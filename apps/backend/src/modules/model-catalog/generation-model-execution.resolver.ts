@@ -4,6 +4,7 @@ import type {
 } from "./ai-model-config.store.ts";
 import {
   normalizeProviderProtocol,
+  resolveAudioProviderAdapterKey,
   resolveImageProviderAdapterKey,
 } from "./provider-adapter-routing.ts";
 
@@ -17,7 +18,7 @@ export class GenerationModelExecutionResolutionError extends Error {
 }
 
 export interface GenerationModelExecution {
-  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "aliyun-bailian-audio" | "apimart-audio" | "globalaiopc-sound-clone" | "mock";
+  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "globalaiopc-video" | "aliyun-bailian-audio" | "apimart-audio" | "globalaiopc-sound-clone" | "mock";
   queueName: string;
   taskMode: string;
   parameters: Record<string, unknown>;
@@ -103,11 +104,15 @@ function providerExecutorFromProtocol(
   }
   if (
     kind === "video" &&
+    (protocol === "globalaiopc_video" || protocol === "global_ai_opc_video")
+  ) {
+    return "globalaiopc-video";
+  }
+  if (
+    kind === "video" &&
     (
       protocol === "volcengine_ark_video" ||
       protocol === "aliyun_bailian_video" ||
-      protocol === "globalaiopc_video" ||
-      protocol === "global_ai_opc_video" ||
       protocol === "lingdong_api" ||
       protocol === "extra_token_video" ||
       protocol === "saier_video" ||
@@ -124,7 +129,7 @@ function providerExecutorFromProtocol(
   if (kind === "audio" && protocol === "apimart_audio") {
     return "apimart-audio";
   }
-  if (kind === "audio" && protocol === "globalaiopc_sound_clone") {
+  if (kind === "audio" && resolveAudioProviderAdapterKey(protocol) === "globalaiopc_sound_clone") {
     return "globalaiopc-sound-clone";
   }
   throw new GenerationModelExecutionResolutionError(

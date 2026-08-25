@@ -75,20 +75,26 @@ export interface GenerationWorkerJob<TData extends Record<string, unknown>> {
 export interface GenerationWorkerProcessors {
   submitGptImage?(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitImageResult>;
   submitSeedanceVideo(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitVideoResult>;
+  submitGlobalAiOpcVideo?(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitVideoResult>;
   submitAudio?(input: { taskId: string; now: Date }): Promise<SubmitAudioResult>;
   pollGptImage?(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
   pollAudio?(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
   pollSeedanceVideo(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
+  pollGlobalAiOpcVideo?(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
   finalizeGptImageArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   fetchGptImageArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   persistGptImageArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   finalizeSeedanceVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   fetchSeedanceVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  finalizeGlobalAiOpcVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  fetchGlobalAiOpcVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   finalizeAudioArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   fetchAudioArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   persistAudioArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   persistSeedanceVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  persistGlobalAiOpcVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
   expireSeedanceVideo(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }>>;
+  expireGlobalAiOpcVideo?(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }> | Extract<PollVideoResult, { status: "skipped" }>>;
   expireGptImage?(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }>>;
   expireAudio?(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }>>;
   schedulePoll?(input: {
@@ -136,7 +142,10 @@ export async function handleGenerationSubmitVideoJob(
     throw new Error(`unsupported_video_provider_executor:${input.job.data.providerExecutor}`);
   }
 
-  const result = await input.processors.submitSeedanceVideo({
+  const submitVideo = input.job.data.providerExecutor === "globalaiopc-video"
+    ? requireVideoProcessor(input.processors.submitGlobalAiOpcVideo, "globalaiopc_video_submit_processor_missing")
+    : input.processors.submitSeedanceVideo;
+  const result = await submitVideo({
     taskId: input.job.data.taskId,
     userConcurrencyLimit: input.config.submit.video.userConcurrencyLimit,
     now: input.now,
@@ -305,7 +314,10 @@ export async function handleGenerationPollVideoJob(
     throw new Error(`unsupported_video_provider_executor:${input.job.data.providerExecutor}`);
   }
 
-  const result = await input.processors.pollSeedanceVideo({
+  const pollVideo = input.job.data.providerExecutor === "globalaiopc-video"
+    ? requireVideoProcessor(input.processors.pollGlobalAiOpcVideo, "globalaiopc_video_poll_processor_missing")
+    : input.processors.pollSeedanceVideo;
+  const result = await pollVideo({
     taskId: input.job.data.taskId,
     ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
     now: input.now,
@@ -329,7 +341,10 @@ export async function handleGenerationPollVideoJob(
   if (result.status === "waiting" || result.status === "skipped") {
     const nextAttempt = Number(input.job.data.pollAttempt) + 1;
     if (nextAttempt > input.config.poll.video.maxAttempts) {
-      const expired = await input.processors.expireSeedanceVideo({
+      const expireVideo = input.job.data.providerExecutor === "globalaiopc-video"
+        ? requireVideoProcessor(input.processors.expireGlobalAiOpcVideo, "globalaiopc_video_expire_processor_missing")
+        : input.processors.expireSeedanceVideo;
+      const expired = await expireVideo({
         taskId: input.job.data.taskId,
         ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
@@ -414,10 +429,10 @@ export async function handleGenerationFinalizeArtifactJob(
 
   try {
     if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
-      if (!input.processors.finalizeSeedanceVideoArtifact) {
-        throw new Error("seedance_finalize_processor_missing");
-      }
-      const result = await input.processors.finalizeSeedanceVideoArtifact({
+      const finalizeVideo = input.job.data.providerExecutor === "globalaiopc-video"
+        ? requireVideoProcessor(input.processors.finalizeGlobalAiOpcVideoArtifact, "globalaiopc_video_finalize_processor_missing")
+        : requireVideoProcessor(input.processors.finalizeSeedanceVideoArtifact, "seedance_finalize_processor_missing");
+      const result = await finalizeVideo({
         taskId: input.job.data.taskId,
         ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
@@ -476,6 +491,17 @@ export async function handleGenerationFetchArtifactJob(
       throwArtifactProcessorFailure(input.job.data.mediaType, result.failureCode);
     }
     if (result.status !== "succeeded") {
+      // The processor already resolved whether the task is terminal, so reaching
+      // here means the chain deliberately stops. Record that no persist successor
+      // was queued so the gap is auditable instead of looking like a clean finish.
+      await input.processors.recordSkippedSuccessor?.({
+        taskId: input.job.data.taskId,
+        ...generationAttemptJobData(input.job.data),
+        stage: "fetch",
+        skipReason: `artifact_fetch_${result.status}`,
+        nextAction: "stop",
+        now: input.now,
+      });
       return {
         status: result.status,
         queuedPersist: false,
@@ -523,8 +549,10 @@ async function runFetchArtifactProcessor(
 ): Promise<FinalizeArtifactResult> {
   const task = attemptScopedProcessorInput(input);
   if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
-    if (!input.processors.fetchSeedanceVideoArtifact) throw new Error("seedance_fetch_processor_missing");
-    return input.processors.fetchSeedanceVideoArtifact(task);
+    const fetchVideo = input.job.data.providerExecutor === "globalaiopc-video"
+      ? requireVideoProcessor(input.processors.fetchGlobalAiOpcVideoArtifact, "globalaiopc_video_fetch_processor_missing")
+      : requireVideoProcessor(input.processors.fetchSeedanceVideoArtifact, "seedance_fetch_processor_missing");
+    return fetchVideo(task);
   }
   if (isImageProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "image") {
     if (!input.processors.fetchGptImageArtifact) throw new Error("gpt_image_fetch_processor_missing");
@@ -541,10 +569,10 @@ async function handlePersistOnlyFinalizeArtifactJob(
   input: GenerationWorkerHandlerInput<GenerationArtifactJobData>,
 ): Promise<{ status: FinalizeArtifactResult["status"]; failureCode?: string }> {
   if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
-    if (!input.processors.persistSeedanceVideoArtifact) {
-      throw new Error("seedance_persist_processor_missing");
-    }
-    const result = await input.processors.persistSeedanceVideoArtifact({
+    const persistVideo = input.job.data.providerExecutor === "globalaiopc-video"
+      ? requireVideoProcessor(input.processors.persistGlobalAiOpcVideoArtifact, "globalaiopc_video_persist_processor_missing")
+      : requireVideoProcessor(input.processors.persistSeedanceVideoArtifact, "seedance_persist_processor_missing");
+    const result = await persistVideo({
       taskId: input.job.data.taskId,
       ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
       now: input.now,
@@ -584,7 +612,12 @@ function isImageProviderExecutor(providerExecutor: string) {
 }
 
 function isVideoProviderExecutor(providerExecutor: string) {
-  return providerExecutor === "seedance";
+  return providerExecutor === "seedance" || providerExecutor === "globalaiopc-video";
+}
+
+function requireVideoProcessor<T>(processor: T | undefined, errorCode: string): T {
+  if (!processor) throw new Error(errorCode);
+  return processor;
 }
 
 function isAudioProviderExecutor(providerExecutor: string) {

@@ -216,7 +216,7 @@ export function redactProviderResponsePreview(text: string) {
     .replace(/"api[_-]?key"\s*:\s*"[^"]+"/gi, '"api_key":"[redacted]"')
     .replace(/"authorization"\s*:\s*"[^"]+"/gi, '"authorization":"[redacted]"')
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [redacted]")
-    .replace(/\b(OpenAI|GlobalAiOpc|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
+    .replace(/\b(OpenAI|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
     .replace(/\bExtra\s+Token\b/gi, "[provider]");
 }
 

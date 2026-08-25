@@ -36,9 +36,8 @@ import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rat
 import { ModelError, translateProviderErrorMessage } from "./provider-error-message.ts";
 import { attachProviderRawResponse, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
-import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
-import { registerGeneratedImageWithGlobalAiOpc } from "./global-ai-opc-material.service.ts";
 import { buildSanBaoImagePayload } from "./san-bao.provider-adapter.ts";
+import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
 import { refreshGenerationInputUrls } from "./generation-input-url-refresh.ts";
@@ -53,11 +52,13 @@ import {
 } from "./generation-model-config-snapshot.ts";
 import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
+  appendProviderRequestDiagnostics,
   createOrReuseProviderRequest,
   refreshPreparedProviderRequestPayload,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
   markProviderRequestResultUnknown,
+  recordGlobalAiOpcLifecycleStep,
   submitProviderRequest,
 } from "./provider-request.service.ts";
 import {
@@ -453,6 +454,7 @@ export async function processGptImageSubmitJob(
     await refreshPreparedProviderRequestPayload(db, {
       providerRequestId: preparedProviderRequest.request.id,
       redactedPayload: requestBody,
+      payloadHash,
       now: input.now,
     });
     providerRequestId = preparedProviderRequest.request.id;
@@ -519,41 +521,15 @@ export async function processGptImageSubmitJob(
       now: input.now,
       adapter,
     });
-    if (submitted.kind === "stale_attempt") {
-      const failureCode = "provider_request_attempt_conflict";
-      const claimedRow = { ...row, attempt_id: claim.attempt.id };
-      await markGptImageTaskManualReview(db, {
-        row: claimedRow,
-        failureCode,
-        providerRequestId: null,
-        metadata: {
-          billingEvent: "manual_review_required",
-          outcome: "manual_review_required",
-          provider: providerLabel,
-          historicalProviderRequestId: submitted.request.id,
-          failureCode,
-          settledAt: input.now,
-        },
-        now: input.now,
-      });
-      await markGenerationTaskSnapshotManualReviewRequired(db, {
-        taskId: row.task_id,
-        attemptId: claim.attempt.id,
-        progressStage: "provider_attempt_conflict",
-        failure: {
-          failureCode,
-          historicalProviderRequestId: submitted.request.id,
-          displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
-        },
-        creditSummary: {
-          reserved: resolveGptImageBillingAmount(row, snapshot),
-          settledAt: input.now.toISOString(),
-        },
-        now: input.now,
-      });
-      return { status: "failed", failureCode };
-    }
     providerRequestId = submitted.request.id;
+    if (submitted.request.externalRequestId) {
+      await recordGlobalAiOpcLifecycleStep(db, {
+        providerRequestId: submitted.request.id,
+        stage: "queued_for_poll",
+        details: { externalRequestId: submitted.request.externalRequestId },
+        now: input.now,
+      });
+    }
     const submittedArtifacts = submitted.kind === "submitted" ? submitted.artifacts : undefined;
     if (
       requestLogBody.requestFormat === "cumob_image" &&
@@ -1323,8 +1299,42 @@ export async function processGptImagePollJob(
         failureCode: "provider_poll_unsupported",
       });
     }
-    const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+    let poll: Awaited<ReturnType<NonNullable<typeof adapter.poll>>>;
+    try {
+      poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+    } catch (error) {
+      await recordGlobalAiOpcLifecycleStep(db, {
+        providerRequestId: row.provider_request_id,
+        stage: "poll_request_failed",
+        details: {
+          externalRequestId: row.external_request_id,
+          failureCode: readErrorFailureCode(error) ?? "image_provider_poll_failed",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+        now: input.now,
+      });
+      throw error;
+    }
+    await recordGlobalAiOpcLifecycleStep(db, {
+      providerRequestId: row.provider_request_id,
+      stage: "poll_response_received",
+      details: {
+        externalRequestId: row.external_request_id,
+        providerStatus: poll.status,
+        providerResponse: poll.redactedResponse,
+      },
+      now: input.now,
+    });
     if (poll.status === "accepted" || poll.status === "running") {
+      await appendProviderRequestDiagnostics(db, {
+        providerRequestId: row.provider_request_id,
+        diagnostics: {
+          ...poll.redactedResponse,
+          externalRequestId: row.external_request_id,
+          pollStatus: poll.status,
+        },
+        now: input.now,
+      });
       await markGenerationTaskSnapshotRunning(db, {
         taskId: row.task_id,
         attemptId: row.attempt_id,
@@ -1799,14 +1809,6 @@ export async function finalizeGptImageArtifactJob(
     now: input.now,
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
-  await registerGeneratedImageWithGlobalAiOpc(db, {
-    storageObjectId: persisted.storageObjectId,
-    sourceUrl: persisted.sourceUrl || persisted.previewUrl,
-    env: input.env,
-    fetchImpl: input.fetchImpl,
-    now: input.now,
-  }).catch(() => undefined);
-
   return { status: "succeeded" };
   });
 }
@@ -2051,13 +2053,6 @@ export async function persistGptImageArtifactJob(
     now: input.now,
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
-  await registerGeneratedImageWithGlobalAiOpc(db, {
-    storageObjectId: persisted.storageObjectId,
-    sourceUrl: persisted.sourceUrl || persisted.previewUrl,
-    env: input.env,
-    now: input.now,
-  }).catch(() => undefined);
-
   return { status: "succeeded" };
   });
 }
@@ -3060,7 +3055,7 @@ export function buildGptImageRequestLogBody(input: {
 }) {
   const providerConfig = readObject(input.modelConfig?.providerConfig);
   const adapterKey = resolveImageProviderAdapterKey(input.modelConfig?.providerProtocol ?? "", providerConfig);
-  if (adapterKey !== "cumob_image" && adapterKey !== "global_ai_opc_image" && adapterKey !== "san_bao") {
+  if (adapterKey !== "cumob_image" && adapterKey !== "san_bao" && adapterKey !== "global_ai_opc_image") {
     return {
       requestFormat: undefined,
       requestBody: input.requestBody,
@@ -3302,16 +3297,6 @@ function gptImageFailureDisplayMessage(failureCode: string) {
     return `图片模型服务返回 HTTP ${providerHttpStatus}，任务没有拿到生成结果，积分已返还。请稍后重试。`;
   }
   switch (failureCode) {
-    case "global_ai_opc_image_failed":
-      return "图片生成失败，请稍后重试";
-    case "global_ai_opc_image_invalid_response":
-    case "global_ai_opc_image_empty_response":
-    case "global_ai_opc_image_invalid_json":
-      return "图片模型返回异常，请稍后重试";
-    case "global_ai_opc_image_timeout":
-      return "图片生成超时，请稍后重试";
-    case "global_ai_opc_image_network_error":
-      return "图片模型连接失败，请稍后重试";
     case "provider_failed":
       return "图片生成服务失败，请稍后重试";
     case "provider_submission_prepare_failed":

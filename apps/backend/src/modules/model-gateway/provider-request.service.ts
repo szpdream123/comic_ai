@@ -7,7 +7,6 @@ import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapte
 import { ModelError } from "./model-error.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
 import {
-  compactProviderAuditValue,
   preserveProviderRequestValue,
   readProviderRawResponse,
 } from "./provider-response-diagnostics.ts";
@@ -95,6 +94,12 @@ interface ProviderRequestRow {
 
 export class ProviderRequestConflictError extends Error {
   readonly code = "provider_request_conflict";
+  // Expose failureCode as well as code. Downstream classifiers (the seedance
+  // worker's readErrorFailureCode, ModelError.fromUnknown) key off failureCode
+  // only; without it this conflict collapsed to the generic
+  // "provider_submission_failed" and the misleading "修改素材或提示词" message,
+  // hiding the true pre-submission cause.
+  readonly failureCode = "provider_request_conflict";
 
   constructor() {
     super("Provider request key was reused with a different request or payload hash.");
@@ -199,39 +204,20 @@ export async function submitProviderRequest(
       redactedRequest?: Record<string, unknown>;
     }
   | { kind: "already_started"; request: ProviderRequestRecord }
-  | { kind: "stale_attempt"; request: ProviderRequestRecord }
 > {
-  let prepared = await createOrReuseProviderRequest(db, input);
-
-  if (
-    prepared.request.externalSubmissionStartedAt
-    && input.taskId
-    && input.attemptId
-    && ["failed", "canceled"].includes(prepared.request.status)
-    && !(await providerRequestBelongsToExpectedAttempt(db, {
-      providerRequestId: prepared.request.id,
-      taskId: input.taskId,
-      attemptId: input.attemptId,
-    }))
-  ) {
-    prepared = await createOrReuseProviderRequest(db, {
-      ...input,
-      requestKey: `${input.requestKey}:retry:${input.attemptId}`,
-    });
-  }
+  const prepared = await createOrReuseProviderRequest(db, input);
+  await recordGlobalAiOpcLifecycleStepSafely(db, {
+    providerRequestId: prepared.request.id,
+    stage: "payload_assembled",
+    details: {
+      providerOperation: prepared.request.providerOperation,
+      requestKey: prepared.request.requestKey,
+      payload: prepared.request.redactedPayload,
+    },
+    now: input.now,
+  });
 
   if (prepared.request.externalSubmissionStartedAt) {
-    if (
-      input.taskId &&
-      input.attemptId &&
-      !(await providerRequestBelongsToExpectedAttempt(db, {
-        providerRequestId: prepared.request.id,
-        taskId: input.taskId,
-        attemptId: input.attemptId,
-      }))
-    ) {
-      return { kind: "stale_attempt", request: prepared.request };
-    }
     if (
       !prepared.request.externalRequestId
       && (
@@ -321,29 +307,33 @@ export async function submitProviderRequest(
   const started = await tryMarkExternalSubmissionStarted(db, {
     providerRequestId: prepared.request.id,
     externalRequestId: null,
-    expectedTaskId: input.taskId ?? null,
-    expectedAttemptId: input.attemptId ?? null,
+    attemptId: null,
     now: input.now,
   });
 
   if (!started) {
     const current = (await findProviderRequestById(db, prepared.request.id))!;
-    if (
-      input.taskId &&
-      input.attemptId &&
-      !(await providerRequestBelongsToExpectedAttempt(db, {
-        providerRequestId: current.id,
-        taskId: input.taskId,
-        attemptId: input.attemptId,
-      }))
-    ) {
-      return { kind: "stale_attempt", request: current };
-    }
+    const diagnosed = await appendProviderRequestDiagnosticsSafely(db, {
+      providerRequestId: current.id,
+      diagnostics: {
+        localStage: "external_submission_start_race",
+        failureCode: "provider_submission_already_started",
+        diagnosticNote: "另一个 worker 已先占用该幂等请求，当前调用不会重复提交供应商。",
+      },
+      now: input.now,
+    });
     return {
       kind: "already_started",
-      request: current,
+      request: diagnosed ?? (await findProviderRequestById(db, current.id))!,
     };
   }
+
+  await recordGlobalAiOpcLifecycleStepSafely(db, {
+    providerRequestId: started.id,
+    stage: "provider_http_request_started",
+    details: { providerOperation: started.providerOperation },
+    now: input.now,
+  });
 
   let submitted: Awaited<ReturnType<ProviderAdapter["submit"]>>;
   try {
@@ -361,7 +351,35 @@ export async function submitProviderRequest(
           request,
           now: input.now,
         });
+        await recordGlobalAiOpcLifecycleStepSafely(db, {
+          providerRequestId: started.id,
+          stage: "provider_http_request_ready",
+          details: { requestBody: request },
+          now: input.now,
+        });
       },
+    });
+
+    // Keep the provider response durable before later task/queue transitions.
+    await appendProviderRequestDiagnosticsSafely(db, {
+      providerRequestId: started.id,
+      diagnostics: {
+        localStage: "provider_http_response",
+        providerStatus: submitted.status,
+        externalRequestId: submitted.externalRequestId ?? null,
+        providerResponse: submitted.redactedResponse ?? null,
+      },
+      now: input.now,
+    });
+    await recordGlobalAiOpcLifecycleStepSafely(db, {
+      providerRequestId: started.id,
+      stage: "provider_http_response_received",
+      details: {
+        providerStatus: submitted.status,
+        externalRequestId: submitted.externalRequestId ?? null,
+        providerResponse: submitted.redactedResponse ?? null,
+      },
+      now: input.now,
     });
 
     if (!submitted.externalRequestId?.trim()) {
@@ -386,7 +404,18 @@ export async function submitProviderRequest(
     const redactedResponse = {
       ...(readProviderDiagnostics(error) ?? {}),
       ...modelError.toRedactedProviderRecord(),
+      localStage: "provider_submit",
+      internalError: {
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      },
     };
+    await recordGlobalAiOpcLifecycleStepSafely(db, {
+      providerRequestId: started.id,
+      stage: "provider_http_request_failed",
+      details: redactedResponse,
+      now: input.now,
+    });
     await markProviderRequestFailed(db, {
       providerRequestId: started.id,
       failureCode,
@@ -409,9 +438,28 @@ export async function submitProviderRequest(
       request: accepted.request,
     };
   }
+  const recorded = await appendProviderRequestDiagnosticsSafely(db, {
+    providerRequestId: accepted.request.id,
+    diagnostics: {
+      localStage: "provider_task_id_received",
+      externalRequestId: accepted.request.externalRequestId,
+      providerStatus: accepted.request.status,
+      queueHandoff: "pending",
+    },
+    now: input.now,
+  });
+  await recordGlobalAiOpcLifecycleStepSafely(db, {
+    providerRequestId: accepted.request.id,
+    stage: "provider_task_id_received",
+    details: {
+      externalRequestId: accepted.request.externalRequestId,
+      providerStatus: accepted.request.status,
+    },
+    now: input.now,
+  });
   return {
     kind: "submitted",
-    request: accepted.request,
+    request: recorded ?? accepted.request,
     artifacts: submitted.artifacts,
     redactedRequest: submitted.redactedRequest,
   };
@@ -422,18 +470,28 @@ export async function refreshPreparedProviderRequestPayload(
   input: {
     providerRequestId: string;
     redactedPayload: Record<string, unknown>;
+    payloadHash?: string;
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
   const row = await queryOne<ProviderRequestRow>(db, `
     UPDATE provider_requests
-    SET payload_redacted_json=$2::jsonb, updated_at=$3
+    SET payload_redacted_json=$2::jsonb,
+        status = 'created',
+        failure_code = NULL,
+        payload_hash=COALESCE($3, payload_hash),
+        updated_at=$4
     WHERE id=$1
-      AND status='created'
+      AND status IN ('created', 'failed')
       AND external_submission_started_at IS NULL
       AND external_request_id IS NULL
     RETURNING *
-  `, [input.providerRequestId, JSON.stringify(input.redactedPayload), input.now]);
+  `, [
+    input.providerRequestId,
+    JSON.stringify(input.redactedPayload),
+    input.payloadHash ?? null,
+    input.now,
+  ]);
   return row
     ? providerRequestFromRow(row)
     : (await findProviderRequestById(db, input.providerRequestId))!;
@@ -595,37 +653,6 @@ async function persistAcceptedProviderSubmission(
   }
 }
 
-async function providerRequestBelongsToExpectedAttempt(
-  db: SqlDatabase,
-  input: { providerRequestId: string; taskId: string; attemptId: string },
-): Promise<boolean> {
-  const row = await queryOne<{ matches: boolean }>(
-    db,
-    `
-      SELECT EXISTS (
-        SELECT 1
-        FROM provider_requests request
-        JOIN tasks task ON task.id = request.task_id
-        JOIN task_attempts attempt
-          ON attempt.id = $3
-         AND attempt.task_id = task.id
-        WHERE request.id = $1
-          AND task.id = $2
-          AND task.current_attempt_id = $3
-          AND task.status = 'running'
-          AND attempt.status = 'running'
-          AND (
-            request.attempt_id = $3
-            OR (request.attempt_id IS NULL AND task.attempt_count = 1)
-          )
-      ) AS matches
-    `,
-    [input.providerRequestId, input.taskId, input.attemptId],
-  );
-
-  return row?.matches === true;
-}
-
 export async function markExternalSubmissionStarted(
   db: SqlDatabase,
   input: {
@@ -670,9 +697,117 @@ export async function recordProviderRequestRedactedBody(
     ],
   );
 
+  // The adapter callback runs immediately before the upstream HTTP request.
+  // Keep the user-facing log aligned with that exact provider payload instead
+  // of leaving the original generation-task snapshot (which may contain
+  // internal fields such as parameters.firstFrame).
+  await db.query(
+    `
+      UPDATE user_model_request_logs
+      SET request_body_json = $2::jsonb,
+          request_text = $3,
+          updated_at = $4
+      WHERE provider_request_id = $1
+        AND status = 'submitted'
+    `,
+    [
+      input.providerRequestId,
+      JSON.stringify(preserveProviderRequestValue(input.request)),
+      JSON.stringify(preserveProviderRequestValue(input.request), null, 2),
+      input.now,
+    ],
+  );
+
   return row
     ? providerRequestFromRow(row)
     : (await findProviderRequestById(db, input.providerRequestId))!;
+}
+
+export async function appendProviderRequestDiagnostics(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    diagnostics: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  const row = await queryOne<ProviderRequestRow>(
+    db,
+    `
+      UPDATE provider_requests
+      SET response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb)
+            || $2::jsonb,
+          task_center_diagnostics_json = COALESCE(task_center_diagnostics_json, '{}'::jsonb)
+            || COALESCE($3::jsonb, '{}'::jsonb),
+          updated_at = $4
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      input.providerRequestId,
+      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.diagnostics))),
+      JSON.stringify(buildTaskCenterProviderDiagnostics(input.diagnostics) ?? {}),
+      input.now,
+    ],
+  );
+  return row
+    ? providerRequestFromRow(row)
+    : (await findProviderRequestById(db, input.providerRequestId))!;
+}
+
+export async function recordGlobalAiOpcLifecycleStep(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    stage: string;
+    details?: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<void> {
+  const step = sanitizeProviderIdentityFields({
+    stage: input.stage,
+    recordedAt: input.now.toISOString(),
+    ...(input.details ?? {}),
+  });
+  await db.query(
+    `
+      UPDATE provider_requests
+      SET task_center_diagnostics_json = COALESCE(task_center_diagnostics_json, '{}'::jsonb)
+            || jsonb_build_object(
+              'localStage', $2::text,
+              'lifecycleSteps',
+              COALESCE(task_center_diagnostics_json->'lifecycleSteps', '[]'::jsonb)
+                || jsonb_build_array($3::jsonb)
+            ),
+          updated_at = $4
+      WHERE id = $1
+        AND lower(regexp_replace(provider_name, '[^a-zA-Z0-9]', '', 'g')) LIKE 'globalaiopc%'
+    `,
+    [input.providerRequestId, input.stage, JSON.stringify(step), input.now],
+  );
+}
+
+async function recordGlobalAiOpcLifecycleStepSafely(
+  db: SqlDatabase,
+  input: Parameters<typeof recordGlobalAiOpcLifecycleStep>[1],
+): Promise<void> {
+  try {
+    await recordGlobalAiOpcLifecycleStep(db, input);
+  } catch {
+    // Audit persistence must not delay or block the provider request.
+  }
+}
+
+async function appendProviderRequestDiagnosticsSafely(
+  db: SqlDatabase,
+  input: Parameters<typeof appendProviderRequestDiagnostics>[1],
+): Promise<ProviderRequestRecord | undefined> {
+  try {
+    return await appendProviderRequestDiagnostics(db, input);
+  } catch {
+    // Diagnostics must never change the submission outcome.
+    return undefined;
+  }
 }
 
 export async function hasExternalProviderSubmissionStartedForTask(
@@ -699,55 +834,28 @@ async function tryMarkExternalSubmissionStarted(
   input: {
     providerRequestId: string;
     externalRequestId: string | null;
-    expectedTaskId?: string | null;
-    expectedAttemptId?: string | null;
+    attemptId?: string | null;
     now: Date;
   },
 ): Promise<ProviderRequestRecord | undefined> {
   const row = await queryOne<ProviderRequestRow>(
     db,
     `
-      WITH locked_attempt AS MATERIALIZED (
-        SELECT task.id
-        FROM tasks task
-        JOIN task_attempts attempt
-          ON attempt.id = $5::uuid
-         AND attempt.task_id = task.id
-        WHERE $4::uuid IS NOT NULL
-          AND $5::uuid IS NOT NULL
-          AND task.id = $4::uuid
-          AND task.current_attempt_id = $5::uuid
-          AND task.status = 'running'
-          AND attempt.status = 'running'
-        FOR UPDATE OF task, attempt
-      )
-      UPDATE provider_requests
-      SET attempt_id = CASE
-            WHEN $4::uuid IS NOT NULL AND $5::uuid IS NOT NULL THEN $5::uuid
-            ELSE attempt_id
-          END,
-          status = 'submitted',
+      UPDATE provider_requests pr
+      SET status = 'submitted',
           external_submission_started_at = $2,
           external_request_id = $3,
           updated_at = $2
       WHERE id = $1
         AND external_submission_started_at IS NULL
-        AND (
-          $4::uuid IS NULL
-          OR $5::uuid IS NULL
-          OR (task_id = $4::uuid AND EXISTS (SELECT 1 FROM locked_attempt))
-        )
       RETURNING *
     `,
     [
       input.providerRequestId,
       input.now,
       input.externalRequestId,
-      input.expectedTaskId ?? null,
-      input.expectedAttemptId ?? null,
     ],
   );
-
   return row ? providerRequestFromRow(row) : undefined;
 }
 
@@ -846,7 +954,7 @@ export async function markProviderRequestSucceeded(
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
-  return updateProviderRequestTerminalStatus(db, {
+  const request = await updateProviderRequestTerminalStatus(db, {
     providerRequestId: input.providerRequestId,
     status: "succeeded",
     externalRequestId: input.externalRequestId,
@@ -854,6 +962,13 @@ export async function markProviderRequestSucceeded(
     failureCode: null,
     now: input.now,
   });
+  await recordGlobalAiOpcLifecycleStepSafely(db, {
+    providerRequestId: input.providerRequestId,
+    stage: "generation_succeeded",
+    details: { externalRequestId: input.externalRequestId, providerResponse: input.redactedResponse },
+    now: input.now,
+  });
+  return request;
 }
 
 export async function markProviderRequestFailed(
@@ -865,7 +980,7 @@ export async function markProviderRequestFailed(
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
-  return updateProviderRequestTerminalStatus(db, {
+  const request = await updateProviderRequestTerminalStatus(db, {
     providerRequestId: input.providerRequestId,
     status: "failed",
     externalRequestId: null,
@@ -873,6 +988,13 @@ export async function markProviderRequestFailed(
     failureCode: input.failureCode,
     now: input.now,
   });
+  await recordGlobalAiOpcLifecycleStepSafely(db, {
+    providerRequestId: input.providerRequestId,
+    stage: "generation_failed",
+    details: { failureCode: input.failureCode, providerResponse: input.redactedResponse },
+    now: input.now,
+  });
+  return request;
 }
 
 export async function markProviderRequestCanceled(
@@ -884,7 +1006,7 @@ export async function markProviderRequestCanceled(
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
-  return updateProviderRequestTerminalStatus(db, {
+  const request = await updateProviderRequestTerminalStatus(db, {
     providerRequestId: input.providerRequestId,
     status: "canceled",
     externalRequestId: null,
@@ -892,6 +1014,13 @@ export async function markProviderRequestCanceled(
     failureCode: input.failureCode,
     now: input.now,
   });
+  await recordGlobalAiOpcLifecycleStepSafely(db, {
+    providerRequestId: input.providerRequestId,
+    stage: "generation_canceled",
+    details: { failureCode: input.failureCode, providerResponse: input.redactedResponse },
+    now: input.now,
+  });
+  return request;
 }
 
 async function recordProviderSubmissionAccepted(
@@ -982,6 +1111,24 @@ async function updateProviderRequestTerminalStatus(
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
+  // Only failures need a synthesized stage. Succeeded and canceled records must
+  // not be decorated with failure diagnostics — doing so made completed provider
+  // responses look like unexplained failures in the task center.
+  const needsStageFallback = input.status === "failed"
+    && !(typeof input.redactedResponse.localStage === "string" && input.redactedResponse.localStage.trim());
+  const terminalDiagnostics = {
+    ...input.redactedResponse,
+    ...(needsStageFallback
+      ? {
+          localStage: "provider_request_terminal_status",
+          diagnosticNote: "终态失败记录未提供提交阶段，已由 provider request 终态监控补齐。",
+          localError: {
+            code: input.failureCode,
+            message: "失败请求未携带更早阶段的本地异常详情。",
+          },
+        }
+      : {}),
+  };
   const row = await queryOne<ProviderRequestRow>(
     db,
     `
@@ -989,8 +1136,17 @@ async function updateProviderRequestTerminalStatus(
       SET status = $2,
           external_request_id = COALESCE($3, external_request_id),
           next_poll_at = NULL,
-          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
-          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb
+            || COALESCE((
+              SELECT jsonb_object_agg(entry.key, entry.value)
+              FROM jsonb_each(COALESCE(provider_requests.response_redacted_json, '{}'::jsonb)) entry
+              WHERE entry.key = ANY(ARRAY[
+                'localStage', 'localError', 'modelError', 'providerDiagnostics',
+                'localState', 'internalError', 'diagnosticNote'
+              ])
+            ), '{}'::jsonb),
+          task_center_diagnostics_json = COALESCE($5::jsonb, '{}'::jsonb)
+            || COALESCE(task_center_diagnostics_json, '{}'::jsonb),
           failure_code = $6,
           updated_at = $7
       WHERE id = $1
@@ -1015,8 +1171,8 @@ async function updateProviderRequestTerminalStatus(
       input.providerRequestId,
       input.status,
       input.externalRequestId,
-      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
-      serializeTaskCenterProviderDiagnostics(input.redactedResponse),
+      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(terminalDiagnostics))),
+      serializeTaskCenterProviderDiagnostics(terminalDiagnostics),
       input.failureCode,
       input.now,
     ],
@@ -1036,7 +1192,7 @@ function withStoredProviderRawResponse(value: Record<string, unknown>): Record<s
   const rawResponse = readProviderRawResponse(value);
   return rawResponse === undefined
     ? value
-    : { ...value, providerRawResponse: compactProviderAuditValue(rawResponse) };
+    : { ...value, providerRawResponse: rawResponse };
 }
 
 function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unknown {
@@ -1044,6 +1200,9 @@ function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unkn
     return value;
   }
   if (parentKey === "diagnostics") {
+    return value;
+  }
+  if (parentKey === "localError" || parentKey === "internalError" || parentKey === "modelError") {
     return value;
   }
   if (parentKey === "providerRawResponse") {
@@ -1071,7 +1230,7 @@ function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unkn
 
 function sanitizeProviderIdentityString(value: string): string {
   const sanitized = value
-    .replace(/\b(OpenAI|GlobalAiOpc|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
+    .replace(/\b(OpenAI|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
     .replace(/\bExtra\s+Token\b/gi, "[provider]");
   return sanitized;
 }

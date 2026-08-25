@@ -48,6 +48,7 @@ import {
   renderStoryboardPanel,
   renderStoryboardGenerationEntryForPolling,
   renderStoryboardStageForPartialUpdate,
+  mergeGenerationTaskCenterState,
 } from "./episode-workbench-rebuilt.js?video-category=2&storyboard-style-picker=1";
 import {
   isStoryboardPromptClearedForSelection,
@@ -2446,6 +2447,97 @@ function playHomeTvVideoPreview(card) {
   }, HOME_TV_PREVIEW_MAX_DURATION_MS));
 }
 
+function isDeferredMediaSource(source) {
+  return Boolean(source) && !/^(?:data|blob):/i.test(source);
+}
+
+function resolveDirectStorageImageSource(source) {
+  return String(source ?? "").replace(
+    /(\/api\/storage\/objects\/[^/]+\/content)\?proxy=1$/i,
+    "$1",
+  );
+}
+
+function syncDeferredVideoPreload(root) {
+  const videos = [...(root?.querySelectorAll?.("video") ?? [])];
+  for (const video of videos) {
+    if (video?.getAttribute?.("preload")) continue;
+    const source = String(video?.getAttribute?.("src") ?? "").trim();
+    if (isDeferredMediaSource(source)) video.setAttribute("preload", "none");
+  }
+}
+
+function prepareDeferredMediaElements(root) {
+  const media = [...(root?.querySelectorAll?.("img") ?? [])];
+  for (const image of media) {
+    if (!image?.dataset || image.dataset.deferredMediaManaged === "true") continue;
+    // Picker dialogs have their own scroll container; native lazy loading is
+    // more reliable there than observing against the workbench root.
+    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen]")) continue;
+    const source = String(image.getAttribute?.("src") ?? "").trim();
+    if (!isDeferredMediaSource(source)) continue;
+    image.dataset.deferredMediaManaged = "true";
+    image.dataset.deferredSrc = resolveDirectStorageImageSource(source);
+    const sourceSet = String(image.getAttribute?.("srcset") ?? "").trim();
+    if (sourceSet) {
+      image.dataset.deferredSrcset = sourceSet;
+      image.removeAttribute("srcset");
+    }
+    image.removeAttribute("src");
+  }
+  for (const image of media) {
+    if (image?.dataset?.deferredSrc) {
+      image.dataset.deferredSrc = resolveDirectStorageImageSource(image.dataset.deferredSrc);
+      image.dataset.deferredMediaManaged = "true";
+    }
+  }
+}
+
+function loadDeferredMediaElement(image) {
+  const source = String(image?.dataset?.deferredSrc ?? "").trim();
+  if (!source || image.getAttribute?.("src")) return false;
+  image.fetchPriority = "low";
+  const sourceSet = String(image?.dataset?.deferredSrcset ?? "").trim();
+  if (sourceSet) image.setAttribute("srcset", sourceSet);
+  image.setAttribute("src", source);
+  image.removeAttribute("data-deferred-src");
+  return true;
+}
+
+function syncDeferredMediaLoading(workbench) {
+  const root = workbench?.root;
+  syncDeferredVideoPreload(root);
+  prepareDeferredMediaElements(root);
+  const images = [...(root?.querySelectorAll?.("img[data-deferred-src]") ?? [])];
+  workbench.disposeDeferredMediaLoading?.();
+  workbench.disposeDeferredMediaLoading = null;
+  if (!images.length) return;
+
+  const loadImage = (image) => {
+    loadDeferredMediaElement(image);
+  };
+  if (typeof globalThis.IntersectionObserver !== "function") {
+    const schedule = globalThis.requestIdleCallback
+      ? (callback) => globalThis.requestIdleCallback(callback, { timeout: 1000 })
+      : (callback) => globalThis.setTimeout(callback, 0);
+    const timer = schedule(() => images.forEach(loadImage));
+    workbench.disposeDeferredMediaLoading = () => {
+      if (globalThis.cancelIdleCallback && typeof timer === "number") globalThis.cancelIdleCallback(timer);
+      else globalThis.clearTimeout?.(timer);
+    };
+    return;
+  }
+  const observer = new globalThis.IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      loadImage(entry.target);
+      observer.unobserve(entry.target);
+    }
+  }, { root, rootMargin: "320px 0px" });
+  images.forEach((image) => observer.observe(image));
+  workbench.disposeDeferredMediaLoading = () => observer.disconnect();
+}
+
 function stopHomeTvVideoPreview(card, options = {}) {
   const video = card?.querySelector?.("[data-home-tv-preview]");
   if (!video) return;
@@ -3160,6 +3252,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       assetGeneratorCreditCost: null,
       assetGeneratorOpenMenu: "",
       assetGeneratorSubmitting: false,
+      assetGeneratorSubmissionStartedAt: 0,
       assetGeneratorConfigLoading: false,
       assetGeneratorConfigRequestId: 0,
       renameImportedAsset: null,
@@ -8252,10 +8345,14 @@ function normalizeEpisodeBatchImageStyleSkills(items = [], source = "") {
     .filter((item) => String(item?.category ?? item?.promptCategory ?? "") === "image_style")
     .map((item) => {
       const promptContent = String(item?.prompt_content ?? item?.promptContent ?? "").trim();
+      const coverStorageObjectId = String(item?.coverStorageObjectId ?? item?.cover_storage_object_id ?? "").trim();
       return {
         id: String(item?.id ?? ""),
         label: String(item?.title ?? item?.name ?? "未命名技能"),
-        preview: String(item?.coverImageUrl ?? item?.cover_image_url ?? ""),
+        preview: coverStorageObjectId
+          ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+          : String(item?.coverImageUrl ?? item?.cover_image_url ?? ""),
+        coverStorageObjectId,
         ...(promptContent ? { prompt_content: promptContent, promptContent } : {}),
         priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
         isDefault: item?.isDefault === true || item?.is_default === true,
@@ -8424,6 +8521,7 @@ function resolveProjectStyleList(payload) {
       name: String(item.name ?? ""),
       code: String(item.code ?? ""),
       coverImageUrl: String(item.coverImageUrl ?? item.cover_image_url ?? ""),
+      coverStorageObjectId: String(item.coverStorageObjectId ?? item.cover_storage_object_id ?? ""),
       prompt_content: String(item.prompt_content ?? item.promptContent ?? ""),
       promptContent: String(item.promptContent ?? item.prompt_content ?? ""),
       status: String(item.status ?? "enabled"),
@@ -9441,6 +9539,7 @@ function renderWorkbenchChrome(workbench) {
     render(workbench);
     return false;
   }
+  syncDeferredMediaLoading(workbench);
   restoreToolboxWatermarkRemovalMask(workbench);
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") persistWorkbenchState(workbench);
   return true;
@@ -9995,6 +10094,8 @@ export function reconcileFirstLoginGuideTargets(workbench) {
 function render(workbench, options = {}) {
   if (updateNewCanvasSurfaceForHostAction(workbench)) return;
   stopActiveHomeTvVideoPlayback(workbench.root);
+  workbench.disposeDeferredMediaLoading?.();
+  workbench.disposeDeferredMediaLoading = null;
   workbench.disposeHomeTvIncrementalLoading?.();
   workbench.disposeHomeTvIncrementalLoading = null;
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
@@ -10079,6 +10180,7 @@ function render(workbench, options = {}) {
   syncHomeLiquidEther(workbench);
   syncHomeLightfall(workbench);
   syncHomeBackgroundVideoLocalCache(workbench);
+  syncDeferredMediaLoading(workbench);
   scheduleProjectGalleryMeasurement(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, singleEpisodeAiScrollState);
   if (shouldMountNewCanvas(workbench) && !restoredNewCanvasMount) {
@@ -11572,12 +11674,15 @@ function renderEpisodeStoryboardCardOnly(workbench, storyboardId) {
     (workbench.ui.selectedStoryboardIds ?? []).includes(storyboard.id),
     resolveEpisodeWorkbenchAssetLibraryFromState(workbench),
     workbench.ui.museBoardMode ?? "operation",
+    false,
+    workbench.ui.taskCenterTasksById ?? {},
   );
   const nextShell = replacement.firstElementChild;
   if (!nextShell) {
     return false;
   }
   currentShell.replaceWith(nextShell);
+  syncDeferredMediaLoading(workbench);
   return true;
 }
 
@@ -11604,7 +11709,10 @@ function renderEpisodeStoryboardPanelOnly(workbench) {
     resolveEpisodeWorkbenchAssetLibraryFromState(workbench),
     pagination,
     renderBatchSelectionActions("storyboard", isAllSelected, storyboards.length === 0),
+    "",
+    workbench.ui.taskCenterTasksById ?? {},
   );
+  syncDeferredMediaLoading(workbench);
   return true;
 }
 
@@ -11649,6 +11757,7 @@ function syncEpisodeStoryboardBoardModeOnly(workbench) {
       column.remove?.();
     }
   });
+  syncDeferredMediaLoading(workbench);
   return tabs.length > 0 && bodies.length > 0;
 }
 
@@ -11839,6 +11948,7 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
         if (options.updateProjectStyleControl === true) {
           syncEpisodeWorkbenchProjectStyleControlDom(currentPromptDock, nextPromptDock);
         }
+        syncDeferredMediaLoading(workbench);
         return;
       }
     }
@@ -11846,6 +11956,7 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
     currentPromptDock.replaceWith(nextPromptDock);
     restoreEpisodePromptInputState(nextPromptDock, promptInputState);
     void syncEpisodePromptEditor(workbench, { restoreState: promptInputState });
+    syncDeferredMediaLoading(workbench);
     return;
   }
   render(workbench);
@@ -12834,14 +12945,22 @@ function renderEpisodeWorkbenchStageBodyOnly(workbench) {
       (assetGroups?.[activeAssetTab] ?? [])[0] ??
       null;
     const assetMediaKind = workbench.ui.episodeMediaMode === "video" ? "video" : "image";
-    const assetEntries = listAssetConversationHistoryEntries(workbench, selectedAsset?.id ?? workbench.ui.selectedEpisodeAssetId, assetMediaKind);
-    const assetResult = assetMediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
+    const assetEntries = listAssetConversationHistoryEntries(workbench, selectedAsset?.id ?? workbench.ui.selectedEpisodeAssetId, assetMediaKind)
+      .map((entry) => mergeGenerationTaskCenterState(entry, workbench.ui.taskCenterTasksById));
+    const assetResult = mergeGenerationTaskCenterState(
+      assetMediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult,
+      workbench.ui.taskCenterTasksById,
+    );
     html = assetEntries.length || assetResult
       ? renderAssetGeneratedStage(selectedAsset, activeAssetTab, assetResult, workbench.ui.episodeMediaMode ?? "image", assetEntries)
       : "";
   } else {
-    const entries = listStoryboardConversationHistoryEntries(workbench, selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId, mediaKind);
-    const rawResult = mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
+    const entries = listStoryboardConversationHistoryEntries(workbench, selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId, mediaKind)
+      .map((entry) => mergeGenerationTaskCenterState(entry, workbench.ui.taskCenterTasksById));
+    const rawResult = mergeGenerationTaskCenterState(
+      mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult,
+      workbench.ui.taskCenterTasksById,
+    );
     const result = isStoryboardConversationEntryForTarget(
       workbench,
       rawResult,
@@ -12856,6 +12975,7 @@ function renderEpisodeWorkbenchStageBodyOnly(workbench) {
   preserveEpisodeWorkbenchStageBodyScroll(stageBody, () => {
     stageBody.innerHTML = html;
   });
+  syncDeferredMediaLoading(workbench);
   const shouldScrollConversationToTop = requestedScrollMode === "top";
   if (shouldScrollConversationToTop) {
     stageBody.scrollTop = 0;
@@ -12899,6 +13019,7 @@ function renderStoryboardGeneratorTaskOverviewOnly(workbench) {
   }
   currentOverview.outerHTML = nextOverview;
   void syncStoryboardGeneratorPromptEditor(workbench);
+  syncDeferredMediaLoading(workbench);
   return true;
 }
 
@@ -12972,7 +13093,10 @@ function renderEpisodeWorkbenchGenerationEntryUpdate(workbench) {
     return false;
   }
   const mediaKind = resolveStoryboardConversationMediaKind(workbench);
-  const result = mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
+  const result = mergeGenerationTaskCenterState(
+    mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult,
+    workbench.ui.taskCenterTasksById,
+  );
   if (!isStoryboardConversationEntryForTarget(workbench, result, workbench.ui.selectedStoryboardId)) {
     return false;
   }
@@ -12992,6 +13116,7 @@ function renderEpisodeWorkbenchGenerationEntryUpdate(workbench) {
     return false;
   }
   existing.outerHTML = replacementHtml;
+  syncDeferredMediaLoading(workbench);
   const nextScrollHeight = Number(stageBody.scrollHeight ?? 0);
   stageBody.scrollTop = Math.max(0, previousScrollTop + nextScrollHeight - previousScrollHeight);
   return true;
@@ -24970,21 +25095,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         return;
       }
       await workbench.api.deleteProjectAsset(draft.assetId);
-      if (workbench.ui.selectedProjectCardId) {
-        applyProjectDetail(
-          workbench,
-          await workbench.api.getProjectDetail(workbench.ui.selectedProjectCardId),
-        );
-      } else {
-        const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
-        assignImportedAssets(
-          nextAssets,
-          draft.assetKind,
-          draft.mediaType,
-          getImportedAssetBucket(nextAssets, draft.assetKind, draft.mediaType).filter((item) => item.id !== draft.assetId),
-        );
-        workbench.ui.importedAssets = nextAssets;
-      }
+      // Update local state without full page refresh
+      const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
+      assignImportedAssets(
+        nextAssets,
+        draft.assetKind,
+        draft.mediaType,
+        getImportedAssetBucket(nextAssets, draft.assetKind, draft.mediaType).filter((item) => item.id !== draft.assetId),
+      );
+      workbench.ui.importedAssets = nextAssets;
       workbench.ui.deleteImportedAsset = null;
       workbench.ui.toast = draft.name ? `已删除 ${draft.name}。` : "已删除当前资产。";
     });
@@ -25736,6 +25855,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorStoryboardId = storyboard.id;
     workbench.ui.assetGeneratorStoryboardUploadReferences = [];
     workbench.ui.assetGeneratorStyleCode = String(projectStyle?.code ?? projectStyle?.id ?? "").trim();
+    // A previous asset-generation session may have left a custom image-style skill selected.
+    // The storyboard generator starts from the active project style unless the user changes it.
+    workbench.ui.assetImageStyleSkillId = "project-style";
+    workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: "",
+    };
     workbench.ui.assetGeneratorStoryboardReferences = normalizeStoryboardGeneratorImageReferences(
       buildSelectedStoryboardQuickReference(workbench, storyboard, storyboardPrompt, {
         includeStoryboardImage: false,
@@ -25765,6 +25892,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.assetGeneratorSubmissionStartedAt = 0;
     workbench.ui.assetGeneratorOpenMenu = "";
     workbench.ui.openGenerationSelectMenu = null;
     try {
@@ -25843,6 +25971,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.assetGeneratorSubmissionStartedAt = 0;
     invalidateAssetGeneratorConfigRequest(workbench);
     workbench.ui.openGenerationSelectMenu = null;
     render(workbench);
@@ -25966,6 +26095,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         return;
       }
       workbench.ui.assetGeneratorSubmitting = true;
+      workbench.ui.assetGeneratorSubmissionStartedAt = Date.now();
       await runAction(workbench, "正在生成故事板...", async () => {
         await submitStoryboardImageGenerator(workbench, prompt);
         workbench.ui.assetGeneratorSubmitting = false;
@@ -27556,6 +27686,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await generateStoryboardImages(workbench);
       scrollEpisodeWorkbenchConversationToBottom(workbench);
     } catch (error) {
+      workbench.ui.generationPollingActive = false;
+      workbench.ui.busy = false;
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
       render(workbench);
     }
@@ -27589,6 +27721,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await generateStoryboardVideos(workbench);
       scrollEpisodeWorkbenchConversationToBottom(workbench);
     } catch (error) {
+      workbench.ui.generationPollingActive = false;
+      workbench.ui.busy = false;
       workbench.ui.toast = `操作失败：${friendlyError(error)}`;
       render(workbench);
     }
@@ -34824,23 +34958,8 @@ function resolveEpisodeAssetPreviewUrl(asset) {
 }
 
 function canProceedWithStoryboardGeneration(workbench) {
-  if (workbench.state?.assetReview?.readyForGeneration) {
-    return true;
-  }
-  const selectedStoryboard = getSelectedStoryboard(
-    getActiveStoryboards(workbench),
-    workbench.ui.selectedStoryboardId,
-  );
-  if (!selectedStoryboard) {
-    return false;
-  }
-  const generationState = selectedStoryboard.generationState ?? createEmptyGenerationState();
-  const hasStoryboardReferences = Array.isArray(selectedStoryboard.references) && selectedStoryboard.references.length > 0;
-  const hasQuickReferenceImages = (generationState.quickReferenceItems ?? []).some(
-    (item) => String(item?.kind ?? "") === "image" && item?.url,
-  );
-  const hasFrameLikeImage = Boolean(generationState.firstFrame?.url || generationState.imageReference?.url);
-  return hasStoryboardReferences || hasQuickReferenceImages || hasFrameLikeImage;
+  // Always allow generation - no asset validation required
+  return true;
 }
 
 async function runAction(workbench, message, action, options = {}) {
@@ -41398,6 +41517,7 @@ function closeAssetGeneratorModal(workbench) {
   workbench.ui.assetGeneratorRetryPreviewFile = null;
   workbench.ui.assetGeneratorUploading = false;
   workbench.ui.assetGeneratorSubmitting = false;
+  workbench.ui.assetGeneratorSubmissionStartedAt = 0;
   stopProjectAssetGenerationPolling(workbench);
 }
 
@@ -47418,17 +47538,7 @@ export async function generateStoryboardImages(workbench, options = {}) {
   const submissionKey = `${workbench.ui.selectedEpisodeId ?? ""}:${selectedStoryboard.id}:image`;
   const submissionKeys = workbench.imageGenerationSubmissionKeys ?? new Set();
   workbench.imageGenerationSubmissionKeys = submissionKeys;
-  if (
-    !isStoryboardGenerator &&
-    (
-      submissionKeys.has(submissionKey) ||
-      isCurrentEpisodeComposerGenerationPending(workbench, "storyboard", "image", {
-        storyboardId: selectedStoryboard.id,
-      })
-    )
-  ) {
-    return;
-  }
+  // 允许并发生成，不再检查是否有任务进行中
 
   stopGenerationPolling(workbench);
   const composerDraft = captureStoryboardGenerationComposerDraft(workbench, selectedStoryboard);
@@ -47466,6 +47576,7 @@ export async function generateStoryboardImages(workbench, options = {}) {
   let composerClearedAfterSubmit = false;
 
   try {
+    await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
     const payload = buildImageGenerationPayload(workbench);
     collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
       mediaKind: "image",
@@ -47500,6 +47611,7 @@ export async function generateStoryboardImages(workbench, options = {}) {
     };
     if (isStoryboardGenerator) {
       applyStoryboardGeneratorTaskResult(workbench, result, selectedStoryboard.id, submission);
+      await persistStoryboardConversationEntry(workbench, submittedResult, { includeUserRequest: false });
     } else {
       workbench.ui.imageGenerationResult = submittedResult;
       if (isStoryboardGenerationComposerDraftUnchanged(workbench, selectedStoryboard.id, composerDraft)) {
@@ -47568,12 +47680,7 @@ export async function generateStoryboardVideos(workbench) {
   const submissionKey = `${submissionEpisodeId ?? ""}:${selectedStoryboardId ?? ""}:video`;
   const submissionKeys = workbench.videoGenerationSubmissionKeys ?? new Set();
   workbench.videoGenerationSubmissionKeys = submissionKeys;
-  if (
-    submissionKeys.has(submissionKey) ||
-    isCurrentEpisodeComposerGenerationPending(workbench, "storyboard", "video", { storyboardId: selectedStoryboardId })
-  ) {
-    return;
-  }
+  // 允许并发生成，不再检查是否有任务进行中
   submissionKeys.add(submissionKey);
   if (workbench.root?.querySelector?.(".episode-replica-prompt")) {
     renderEpisodeWorkbenchPromptDockOnly(workbench);
@@ -47585,6 +47692,9 @@ export async function generateStoryboardVideos(workbench) {
     workbench.ui.selectedStoryboardId !== selectedStoryboardId ||
     Number(workbench.videoGenerationSelectionVersion ?? 0) !== submissionSelectionVersion
   ) {
+    // 切换了分镜，取消此次生成并清理状态
+    workbench.ui.generationPollingActive = false;
+    workbench.ui.busy = false;
     return;
   }
   const selectedStoryboard = getSelectedStoryboard(
@@ -47618,6 +47728,7 @@ export async function generateStoryboardVideos(workbench) {
   }
   let clearedComposerDraft = null;
   try {
+    await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
     const payload = buildVideoGenerationPayload(workbench);
     clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
     clearedComposerDraft = captureStoryboardGenerationComposerDraft(
@@ -47814,6 +47925,7 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
   const imageResolutionFallback = workbench.ui.imageResolution ?? selectedImageModel?.defaultParams?.quality ?? selectedImageModel?.defaultParams?.resolution;
   const imageAspectRatioFallback = selectedImageModel?.defaultParams?.aspectRatio;
   return {
+    turnId: createAssetConversationTurnId(),
     mediaKind,
     storyboardId: storyboard?.id ?? null,
     shotId: storyboard?.linkedShotId ?? null,
@@ -48167,9 +48279,31 @@ function listStoryboardConversationHistoryEntries(workbench, storyboardId, media
   const key = buildStoryboardConversationHistoryKey(storyboardId, mediaKind);
   const history = workbench.ui.storyboardConversationHistory ?? {};
   const entries = Array.isArray(history[key]) ? history[key] : [];
-  return mediaKind === "image"
-    ? entries.filter((entry) => !isStoryboardGeneratorTaskResult(entry))
-    : entries;
+  return entries.filter((entry) => (
+    isStoryboardConversationTaskEntry(entry) &&
+    (mediaKind !== "image" || !isStoryboardGeneratorTaskResult(entry))
+  ));
+}
+
+function isStoryboardConversationTaskEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+  if (resolveGenerationTaskIdForConversation(entry)) {
+    return true;
+  }
+  const status = resolveWorkflowStatus(
+    entry?.status ?? entry?.platform?.workflowStatus ?? entry?.workflowStatus,
+  );
+  if (["completed", "succeeded", "failed", "canceled", "manual_review_required", "result_unknown"].includes(status)) {
+    return true;
+  }
+  return Boolean(
+    (Array.isArray(entry?.fixedImages) && entry.fixedImages.length) ||
+    (Array.isArray(entry?.fixedVideos) && entry.fixedVideos.length) ||
+    entry?.result?.imageUrl ||
+    entry?.result?.videoUrl,
+  );
 }
 
 function resolveStoryboardConversationIdentitySet(workbench, storyboardId) {
@@ -48260,6 +48394,7 @@ function replaceStoryboardConversationHistoryEntries(workbench, storyboardId, en
     .filter((entry) =>
       entry &&
       !isDeletedConversationGeneration(workbench, entry) &&
+      isStoryboardConversationTaskEntry(entry) &&
       (mediaKind !== "image" || !isStoryboardGeneratorTaskResult(entry))
     );
   workbench.ui.storyboardConversationHistory = {
@@ -48274,7 +48409,7 @@ function appendStoryboardConversationHistoryEntry(workbench, entry) {
     return;
   }
   const mediaKind = entry?.mediaKind === "video" ? "video" : "image";
-  if (mediaKind === "image" && isStoryboardGeneratorTaskResult(entry)) {
+  if (!isStoryboardConversationTaskEntry(entry) || (mediaKind === "image" && isStoryboardGeneratorTaskResult(entry))) {
     return;
   }
   const storyboardId = entry?.storyboardId ?? entry?.selectionContext?.selectedStoryboardId ?? null;
@@ -48839,8 +48974,9 @@ function resolveStoryboardConversationActionResult(workbench, taskId, mediaKind 
   const targetStoryboardId = storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
   const history = listStoryboardConversationHistoryEntries(workbench, targetStoryboardId, mediaKind);
   const normalizedTaskId = String(taskId ?? "").trim();
-  if (!normalizedTaskId) {
-    return history.at(-1) ?? null;
+  const latestHistoryResult = history.at(-1) ?? null;
+  if (!normalizedTaskId && latestHistoryResult) {
+    return latestHistoryResult;
   }
   const scopedResult = [...history]
     .reverse()
@@ -48850,9 +48986,32 @@ function resolveStoryboardConversationActionResult(workbench, taskId, mediaKind 
   }
   const allHistory = Object.values(workbench.ui.storyboardConversationHistory ?? {})
     .flatMap((items) => Array.isArray(items) ? items : []);
-  return allHistory
+  const historyResult = allHistory
     .reverse()
     .find((item) => resolveGenerationTaskIdForConversation(item) === normalizedTaskId) ?? null;
+  if (historyResult) {
+    return historyResult;
+  }
+
+  // The local submission snapshot remains available even when conversation
+  // persistence has not returned the task yet (or a generator task is excluded
+  // from the normal history). It still contains the prompt and references
+  // needed by the "重新编辑" action.
+  const submissionSnapshot = getActiveStoryboards(workbench)
+    .find((item) => String(item?.id ?? "") === String(targetStoryboardId ?? ""))
+    ?.generationState?.lastSubmission;
+  const snapshotMediaKind = String(submissionSnapshot?.mediaKind ?? "").trim();
+  const snapshotMatchesMediaKind = snapshotMediaKind
+    ? snapshotMediaKind === String(mediaKind)
+    : submissionSnapshot?.sourceSurface === STORYBOARD_GENERATOR_SOURCE_SURFACE && mediaKind === "image";
+  if (
+    submissionSnapshot &&
+    snapshotMatchesMediaKind &&
+    (!normalizedTaskId || resolveGenerationTaskIdForConversation(submissionSnapshot) === normalizedTaskId)
+  ) {
+    return submissionSnapshot;
+  }
+  return null;
 }
 
 function resolveStoryboardResultPrompt(result) {
@@ -50617,6 +50776,7 @@ async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, n
     );
     const submission = {
       id: `batch-video-${storyboard.id}-${Date.now()}`,
+      turnId: createAssetConversationTurnId(),
       mediaKind: "video",
       promptPreview: payload.motionPrompt,
       selectedModelId: payload.model,
@@ -50641,6 +50801,7 @@ async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, n
       lastSubmission: submission,
     }));
     workbench.ui.videoGenerationResult = submission;
+    await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
     const task = await workbench.api.createVideoTask(workbench.ui.selectedEpisodeId, {
       ...payload,
       targetType: "storyboard",
@@ -51540,17 +51701,39 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   if (storyboardTargetId) {
     const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardTargetId);
     const generatorSubmission = storyboard?.generationState?.lastSubmission ?? null;
+    const currentSubmissionTaskId = resolveGenerationTaskIdForConversation(generatorSubmission);
+    const currentSubmissionTurnId = String(generatorSubmission?.turnId ?? "").trim();
+    const polledEntryTurnId = String(selectedStoryboardTarget?.entry?.turnId ?? "").trim();
+    const currentSubmissionStatus = resolveWorkflowStatus(
+      generatorSubmission?.status ??
+        generatorSubmission?.platform?.workflowStatus ??
+        generatorSubmission?.workflowStatus,
+    );
+    const isOlderSubmission = Boolean(
+      generatorSubmission &&
+      (
+        (currentSubmissionTaskId && currentSubmissionTaskId !== taskId) ||
+        (currentSubmissionTurnId && polledEntryTurnId && currentSubmissionTurnId !== polledEntryTurnId)
+      ) &&
+      isGenerationTaskPendingStatus(currentSubmissionStatus),
+    );
+    if (isOlderSubmission) {
+      updateStoryboardConversationHistoryTaskResult(workbench, task, storyboardTargetId, mediaKind);
+      applied = true;
+    }
     const isStoryboardGeneratorTask = mediaKind === "image" &&
       isStoryboardGeneratorTaskResult(task, generatorSubmission);
-    if (isStoryboardGeneratorTask) {
-      applyStoryboardGeneratorTaskResult(workbench, task, storyboardTargetId, generatorSubmission);
-    } else {
-      applyEpisodeGenerationTaskResult(workbench, task, storyboardTargetId, mediaKind, {
-        targetScope: "storyboard",
-        suppressFailureToast: task?.suppressFailureToast === true,
-      });
+    if (!isOlderSubmission) {
+      if (isStoryboardGeneratorTask) {
+        applyStoryboardGeneratorTaskResult(workbench, task, storyboardTargetId, generatorSubmission);
+      } else {
+        applyEpisodeGenerationTaskResult(workbench, task, storyboardTargetId, mediaKind, {
+          targetScope: "storyboard",
+          suppressFailureToast: task?.suppressFailureToast === true,
+        });
+      }
+      applied = true;
     }
-    applied = true;
   }
 
   const assetTargets = resolveAssetBatchGenerationPollTargets(workbench, mediaKind)
@@ -52438,6 +52621,37 @@ function resolveSelectedStoryboardGenerationPollTarget(workbench, storyboardId, 
   };
 }
 
+function updateStoryboardConversationHistoryTaskResult(workbench, task, storyboardId, mediaKind = "image") {
+  const taskId = resolveGenerationTaskIdForConversation(task);
+  if (!taskId || !storyboardId) {
+    return false;
+  }
+  const entries = listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
+  const matchedEntry = entries.find((entry) => resolveGenerationTaskIdForConversation(entry) === taskId);
+  if (!matchedEntry) {
+    return false;
+  }
+  const normalized = normalizeEpisodeTaskForLegacyResult(task, matchedEntry, mediaKind);
+  replaceStoryboardConversationHistoryEntries(
+    workbench,
+    storyboardId,
+    entries.map((entry) => resolveGenerationTaskIdForConversation(entry) === taskId
+      ? {
+          ...entry,
+          ...normalized,
+          storyboardId,
+          selectionContext: {
+            ...(entry?.selectionContext ?? {}),
+            ...(normalized?.selectionContext ?? {}),
+            selectedStoryboardId: storyboardId,
+          },
+        }
+      : entry),
+    mediaKind,
+  );
+  return true;
+}
+
 function resumeSelectedStoryboardGenerationPolling(workbench, options = {}) {
   if (typeof window === "undefined" || typeof window.setTimeout !== "function") {
     return false;
@@ -52447,7 +52661,19 @@ function resumeSelectedStoryboardGenerationPolling(workbench, options = {}) {
   if (!target) {
     return false;
   }
-  if (target.entry?.sourceSurface !== STORYBOARD_GENERATOR_SOURCE_SURFACE) {
+  const selectedStoryboard = getActiveStoryboards(workbench).find((item) => item.id === target.storyboardId) ?? null;
+  const currentSubmission = selectedStoryboard?.generationState?.lastSubmission ?? null;
+  const hasDifferentPendingSubmission = Boolean(
+    currentSubmission?.turnId &&
+    target.entry?.turnId &&
+    String(currentSubmission.turnId).trim() !== String(target.entry.turnId).trim() &&
+    isGenerationTaskPendingStatus(
+      currentSubmission?.status ??
+        currentSubmission?.platform?.workflowStatus ??
+        currentSubmission?.workflowStatus,
+    ),
+  );
+  if (target.entry?.sourceSurface !== STORYBOARD_GENERATOR_SOURCE_SURFACE && !hasDifferentPendingSubmission) {
     const targetKey = mediaKind === "video" ? "videoGenerationResult" : "imageGenerationResult";
     workbench.ui[targetKey] = {
       ...(workbench.ui[targetKey] ?? {}),
@@ -56966,6 +57192,10 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
         const upload = await uploadLocalFile(workbench, file, `episode-attachments/${resolvedAttachmentType}`);
         const mediaKind = resolvedAttachmentType === "audio" ? "audio" : resolvedAttachmentType === "video" ? "video" : "image";
         const previewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl);
+        // For videos, use thumbnail if available, otherwise use video URL as src
+        const videoPreview = resolvedAttachmentType === "video" && upload.thumbnailUrl
+          ? resolveApiUrl(upload.thumbnailUrl)
+          : null;
         return {
           id: upload.storageObjectId ?? `episode-attachment-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
           type: mediaKind,
@@ -56973,7 +57203,8 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
           name: normalizeAssetImportName(file.name),
           fileName: file.name,
           src: previewUrl,
-          preview: resolvedAttachmentType === "audio" ? "" : previewUrl,
+          preview: resolvedAttachmentType === "audio" ? "" : (videoPreview || previewUrl),
+          thumbnailUrl: videoPreview,
           uploadSessionId: upload.uploadSessionId ?? null,
           storageObjectId: upload.storageObjectId ?? null,
           assetVersionId: null,

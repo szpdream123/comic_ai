@@ -115,6 +115,8 @@ function fetchProjectShotImageBatch(origin: string, init: RequestInit = {}) {
 describe("phone auth dev server", { concurrency: false }, () => {
   it("polls SanBao video tasks on read without the unrelated Seedance feature flag", () => {
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("san_bao", {}), true);
+    assert.equal(shouldSyncSeedanceVideoTaskOnRead("globalaiopc_video", {}), true);
+    assert.equal(shouldSyncSeedanceVideoTaskOnRead("global_ai_opc_video", {}), true);
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("volcengine_ark_video", {}), false);
     assert.equal(
       shouldSyncSeedanceVideoTaskOnRead("volcengine_ark_video", { SEEDANCE_PROVIDER_ENABLED: "true" }),
@@ -128,6 +130,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(
       source,
       /async function syncSeedanceVideoTaskOnRead[\s\S]*request\.attempt_id = t\.current_attempt_id[\s\S]*t\.current_attempt_id IS NOT NULL/,
+    );
+    assert.match(
+      source,
+      /async function syncSeedanceVideoTaskOnRead[\s\S]*markGenerationTaskSnapshotSucceeded\(db, \{[\s\S]*resultAssets: resultAsset \? \[resultAsset\] : \[\]/,
     );
     assert.match(
       source,
@@ -739,7 +745,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
             (SELECT id FROM ai_model_configs WHERE model_code = 'global-ai-opc-gpt-image-2'),
             'global-ai-opc-gpt-image-2', 'image',
             'generate', 'succeeded', 'completed', 100,
-            '{"prompt":"雨夜街道"}'::jsonb,
+            jsonb_build_object(
+              'prompt', '雨夜街道',
+              'parameters', jsonb_build_object(
+                'aspectRatio', '16:9',
+                'quickReferences', jsonb_build_array(repeat('A', 200000))
+              )
+            ),
             '[{"sourceUrl":"/generated/task-center-result.png","previewUrl":"/generated/task-center-result.png"}]'::jsonb,
             '2026-07-14T08:00:00.000Z', '2026-07-14T08:00:03.000Z',
             '2026-07-14T08:00:18.000Z', '2026-07-14T08:00:00.000Z',
@@ -859,6 +871,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(Object.hasOwn(envelope.data.items[0], "prompt"), false);
       assert.equal(Object.hasOwn(envelope.data.items[0].requestSummary, "prompt"), false);
       assert.equal(Object.hasOwn(envelope.data.items[0].requestSummary, "promptPreview"), false);
+      assert.equal(envelope.data.items[0].parameters.aspectRatio, "16:9");
+      assert.equal(Object.hasOwn(envelope.data.items[0].parameters, "quickReferences"), false);
+      assert.ok(
+        (taskCenterQueryPayloadBytes ?? Number.POSITIVE_INFINITY) < 64 * 1024,
+        `task-center query payload must stay compact, received ${taskCenterQueryPayloadBytes} bytes`,
+      );
       assert.equal(envelope.data.items[0].result.imageUrl, "/generated/task-center-result.png");
       assert.equal(envelope.data.items[0].submittedAt, "2026-07-14T08:00:00.000Z");
       assert.equal(envelope.data.items[0].startedAt, "2026-07-14T08:00:03.000Z");
@@ -12040,6 +12058,141 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("creates a Seedream task without requiring project ownership for a reference", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_name = 'GlobalAiOpc',
+            provider_model = 'seedream-5.0',
+            provider_protocol = 'global_ai_opc_image',
+            invocation_mode = 'async_polling',
+            status = 'active',
+            provider_config_json = '{
+              "baseURL":"https://zcbservice.aizfw.cn/kyyReactApiServer",
+              "createTaskEndpoint":"/v2/model-center/tasks",
+              "queryTaskEndpoint":"/v2/model-center/tasks/{taskId}",
+              "apiKeyEnv":"GLOBAL_AI_OPC_API_KEY",
+              "requestFormat":"global_ai_opc_model_center_seedream_image"
+            }'::jsonb
+        WHERE model_code = 'jimeng-5-image'
+      `,
+    );
+    const bucket = "kyy-reference-test";
+    const storageObjectId = randomUUID();
+    const signedRequests: Array<{ bucket: string; objectKey: string }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        STORAGE_BUCKET: bucket,
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+        BULLMQ_WORKERS_ENABLED: "false",
+        GLOBAL_AI_OPC_API_KEY: "global-ai-opc-test-key",
+      },
+      storageRuntime: {
+        adapter: {
+          createSignedReadUrl: async (input: { bucket: string; objectKey: string }) => {
+            signedRequests.push({ bucket: input.bucket, objectKey: input.objectKey });
+            return { url: "https://signed.example.test/kyy-style.webp" };
+          },
+        } as never,
+      },
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138000";
+      const cookie = await login(server.origin, phone);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "kyy material authorization bypass test",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, bucket, object_key, content_type, size_bytes, provider,
+            status, etag, created_at, last_verified_at
+          )
+          VALUES ($1, $2, 'unscoped/styleReferences/portrait.webp',
+            'image/webp', 128, 'tencent_cos', 'available', 'kyy-cover-etag', now(), now())
+        `,
+        [storageObjectId, bucket],
+      );
+      const idempotencySuffix = randomUUID();
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `kyy-reference-project-${idempotencySuffix}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Official cover reference",
+          scriptInput: "Episode 1: Use an official prompt cover as the style reference.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({ title: "Official Cover Reference" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const taskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `kyy-reference-task-${idempotencySuffix}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "episode",
+          targetId: episodeId,
+          prompt: "portrait photography",
+          model: "jimeng-5-image",
+          parameters: {
+            aspectRatio: "1:1",
+            resolution: "2K",
+            referenceImages: [{
+              name: "人像摄影",
+              url: `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+            }],
+          },
+        }),
+      });
+      const taskEnvelope = await taskResponse.json();
+      const taskRows = await db.query<{ status: string }>(
+        "SELECT status FROM tasks WHERE id = $1",
+        [taskEnvelope.data?.taskId],
+      );
+
+      assert.equal(taskResponse.status, 200, JSON.stringify(taskEnvelope));
+      assert.ok(taskEnvelope.data?.taskId);
+      assert.equal(taskRows.rows[0]?.status, "queued");
+      assert.ok(signedRequests.length > 0);
+      assert.deepEqual(
+        [...new Set(signedRequests.map((request) => `${request.bucket}/${request.objectKey}`))],
+        [`${bucket}/unscoped/styleReferences/portrait.webp`],
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects configured generation models when the user has no active membership", async () => {
     const db = await createMigratedTestDb();
     await db.query(
@@ -13551,6 +13704,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const videoTaskEnvelope = await videoTaskResponse.json();
       const taskId = videoTaskEnvelope.data.taskId;
       const outbox = await db.query<{
+        user_id: string | null;
         event_type: string;
         status: string;
         payload_json: {
@@ -13560,7 +13714,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           queueName?: string;
         };
       }>(
-        "SELECT event_type, status, payload_json FROM outbox_events WHERE event_type = 'generation.task.created'",
+        "SELECT user_id, event_type, status, payload_json FROM outbox_events WHERE event_type = 'generation.task.created'",
       );
       const providerRequests = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM provider_requests WHERE task_id = $1",
@@ -13599,6 +13753,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(providerRequests.rows[0]?.count, 1);
       assert.equal(outbox.rows.length, 1);
       assert.equal(outbox.rows[0]?.status, "pending");
+      assert.equal(outbox.rows[0]?.user_id, userId);
       assert.equal(outbox.rows[0]?.payload_json.taskId, taskId);
       assert.equal(outbox.rows[0]?.payload_json.modelCode, "seedance-i2v-pro");
       assert.equal(outbox.rows[0]?.payload_json.mediaType, "video");
@@ -17228,6 +17383,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(response.status, 200, JSON.stringify(body));
       assert.equal(
         body.data.proxyUrl,
+        `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+      );
+
+      const proxyResponse = await fetch(`${server.origin}/api/storage/proxy?url=${encodeURIComponent(sourceUrl)}`, {
+        headers: { cookie },
+        redirect: "manual",
+      });
+      assert.equal(proxyResponse.status, 307);
+      assert.equal(
+        proxyResponse.headers.get("location"),
         `/api/storage/objects/${storageObjectId}/content?proxy=1`,
       );
     } finally {

@@ -4615,15 +4615,15 @@ WITH globalaiopc_seedance20_configs AS (
       'sd_2.0_special',
       'Seedance 2.0 特价版（图片参考）',
       'sd_2.0_special',
-      'globalaiopc_seedance_special',
-      '/v1/seedance-special/videos',
+      'globalaiopc_model_center_video',
+      '/v2/model-center/tasks',
       '["video.text_to_video","video.image_to_video","video.first_last_frame_to_video","video.reference_image_to_video"]'::jsonb,
       '{"prompt":true,"firstFrame":true,"lastFrame":true,"referenceImages":true,"referenceVideo":false,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"seedance2_special","membershipPriorityEligible":true}'::jsonb,
       '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p","2k","4k"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15},"seed":{"label":"随机种子","type":"integer","required":false,"minimum":-1},"generateAudio":{"label":"生成音频","type":"boolean","providerKey":"generate_audio","required":false},"returnLastFrame":{"label":"返回尾帧","type":"boolean","providerKey":"return_last_frame","required":false}}'::jsonb,
       '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"seed":-1,"generateAudio":true,"returnLastFrame":false}'::jsonb,
       '{"unit":"video","baseCredits":100,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35,"2k":1.8,"4k":2.6}}'::jsonb,
       '{"maxPromptLength":2000,"maxReferences":9,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p","2k","4k"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","audio/mpeg","audio/wav"]}'::jsonb,
-      '{"label":"Seedance 2.0 特价版（图片参考）","group":"GlobalAiOpc Seedance 2.0 特价版","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/seedance-special/seedance-special-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+      '{"label":"Seedance 2.0 特价版（图片参考）","group":"客易云 Model Center","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/model-center/video-gen/sd_2.0_special","parameterDisplayLanguage":"zh-CN"}'::jsonb,
       45,
       'GlobalAiOpc Seedance 2.0 特价版图片参考组：sd_2.0_special_720p、sd_2.0_special_1080p、sd_2.0_special_2k、sd_2.0_special_4k。'
     ),
@@ -4667,7 +4667,10 @@ SELECT
   jsonb_build_object(
     'baseURL', 'https://zcbservice.aizfw.cn/kyyReactApiServer',
     'createTaskEndpoint', config.create_task_endpoint,
-    'queryTaskEndpoint', '/v1/result/{taskId}',
+    'queryTaskEndpoint', CASE
+      WHEN config.request_format = 'globalaiopc_model_center_video' THEN '/v2/model-center/tasks/{taskId}'
+      ELSE '/v1/result/{taskId}'
+    END,
     'apiKeyEnv', COALESCE(NULLIF(existing.provider_config_json->>'apiKeyEnv', ''), 'GLOBAL_AI_OPC_API_KEY'),
     'requestFormat', config.request_format,
     'timeoutMs', 10800000

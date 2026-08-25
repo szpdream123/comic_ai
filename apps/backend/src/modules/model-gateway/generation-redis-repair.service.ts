@@ -17,13 +17,17 @@ import {
   markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotResultUnknown,
+  markGenerationTaskSnapshotQueued,
 } from "./generation-task-snapshot.service.ts";
 import {
   appendGenerationTaskCreatedOutboxEvent,
   appendGenerationTaskFinalizeRequestedOutboxEvent,
 } from "./generation-outbox.service.ts";
 import { failSeedanceVideoTaskBeforeProviderSubmission } from "./seedance-video.worker.ts";
-import { createGenerationProviderRouteIdentity } from "./generation-model-config-snapshot.ts";
+import {
+  createGenerationProviderRouteIdentity,
+  readGenerationProviderRouteReferences,
+} from "./generation-model-config-snapshot.ts";
 import {
   hasRecoverableGenerationQueueSuccessor,
   markGenerationQueueStagePublished,
@@ -72,6 +76,8 @@ interface ExpiredGenerationSubmitLeaseRow {
   provider_status: string | null;
   external_submission_started_at: Date | string | null;
   external_request_id: string | null;
+  submit_assignment_status: "publishing" | "admitted" | "released" | null;
+  submit_assignment_published_at: Date | string | null;
 }
 
 const defaultStaleDispatchMs = 2 * 60 * 1000;
@@ -321,8 +327,12 @@ export async function failStaleGenerationTasksBeforeProviderSubmission(
           SELECT 1 FROM provider_requests pr
           WHERE pr.task_id = t.id
             AND (
-              pr.attempt_id = t.current_attempt_id
-              OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+            pr.attempt_id = t.current_attempt_id
+              OR (
+                pr.attempt_id IS NULL
+                AND pr.external_submission_started_at IS NULL
+                AND pr.external_request_id IS NULL
+              )
             )
             AND pr.external_submission_started_at IS NOT NULL
         )
@@ -375,7 +385,7 @@ export async function repairQueuedGenerationTaskOutbox(
         AND t.task_type IN ('episode_generate_video', 'episode_generate_image', 'episode_generate_audio')
         AND t.scheduled_at <= $1
         AND (
-          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
+          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video'))
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
           OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
@@ -417,11 +427,45 @@ export async function repairQueuedGenerationTaskOutbox(
       continue;
     }
 
+    // The candidate query and claim are separate statements. An outbox
+    // dispatcher may publish the original event in that gap, so check again
+    // before creating a repair event and avoid duplicate task delivery.
+    const activeOutbox = await queryOne<{ id: string }>(
+      db,
+      `
+        SELECT id
+        FROM outbox_events
+        WHERE event_type = 'generation.task.created'
+          AND payload_json->>'taskId' = $1::text
+          AND status IN ('pending', 'processing', 'failed')
+        LIMIT 1
+      `,
+      [candidate.task_id],
+    );
+    if (activeOutbox) {
+      continue;
+    }
+    const activeAssignment = await queryOne<{ assignment_key: string }>(
+      db,
+      `
+        SELECT assignment_key
+        FROM generation_queue_stage_assignments
+        WHERE task_id = $1
+          AND stage = 'submit'
+          AND status IN ('publishing', 'admitted')
+        LIMIT 1
+      `,
+      [candidate.task_id],
+    );
+    if (activeAssignment) {
+      continue;
+    }
+
     const snapshot = parseSnapshot(candidate.input_snapshot_json);
     const mediaType = candidate.task_type === "episode_generate_image"
       ? "image"
       : candidate.task_type === "episode_generate_audio" ? "audio" : "video";
-    await appendGenerationTaskCreatedOutboxEvent(db, {
+    const repairedEvent = await appendGenerationTaskCreatedOutboxEvent(db, {
       userId: candidate.user_id,
       workflowId: candidate.workflow_id,
       taskId: candidate.task_id,
@@ -431,11 +475,14 @@ export async function repairQueuedGenerationTaskOutbox(
       targetType: readString(snapshot.targetType) || candidate.target_entity_type,
       targetId: readString(snapshot.targetId) || candidate.target_entity_id,
       providerExecutor: readString(snapshot.providerExecutor) || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance"),
+      ...readGenerationProviderRouteReferences(snapshot),
       dispatchToken: `redis-repair-${randomUUID()}`,
       ...generationPriorityFromSnapshot(snapshot),
       availableAt: input.now,
     });
-    repairedTaskIds.push(candidate.task_id);
+    if (repairedEvent) {
+      repairedTaskIds.push(candidate.task_id);
+    }
   }
 
   return { repairedTaskIds };
@@ -462,7 +509,9 @@ export async function repairExpiredGenerationSubmitLeases(
         provider.id AS provider_request_id,
         provider.status AS provider_status,
         provider.external_submission_started_at,
-        provider.external_request_id
+        provider.external_request_id,
+        assignment.status AS submit_assignment_status,
+        assignment.published_at AS submit_assignment_published_at
       FROM tasks task
       LEFT JOIN LATERAL (
         SELECT
@@ -483,6 +532,14 @@ export async function repairExpiredGenerationSubmitLeases(
         ORDER BY request.updated_at DESC, request.id DESC
         LIMIT 1
       ) provider ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT status, published_at
+        FROM generation_queue_stage_assignments
+        WHERE task_id = task.id
+          AND stage = 'submit'
+        ORDER BY created_at DESC, assignment_key DESC
+        LIMIT 1
+      ) assignment ON TRUE
       WHERE task.status = 'running'
         AND task.current_attempt_id IS NOT NULL
         AND task.locked_until IS NOT NULL
@@ -528,6 +585,19 @@ export async function repairExpiredGenerationSubmitLeases(
       continue;
     }
 
+    if (
+      candidate.submit_assignment_status === "released"
+      && !candidate.submit_assignment_published_at
+      && await requeueGenerationTaskAfterUnpublishedSubmit(db, {
+        taskId: candidate.id,
+        attemptId: candidate.current_attempt_id,
+        now: input.now,
+      })
+    ) {
+      requeuedTaskIds.push(candidate.id);
+      continue;
+    }
+
     if (await failGenerationTaskAfterQueueError(db, {
       taskId: candidate.id,
       expectedAttemptId: candidate.current_attempt_id,
@@ -545,6 +615,77 @@ export async function repairExpiredGenerationSubmitLeases(
     resultUnknownTaskIds,
     repairedTaskIds: failedTaskIds,
   };
+}
+
+async function requeueGenerationTaskAfterUnpublishedSubmit(
+  db: SqlDatabase,
+  input: { taskId: string; attemptId: string | null; now: Date },
+) {
+  if (!input.attemptId) return false;
+  await db.query("BEGIN");
+  try {
+    const attempt = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE task_attempts
+        SET status = 'canceled',
+            failure_code = 'generation_queue_publish_not_completed',
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            finished_at = $3,
+            updated_at = $3
+        WHERE id = $2
+          AND task_id = $1
+          AND status IN ('created', 'running', 'result_unknown')
+        RETURNING id
+      `,
+      [input.taskId, input.attemptId, input.now],
+    );
+    const task = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE tasks
+        SET status = 'queued',
+            failure_code = NULL,
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            current_attempt_id = NULL,
+            max_attempts = GREATEST(max_attempts, attempt_count + 1),
+            updated_at = $3
+        WHERE id = $1
+          AND current_attempt_id = $2
+          AND status = 'running'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM provider_requests request
+            WHERE request.task_id = $1
+              AND (
+                request.external_submission_started_at IS NOT NULL
+                OR request.external_request_id IS NOT NULL
+              )
+          )
+        RETURNING id
+      `,
+      [input.taskId, input.attemptId, input.now],
+    );
+    if (!attempt || !task) {
+      await db.query("ROLLBACK");
+      return false;
+    }
+    await markGenerationTaskSnapshotQueued(db, {
+      taskId: input.taskId,
+      progressStage: "queue_publish_retry",
+      progressPercent: 5,
+      now: input.now,
+    });
+    await db.query("COMMIT");
+    return true;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 async function clearExpiredGenerationSubmitLease(
@@ -971,7 +1112,7 @@ export async function repairRunningSeedancePollJobs(
           )
         )
         AND (
-          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
+          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video'))
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
           OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
@@ -1141,7 +1282,7 @@ export async function repairRunningSeedancePollJobs(
           )
         )
         AND (
-          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
+          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video'))
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
           OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
@@ -1333,13 +1474,13 @@ async function markGenerationTaskRedisRepairClaimed(
     db,
     `
       UPDATE tasks
-      SET last_dispatched_at = $2,
+      SET last_dispatched_at = GREATEST(COALESCE(last_dispatched_at, $2), $2),
           updated_at = $2
       WHERE id = $1
         AND status = 'queued'
       AND task_type = $4
       AND (
-        (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
+        (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video'))
         OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
         OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
       )
@@ -1376,7 +1517,7 @@ async function markRunningPollRepairClaimed(
           AND failure_code = 'generation_queue_error'
       ), claimed_task AS (
         UPDATE tasks
-        SET last_dispatched_at = $2,
+        SET last_dispatched_at = GREATEST(COALESCE(last_dispatched_at, $2), $2),
             status = CASE
               WHEN status = 'manual_review_required' AND failure_code = 'generation_queue_error'
                 THEN 'running'
@@ -1403,7 +1544,7 @@ async function markRunningPollRepairClaimed(
         )
         AND task_type = $4
         AND (
-          (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
+          (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video'))
           OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
           OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
@@ -1490,7 +1631,7 @@ async function markRunningFinalizeRepairClaimed(
           )
           AND task_type = $4
           AND (
-            (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
+            (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video'))
             OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
             OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
           )
@@ -1553,7 +1694,7 @@ async function markRunningFinalizeRepairClaimed(
             WHEN candidate.recovered_image_failure THEN NULL
             ELSE task.failure_code
           END,
-          last_dispatched_at = $2,
+          last_dispatched_at = GREATEST(COALESCE(task.last_dispatched_at, $2), $2),
           updated_at = $2
       FROM candidate
       WHERE task.id = candidate.id

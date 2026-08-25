@@ -6,9 +6,7 @@ import { BananaRouterProviderAdapter } from "./bananarouter.provider-adapter.ts"
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
-import { GlobalAiOpcImageProviderAdapter } from "./global-ai-opc-image.provider-adapter.ts";
-import { GlobalAiOpcVideoProviderAdapter } from "./global-ai-opc-video.provider-adapter.ts";
-import { GlobalAiOpcSoundCloneProviderAdapter } from "./global-ai-opc-sound-clone.provider-adapter.ts";
+import { GlobalAiOpcVideoProviderAdapter } from "./globalaiopc-video.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { ModelError } from "./model-error.ts";
@@ -17,6 +15,8 @@ import { SaierVideoProviderAdapter } from "./saier-video.provider-adapter.ts";
 import { SanBaoProviderAdapter } from "./san-bao.provider-adapter.ts";
 import { SeedanceVideoProviderAdapter } from "./seedance-video.provider-adapter.ts";
 import { VolcengineArkImageProviderAdapter } from "./volcengine-ark-image.provider-adapter.ts";
+import { GlobalAiOpcImageProviderAdapter } from "./global-ai-opc-image.provider-adapter.ts";
+import { GlobalAiOpcSoundCloneProviderAdapter } from "./globalaiopc-sound-clone.provider-adapter.ts";
 import {
   normalizeProviderProtocol,
   resolveImageProviderAdapterKey,
@@ -27,7 +27,6 @@ export interface ModelProviderAdapterConfig {
   providerModel?: string | null;
   mediaType?: string | null;
   providerConfig?: Record<string, unknown> | null;
-  mediaType?: string | null;
   invocationMode?: string | null;
 }
 
@@ -140,32 +139,12 @@ export function createProviderAdapterFromModelConfig(
       fetchImpl,
     });
   }
-  if (
-    providerProtocol === "globalaiopc_video" ||
-    providerProtocol === "global_ai_opc_video"
-  ) {
-    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
-    if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
-    }
-
-    return new GlobalAiOpcVideoProviderAdapter({
-      apiKey: resolveProviderApiKey(providerConfig, env),
-      model: modelConfig.providerModel?.trim() || undefined,
-      createTaskEndpoint,
-      queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
-      defaultRequestParams: readRecord(providerConfig.defaultRequestParams),
-      requestFormat: readNonEmptyString(providerConfig.requestFormat),
-      fetchImpl,
-    });
-  }
-
   const imageAdapterKey = resolveImageProviderAdapterKey(providerProtocol, providerConfig);
 
   if (imageAdapterKey === "openai_images") {
     const endpoint = resolveProviderEndpoint(providerConfig);
     if (!endpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new OpenAIImagesProviderAdapter({
@@ -194,7 +173,7 @@ export function createProviderAdapterFromModelConfig(
 
     const imageEndpoint = resolveProviderEndpoint(providerConfig);
     if (!imageEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
     return new LingdongApiProviderAdapter({
       apiKey: resolveProviderApiKey(providerConfig, env),
@@ -208,7 +187,7 @@ export function createProviderAdapterFromModelConfig(
   if (imageAdapterKey === "cumob_image") {
     const endpoint = resolveProviderEndpoint(providerConfig);
     if (!endpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new CumobImageProviderAdapter({
@@ -226,9 +205,8 @@ export function createProviderAdapterFromModelConfig(
       resolveProviderEndpoint(providerConfig, "createTaskEndpoint") ??
       resolveProviderEndpoint(providerConfig);
     if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
-
     return new GlobalAiOpcImageProviderAdapter({
       apiKey: resolveProviderApiKey(providerConfig, env),
       model: modelConfig.providerModel?.trim() || undefined,
@@ -245,7 +223,7 @@ export function createProviderAdapterFromModelConfig(
       resolveProviderEndpoint(providerConfig, "createTaskEndpoint") ??
       resolveProviderEndpoint(providerConfig);
     if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new VolcengineArkImageProviderAdapter({
@@ -261,7 +239,7 @@ export function createProviderAdapterFromModelConfig(
   if (providerProtocol === "extra_token_video") {
     const extraTokenBaseURL = resolveExtraTokenVideoBaseURL(providerConfig);
     if (!extraTokenBaseURL) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new ExtraTokenVideoProviderAdapter({
@@ -273,19 +251,57 @@ export function createProviderAdapterFromModelConfig(
     });
   }
 
+  if (providerProtocol === "globalaiopc_video" || providerProtocol === "global_ai_opc_video") {
+    if (modelConfig.mediaType?.trim() !== "video") {
+      throw providerAdapterConfigError("provider_request_format_media_mismatch", { providerProtocol });
+    }
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!createTaskEndpoint) {
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
+    }
+    if (!queryTaskEndpoint) {
+      throw providerAdapterConfigError("provider_query_endpoint_required", { providerProtocol });
+    }
+    return new GlobalAiOpcVideoProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint,
+      fetchImpl,
+    });
+  }
+
   if (providerProtocol === "saier_video") {
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
     const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
     if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
     if (!queryTaskEndpoint) {
-      throw new Error("provider_query_endpoint_required");
+      throw providerAdapterConfigError("provider_query_endpoint_required", { providerProtocol });
     }
 
     return new SaierVideoProviderAdapter({
       apiKey: resolveProviderApiKey(providerConfig, env),
       model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint,
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "globalaiopc_sound_clone" || providerProtocol === "global_ai_opc_sound_clone") {
+    if (modelConfig.mediaType?.trim() !== "audio") {
+      throw providerAdapterConfigError("provider_request_format_media_mismatch", { providerProtocol });
+    }
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!createTaskEndpoint || !queryTaskEndpoint) {
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
+    }
+    return new GlobalAiOpcSoundCloneProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
       createTaskEndpoint,
       queryTaskEndpoint,
       fetchImpl,
@@ -317,7 +333,7 @@ export function createProviderAdapterFromModelConfig(
       createTaskEndpoint?.includes("/contents/generations/tasks")
     ) {
       if (!createTaskEndpoint) {
-        throw new Error("provider_endpoint_required");
+        throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
       }
 
       return new SeedanceVideoProviderAdapter({
@@ -335,7 +351,7 @@ export function createProviderAdapterFromModelConfig(
     ) {
       const endpoint = createTaskEndpoint ?? imageGenerationEndpoint;
       if (!endpoint) {
-        throw new Error("provider_endpoint_required");
+        throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
       }
 
       return new VolcengineArkImageProviderAdapter({
@@ -352,7 +368,7 @@ export function createProviderAdapterFromModelConfig(
 
     const endpoint = resolveProviderEndpoint(providerConfig);
     if (!endpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new HttpProviderAdapter({
@@ -375,7 +391,7 @@ export function createProviderAdapterFromModelConfig(
       });
     }
     if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new SeedanceVideoProviderAdapter({
@@ -390,7 +406,7 @@ export function createProviderAdapterFromModelConfig(
   if (providerProtocol === "aliyun_bailian_audio") {
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
     if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new AliyunBailianAudioProviderAdapter({
@@ -404,7 +420,7 @@ export function createProviderAdapterFromModelConfig(
 
   if (providerProtocol === "apimart_audio") {
     const baseURL = readNonEmptyString(providerConfig.baseURL);
-    if (!baseURL) throw new Error("provider_endpoint_required");
+    if (!baseURL) throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     return new ApiMartAudioProviderAdapter({
       apiKey: resolveProviderApiKey(providerConfig, env),
       model: modelConfig.providerModel?.trim() || undefined,
@@ -415,24 +431,10 @@ export function createProviderAdapterFromModelConfig(
     });
   }
 
-  if (providerProtocol === "globalaiopc_sound_clone") {
-    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
-    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
-    if (!createTaskEndpoint || !queryTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
-    }
-    return new GlobalAiOpcSoundCloneProviderAdapter({
-      apiKey: resolveProviderApiKey(providerConfig, env),
-      createTaskEndpoint,
-      queryTaskEndpoint,
-      fetchImpl,
-    });
-  }
-
   if (providerProtocol === "aliyun_bailian_video") {
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
     if (!createTaskEndpoint) {
-      throw new Error("provider_endpoint_required");
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
     }
 
     return new AliyunBailianVideoProviderAdapter({
@@ -448,7 +450,23 @@ export function createProviderAdapterFromModelConfig(
     return createCreatorDevProviderAdapter();
   }
 
-  throw new Error("provider_adapter_missing");
+  throw providerAdapterConfigError("provider_adapter_missing", {
+    providerProtocol,
+    mediaType: readNonEmptyString(modelConfig.mediaType) ?? null,
+  });
+}
+
+// Adapter construction runs at submissionStage "provider_adapter_init", before
+// any provider HTTP call. These used to be bare `new Error(...)`, carrying
+// neither `failureCode` nor `code`, so readErrorFailureCode() returned
+// undefined and the worker collapsed a precise configuration fault into the
+// generic "provider_submission_failed" with the misleading
+// "修改素材或提示词" message. Attaching failureCode keeps the real cause.
+function providerAdapterConfigError(
+  failureCode: string,
+  details: Record<string, unknown> = {},
+) {
+  return Object.assign(new Error(failureCode), { failureCode, ...details });
 }
 
 export function validateBananaRouterProviderConfig(
@@ -503,11 +521,18 @@ function resolveProviderEndpoint(
   providerConfig: Record<string, unknown>,
   endpointField = "endpoint",
 ): string | undefined {
-  const modelCenterVideo = providerConfig.requestFormat === "globalaiopc_model_center_video";
-  const requestPath = !modelCenterVideo && (endpointField === "endpoint" || endpointField === "createTaskEndpoint")
+  const configuredEndpoint = readNonEmptyString(providerConfig[endpointField]);
+  const requestPath = endpointField === "endpoint" || endpointField === "createTaskEndpoint"
     ? readNonEmptyString(providerConfig.requestPath)
     : undefined;
-  const endpoint = requestPath ?? readNonEmptyString(providerConfig[endpointField]);
+  const preferConfiguredEndpoint = endpointField === "createTaskEndpoint"
+    && [
+      "global_ai_opc_model_center_seedream_image",
+      "globalaiopc_model_center_video",
+    ].includes(String(providerConfig.requestFormat ?? ""));
+  const endpoint = preferConfiguredEndpoint
+    ? configuredEndpoint ?? requestPath
+    : requestPath ?? configuredEndpoint;
   const baseURL = readNonEmptyString(providerConfig.baseURL);
 
   if (endpoint && isAbsoluteHttpUrl(endpoint)) {
@@ -542,15 +567,15 @@ function resolveProviderApiKey(
     });
   }
 
-  const apiKey = env[apiKeyEnv]?.trim();
-  if (!apiKey) {
-    throw Object.assign(new Error("provider_api_key_missing"), {
-      failureCode: "provider_api_key_missing",
-      apiKeyEnv,
-    });
+  const configuredApiKey = readNonEmptyString(env[apiKeyEnv]);
+  if (configuredApiKey) {
+    return configuredApiKey;
   }
 
-  return apiKey;
+  throw Object.assign(new Error("provider_api_key_missing"), {
+    failureCode: "provider_api_key_missing",
+    apiKeyEnv,
+  });
 }
 
 function resolveOptionalProviderApiKey(
@@ -567,7 +592,7 @@ function resolveOptionalProviderApiKey(
     return undefined;
   }
 
-  return env[apiKeyEnv]?.trim() || undefined;
+  return readNonEmptyString(env[apiKeyEnv]);
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

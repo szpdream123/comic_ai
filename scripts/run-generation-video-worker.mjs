@@ -62,6 +62,10 @@ const [
   import("../apps/backend/src/modules/model-gateway/generation-stage-successor.store.ts"),
 ]);
 
+// Worker isolation configuration
+const { resolveWorkerIsolationConfig } = await import("../apps/backend/src/modules/model-gateway/worker-isolation.config.ts");
+const isolationConfig = resolveWorkerIsolationConfig(process.env);
+
 const config = loadGenerationQueueConfig(process.env);
 const db = await createDevDb();
 const generationWorkerLeaseOwnerId = `${hostname()}:${process.pid}:${randomUUID()}`;
@@ -219,7 +223,27 @@ const processors = {
       now,
     });
   },
+  async submitGlobalAiOpcVideo({ taskId, userConcurrencyLimit, now }) {
+    return processSeedanceVideoSubmitJob(db, {
+      taskId,
+      runtime: storageRuntime,
+      env: process.env,
+      rateLimiter,
+      userConcurrencyLimit,
+      now,
+    });
+  },
   async pollSeedanceVideo({ taskId, attemptId, now }) {
+    return processSeedanceVideoPollJob(db, {
+      taskId,
+      expectedAttemptId: attemptId ?? null,
+      runtime: storageRuntime,
+      env: process.env,
+      rateLimiter,
+      now,
+    });
+  },
+  async pollGlobalAiOpcVideo({ taskId, attemptId, now }) {
     return processSeedanceVideoPollJob(db, {
       taskId,
       expectedAttemptId: attemptId ?? null,
@@ -237,7 +261,24 @@ const processors = {
       now,
     });
   },
+  async expireGlobalAiOpcVideo({ taskId, attemptId, now }) {
+    return expireSeedanceVideoPollJob(db, {
+      taskId,
+      expectedAttemptId: attemptId ?? null,
+      env: process.env,
+      now,
+    });
+  },
   async finalizeSeedanceVideoArtifact({ taskId, attemptId, now }) {
+    return finalizeSeedanceVideoArtifactJob(db, {
+      taskId,
+      expectedAttemptId: attemptId ?? null,
+      runtime: storageRuntime,
+      env: process.env,
+      now,
+    });
+  },
+  async finalizeGlobalAiOpcVideoArtifact({ taskId, attemptId, now }) {
     return finalizeSeedanceVideoArtifactJob(db, {
       taskId,
       expectedAttemptId: attemptId ?? null,
@@ -255,7 +296,25 @@ const processors = {
       now,
     });
   },
+  async fetchGlobalAiOpcVideoArtifact({ taskId, attemptId, now }) {
+    return fetchSeedanceVideoArtifactJob(db, {
+      taskId,
+      expectedAttemptId: attemptId ?? null,
+      runtime: storageRuntime,
+      env: process.env,
+      now,
+    });
+  },
   async persistSeedanceVideoArtifact({ taskId, attemptId, now }) {
+    return persistSeedanceVideoArtifactJob(db, {
+      taskId,
+      expectedAttemptId: attemptId ?? null,
+      runtime: storageRuntime,
+      env: process.env,
+      now,
+    });
+  },
+  async persistGlobalAiOpcVideoArtifact({ taskId, attemptId, now }) {
     return persistSeedanceVideoArtifactJob(db, {
       taskId,
       expectedAttemptId: attemptId ?? null,
@@ -423,13 +482,21 @@ const dynamicShardRunner = config.sharding.enabled
           rateLimitMax: config.sharding.rateLimitMax,
           rateLimitDurationMs: config.sharding.rateLimitDurationMs,
         }));
-        const leasedQueueNames = await reconcileGenerationQueueWorkerLeases(db, {
-          ownerId: generationWorkerLeaseOwnerId,
-          candidateQueueNames: prioritizeGenerationShards(shardSpecs).map((shard) => shard.queueName),
-          limit: config.sharding.workerQueuesPerProcess,
-          now: new Date(),
-          leaseMs: generationWorkerLeaseMs,
-        });
+        const prioritizedQueueNames = prioritizeGenerationShards(shardSpecs)
+          .map((shard) => shard.queueName);
+        // Non-production environments use isolated BullMQ prefixes but share
+        // the queue directory database. A global DB lease held by production
+        // must not prevent the local/staging worker from consuming its own
+        // Redis namespace.
+        const leasedQueueNames = config.workerEnvironment === "production"
+          ? await reconcileGenerationQueueWorkerLeases(db, {
+              ownerId: generationWorkerLeaseOwnerId,
+              candidateQueueNames: prioritizedQueueNames,
+              limit: config.sharding.workerQueuesPerProcess,
+              now: new Date(),
+              leaseMs: generationWorkerLeaseMs,
+            })
+          : prioritizedQueueNames.slice(0, config.sharding.workerQueuesPerProcess);
         const leased = new Set(leasedQueueNames);
         return shardSpecs.filter((shard) => leased.has(shard.queueName));
       },
@@ -532,6 +599,14 @@ for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pol
 console.info(
   `[generation-video] Worker started. GENERATION_SUBMIT_IMAGE_QUEUE=${config.queues.submitImage} GENERATION_SUBMIT_VIDEO_QUEUE=${config.queues.submitVideo} GENERATION_POLL_IMAGE_QUEUE=${config.queues.pollImage} GENERATION_POLL_VIDEO_QUEUE=${config.queues.pollVideo} GENERATION_POLL_AUDIO_QUEUE=${config.queues.pollAudio} GENERATION_FINALIZE_ARTIFACT_QUEUE=${config.queues.finalizeArtifact}`,
 );
+
+if (isolationConfig.enableIsolation) {
+  console.info(
+    `[generation-video] Worker Isolation: ENABLED | Environment: ${isolationConfig.workerEnvironment} | Detected Host: ${isolationConfig.detectedHost} | Worker ID Prefix: ${isolationConfig.workerIdPrefix}`,
+  );
+} else {
+  console.info(`[generation-video] Worker Isolation: DISABLED`);
+}
 
 function trackGenerationAssignmentRelease(job, reason) {
   generationAssignmentReleases.track(releaseGenerationAssignment(job, reason));

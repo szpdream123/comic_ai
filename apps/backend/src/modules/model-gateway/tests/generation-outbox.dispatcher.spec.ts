@@ -41,6 +41,39 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     }
   });
 
+  it("serializes concurrent task event appends behind the task dispatch guard", async () => {
+    const db = await createMigratedTestDb();
+    const input = {
+      workflowId: "40000000-0000-4000-8000-000000000002",
+      taskId: "50000000-0000-4000-8000-000000000002",
+      kind: "video" as const,
+      modelCode: "seedance-i2v-pro",
+      queueName: "generation-submit-video",
+      targetType: "episode",
+      targetId: "60000000-0000-4000-8000-000000000002",
+      providerExecutor: "seedance",
+      availableAt: new Date("2026-06-03T00:00:00.000Z"),
+    };
+
+    try {
+      const [first, second] = await Promise.all([
+        appendGenerationTaskCreatedOutboxEvent(db, input),
+        appendGenerationTaskCreatedOutboxEvent(db, input),
+      ]);
+      const rows = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.created'
+          AND payload_json->>'taskId' = $1
+      `, [input.taskId]);
+
+      assert.equal(first?.id, second?.id);
+      assert.equal(rows.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("publishes generation task events to BullMQ and leaves unrelated outbox events untouched", async () => {
     const db = await createMigratedTestDb();
     const published: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];

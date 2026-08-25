@@ -256,7 +256,7 @@
       .dashboard-queue-badge.success { color: #167047; border-color: #b9dfca; background: #f4fbf6; }
       .dashboard-queue-badge.warning { color: #9a5b08; border-color: #ead19c; background: #fffaf0; }
       .dashboard-queue-badge.danger { color: #b42318; border-color: #f0b8b2; background: #fff6f5; }
-      .dashboard-queue-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+      .dashboard-queue-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
       .dashboard-queue-item { min-width: 0; padding: 13px; border: 1px solid #e0e7ef; border-radius: 5px; background: #fbfcfe; }
       .dashboard-queue-item.degraded { border-color: #e8c98e; background: #fffaf1; }
       .dashboard-queue-item.unavailable { border-color: #efb7b1; background: #fff7f6; }
@@ -269,6 +269,7 @@
       .dashboard-queue-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
       .dashboard-queue-count span { display: block; color: #718399; font-size: 10px; }
       .dashboard-queue-count strong { display: block; margin-top: 3px; color: #1d3047; font-size: 16px; font-variant-numeric: tabular-nums; }
+      .dashboard-queue-count.has-failed strong { color: #d92d20; font-weight: 700; }
       .dashboard-queue-item-actions { display: flex; justify-content: flex-end; margin-top: 12px; padding-top: 10px; border-top: 1px solid #eadfca; }
       .dashboard-queue-manage { border: 0; background: transparent; color: #8a5108; cursor: pointer; font-size: 11px; font-weight: 750; }
       .dashboard-queue-manage:hover { color: #663900; text-decoration: underline; }
@@ -3533,20 +3534,46 @@
         const redisTone = health.redis?.status === "healthy" ? "success" : "danger";
         const overallTone = !runtimeDegraded ? "success" : health.status === "unavailable" || outboxStale ? "danger" : "warning";
         const workerCount = queues.reduce((sum, queue) => sum + (Number.isFinite(Number(queue.workerCount)) ? Number(queue.workerCount) : 0), 0);
-        const queueItems = queues.map((queue) => {
+
+        // 按状态排序：先显示有问题的队列，再显示正常的队列，最后是死信队列
+        const sortedQueues = [...queues].sort((a, b) => {
+          const aIsDeadLetter = a.role === "dead_letter" ? 1 : 0;
+          const bIsDeadLetter = b.role === "dead_letter" ? 1 : 0;
+          if (aIsDeadLetter !== bIsDeadLetter) return aIsDeadLetter - bIsDeadLetter;
+
+          const aScore = a.status === "healthy" ? 0 : a.status === "degraded" ? 2 : 3;
+          const bScore = b.status === "healthy" ? 0 : b.status === "degraded" ? 2 : 3;
+          if (aScore !== bScore) return bScore - aScore;
+
+          return (a.name || "").localeCompare(b.name || "");
+        });
+
+        const queueItems = sortedQueues.map((queue) => {
           const counts = queue.counts || {};
           const isDeadLetter = queue.role === "dead_letter";
           const pendingDeadLetters = Number(counts.waiting || 0) + Number(counts.delayed || 0) + Number(counts.failed || 0);
-          const status = isDeadLetter && pendingDeadLetters > 0
-            ? "待人工处理"
-            : queue.status === "healthy" ? "正常" : queue.status === "degraded" ? "需关注" : "不可用";
+          const totalPending = Number(counts.waiting || 0) + Number(counts.delayed || 0);
+          const hasActivity = Number(counts.active || 0) > 0 || totalPending > 0;
+          const hasFailed = Number(counts.failed || 0) > 0;
+
+          let statusText = "正常";
+          if (isDeadLetter && pendingDeadLetters > 0) {
+            statusText = "待人工处理";
+          } else if (queue.status === "unavailable") {
+            statusText = "不可用";
+          } else if (queue.status === "degraded") {
+            statusText = "需关注";
+          } else if (hasActivity) {
+            statusText = "运行中";
+          }
+
           const workers = isDeadLetter
             ? "隔离存储"
             : queue.workerCount == null ? "消费者未知" : `${Number(queue.workerCount).toLocaleString()} 个消费者`;
           const manageAction = isDeadLetter && pendingDeadLetters > 0
             ? `<div class="dashboard-queue-item-actions"><button class="dashboard-queue-manage" type="button" onclick="openDeadLetterWorkbench()">处理 ${pendingDeadLetters.toLocaleString()} 条死信</button></div>`
             : "";
-          return `<article class="dashboard-queue-item ${escapeAttribute(queue.status || "unavailable")}"><div class="dashboard-queue-item-head"><div style="min-width:0"><div class="dashboard-queue-item-name" title="${escapeAttribute(queue.name)}">${escapeHtml(queue.name)}</div><div class="dashboard-queue-item-role">${escapeHtml(queueRoleLabel(queue.role))}</div></div><span class="dashboard-queue-item-status">${status} · ${workers}</span></div><div class="dashboard-queue-counts"><div class="dashboard-queue-count"><span>等待</span><strong>${Number(counts.waiting || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>执行中</span><strong>${Number(counts.active || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>延迟</span><strong>${Number(counts.delayed || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>失败</span><strong>${Number(counts.failed || 0).toLocaleString()}</strong></div></div>${manageAction}</article>`;
+          return `<article class="dashboard-queue-item ${escapeAttribute(queue.status || "unavailable")}"><div class="dashboard-queue-item-head"><div style="min-width:0"><div class="dashboard-queue-item-name" title="${escapeAttribute(queue.name)}">${escapeHtml(queue.name)}</div><div class="dashboard-queue-item-role">${escapeHtml(queueRoleLabel(queue.role))}</div></div><span class="dashboard-queue-item-status">${statusText} · ${workers}</span></div><div class="dashboard-queue-counts"><div class="dashboard-queue-count"><span>等待</span><strong>${Number(counts.waiting || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>执行中</span><strong>${Number(counts.active || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>延迟</span><strong>${Number(counts.delayed || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count ${hasFailed ? 'has-failed' : ''}"><span>失败</span><strong>${Number(counts.failed || 0).toLocaleString()}</strong></div></div>${manageAction}</article>`;
         }).join("");
         const overallLabel = !runtimeDegraded
           ? "队列系统正常"
@@ -3570,7 +3597,8 @@
                   ? `Outbox 待投递 ${outboxReady.toLocaleString()} 条`
                   : "Outbox 正常";
         const checkedAt = state.dashboardQueueRefreshNote || (health.inspectedAt ? `检查时间 ${formatAdminDateTime(health.inspectedAt)}` : "");
-        return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康</h3><p>刷新时重新请求 Redis、BullMQ 和数据库 outbox 的当前状态</p></div><div class="dashboard-panel-actions"><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button></div></div><div class="dashboard-queue-summary"><span class="dashboard-queue-badge ${overallTone}">${overallLabel}</span><span class="dashboard-queue-badge ${redisTone}">Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"}</span><span class="dashboard-queue-badge ${dispatcherHealthy ? "success" : "danger"}">Dispatcher ${dispatcherHealthy ? "运行中" : "无心跳"}</span><span class="dashboard-queue-badge ${health.workersEnabled && workerCount > 0 ? "success" : "danger"}">消费者 ${workerCount.toLocaleString()}</span><span class="dashboard-queue-badge ${outboxTone}">${outboxLabel}</span></div><div class="dashboard-queue-grid">${queueItems || `<div class="dashboard-empty">暂无 BullMQ 队列数据</div>`}</div><div class="dashboard-queue-foot"><span>Redis 命名空间 <strong>${escapeHtml(health.queuePrefix || "-")}</strong> · 数据库 outbox 待投递 <strong>${outboxReady.toLocaleString()}</strong>${outboxReady > 0 ? ` · 最旧等待 <strong>${formatQueueAge(outboxOldestAgeMs)}</strong>` : ""} · 活跃生成任务 <strong>${Number(platform.tasks?.activeCount || 0).toLocaleString()}</strong></span><span>${escapeHtml(checkedAt)}</span></div></section>`;
+        const queueCountSummary = `共 ${queues.length.toLocaleString()} 个队列`;
+        return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康 <span style="color:var(--muted);font-weight:400;font-size:13px;">(${queueCountSummary})</span></h3><p>刷新时重新请求 Redis、BullMQ 和数据库 outbox 的当前状态</p></div><div class="dashboard-panel-actions"><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button></div></div><div class="dashboard-queue-summary"><span class="dashboard-queue-badge ${overallTone}">${overallLabel}</span><span class="dashboard-queue-badge ${redisTone}">Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"}</span><span class="dashboard-queue-badge ${dispatcherHealthy ? "success" : "danger"}">Dispatcher ${dispatcherHealthy ? "运行中" : "无心跳"}</span><span class="dashboard-queue-badge ${health.workersEnabled && workerCount > 0 ? "success" : "danger"}">消费者 ${workerCount.toLocaleString()}</span><span class="dashboard-queue-badge ${outboxTone}">${outboxLabel}</span></div><div class="dashboard-queue-grid">${queueItems || `<div class="dashboard-empty">暂无 BullMQ 队列数据</div>`}</div><div class="dashboard-queue-foot"><span>Redis 命名空间 <strong>${escapeHtml(health.queuePrefix || "-")}</strong> · 数据库 outbox 待投递 <strong>${outboxReady.toLocaleString()}</strong>${outboxReady > 0 ? ` · 最旧等待 <strong>${formatQueueAge(outboxOldestAgeMs)}</strong>` : ""} · 活跃生成任务 <strong>${Number(platform.tasks?.activeCount || 0).toLocaleString()}</strong></span><span>${escapeHtml(checkedAt)}</span></div></section>`;
       }
 
       function dashboardQueueRuntimeIssue(health) {
@@ -6420,7 +6448,29 @@
       }
 
       function queueRoleLabel(value) {
-        return ({ submit_image: "图片提交队列", submit_video: "视频提交队列", poll_image: "图片结果查询队列", poll_video: "视频结果查询队列", poll_audio: "音频结果查询队列", finalize_artifact: "生成结果归档队列", dead_letter: "死信队列" })[value] || value || "未知队列";
+        const labels = {
+          submit_image: "图片提交队列",
+          submit_video: "视频提交队列",
+          poll_image: "图片结果查询队列",
+          poll_video: "视频结果查询队列",
+          poll_audio: "音频结果查询队列",
+          finalize_artifact: "生成结果归档队列",
+          dead_letter: "死信队列",
+          image_submit: "图片提交队列",
+          image_poll: "图片轮询队列",
+          video_submit: "视频提交队列",
+          video_poll: "视频轮询队列",
+          audio_poll: "音频轮询队列",
+          generation_shard: "生成队列分片"
+        };
+        if (labels[value]) return labels[value];
+        // 处理动态分片队列命名
+        if (value && typeof value === "string") {
+          if (value.includes("_submit")) return value.replace(/_/g, " ") + " (提交)";
+          if (value.includes("_poll")) return value.replace(/_/g, " ") + " (轮询)";
+          return value.replace(/_/g, " ");
+        }
+        return value || "未知队列";
       }
 
       function downloadRiskExport(scope) {
@@ -7542,15 +7592,26 @@
 
       function renderModelProviderResponseContent(item) {
         const providerResponse = item?.providerResponseBody;
+        const diagnostics = item?.providerDiagnostics;
+        const sections = [];
         if (providerResponse !== null && providerResponse !== undefined) {
-          if (typeof providerResponse === "string") return providerResponse;
-          try {
-            return JSON.stringify(providerResponse, null, 2);
-          } catch {
-            return String(providerResponse);
+          if (typeof providerResponse === "string") sections.push(providerResponse);
+          else {
+            try {
+              sections.push(JSON.stringify(providerResponse, null, 2));
+            } catch {
+              sections.push(String(providerResponse));
+            }
           }
         }
-        return item?.responseText || renderModelUsage(item?.responseUsage);
+        if (diagnostics && typeof diagnostics === "object" && Object.keys(diagnostics).length > 0) {
+          try {
+            sections.push(`链路诊断：\n${JSON.stringify(diagnostics, null, 2)}`);
+          } catch {
+            sections.push(`链路诊断：\n${String(diagnostics)}`);
+          }
+        }
+        return sections.join("\n\n") || item?.responseText || renderModelUsage(item?.responseUsage);
       }
 
       const MODEL_REQUEST_DISPLAY_MAX_CHARACTERS = 20_000;
@@ -8601,7 +8662,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"], defaults.providerProtocol)}</select></label>
+          <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>

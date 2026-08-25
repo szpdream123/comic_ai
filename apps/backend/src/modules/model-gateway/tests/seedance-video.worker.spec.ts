@@ -23,7 +23,6 @@ import {
   processSeedanceVideoSubmitJob,
   readGenerationArtifactUploadConfig,
   recoverSeedanceVideoAfterPollTimeout,
-  sanitizeSeedanceUserModelRequestLogBody,
 } from "../seedance-video.worker.ts";
 
 describe("Seedance video worker user ownership", () => {
@@ -62,43 +61,6 @@ describe("Seedance video worker user ownership", () => {
       audios: ["https://cdn.example.com/reference.mp3"],
     });
     assert.doesNotMatch(request.requestText, /targetType|parameters/);
-  });
-
-  it("removes first_image from the Model Center request log preview", () => {
-    const request = sanitizeSeedanceUserModelRequestLogBody({
-      requestFormat: "globalaiopc_video",
-      requestBody: {
-        model: "seedance-2.5-c1",
-        prompt: "use the reference",
-        first_image: "https://cdn.example.com/first.png",
-        last_image: "https://cdn.example.com/last.png",
-      },
-      requestText: "legacy preview",
-    }, "globalaiopc_model_center_video");
-
-    assert.equal(request.requestFormat, "globalaiopc_model_center_video");
-    assert.equal(request.requestBody.first_image, undefined);
-    assert.equal(request.requestBody.last_image, "https://cdn.example.com/last.png");
-    assert.doesNotMatch(request.requestText, /first_image/);
-  });
-
-  it("keeps the Model Center request format in GlobalAiOpc request logs", () => {
-    const request = buildSeedanceUserModelRequestLogBody({
-      prompt: "use the reference",
-      motionPrompt: "use the reference",
-      parameters: { resolution: "768p", aspectRatio: "16:9", durationSec: 10 },
-      firstFrameUrl: "https://cdn.example.com/first.png",
-      targetType: "episode",
-    }, {
-      providerName: "GlobalAiOpc",
-      providerProtocol: "globalaiopc_video",
-      providerModel: "MiniMax-H3-768p",
-      providerConfig: { requestFormat: "globalaiopc_model_center_video" },
-    });
-
-    assert.equal(request.requestFormat, "globalaiopc_model_center_video");
-    assert.equal(request.requestBody.model, "MiniMax-H3-768p");
-    assert.deepEqual(request.requestBody.reference_images, ["https://cdn.example.com/first.png"]);
   });
 
   it("uses a thirty-minute video download timeout and independent upload timeout", () => {
@@ -546,6 +508,166 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
+  it("advances the provider request when polling reports video generation running", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "204",
+        userId: "70000000-0000-4000-8000-000000000204",
+        status: "running",
+      });
+      await db.query(
+        "UPDATE provider_requests SET status = 'accepted' WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            attempt_id, provider_request_id, model_code, media_type, task_mode,
+            status, progress_stage, request_summary_json, submitted_at, started_at,
+            created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000204', $1, $2, 'episode', $3, $4, $3,
+            $5, $6, 'seedance-i2v-pro', 'video', 'video.image_to_video',
+            'running', 'provider_accepted', '{}'::jsonb, $7, $7, $7, $7
+          )
+        `,
+        [
+          seeded.userId,
+          seeded.projectId,
+          seeded.taskId,
+          seeded.workflowId,
+          seeded.attemptId,
+          seeded.providerRequestId,
+          new Date("2026-08-25T03:22:50.487Z"),
+        ],
+      );
+
+      const result = await processSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => new Response(JSON.stringify({
+          id: `external-${seeded.taskId}`,
+          status: "running",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+        now: new Date("2026-08-25T03:24:32.481Z"),
+      });
+      const state = await db.query<{
+        provider_status: string;
+        snapshot_status: string;
+        progress_stage: string;
+      }>(
+        `
+          SELECT provider.status AS provider_status,
+                 snapshot.status AS snapshot_status,
+                 snapshot.progress_stage
+          FROM provider_requests provider
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = provider.task_id
+          WHERE provider.id = $1
+        `,
+        [seeded.providerRequestId],
+      );
+
+      assert.deepEqual(result, { status: "waiting" });
+      assert.deepEqual(state.rows[0], {
+        provider_status: "running",
+        snapshot_status: "running",
+        progress_stage: "provider_rendering",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("submits a video whose provider request was pre-created at task creation", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "318",
+        userId: "70000000-0000-4000-8000-000000000318",
+        status: "queued",
+      });
+      // Task creation pre-creates the provider request with the seed
+      // `taskId:model:prompt`. The submit worker must derive the same hash for
+      // an ordinary (non-resubmit) task, otherwise the request_key collides
+      // while request_hash differs and submission dies before any HTTP send.
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, NULL, 'volcengine', 'episode.video.generate',
+            $5, $6, $7, $8, 'created', $9
+          )
+        `,
+        [
+          "80000000-0000-4000-8000-000000000318",
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          `${seeded.workflowId}:${seeded.taskId}`,
+          createHash("sha256").update(
+            `${seeded.taskId}:seedance-i2v-pro:user-scoped limiter test`,
+          ).digest("hex"),
+          `creator://generation/episode/${seeded.taskId}/video/${seeded.taskId}`,
+          createHash("sha256").update("payload-hash-318").digest("hex"),
+          seeded.userId,
+        ],
+      );
+
+      const result = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => new Response(
+          JSON.stringify({ data: { task_id: "seedance-precreated", status: "queued" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+        now: new Date("2026-08-24T09:37:28.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        provider_count: number;
+        provider_status: string;
+        external_request_id: string | null;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 task.failure_code AS task_failure_code,
+                 (SELECT count(*)::int FROM provider_requests WHERE task_id = task.id) AS provider_count,
+                 provider.status AS provider_status,
+                 provider.external_request_id
+          FROM tasks task
+          JOIN provider_requests provider ON provider.task_id = task.id
+          WHERE task.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.equal(result.status, "submitted", JSON.stringify(result));
+      assert.equal(result.externalRequestId, "seedance-precreated");
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        task_failure_code: null,
+        provider_count: 1,
+        provider_status: "accepted",
+        external_request_id: "seedance-precreated",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("fails immediately when video submission has no external id", async () => {
     const db = await createMigratedTestDb();
 
@@ -606,8 +728,23 @@ describe("Seedance video worker user ownership", () => {
         "SELECT status, failure_code FROM tasks WHERE id = $1",
         [seeded.taskId],
       );
-      const providerRequest = await db.query<{ status: string }>(
-        "SELECT status FROM provider_requests WHERE task_id = $1",
+      const providerRequest = await db.query<{
+        status: string;
+        response_redacted_json: Record<string, unknown>;
+        attempt_id: string | null;
+        log_attempt_id: string | null;
+        response_text: string | null;
+      }>(
+        `
+          SELECT provider.status,
+                 provider.response_redacted_json,
+                 provider.attempt_id,
+                 log.attempt_id AS log_attempt_id,
+                 log.response_text
+          FROM provider_requests provider
+          LEFT JOIN user_model_request_logs log ON log.provider_request_id = provider.id
+          WHERE provider.task_id = $1
+        `,
         [seeded.taskId],
       );
 
@@ -617,6 +754,14 @@ describe("Seedance video worker user ownership", () => {
         failure_code: "provider_submission_failed",
       });
       assert.equal(providerRequest.rows[0]?.status, "failed");
+      assert.equal(
+        providerRequest.rows[0]?.response_redacted_json?.providerRawResponse,
+        '{"error":{"message":"invalid request"}}',
+      );
+      assert.equal(providerRequest.rows[0]?.attempt_id, seeded.attemptId);
+      assert.equal(providerRequest.rows[0]?.log_attempt_id, seeded.attemptId);
+      assert.match(providerRequest.rows[0]?.response_text ?? "", /"localStage": "provider_submit"/);
+      assert.match(providerRequest.rows[0]?.response_text ?? "", /"providerRawResponse": "\{\\"error\\":/);
     } finally {
       await db.close();
     }
@@ -1872,7 +2017,7 @@ describe("Seedance video worker user ownership", () => {
             !switched
             && sql.includes("LEFT JOIN provider_requests pr")
             && sql.includes("t.current_attempt_id AS attempt_id")
-            && sql.includes("t.input_snapshot_json->>'providerExecutor' = 'seedance'")
+            && sql.includes("t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')")
           ) {
             switched = true;
             await db.query(

@@ -97,6 +97,7 @@ import {
   renderStoryboardPanel,
   renderStoryboardStageForPartialUpdate,
   renderBatchSelectionActions,
+  mergeGenerationTaskCenterState,
 } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 import {
   addStoryboard,
@@ -19209,6 +19210,132 @@ describe("production workbench project tab", () => {
 
     assert.equal(workbench.ui.videoGenerationResult.taskId, "current-visible-task");
     assert.deepEqual(workbench.ui.storyboardConversationHistory, {});
+  });
+
+  it("uses the task center as the authoritative generation status", () => {
+    const merged = mergeGenerationTaskCenterState(
+      {
+        taskId: "task-authoritative-status",
+        status: "accepted",
+        progressStage: "provider_accepted",
+      },
+      {
+        "task-authoritative-status": {
+          taskId: "task-authoritative-status",
+          status: "running",
+          workflowStatus: "running",
+          progressStage: "provider_rendering",
+          progressPercent: 60,
+          updatedAt: "2026-08-25T03:24:32.481Z",
+        },
+      },
+    );
+
+    assert.equal(merged.status, "running");
+    assert.equal(merged.workflowStatus, "running");
+    assert.equal(merged.progressStage, "provider_rendering");
+    assert.equal(merged.progressPercent, 60);
+    const html = renderStoryboardGenerationEntryForPolling(
+      {
+        id: "storyboard-authoritative-status",
+        displayTitle: "分镜状态一致性",
+        generationState: { lastSubmission: merged },
+      },
+      merged,
+      "video",
+    );
+    assert.match(html, /任务进度：生成中 60%/);
+    assert.doesNotMatch(html, /任务进度：排队/);
+
+    const badgeHtml = renderStoryboardPanel(
+      [{
+        id: "storyboard-authoritative-status",
+        index: 1,
+        displayTitle: "分镜状态一致性",
+        generationState: {
+          lastSubmission: {
+            taskId: "task-authoritative-status",
+            status: "accepted",
+          },
+        },
+      }],
+      null,
+      "operation",
+      [],
+      {},
+      {},
+      "",
+      "",
+      {
+        "task-authoritative-status": {
+          taskId: "task-authoritative-status",
+          status: "succeeded",
+          workflowStatus: "succeeded",
+          progressStage: "completed",
+          progressPercent: 100,
+        },
+      },
+    );
+    assert.match(badgeHtml, /episode-replica-shot-status-badge completed[^>]*>已完成/);
+    assert.doesNotMatch(badgeHtml, /episode-replica-shot-status-badge generating/);
+  });
+
+  it("does not let an older storyboard task overwrite a newer submission", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-newer-submission-guard",
+      linkedShotId: "shot-newer-submission-guard",
+      generationState: {
+        lastSubmission: {
+          turnId: "turn-new",
+          storyboardId: "storyboard-newer-submission-guard",
+          mediaKind: "image",
+          taskId: "task-new",
+          status: "running",
+          promptPreview: "新任务",
+        },
+      },
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      api: { getGenerationTask() {} },
+      ui: {
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        museScopeMode: "storyboard",
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        storyboardConversationHistory: {
+          [`image:${storyboard.id}`]: [{
+            turnId: "turn-old",
+            storyboardId: storyboard.id,
+            mediaKind: "image",
+            taskId: "task-old",
+            status: "queued",
+            targetType: "storyboard",
+            targetId: storyboard.linkedShotId,
+            promptPreview: "旧任务",
+          }],
+        },
+        imageGenerationResult: storyboard.generationState.lastSubmission,
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "task-old",
+      status: "running",
+      targetType: "storyboard",
+      targetId: storyboard.linkedShotId,
+      progressPercent: 10,
+    });
+
+    assert.equal(workbench.ui.imageGenerationResult.turnId, "turn-new");
+    assert.equal(
+      workbench.ui.episodeStoryboardMap["episode-new"][0].generationState.lastSubmission.turnId,
+      "turn-new",
+    );
+    assert.equal(workbench.ui.storyboardConversationHistory[`image:${storyboard.id}`][0].taskId, "task-old");
+    assert.equal(workbench.ui.storyboardConversationHistory[`image:${storyboard.id}`][0].status, "running");
   });
 
   it("reopens the previously selected storyboard when re-entering the same episode workbench", async () => {
@@ -48662,6 +48789,48 @@ describe("production workbench project tab", () => {
     assert.ok(html.indexOf("storyboard-video-task-a") < html.indexOf("storyboard-video-task-b"));
     assert.doesNotMatch(html, /第一次视频生成：镜头缓慢推进。/);
     assert.doesNotMatch(html, /第二次视频生成：雨水更明显。/);
+  });
+
+  it("does not render a taskless storyboard user request as a generating record", () => {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+    const storyboardId = storyboards[0]?.id ?? "storyboard-1";
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          selectedEpisodeId: "episode-primary",
+          museScopeMode: "storyboard",
+          episodeMediaMode: "video",
+          selectedStoryboard: storyboards[0],
+          selectedStoryboardId: storyboardId,
+          storyboards,
+          episodeStoryboardMap: { "episode-primary": storyboards },
+          storyboardConversationHistory: {
+            [`video:${storyboardId}`]: [
+              {
+                storyboardId,
+                mediaKind: "video",
+                status: "running",
+                promptPreview: "纯用户请求不应显示为任务",
+              },
+              {
+                storyboardId,
+                mediaKind: "video",
+                taskId: "storyboard-video-real-task",
+                status: "queued",
+                promptPreview: "真实任务",
+              },
+            ],
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /storyboard-video-real-task/);
+    assert.doesNotMatch(html, /纯用户请求不应显示为任务/);
   });
 
   it("prefills the composer with prior storyboard prompt, audio and images when editing a result", async () => {

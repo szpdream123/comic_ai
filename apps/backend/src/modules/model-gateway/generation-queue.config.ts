@@ -7,6 +7,7 @@ import {
 export interface GenerationQueueConfig {
   redisUrl: string;
   queuePrefix: string;
+  workerEnvironment?: "production" | "local" | "staging";
   workersEnabled: boolean;
   outboxDispatcherEnabled: boolean;
   queues: {
@@ -152,6 +153,7 @@ export function loadGenerationQueueConfig(
   return {
     redisUrl: readString(env.REDIS_URL) || "redis://127.0.0.1:6379/0",
     queuePrefix: readString(env.BULLMQ_QUEUE_PREFIX) || "comic-ai-dev",
+    workerEnvironment: resolveWorkerEnvironment(env),
     workersEnabled: isEnabled(env.BULLMQ_WORKERS_ENABLED),
     outboxDispatcherEnabled: isEnabled(env.BULLMQ_OUTBOX_DISPATCHER_ENABLED),
     queues: {
@@ -374,6 +376,11 @@ export function loadGenerationQueueConfig(
       },
     },
   };
+}
+
+function resolveWorkerEnvironment(env: NodeJS.ProcessEnv): "production" | "local" | "staging" | undefined {
+  const value = readString(env.WORKER_ENVIRONMENT)?.toLowerCase();
+  return value === "production" || value === "local" || value === "staging" ? value : undefined;
 }
 
 function readString(value: unknown) {

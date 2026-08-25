@@ -96,7 +96,38 @@ export async function appendGenerationTaskCreatedOutboxEvent(
   }>(
     db,
     `
-      WITH inserted AS (
+      WITH task_lock AS MATERIALIZED (
+        SELECT task.id
+        FROM tasks task
+        WHERE task.id::text = $6::text
+        FOR UPDATE
+      ),
+      outbox_lock AS MATERIALIZED (
+        SELECT event.id, event.status
+        FROM outbox_events event
+        WHERE event.dedupe_key = $5
+        FOR UPDATE
+      ),
+      generation_task_dispatch_guard AS (
+        SELECT task_lock.id
+        FROM task_lock
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM outbox_lock
+          WHERE status IN ('pending', 'processing', 'failed')
+        )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM generation_queue_stage_assignments assignment
+            WHERE assignment.task_id = task_lock.id
+              AND assignment.stage = 'submit'
+              AND assignment.status IN ('publishing', 'admitted')
+          )
+        UNION ALL
+        SELECT NULL::uuid
+        WHERE NOT EXISTS (SELECT 1 FROM task_lock)
+      ),
+      inserted AS (
       INSERT INTO outbox_events (
         id,
         user_id,
@@ -112,11 +143,11 @@ export async function appendGenerationTaskCreatedOutboxEvent(
         created_at,
         updated_at
       )
-      VALUES (
+      SELECT
         $1, $2, '${generationTaskCreatedEventType}', $3::jsonb, 'submit',
         $3::jsonb->>'providerRouteIdentity', $3::jsonb->>'providerConfigRevisionId',
         $3::jsonb->>'credentialVersionRef', 'pending', $4, $5, $4, $4
-      )
+      FROM generation_task_dispatch_guard
       ON CONFLICT DO NOTHING
       RETURNING id, event_type, payload_json, status
       )
@@ -134,6 +165,7 @@ export async function appendGenerationTaskCreatedOutboxEvent(
       JSON.stringify(payload),
       input.availableAt,
       dedupeKey,
+      input.taskId,
     ],
   );
 

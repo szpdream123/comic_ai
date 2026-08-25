@@ -157,7 +157,7 @@ export async function recordGenerationProviderWebhook(
       availableAt: input.now,
     });
     await db.query(
-      "UPDATE tasks SET last_dispatched_at = $2, updated_at = GREATEST(updated_at, $2) WHERE id = $1",
+      "UPDATE tasks SET last_dispatched_at = GREATEST(COALESCE(last_dispatched_at, $2), $2), updated_at = GREATEST(updated_at, $2) WHERE id = $1",
       [request.task_id, input.now],
     );
     await markWebhookInbox(db, {

@@ -83,6 +83,7 @@ export function buildGenerationBullMQJob(
   const dispatchToken = readString(event.payload.dispatchToken) || event.id;
   const jobId = buildGenerationBullMQJobId("generation.task.created", taskId, "submit", dispatchToken);
   const queuePriority = readQueuePriority(event.payload.queuePriority);
+  const attemptId = readString(event.payload.attemptId);
   const data: GenerationBullMQJob["data"] = {
     outboxEventId: event.id,
     taskId,
@@ -90,6 +91,7 @@ export function buildGenerationBullMQJob(
     mediaType,
     modelCode: readString(event.payload.modelCode) || null,
     providerExecutor: readString(event.payload.providerExecutor) || "model-gateway",
+    ...(attemptId ? { attemptId } : {}),
   };
   const queueAssignmentKey = readString(event.payload.queueAssignmentKey);
   if (queueAssignmentKey) data.queueAssignmentKey = queueAssignmentKey;
@@ -263,7 +265,9 @@ export async function publishGenerationTaskCreatedToBullMQ(
   },
 ) {
   const job = buildGenerationBullMQJob(event, input.config);
+  console.log(`[generation-outbox] Publishing task ${job.data.taskId} to queue ${job.queueName}, jobId: ${job.jobId}`);
   await input.publisher.add(job.queueName, job.jobName, job.data, job.options);
+  console.log(`[generation-outbox] Successfully published task ${job.data.taskId} to queue ${job.queueName}`);
   return job;
 }
 

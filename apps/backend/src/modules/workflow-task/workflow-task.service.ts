@@ -243,6 +243,39 @@ export async function claimQueuedTask(
       `,
       [task.id, attemptId],
     );
+    // Generation intake pre-creates provider_requests before a worker attempt
+    // exists. Bind those still-unstarted requests in the same transaction as
+    // the claim so a failure before the provider worker's preparation stage
+    // cannot leave the request detached from the durable current attempt.
+    await db.query(
+      `
+        UPDATE provider_requests
+        SET attempt_id = $2,
+            updated_at = $3
+        WHERE task_id = $1
+          AND attempt_id IS NULL
+          AND external_submission_started_at IS NULL
+          AND external_request_id IS NULL
+      `,
+      [task.id, attemptId, input.now],
+    );
+    await db.query(
+      `
+        UPDATE user_model_request_logs log
+        SET attempt_id = $2,
+            updated_at = $3
+        WHERE log.task_id = $1
+          AND log.attempt_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM provider_requests request
+            WHERE request.id = log.provider_request_id
+              AND request.task_id = $1
+              AND request.attempt_id = $2
+          )
+      `,
+      [task.id, attemptId, input.now],
+    );
     await db.query(
       `
         UPDATE workflows

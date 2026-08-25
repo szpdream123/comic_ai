@@ -42,6 +42,7 @@ export async function claimOutboxEventsForDispatch(
     eventTypes?: string[];
     fairnessScope?: string;
     membershipQuantum?: number;
+    taskEnvironment?: string;
   },
 ): Promise<OutboxEventRecord[]> {
   const staleCutoff = new Date(
@@ -57,12 +58,41 @@ export async function claimOutboxEventsForDispatch(
       eventTypes,
       fairnessScope,
       membershipQuantum: Math.max(1, Math.floor(input.membershipQuantum ?? 1)),
+      taskEnvironment: input.taskEnvironment,
     });
   }
   const eventTypeWhere = eventTypes?.length ? "AND event_type = ANY($4::text[])" : "";
+  const taskEnvironmentParam = eventTypes?.length ? 5 : 4;
+  const taskEnvironmentWhere = input.taskEnvironment
+    ? `AND EXISTS (
+        SELECT 1
+        FROM tasks task_filter
+        WHERE task_filter.id = CASE
+          WHEN payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+            THEN (payload_json->>'taskId')::uuid
+          ELSE NULL
+        END
+          AND task_filter.input_snapshot_json->>'workerEnvironment' = $${taskEnvironmentParam}
+      )`
+    : "";
+  const taskEnvironmentEventWhere = input.taskEnvironment
+    ? `AND EXISTS (
+        SELECT 1 FROM tasks task_filter
+        WHERE task_filter.id = CASE
+          WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+            THEN (event.payload_json->>'taskId')::uuid
+          ELSE NULL
+        END
+          AND task_filter.input_snapshot_json->>'workerEnvironment' = $${taskEnvironmentParam}
+      )`
+    : "";
   const queryParams = eventTypes?.length
-    ? [input.now, staleCutoff, input.limit, eventTypes]
-    : [input.now, staleCutoff, input.limit];
+    ? (input.taskEnvironment
+      ? [input.now, staleCutoff, input.limit, eventTypes, input.taskEnvironment]
+      : [input.now, staleCutoff, input.limit, eventTypes])
+    : (input.taskEnvironment
+      ? [input.now, staleCutoff, input.limit, input.taskEnvironment]
+      : [input.now, staleCutoff, input.limit]);
   const claimedRows = await db.query<OutboxEventRow>(
     `
       WITH fair_users AS (
@@ -79,6 +109,7 @@ export async function claimOutboxEventsForDispatch(
             )
           )
           ${eventTypeWhere}
+          ${taskEnvironmentWhere}
         GROUP BY user_id
         ORDER BY min(available_at) ASC, min(created_at) ASC, user_id NULLS FIRST
         LIMIT $3
@@ -100,6 +131,7 @@ export async function claimOutboxEventsForDispatch(
               )
             )
             ${eventTypes?.length ? "AND event.event_type = ANY($4::text[])" : ""}
+            ${taskEnvironmentEventWhere}
             AND event.user_id IS NOT DISTINCT FROM fair_user.user_id
           ORDER BY event.available_at ASC, event.created_at ASC, event.id ASC
           FOR UPDATE SKIP LOCKED
@@ -120,6 +152,7 @@ export async function claimOutboxEventsForDispatch(
             )
           )
           ${eventTypes?.length ? "AND event.event_type = ANY($4::text[])" : ""}
+          ${taskEnvironmentWhere.replaceAll("payload_json", "event.payload_json")}
           AND NOT EXISTS (
             SELECT 1
             FROM round_robin_candidates round_robin
@@ -162,6 +195,7 @@ async function claimFairOutboxEventsForDispatch(
     eventTypes?: string[];
     fairnessScope: string;
     membershipQuantum: number;
+    taskEnvironment?: string;
   },
 ) {
   const limit = Math.max(0, Math.floor(input.limit));
@@ -204,6 +238,7 @@ async function claimFairOutboxEventsForDispatch(
                 OR (event.status = 'processing' AND event.updated_at < $2)
               )
               AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
+              ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
             GROUP BY COALESCE(event.user_id::text, 'anonymous')
           ),
           candidates AS (
@@ -237,6 +272,7 @@ async function claimFairOutboxEventsForDispatch(
                     OR (event.status = 'processing' AND event.updated_at < $2)
                   )
                   AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
+                  ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
                   AND COALESCE(event.user_id::text, 'anonymous') = main.main_key
                 GROUP BY child_key
                 ORDER BY
@@ -266,6 +302,7 @@ async function claimFairOutboxEventsForDispatch(
                       OR (event.status = 'processing' AND event.updated_at < $2)
                     )
                     AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
+                    ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
                     AND COALESCE(event.user_id::text, 'anonymous') = main.main_key
                     AND COALESCE(
                       NULLIF(event.payload_json->>'teamMemberId', ''),
@@ -298,6 +335,7 @@ async function claimFairOutboxEventsForDispatch(
                     OR (event.status = 'processing' AND event.updated_at < $2)
                   )
                   AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
+                  ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
                   AND COALESCE(event.user_id::text, 'anonymous') = main.main_key
                   AND NOT EXISTS (SELECT 1 FROM first_candidates first WHERE first.id = event.id)
                 ORDER BY event.available_at ASC, event.created_at ASC, event.id ASC
@@ -352,6 +390,7 @@ async function claimFairOutboxEventsForDispatch(
           input.fairnessScope,
           input.membershipQuantum,
           limit - claimed.length,
+          ...(input.taskEnvironment ? [input.taskEnvironment] : []),
         ],
       );
       if (round.rows.length === 0) break;

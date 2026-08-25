@@ -53,7 +53,7 @@ async function reconcileAmbiguousLocalTerminalStates(db: SqlDatabase, now: Date,
         )
         AND NOT (
           COALESCE(request.response_redacted_json->'diagnostics'->>'httpStatus', request.response_redacted_json->>'httpStatus', '') ~ '^2[0-9]{2}$'
-          AND task.failure_code IN ('provider_failed','provider_submission_failed','cumob_image_failed','global_ai_opc_image_failed')
+          AND task.failure_code IN ('provider_failed','provider_submission_failed','cumob_image_failed')
         )
       ORDER BY task.updated_at ASC, task.id ASC
       LIMIT $1

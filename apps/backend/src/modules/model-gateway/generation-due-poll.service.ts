@@ -160,7 +160,7 @@ export async function enqueueDueGenerationPolls(
         availableAt: input.now,
       });
       await db.query(
-        "UPDATE tasks SET last_dispatched_at = $2, updated_at = GREATEST(updated_at, $2) WHERE id = $1",
+        "UPDATE tasks SET last_dispatched_at = GREATEST(COALESCE(last_dispatched_at, $2), $2), updated_at = GREATEST(updated_at, $2) WHERE id = $1",
         [row.task_id, input.now],
       );
       enqueuedTaskIds.push(row.task_id);

@@ -193,9 +193,6 @@ export async function resolveAiModelConfigSecretReferences(
   modelConfig: AiModelConfigRecord,
 ): Promise<AiModelConfigRecord> {
   const apiKeyEnv = readString(modelConfig.providerConfig.apiKeyEnv);
-  if (readString(modelConfig.providerConfig.apiKey)) {
-    return modelConfig;
-  }
   await ensureAdminSecretValueStore(db);
   const providerName = readString(modelConfig.providerName) || "";
   const requestDomain = readProviderRequestDomain(modelConfig.providerConfig) || "";
@@ -229,13 +226,12 @@ export async function resolveAiModelConfigSecretReferences(
   );
   const secretValue = readString(row?.secret_value);
   const resolvedRequestDomain = readString(row?.request_domain);
-  if (!secretValue && !resolvedRequestDomain) {
-    return modelConfig;
-  }
+  const providerConfig = { ...modelConfig.providerConfig };
+  delete providerConfig.apiKey;
   return {
     ...modelConfig,
     providerConfig: {
-      ...modelConfig.providerConfig,
+      ...providerConfig,
       ...(secretValue ? { apiKey: secretValue } : {}),
       ...(resolvedRequestDomain ? { baseURL: resolvedRequestDomain } : {}),
     },

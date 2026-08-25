@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   createOrReuseProviderRequest,
+  refreshPreparedProviderRequestPayload,
   submitProviderRequest,
 } from "../provider-request.service.ts";
 import {
@@ -38,6 +39,40 @@ describe("provider request crash before external start", () => {
           prompt: "[redacted]",
         },
       });
+      assert.equal(adapter.calls.length, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps a refreshed payload hash compatible with the subsequent submit", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new RecordingProviderAdapter();
+
+    try {
+      const initial = providerInput();
+      const preCall = await createOrReuseProviderRequest(db, initial);
+      const refreshed = {
+        prompt: "[redacted]-refreshed-url",
+      };
+      const refreshedHash = "payload-hash-refreshed";
+      await refreshPreparedProviderRequestPayload(db, {
+        providerRequestId: preCall.request.id,
+        redactedPayload: refreshed,
+        payloadHash: refreshedHash,
+        now: new Date("2026-05-09T10:00:30.000Z"),
+      });
+
+      const submitted = await submitProviderRequest(db, {
+        ...initial,
+        redactedPayload: refreshed,
+        payloadHash: refreshedHash,
+        adapter,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+      });
+
+      assert.equal(submitted.kind, "submitted");
+      assert.equal(submitted.request.externalRequestId, "external-1");
       assert.equal(adapter.calls.length, 1);
     } finally {
       await db.close();

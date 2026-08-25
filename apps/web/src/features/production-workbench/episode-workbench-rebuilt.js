@@ -260,6 +260,7 @@ export function renderEpisodeWorkbench({
   const assetPromptDraft = generationUiState.assetPromptDraft ?? {};
   const assetConversationHistory = generationUiState.assetConversationHistory ?? {};
   const storyboardConversationHistory = generationUiState.storyboardConversationHistory ?? {};
+  const taskCenterTasksById = generationUiState.taskCenterTasksById ?? {};
   const assetQuickReferenceItems = assetPromptDraft.quickReferenceItems ?? [];
   const assetSelectionContext = assetPromptDraft.selectionContext ?? {};
   const assetConversationEntries = resolveAssetConversationEntries(
@@ -267,6 +268,7 @@ export function renderEpisodeWorkbench({
     selectedAsset?.id ?? null,
     effectiveMediaMode === "video" ? "video" : "image",
     imageGenerationResult,
+    taskCenterTasksById,
   ).map((entry) => enrichGenerationStyleDisplayMetadata(entry, generationUiState));
   const hasAssetConversationEntries = assetConversationEntries.length > 0;
   const isEmptyAssetComposer = scopeMode === "assets" && allAssetIds.length === 0 && !hasAssetConversationEntries;
@@ -276,6 +278,7 @@ export function renderEpisodeWorkbench({
     currentStoryboard?.id ?? null,
     storyboardMediaKind,
     storyboardMediaKind === "video" ? videoGenerationResult : imageGenerationResult,
+    taskCenterTasksById,
   ).map((entry) => enrichGenerationStyleDisplayMetadata(entry, generationUiState));
   const currentGenerationPollingActive = Boolean(generationPollingActive) && (
     scopeMode === "assets"
@@ -411,6 +414,8 @@ export function renderEpisodeWorkbench({
                         mode: storyboardPaginationMode,
                       },
                       batchSelectionActions,
+                      "",
+                      taskCenterTasksById,
                     )}
                   </section>
                 </div>`
@@ -437,6 +442,7 @@ export function renderEpisodeWorkbench({
                   },
                   batchSelectionActions,
                   firstLoginGuideTargetKey,
+                  taskCenterTasksById,
                 )
           }
         </section>
@@ -912,6 +918,7 @@ export function renderStoryboardPanel(
   pagination = {},
   batchSelectionActions = "",
   firstLoginGuideTargetKey = "",
+  taskCenterTasksById = {},
 ) {
   const totalCount = Math.max(0, Number(pagination.total ?? storyboards.length) || 0);
   const pageSize = normalizeStoryboardPageSize(pagination.pageSize);
@@ -949,6 +956,7 @@ export function renderStoryboardPanel(
                 assetGroups,
                 activeBoardMode,
                 currentPage === 1 && index === 0 && firstLoginGuideTargetKey === "first-storyboard-card",
+                taskCenterTasksById,
               ),
             ).join("")}${currentPage === totalPages ? addStoryboardRow : ""}`
             : `${addStoryboardRow}${renderStoryboardEmptyState()}`
@@ -1023,14 +1031,14 @@ function clampStoryboardPage(value, totalPages) {
   return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
 }
 
-export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}, boardMode = "operation", isFirstGuideTarget = false) {
+export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}, boardMode = "operation", isFirstGuideTarget = false, taskCenterTasksById = {}) {
   const desc = String(storyboard.description ?? "").trim();
   const displayTitle = String(storyboard.displayTitle ?? "").trim() || String(storyboard.title ?? "");
   const storyboardName = `分镜 ${String(storyboard.index ?? 1)}: ${displayTitle}`;
   const refs = mergeStoryboardMentionReferences(storyboard, assetGroups).slice(0, 6);
   const linkedRefs = groupStoryboardReferences((storyboard.references ?? []).slice(0, 6));
   const previewVideo = resolveSelectedVideoSource(storyboard);
-  const generationBadge = renderStoryboardGenerationBadge(storyboard);
+  const generationBadge = renderStoryboardGenerationBadge(storyboard, taskCenterTasksById);
   const showStoryboardColumn = boardMode === "storyboard";
   return `
     <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""} ${isFirstGuideTarget ? "first-login-guide-target" : ""}" ${isFirstGuideTarget ? 'data-first-login-target="first-storyboard-card"' : ""}>
@@ -1100,8 +1108,11 @@ export function renderStoryboardImageColumn(storyboard, storyboardName = "") {
   `;
 }
 
-function renderStoryboardGenerationBadge(storyboard) {
-  const submission = storyboard?.generationState?.lastSubmission ?? null;
+function renderStoryboardGenerationBadge(storyboard, taskCenterTasksById = {}) {
+  const submission = mergeGenerationTaskCenterState(
+    storyboard?.generationState?.lastSubmission ?? null,
+    taskCenterTasksById,
+  );
   const status = String(submission?.status ?? "").toLowerCase();
   if (!status) {
     return "";
@@ -1326,9 +1337,12 @@ function renderAssetStage({ asset, activeAssetTab, mediaMode, quickReferenceItem
   `;
 }
 
-function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "image", generationResult = null) {
+function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "image", generationResult = null, taskCenterTasksById = {}) {
   const key = `${mediaKind}:${assetId ?? ""}`;
-  const historyEntries = Array.isArray(historyMap?.[key]) ? historyMap[key].filter(Boolean) : [];
+  const historyEntries = Array.isArray(historyMap?.[key])
+    ? historyMap[key].filter(Boolean).map((entry) => mergeGenerationTaskCenterState(entry, taskCenterTasksById))
+    : [];
+  generationResult = mergeGenerationTaskCenterState(generationResult, taskCenterTasksById);
   if (!generationResult) {
     return historyEntries;
   }
@@ -1347,11 +1361,14 @@ function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "
   return [...historyEntries, generationResult];
 }
 
-function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, mediaKind = "image", generationResult = null) {
+function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, mediaKind = "image", generationResult = null, taskCenterTasksById = {}) {
   const key = `${mediaKind}:${storyboardId ?? ""}`;
   const historyEntries = Array.isArray(historyMap?.[key])
-    ? historyMap[key].filter((entry) => entry && !isStoryboardGeneratorConversationEntry(entry))
+    ? historyMap[key]
+      .filter((entry) => isStoryboardConversationTaskEntry(entry) && !isStoryboardGeneratorConversationEntry(entry))
+      .map((entry) => mergeGenerationTaskCenterState(entry, taskCenterTasksById))
     : [];
+  generationResult = mergeGenerationTaskCenterState(generationResult, taskCenterTasksById);
   if (!generationResult || isStoryboardGeneratorConversationEntry(generationResult)) {
     return historyEntries;
   }
@@ -1368,6 +1385,50 @@ function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, med
     return historyEntries;
   }
   return [...historyEntries, generationResult];
+}
+
+export function mergeGenerationTaskCenterState(generationResult, taskCenterTasksById = {}) {
+  if (!generationResult) {
+    return generationResult;
+  }
+  const taskId = resolveGenerationTaskId(generationResult);
+  const taskCenterTask = taskId ? taskCenterTasksById?.[taskId] : null;
+  if (!taskCenterTask) {
+    return generationResult;
+  }
+  return {
+    ...generationResult,
+    status: taskCenterTask.status ?? taskCenterTask.workflowStatus ?? generationResult.status,
+    workflowStatus: taskCenterTask.workflowStatus ?? taskCenterTask.status ?? generationResult.workflowStatus,
+    progressStage: taskCenterTask.progressStage ?? generationResult.progressStage ?? null,
+    progressPercent: taskCenterTask.progressPercent ?? generationResult.progressPercent ?? null,
+    failure: taskCenterTask.failure ?? generationResult.failure ?? null,
+    failureCode: taskCenterTask.failureCode ?? generationResult.failureCode ?? null,
+    result: taskCenterTask.result ?? generationResult.result,
+    returnedAt: taskCenterTask.returnedAt ?? generationResult.returnedAt ?? null,
+    updatedAt: taskCenterTask.updatedAt ?? generationResult.updatedAt,
+  };
+}
+
+function isStoryboardConversationTaskEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+  if (resolveGenerationTaskId(entry)) {
+    return true;
+  }
+  const status = String(entry?.status ?? entry?.platform?.workflowStatus ?? entry?.workflowStatus ?? "")
+    .trim()
+    .toLowerCase();
+  if (["completed", "succeeded", "failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status)) {
+    return true;
+  }
+  return Boolean(
+    (Array.isArray(entry?.fixedImages) && entry.fixedImages.length) ||
+    (Array.isArray(entry?.fixedVideos) && entry.fixedVideos.length) ||
+    entry?.result?.imageUrl ||
+    entry?.result?.videoUrl,
+  );
 }
 
 export function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, mediaMode, generationHistory = []) {
@@ -3184,7 +3245,7 @@ export function renderPromptDock({
   const generateCostLabel = !isVideoMode && selectedImageStyleCredits > 0
     ? `${modelGenerateCost} + ${selectedImageStyleCredits}积分`
     : String(generateCost);
-  const interactionBusy = Boolean(busy || generationPollingActive);
+  const interactionBusy = Boolean(busy);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -3293,8 +3354,8 @@ export function renderPromptDock({
           action: generateAction,
           cost: generateCost,
           costLabel: generateCostLabel,
-          busy: busy || generationPollingActive,
-          label: generationPollingActive ? "生成中" : "生成",
+          busy: busy,
+          label: "生成",
         })}
       </div>
       <p class="episode-replica-validation">${escapeHtml(validationMessage)}</p>
@@ -3559,7 +3620,7 @@ function renderLipSyncDock({
     ? generationUiState.lipSyncAudioItems
     : (attachments ?? []).filter((item) => item?.type === "audio" || item?.kind === "audio"));
   return `
-    <section class="episode-replica-prompt lip-sync-mode" ${busy || generationPollingActive ? 'aria-busy="true"' : ""}>
+    <section class="episode-replica-prompt lip-sync-mode" ${busy ? 'aria-busy="true"' : ""}>
       <div class="episode-replica-stage-head lip-sync-head">
         <p class="episode-replica-stage-title">配音内容</p>
       </div>
@@ -3577,9 +3638,9 @@ function renderLipSyncDock({
           >${escapeHtml(voiceName || "+ 配音员")}</button>
           ${voiceName ? `<span class="episode-replica-lipsync-voice-chip">${escapeHtml(voiceName)}</span>` : ""}
         </div>
-        <button class="episode-replica-generate" type="button" data-action="generate-videos" ${disabled(busy || generationPollingActive)}>
+        <button class="episode-replica-generate" type="button" data-action="generate-videos" ${disabled(busy)}>
           <span>${escapeHtml(String(lipSyncCost))}</span>
-          <strong class="episode-replica-generate-label">${generationPollingActive ? "生成中" : "生成"}</strong>
+          <strong class="episode-replica-generate-label">生成</strong>
         </button>
       </div>
       <div class="episode-replica-stage-head lip-sync-head secondary">
@@ -3650,13 +3711,9 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
   const annotationSelectionKey = resolveAnnotationSelectionKey(item);
   const preview =
     mediaType === "audio"
-      ? "<i>♫</i>"
+      ? `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v18m0-18c-3 0-5 2-7 2v12c2 0 4 2 7 2m0-16c3 0 5 2 7 2v12c-2 0-4 2-7 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
       : mediaType === "video"
-        ? imagePreviewUrl
-          ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low" />`
-          : mediaSourceUrl
-            ? `<video src="${escapeAttr(mediaSourceUrl)}"${previewUrl && previewUrl !== mediaSourceUrl ? ` poster="${escapeAttr(previewUrl)}"` : ""} muted playsinline preload="none"></video>`
-            : renderPromptMediaPlaceholder(mediaType, item.name ?? "视频")
+        ? `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="2"/><path d="M10 8.5l6 3.5-6 3.5V8.5z" fill="currentColor"/></svg>`
         : previewUrl
           ? `<img src="${escapeAttr(previewUrl)}" alt="reference image" loading="lazy" decoding="async" fetchpriority="low" />`
           : renderQuickPlaceholder(mediaType, item.name ?? "图片");

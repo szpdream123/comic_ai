@@ -369,7 +369,7 @@ export function resolveApiUrl(url) {
   if (/^(?:https?:|data:|blob:)/i.test(url)) {
     return url;
   }
-  const backendOwnedPath = /^\/(?:api|uploads|vendor)(?:\/|$)/.test(url);
+  const backendOwnedPath = /^\/(?:api|admin|uploads|vendor)(?:\/|$)/.test(url);
   const localHttpHost = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
     window.location.host ?? "",
   );

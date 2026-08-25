@@ -36,6 +36,7 @@ import {
   appendGenerationTaskFinalizeRequestedOutboxEvent,
   appendGenerationTaskPollRequestedOutboxEvent,
 } from "../model-gateway/generation-outbox.service.ts";
+import { readGenerationProviderRouteReferences } from "../model-gateway/generation-model-config-snapshot.ts";
 import { aggregateWorkflowStatus } from "../workflow-task/workflow-task.service.ts";
 import { generationTimeoutMsFor } from "../model-gateway/generation-timeout.policy.ts";
 
@@ -102,6 +103,7 @@ interface AdminTaskSnapshotRow {
 
 interface GenerationRetryTaskRow {
   id: string;
+  user_id: string | null;
   workflow_id: string;
   task_type: string;
   queue_name: string;
@@ -2101,17 +2103,20 @@ async function appendRetryGenerationOutboxIfNeeded(
     db,
     `
       SELECT
-        id,
-        workflow_id,
-        task_type,
-        queue_name,
-        input_snapshot_json,
-        target_entity_type,
-        target_entity_id
+        tasks.id,
+        COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
+        tasks.workflow_id,
+        tasks.task_type,
+        tasks.queue_name,
+        tasks.input_snapshot_json,
+        tasks.target_entity_type,
+        tasks.target_entity_id
       FROM tasks
-      WHERE id = $1
-        AND status = 'queued'
-        AND task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
+      JOIN workflows workflow ON workflow.id = tasks.workflow_id
+      LEFT JOIN projects project ON project.id = tasks.project_id
+      WHERE tasks.id = $1
+        AND tasks.status = 'queued'
+        AND tasks.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
       LIMIT 1
     `,
     [input.taskId],
@@ -2132,6 +2137,7 @@ async function appendRetryGenerationOutboxIfNeeded(
   }
 
   await appendGenerationTaskCreatedOutboxEvent(db, {
+    userId: row.user_id,
     workflowId: row.workflow_id,
     taskId: row.id,
     kind,
@@ -2140,6 +2146,7 @@ async function appendRetryGenerationOutboxIfNeeded(
     targetType: readNonEmptyString(snapshot.targetType) ?? row.target_entity_type,
     targetId: readNonEmptyString(snapshot.targetId) ?? row.target_entity_id,
     providerExecutor,
+    ...readGenerationProviderRouteReferences(snapshot),
     dispatchToken: input.dispatchToken,
     availableAt: input.availableAt,
   });

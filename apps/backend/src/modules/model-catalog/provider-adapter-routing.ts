@@ -7,6 +7,8 @@ export type ImageProviderAdapterKey =
   | "san_bao"
   | "custom_http";
 
+export type AudioProviderAdapterKey = "aliyun_bailian_audio" | "apimart_audio" | "globalaiopc_sound_clone";
+
 interface ProviderAdapterRoute {
   adapterKey: ImageProviderAdapterKey;
   protocols: string[];
@@ -30,6 +32,8 @@ const imageProviderRoutes: ProviderAdapterRoute[] = [
   {
     adapterKey: "global_ai_opc_image",
     protocols: ["global_ai_opc_image"],
+    requestFormats: ["global_ai_opc_model_center_seedream_image"],
+    apiKeyEnvs: ["GLOBAL_AI_OPC_API_KEY"],
   },
   {
     adapterKey: "volcengine_ark_image",
@@ -45,6 +49,17 @@ const imageProviderRoutes: ProviderAdapterRoute[] = [
     protocols: ["custom_http"],
   },
 ];
+
+const audioProviderRoutes: Array<{ adapterKey: AudioProviderAdapterKey; protocols: string[] }> = [
+  { adapterKey: "aliyun_bailian_audio", protocols: ["aliyun_bailian_audio"] },
+  { adapterKey: "apimart_audio", protocols: ["apimart_audio"] },
+  { adapterKey: "globalaiopc_sound_clone", protocols: ["globalaiopc_sound_clone", "global_ai_opc_sound_clone"] },
+];
+
+export function resolveAudioProviderAdapterKey(providerProtocol: string): AudioProviderAdapterKey | undefined {
+  const protocol = normalizeProviderProtocol(providerProtocol);
+  return audioProviderRoutes.find((route) => route.protocols.includes(protocol))?.adapterKey;
+}
 
 export function resolveImageProviderAdapterKey(
   providerProtocol: string,

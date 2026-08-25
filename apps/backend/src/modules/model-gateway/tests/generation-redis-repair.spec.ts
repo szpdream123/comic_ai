@@ -374,6 +374,100 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("does not duplicate an active task event when the original event has no user id", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(`
+        INSERT INTO outbox_events (
+          id, event_type, payload_json, generation_stage, status,
+          available_at, dedupe_key, created_at, updated_at, user_id
+        ) VALUES (
+          '90000000-0000-4000-8000-000000000101',
+          'generation.task.created',
+          '{"taskId":"50000000-0000-4000-8000-000000000101"}'::jsonb,
+          'submit', 'processing',
+          '2026-06-03T05:59:00.000Z',
+          'generation.task.created:50000000-0000-4000-8000-000000000101',
+          '2026-06-03T05:59:00.000Z', '2026-06-03T05:59:00.000Z', NULL
+        )
+      `);
+
+      const repaired = await repairQueuedGenerationTaskOutbox(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+      });
+      const outbox = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.created'
+          AND payload_json->>'taskId' = '50000000-0000-4000-8000-000000000101'
+      `);
+
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not recreate a processed task event while its submit assignment is active", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(`
+        INSERT INTO outbox_events (
+          id, event_type, payload_json, generation_stage, status,
+          available_at, processed_at, dedupe_key, created_at, updated_at, user_id
+        ) VALUES (
+          '90000000-0000-4000-8000-000000000102',
+          'generation.task.created',
+          '{"taskId":"50000000-0000-4000-8000-000000000101"}'::jsonb,
+          'submit', 'processed',
+          '2026-06-03T05:55:00.000Z', '2026-06-03T05:56:00.000Z',
+          'generation.task.created:50000000-0000-4000-8000-000000000101',
+          '2026-06-03T05:55:00.000Z', '2026-06-03T05:56:00.000Z',
+          '00000000-0000-4000-8000-000000000101'
+        );
+        INSERT INTO generation_queue_routes (route_key, route_code)
+        VALUES ('repair-submit-active', 'rsa');
+        INSERT INTO generation_queue_shards (
+          id, media_type, stage, route_key, route_code, shard_no, queue_name, admitted_count
+        ) VALUES (
+          '71000000-0000-4000-8000-000000000111', 'video', 'submit',
+          'repair-submit-active', 'rsa', 0, 'generation-video-submit-rsa-000', 1
+        );
+        INSERT INTO generation_queue_stage_assignments (
+          assignment_key, task_id, media_type, stage, route_key, shard_id, status, admitted_at
+        ) VALUES (
+          'repair:processed-event-active-submit',
+          '50000000-0000-4000-8000-000000000101',
+          'video', 'submit', 'repair-submit-active',
+          '71000000-0000-4000-8000-000000000111', 'admitted',
+          '2026-06-03T05:56:00.000Z'
+        )
+      `);
+
+      const repaired = await repairQueuedGenerationTaskOutbox(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+      });
+      const outbox = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.created'
+          AND payload_json->>'taskId' = '50000000-0000-4000-8000-000000000101'
+      `);
+
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("fails expired GPT Image submit leases without requeueing", async () => {
     const db = await createMigratedTestDb();
 

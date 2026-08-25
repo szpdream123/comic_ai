@@ -46,8 +46,10 @@ import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory
 import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
 import {
   advanceProviderRequestStage,
+  appendProviderRequestDiagnostics,
   markProviderRequestFailed,
   markProviderRequestResultUnknown,
+  recordGlobalAiOpcLifecycleStep,
   markProviderRequestSucceeded,
   submitProviderRequest,
 } from "./provider-request.service.ts";
@@ -137,34 +139,13 @@ export async function processAudioGenerationSubmitJob(
       attemptId: claim.attempt.id,
       adapter: context.adapter,
     });
-    if (submitted.kind === "stale_attempt") {
-      const failureCode = "provider_request_attempt_conflict";
-      const marked = await failAudioTask(db, {
-        taskId: row.task_id,
-        expectedAttemptId: claim.attempt.id,
-        failureCode,
-        displayMessage: "检测到历史生成请求仍在执行，当前任务已停止自动处理并等待后台复核。",
-        creditOutcome: "manual_review_required",
+    if (submitted.request.externalRequestId) {
+      await recordGlobalAiOpcLifecycleStep(db, {
+        providerRequestId: submitted.request.id,
+        stage: "queued_for_poll",
+        details: { externalRequestId: submitted.request.externalRequestId },
         now: input.now,
       });
-      if (marked) {
-        await markGenerationTaskSnapshotManualReviewRequired(db, {
-          taskId: row.task_id,
-          attemptId: claim.attempt.id,
-          progressStage: "provider_attempt_conflict",
-          failure: {
-            failureCode,
-            historicalProviderRequestId: submitted.request.id,
-            displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
-          },
-          creditSummary: {
-            reserved: Number(row.amount_reserved ?? 0),
-            settledAt: input.now.toISOString(),
-          },
-          now: input.now,
-        });
-      }
-      return { status: "failed", failureCode };
     }
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
@@ -370,12 +351,37 @@ export async function processAudioGenerationPollJob(
     fetchImpl: input.fetchImpl,
     now: input.now,
   });
-  const poll = await context.adapter.poll({
-    externalRequestId: row.external_request_id,
-    redactedPayload: {
-      ...snapshot,
-      providerState: parseRecord(row.provider_response_redacted_json),
+  let poll: Awaited<ReturnType<typeof context.adapter.poll>>;
+  try {
+    poll = await context.adapter.poll({
+      externalRequestId: row.external_request_id,
+      redactedPayload: {
+        ...snapshot,
+        providerState: parseRecord(row.provider_response_redacted_json),
+      },
+    });
+  } catch (error) {
+    await recordGlobalAiOpcLifecycleStep(db, {
+      providerRequestId: row.provider_request_id,
+      stage: "poll_request_failed",
+      details: {
+        externalRequestId: row.external_request_id,
+        failureCode: readFailureCode(error) ?? "audio_provider_poll_failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+      now: input.now,
+    });
+    throw error;
+  }
+  await recordGlobalAiOpcLifecycleStep(db, {
+    providerRequestId: row.provider_request_id,
+    stage: "poll_response_received",
+    details: {
+      externalRequestId: row.external_request_id,
+      providerStatus: poll.status,
+      providerResponse: poll.redactedResponse,
     },
+    now: input.now,
   });
   const externalRequestId = readString(poll.externalRequestId) ?? row.external_request_id;
   if (externalRequestId !== row.external_request_id) {
@@ -387,6 +393,15 @@ export async function processAudioGenerationPollJob(
     });
   }
   if (poll.status === "accepted" || poll.status === "running") {
+    await appendProviderRequestDiagnostics(db, {
+      providerRequestId: row.provider_request_id,
+      diagnostics: {
+        ...poll.redactedResponse,
+        externalRequestId,
+        pollStatus: poll.status,
+      },
+      now: input.now,
+    });
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -434,6 +449,26 @@ export async function processAudioGenerationPollJob(
   const artifact = findAudioArtifact(poll.artifacts);
   if (!artifact) {
     const failureCode = "audio_provider_artifact_missing";
+    const providerStatus = {
+      ...poll.redactedResponse,
+      externalRequestId,
+      failureCode,
+    };
+    await markProviderRequestFailed(db, {
+      providerRequestId: row.provider_request_id,
+      failureCode,
+      redactedResponse: providerStatus,
+      now: input.now,
+    });
+    await completeUserModelRequestLog(db, {
+      providerRequestId: row.provider_request_id,
+      status: "failed",
+      responseText: JSON.stringify(providerStatus),
+      responseUsage: null,
+      finishReasons: [],
+      failureCode,
+      now: input.now,
+    });
     await failAudioTask(db, {
       taskId: row.task_id,
       expectedAttemptId: row.attempt_id,
@@ -883,7 +918,7 @@ async function buildAudioProviderContext(
   if (
     !modelConfig
     || modelConfig.mediaType !== "audio"
-    || !["aliyun_bailian_audio", "apimart_audio", "globalaiopc_sound_clone"].includes(modelConfig.providerProtocol)
+    || !["aliyun_bailian_audio", "apimart_audio", "globalaiopc_sound_clone", "global_ai_opc_sound_clone"].includes(modelConfig.providerProtocol)
   ) {
     throw new Error("audio_model_not_configured");
   }

@@ -175,9 +175,11 @@ async function waitForStackReady(input) {
   let lastStatus = "status unavailable";
   const requiredLogMarkers = [
     "Phone auth dev server listening on",
-    "[media-crawler] API started on http://127.0.0.1:4312",
     "[marketing-competitor-collection] Worker started.",
   ];
+  if (isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true")) {
+    requiredLogMarkers.push("[media-crawler] API started on http://127.0.0.1:4312");
+  }
   if (generationQueueEnabled()) {
     requiredLogMarkers.push(
       "[generation-outbox] Dispatcher started.",
@@ -205,6 +207,10 @@ async function waitForStackReady(input) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   return { ready: false, lastStatus };
+}
+
+function isEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 }
 
 function readStackStatus(runtimePath, entrypoint) {

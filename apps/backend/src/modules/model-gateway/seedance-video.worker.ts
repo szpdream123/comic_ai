@@ -4,6 +4,12 @@ import { pipeline } from "node:stream/promises";
 
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import {
+  resolveWorkerIsolationConfig,
+  buildWorkerIdWithEnvironment,
+  shouldProcessTask,
+  type WorkerIsolationConfig,
+} from "./worker-isolation.config.ts";
+import {
   settleReservationAllocation,
   settleReservationAllocationInTransaction,
 } from "../credit-billing/credit-ledger.service.ts";
@@ -43,7 +49,10 @@ import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assi
 import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
-import { refreshGenerationInputUrls } from "./generation-input-url-refresh.ts";
+import {
+  refreshGenerationInputUrls,
+  type GenerationInputUrlRefreshDiagnostic,
+} from "./generation-input-url-refresh.ts";
 import {
   GENERATION_ARTIFACT_FETCH_NOT_READY,
   resolveGenerationArtifactStageUnavailable,
@@ -57,11 +66,15 @@ import { ModelError, translateProviderErrorMessage } from "./provider-error-mess
 import { attachProviderRawResponse, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
+  appendProviderRequestDiagnostics,
+  advanceProviderRequestStage,
   createOrReuseProviderRequest,
+  ProviderRequestConflictError,
   refreshPreparedProviderRequestPayload,
   markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestResultUnknown,
+  recordGlobalAiOpcLifecycleStep,
   markProviderRequestSucceeded,
   submitProviderRequest,
 } from "./provider-request.service.ts";
@@ -69,7 +82,6 @@ import {
   completeUserModelRequestLog,
   createUserModelRequestLog,
 } from "./user-model-request-log.service.ts";
-import { buildGlobalAiOpcVideoPayload } from "./global-ai-opc-video.provider-adapter.ts";
 import { buildLingdongVideoPayload } from "./lingdong-api.provider-adapter.ts";
 import { buildSanBaoVideoPayload } from "./san-bao.provider-adapter.ts";
 import {
@@ -78,11 +90,11 @@ import {
   markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotSucceeded,
+  markGenerationTaskSnapshotQueued,
   markGenerationTaskSnapshotManualReviewRequired,
   serializeGenerationProviderStatus,
   serializeGenerationTaskCenterProviderDiagnostics,
 } from "./generation-task-snapshot.service.ts";
-import { appendGenerationTaskFinalizeRequestedOutboxEvent } from "./generation-outbox.service.ts";
 import {
   findGenerationArtifactHandoff,
   findOrRecoverGenerationArtifactHandoff,
@@ -184,6 +196,29 @@ async function renewSeedancePollLease(
   return Boolean(renewed);
 }
 
+// Drop only this worker's own poll lease, and only while the task is still the
+// running attempt we just polled. The artifact stages take their own lease, so
+// clearing it here narrows the window rather than leaving the task unguarded.
+async function releaseSeedancePollLeaseForArtifactHandoff(
+  db: SqlDatabase,
+  input: { taskId: string; attemptId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET locked_by = NULL,
+          locked_until = NULL,
+          heartbeat_at = $3,
+          updated_at = $3
+      WHERE id = $1
+        AND current_attempt_id = $2
+        AND status = 'running'
+        AND locked_by = 'seedance-video-poll-worker'
+    `,
+    [input.taskId, input.attemptId, input.now],
+  );
+}
+
 function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
   const candidate = snapshot.teamMemberId ?? snapshot.memberId;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
@@ -217,6 +252,42 @@ export async function processSeedanceVideoSubmitJob(
     userConcurrencyLimit?: number;
     now: Date;
   },
+): Promise<Awaited<ReturnType<typeof processSeedanceVideoSubmitJobInternal>>> {
+  // Worker隔离检查
+  const isolationConfig = resolveWorkerIsolationConfig(input.env);
+  const row = await findSeedanceTaskForSubmit(db, input.taskId);
+
+  if (row && isolationConfig.enableIsolation) {
+    const snapshot = parseSnapshot(row.input_snapshot_json);
+    if (!shouldProcessTask(snapshot, isolationConfig)) {
+      return {
+        status: "settled",
+      };
+    }
+  }
+
+  const result = await processSeedanceVideoSubmitJobInternal(db, input);
+  if (result.status === "failed") {
+    await ensureSeedanceFailedResultDiagnostics(db, {
+      taskId: input.taskId,
+      failureCode: result.failureCode,
+      now: input.now,
+    });
+  }
+  return result;
+}
+
+async function processSeedanceVideoSubmitJobInternal(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    runtime?: UploadSessionRuntime;
+    env: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    rateLimiter?: ProviderRateLimiter;
+    userConcurrencyLimit?: number;
+    now: Date;
+  },
 ): Promise<
   | { status: "submitted"; externalRequestId: string | null; attemptId?: string }
   | { status: "already_started"; externalRequestId: string | null; attemptId?: string }
@@ -231,17 +302,30 @@ export async function processSeedanceVideoSubmitJob(
   }
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
+  const isolationConfig = resolveWorkerIsolationConfig(input.env);
   const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
-  const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
+  let modelConfig: Awaited<ReturnType<typeof resolveGenerationModelConfigForTask>>;
+  try {
+    modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
+  } catch (error) {
+    await appendSeedanceSubmitPreparationDiagnostics(db, row.task_id, "model_config_resolve", error, input.now);
+    throw error;
+  }
   const providerName = modelConfig?.providerName || "volcengine";
   const providerModel = modelConfig?.providerModel || fallbackSeedanceModelConfig(input.env).providerModel;
-  const permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
-    providerName,
-    modelCode,
-    userId: resolveRateLimitUserId(row.created_by_user_id ?? row.user_id, snapshot),
-    userConcurrencyLimit: input.userConcurrencyLimit ?? 10,
-    now: input.now,
-  });
+  let permit: ProviderRateLimitGrant | null;
+  try {
+    permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
+      providerName,
+      modelCode,
+      userId: resolveRateLimitUserId(row.created_by_user_id ?? row.user_id, snapshot),
+      userConcurrencyLimit: input.userConcurrencyLimit ?? 10,
+      now: input.now,
+    });
+  } catch (error) {
+    await appendSeedanceSubmitPreparationDiagnostics(db, row.task_id, "submit_permit_acquire", error, input.now);
+    throw error;
+  }
   if (permit && !permit.granted) {
     return {
       status: "rate_limited",
@@ -250,19 +334,34 @@ export async function processSeedanceVideoSubmitJob(
     };
   }
 
-  const claim = await claimQueuedTask(db, {
-    taskId: row.task_id,
-    workerId: "seedance-video-submit-worker",
-    now: input.now,
-    leaseMs: SEEDANCE_VIDEO_TASK_LEASE_MS,
-  });
+  let claim: Awaited<ReturnType<typeof claimQueuedTask>>;
+  try {
+    claim = await claimQueuedTask(db, {
+      taskId: row.task_id,
+      workerId: buildWorkerIdWithEnvironment("seedance-video-submit-worker", isolationConfig),
+      now: input.now,
+      leaseMs: SEEDANCE_VIDEO_TASK_LEASE_MS,
+    });
+  } catch (error) {
+    await releaseProviderPermit(permit);
+    await appendSeedanceSubmitPreparationDiagnostics(db, row.task_id, "task_claim", error, input.now);
+    throw error;
+  }
   if (!claim) {
     await releaseProviderPermit(permit);
     return resolveSeedanceSubmitConflict(db, input.taskId);
   }
 
+  const materialRefresh = {
+    status: input.runtime ? "pending" : "not_requested",
+    diagnostics: [] as GenerationInputUrlRefreshDiagnostic[],
+  };
+  let submissionStage = "claim_completed";
+
   try {
+    submissionStage = "canvas_assignment_check";
     await assertCanvasGenerationAssignmentActive(db, snapshot);
+    submissionStage = "provider_adapter_init";
     const adapter = createProviderAdapterFromModelConfig(
       modelConfig
         ? {
@@ -276,6 +375,7 @@ export async function processSeedanceVideoSubmitJob(
       input.env,
       resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
     );
+    submissionStage = "provider_payload_build";
     const payloadRef = buildGenerationProviderPayloadRef({
       targetType: snapshot.targetType,
       targetId: snapshot.targetId,
@@ -288,7 +388,16 @@ export async function processSeedanceVideoSubmitJob(
     const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
     const resubmitNonce = readString(snapshot.resubmitNonce);
     const requestKey = `${row.workflow_id}:${row.task_id}${resubmitNonce ? `:resubmit:${resubmitNonce}` : ""}`;
-    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}:${resubmitNonce ?? ""}`);
+    // Task creation pre-creates this provider_request with the seed
+    // `taskId:model:prompt` (no trailing separator). Appending the nonce
+    // unconditionally added a trailing ":" for ordinary submissions, so the
+    // request_key matched the existing row while request_hash did not, and
+    // every submission threw ProviderRequestConflictError before any HTTP send.
+    const requestHash = sha256(
+      resubmitNonce
+        ? `${row.task_id}:${modelCode}:${prompt}:${resubmitNonce}`
+        : `${row.task_id}:${modelCode}:${prompt}`,
+    );
     const originalRequestBody = {
       prompt,
       motionPrompt: prompt,
@@ -301,29 +410,50 @@ export async function processSeedanceVideoSubmitJob(
         ? { providerPayloadOverride: readObject(snapshot.providerPayloadOverride) }
         : {}),
     };
-    const refreshedOriginalRequestBody = input.runtime
-      ? await refreshGenerationInputUrls(db, originalRequestBody, {
+    let requestBody = originalRequestBody;
+    if (input.runtime) {
+      submissionStage = "material_url_refresh";
+      try {
+        const refreshed = await refreshGenerationInputUrls(db, originalRequestBody, {
           runtime: input.runtime,
           now: input.now,
           expiresInSeconds: modelSignedUrlExpiresInSeconds(input.env),
-        }).then((value) => value as typeof originalRequestBody)
-          // The client may already provide a valid signed URL. A storage
-          // refresh failure must not block provider submission.
-          .catch(() => originalRequestBody)
-      : originalRequestBody;
+          onDiagnostic: (diagnostic) => {
+            if (materialRefresh.diagnostics.length < 100) {
+              materialRefresh.diagnostics.push(diagnostic);
+            }
+          },
+        }) as typeof originalRequestBody;
+        requestBody = refreshed;
+        materialRefresh.status = materialRefresh.diagnostics.some(({ status }) => status === "failed")
+          ? "degraded"
+          : JSON.stringify(refreshed) === JSON.stringify(originalRequestBody)
+            ? "unchanged"
+            : "refreshed";
+      } catch (error) {
+        materialRefresh.status = "fallback";
+        materialRefresh.diagnostics.push({
+          stage: "refresh_inputs_fallback",
+          status: "failed",
+          error: readLocalErrorDiagnostics(error),
+        });
+        // The client may already provide a valid signed URL. A storage
+        // refresh failure must not block provider submission.
+        requestBody = originalRequestBody;
+      }
+    } else {
+      materialRefresh.status = "not_requested";
+    }
     // Submit the user's original material URLs directly. Provider-side asset
     // registration is asynchronous and must not replace user-supplied media.
-    const requestBody = refreshedOriginalRequestBody;
-    const requestLogBody = sanitizeSeedanceUserModelRequestLogBody(
-      buildSeedanceUserModelRequestLogBody(requestBody, {
-        providerName,
-        providerProtocol: modelConfig?.providerProtocol,
-        providerModel,
-        providerConfig: modelConfig?.providerConfig,
-      }),
-      readString(modelConfig?.providerConfig.requestFormat),
-    );
-    const preparedProviderRequest = await createOrReuseProviderRequest(db, {
+    const requestLogBody = buildSeedanceUserModelRequestLogBody(requestBody, {
+      providerName,
+      providerProtocol: modelConfig?.providerProtocol,
+      providerModel,
+      providerConfig: modelConfig?.providerConfig,
+    });
+    submissionStage = "provider_request_create_or_reuse";
+    const providerRequestInput = {
       projectId: row.project_id,
       canvasProjectId: readString(snapshot.canvasProjectId) ?? null,
       workflowId: row.workflow_id,
@@ -339,33 +469,81 @@ export async function processSeedanceVideoSubmitJob(
       ...readGenerationProviderRouteReferences(snapshot),
       userId: row.user_id,
       now: input.now,
-    });
+    };
+    let preparedProviderRequest: Awaited<ReturnType<typeof createOrReuseProviderRequest>>;
+    try {
+      preparedProviderRequest = await createOrReuseProviderRequest(db, providerRequestInput);
+    } catch (error) {
+      if (!(error instanceof ProviderRequestConflictError)) throw error;
+      const repaired = await repairSeedanceUnstartedProviderRequestPayload(db, {
+        ...providerRequestInput,
+        redactedPayload: requestBody,
+      });
+      if (!repaired) throw error;
+      preparedProviderRequest = await createOrReuseProviderRequest(db, providerRequestInput);
+    }
+    submissionStage = "provider_request_payload_update";
     await refreshPreparedProviderRequestPayload(db, {
       providerRequestId: preparedProviderRequest.request.id,
       redactedPayload: requestBody,
-      now: input.now,
-    });
-    await createUserModelRequestLog(db, {
-      providerRequestId: preparedProviderRequest.request.id,
-      projectId: row.project_id,
-      canvasProjectId: readString(snapshot.canvasProjectId) ?? null,
-      workflowId: row.workflow_id,
-      taskId: row.task_id,
-      attemptId: claim.attempt.id,
-      userId: row.created_by_user_id,
-      providerName,
-      providerOperation: operationNames.episodeVideoGenerate,
-      modelId: modelCode,
-      providerModel,
-      requestKey,
-      requestHash,
       payloadHash,
-      payloadSummary: null,
-      requestFormat: requestLogBody.requestFormat,
-      requestBody: requestLogBody.requestBody,
-      requestText: requestLogBody.requestText,
       now: input.now,
     });
+    if (materialRefresh.status === "fallback" || materialRefresh.status === "degraded") {
+      try {
+        await appendProviderRequestDiagnostics(db, {
+          providerRequestId: preparedProviderRequest.request.id,
+          diagnostics: buildMaterialRefreshDiagnostics(materialRefresh),
+          now: input.now,
+        });
+      } catch (diagnosticError) {
+        materialRefresh.diagnostics.push({
+          stage: "diagnostics_persist",
+          status: "failed",
+          error: readLocalErrorDiagnostics(diagnosticError),
+        });
+      }
+    }
+    submissionStage = "user_model_request_log_create";
+    try {
+      await createUserModelRequestLog(db, {
+        providerRequestId: preparedProviderRequest.request.id,
+        projectId: row.project_id,
+        canvasProjectId: readString(snapshot.canvasProjectId) ?? null,
+        workflowId: row.workflow_id,
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        userId: row.created_by_user_id,
+        providerName,
+        providerOperation: operationNames.episodeVideoGenerate,
+        modelId: modelCode,
+        providerModel,
+        requestKey,
+        requestHash,
+        payloadHash,
+        payloadSummary: null,
+        requestFormat: requestLogBody.requestFormat,
+        requestBody: requestLogBody.requestBody,
+        requestText: requestLogBody.requestText,
+        now: input.now,
+      });
+    } catch (error) {
+      // Request auditing is auxiliary; it must not prevent the provider HTTP call.
+      try {
+        await appendProviderRequestDiagnostics(db, {
+          providerRequestId: preparedProviderRequest.request.id,
+          diagnostics: {
+            localStage: "user_model_request_log_create",
+            localError: readLocalErrorDiagnostics(error),
+            diagnosticNote: "提交前审计日志写入失败，已继续提交供应商请求。",
+          },
+          now: input.now,
+        });
+      } catch {
+        // Preserve the original submission path even if diagnostics cannot be persisted.
+      }
+    }
+    submissionStage = "provider_submit";
     const submitted = await submitProviderRequest(db, {
       projectId: row.project_id,
       canvasProjectId: readString(snapshot.canvasProjectId) ?? null,
@@ -384,44 +562,8 @@ export async function processSeedanceVideoSubmitJob(
       now: input.now,
       adapter,
     });
-    if (submitted.kind === "stale_attempt") {
-      const failureCode = "provider_request_attempt_conflict";
-      const claimedRow = { ...row, attempt_id: claim.attempt.id };
-      await markSeedanceTaskManualReview(db, {
-        row: claimedRow,
-        failureCode,
-        providerRequestId: null,
-        redactedResponse: buildSeedanceBillingMetadata(claimedRow, snapshot, {
-          billingEvent: "manual_review_required",
-          outcome: "manual_review_required",
-          provider: "model-gateway",
-          providerRequestId: submitted.request.id,
-          failureCode,
-          settledAt: input.now,
-        }),
-        now: input.now,
-      });
-      await markGenerationTaskSnapshotManualReviewRequired(db, {
-        taskId: row.task_id,
-        attemptId: claim.attempt.id,
-        progressStage: "provider_attempt_conflict",
-        failure: {
-          failureCode,
-          historicalProviderRequestId: submitted.request.id,
-          displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
-        },
-        creditSummary: {
-          reserved: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
-          settledAt: input.now.toISOString(),
-        },
-        now: input.now,
-      });
-      return { status: "failed", failureCode };
-    }
-    const finalRequestBody = sanitizeSeedance25SpecialRequestBody(
-      readSubmittedRedactedRequest(submitted) ?? requestLogBody.requestBody,
-      readString(modelConfig?.providerConfig.requestFormat) ?? requestLogBody.requestFormat,
-    );
+    const finalRequestBody = readSubmittedRedactedRequest(submitted) ?? requestLogBody.requestBody;
+    submissionStage = "user_model_request_log_update";
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
       projectId: row.project_id,
@@ -459,9 +601,31 @@ export async function processSeedanceVideoSubmitJob(
           },
         now: input.now,
       });
+      await recordGlobalAiOpcLifecycleStep(db, {
+        providerRequestId: submitted.request.id,
+        stage: "queued_for_poll",
+        details: { externalRequestId: submitted.request.externalRequestId },
+        now: input.now,
+      });
     }
 
     if (!submitted.request.externalRequestId) {
+      if (submitted.kind === "already_started") {
+        const requeued = await requeueSeedanceTaskBeforeProviderSubmission(db, {
+          taskId: row.task_id,
+          attemptId: claim.attempt.id,
+          providerRequestId: submitted.request.id,
+          failureCode: "provider_submission_not_started",
+          now: input.now,
+        });
+        if (requeued) {
+          return {
+            status: "retryable",
+            retryAfterMs: 1000,
+            reason: "provider_submission_not_started",
+          };
+        }
+      }
       const failureCode = "provider_submission_missing_task_id";
       const errorMessage = "模型服务未返回可查询的任务 ID。";
       await markProviderRequestFailed(db, {
@@ -493,8 +657,16 @@ export async function processSeedanceVideoSubmitJob(
     const prompt = readString(snapshot.prompt) ?? "";
     const firstFrameUrl = readString(snapshot.firstFrameUrl);
     const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
-    const requestKey = `${row.workflow_id}:${row.task_id}`;
-    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+    // Mirror the submit path's derivation exactly (including the resubmit
+    // nonce); otherwise a resubmitted task records a request_key/request_hash
+    // pair that matches no provider_requests row.
+    const resubmitNonce = readString(snapshot.resubmitNonce);
+    const requestKey = `${row.workflow_id}:${row.task_id}${resubmitNonce ? `:resubmit:${resubmitNonce}` : ""}`;
+    const requestHash = sha256(
+      resubmitNonce
+        ? `${row.task_id}:${modelCode}:${prompt}:${resubmitNonce}`
+        : `${row.task_id}:${modelCode}:${prompt}`,
+    );
     const requestBody = {
       prompt,
       motionPrompt: prompt,
@@ -504,11 +676,22 @@ export async function processSeedanceVideoSubmitJob(
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
     };
-    const providerRequest = await findLatestProviderRequestForTask(
-      db,
-      row.task_id,
-      claim.attempt.id,
-    );
+    let providerRequest;
+    let submissionState = null;
+    let diagnosticsLookupError: Record<string, unknown> | null = null;
+    try {
+      providerRequest = await findLatestProviderRequestForTask(
+        db,
+        row.task_id,
+        claim.attempt.id,
+      ) ?? await findAnyUnstartedProviderRequestForTask(db, row.task_id);
+      submissionState = providerRequest
+        ? await readSeedanceSubmissionState(db, row.task_id, claim.attempt.id, providerRequest.provider_request_id)
+        : null;
+    } catch (lookupError) {
+      diagnosticsLookupError = readLocalErrorDiagnostics(lookupError);
+      providerRequest = await findAnyUnstartedProviderRequestForTask(db, row.task_id).catch(() => undefined);
+    }
     const submissionWasAccepted = Boolean(providerRequest?.external_request_id) &&
       ["accepted", "running", "succeeded"].includes(providerRequest?.status ?? "");
     if (submissionWasAccepted) {
@@ -536,13 +719,118 @@ export async function processSeedanceVideoSubmitJob(
         attemptId: claim.attempt.id,
       };
     }
-    const submissionFailureCode = readErrorFailureCode(error) ?? "provider_submission_failed";
+    const submissionWasNotStarted = providerRequest
+      && !providerRequest.external_submission_started_at
+      && !providerRequest.external_request_id;
+
+    const submissionFailureCode = readErrorFailureCode(error) ?? (
+      submissionWasNotStarted
+        ? "provider_submission_prepare_failed"
+        : "provider_submission_failed"
+    );
+    const submissionModelError = ModelError.fromUnknown(error, {
+      failureCode: submissionFailureCode,
+      mediaType: "video",
+      phase: "submit",
+    });
+    let preSubmissionRetryCount = 0;
+    if (providerRequest) {
+      try {
+        preSubmissionRetryCount = await countPreSubmissionRetries(db, row.task_id);
+      } catch (retryLookupError) {
+        diagnosticsLookupError ??= readLocalErrorDiagnostics(retryLookupError);
+      }
+    }
+    const shouldRetryBeforeExternalStart = Boolean(submissionWasNotStarted && providerRequest?.provider_request_id)
+      && !hasExternalProviderSubmission(providerRequest)
+      && preSubmissionRetryCount < PRE_SUBMISSION_RETRY_LIMIT
+      && (
+        submissionModelError.httpStatus === null
+        || submissionFailureCode === "provider_submission_failed"
+        || submissionFailureCode === "provider_submission_prepare_failed"
+      );
+    if (shouldRetryBeforeExternalStart) {
+      if (providerRequest?.provider_request_id) {
+        try {
+          await appendProviderRequestDiagnostics(db, {
+            providerRequestId: providerRequest.provider_request_id,
+            diagnostics: {
+              ...buildMaterialRefreshDiagnostics(materialRefresh),
+              localStage: submissionStage,
+              localError: readLocalErrorDiagnostics(error),
+              modelError: {
+                code: submissionModelError.code,
+                failureCode: submissionModelError.failureCode,
+                httpStatus: submissionModelError.httpStatus,
+                retryable: submissionModelError.retryable,
+              },
+              localState: submissionState ?? { lookup: "missing" },
+              ...(diagnosticsLookupError ? { diagnosticsLookupError } : {}),
+              preSubmissionRetryCount,
+              diagnosticNote: "供应商提交尚未开始，任务将进行有限次数的提交前重试。",
+            },
+            now: input.now,
+          });
+        } catch (diagnosticError) {
+          materialRefresh.diagnostics.push({
+            stage: "diagnostics_persist",
+            status: "failed",
+            error: readLocalErrorDiagnostics(diagnosticError),
+          });
+        }
+      }
+      if (providerRequest?.provider_request_id) {
+        const requeued = await requeueSeedanceTaskBeforeProviderSubmission(db, {
+          taskId: row.task_id,
+          attemptId: claim.attempt.id,
+          providerRequestId: providerRequest.provider_request_id,
+          failureCode: submissionFailureCode,
+          now: input.now,
+        });
+        if (requeued) {
+          return {
+            status: "retryable",
+            retryAfterMs: 1000,
+            reason: "provider_submission_prepare_retry",
+          };
+        }
+      }
+    }
     const errorMessage = translateProviderErrorMessage(error, {
       failureCode: submissionFailureCode,
       mediaType: "video",
       phase: "submit",
     });
     const submissionIsAmbiguous = providerRequest?.status === "result_unknown";
+    // Built outside the provider-request gate below. When no provider_requests
+    // row can be located, every write inside that gate is skipped, and the only
+    // record left was the generic snapshot failure code with no context — the
+    // "找不到原因" case. The snapshot failure now carries these diagnostics too.
+    const submissionDiagnostics = {
+      ...(readErrorProviderDiagnostics(error) ?? {}),
+      ...buildMaterialRefreshDiagnostics(materialRefresh),
+      localStage: submissionStage,
+      // Always persist the underlying error. Previously localError/modelError
+      // were recorded only when submissionWasNotStarted was true, which
+      // silently dropped the real cause on the generic provider_submission_failed
+      // path (error carries no failureCode and the request could not be
+      // classified as unstarted). That left model records with a generic code
+      // and no diagnosable context ("找不到原因"). Capturing them
+      // unconditionally surfaces the true pre-submission failure.
+      localError: readLocalErrorDiagnostics(error),
+      modelError: {
+        code: submissionModelError.code,
+        failureCode: submissionModelError.failureCode,
+        httpStatus: submissionModelError.httpStatus,
+        retryable: submissionModelError.retryable,
+      },
+      submissionWasNotStarted: Boolean(submissionWasNotStarted),
+      localState: submissionState ?? { lookup: "missing" },
+      ...(diagnosticsLookupError ? { diagnosticsLookupError } : {}),
+      preSubmissionRetryCount,
+      preSubmissionRetryLimit: PRE_SUBMISSION_RETRY_LIMIT,
+      providerRequestLookup: providerRequest?.provider_request_id ? "found" : "missing",
+    };
     if (providerRequest?.provider_request_id) {
       const preparedRequestLog = buildSeedanceUserModelRequestLogBody(requestBody, {
         providerName,
@@ -550,18 +838,15 @@ export async function processSeedanceVideoSubmitJob(
         providerModel,
         providerConfig: modelConfig?.providerConfig,
       });
-      const logRequestBody = sanitizeSeedance25SpecialRequestBody(
-        readProviderRedactedRequest(error) ??
+      const logRequestBody = readProviderRedactedRequest(error) ??
         readProviderResponseRedactedRequest(providerRequest.provider_response_redacted_json) ??
-        preparedRequestLog.requestBody,
-        readString(modelConfig?.providerConfig.requestFormat) ?? preparedRequestLog.requestFormat,
-      );
+        preparedRequestLog.requestBody;
       if (!submissionIsAmbiguous) {
         await markProviderRequestFailed(db, {
           providerRequestId: providerRequest.provider_request_id,
           failureCode: submissionFailureCode,
           redactedResponse: {
-            ...(readErrorProviderDiagnostics(error) ?? {}),
+            ...submissionDiagnostics,
             failureCode: submissionFailureCode,
             errorMessage,
             phase: "submit",
@@ -598,6 +883,7 @@ export async function processSeedanceVideoSubmitJob(
           responseText: buildSeedanceFailureResponseText({
             failureCode: submissionFailureCode,
             errorMessage,
+            diagnostics: submissionDiagnostics,
           }),
           responseUsage: null,
           finishReasons: [],
@@ -640,6 +926,8 @@ export async function processSeedanceVideoSubmitJob(
         providerRequestId: providerRequest?.provider_request_id ?? null,
         failureCode: submissionFailureCode,
         errorMessage,
+        localStage: submissionStage,
+        ...buildMaterialRefreshDiagnostics(materialRefresh),
         settledAt: input.now,
       }),
       now: input.now,
@@ -658,6 +946,7 @@ export async function processSeedanceVideoSubmitJob(
         providerFailureCode: providerRequest?.failure_code ?? null,
         errorMessage,
         displayMessage: errorMessage,
+        ...submissionDiagnostics,
       },
       creditSummary: {
         released: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
@@ -669,50 +958,6 @@ export async function processSeedanceVideoSubmitJob(
   } finally {
     await releaseProviderPermit(permit);
   }
-}
-
-export function shouldPrepareGlobalAiOpcVideoMaterials(
-  modelConfig: { providerProtocol?: string | null; providerModel?: string | null; providerConfig?: Record<string, unknown> } | null | undefined,
-) {
-  return modelConfig?.providerProtocol === "globalaiopc_video"
-    && readString(modelConfig.providerConfig?.requestFormat) === "globalaiopc_model_center_video";
-}
-
-export function sanitizeSeedanceUserModelRequestLogBody(
-  requestLogBody: {
-    requestFormat?: string;
-    requestBody: Record<string, unknown>;
-    requestText: string;
-  },
-  providerRequestFormat: string | undefined,
-) {
-  if (providerRequestFormat !== "globalaiopc_model_center_video") return requestLogBody;
-  const requestBody = sanitizeSeedance25SpecialRequestBody(
-    requestLogBody.requestBody,
-    providerRequestFormat,
-  );
-  return {
-    ...requestLogBody,
-    requestFormat: providerRequestFormat,
-    requestBody,
-    requestText: JSON.stringify(requestBody, null, 2),
-  };
-}
-
-function sanitizeSeedance25SpecialRequestBody(
-  requestBody: Record<string, unknown>,
-  requestFormat?: string,
-) {
-  if (
-    requestFormat !== "globalaiopc_model_center_video" &&
-    requestBody.model !== "sd_2.5_special_v1"
-  ) return requestBody;
-  const sanitized = { ...requestBody };
-  delete sanitized.first_image;
-  if (requestBody.model === "sd_2.5_special_v1") {
-    delete sanitized.last_image;
-  }
-  return sanitized;
 }
 
 async function resolveSeedanceSubmitConflict(
@@ -813,12 +1058,141 @@ async function findLatestProviderRequestForTask(
         AND task.current_attempt_id = $2
         AND (
           request.attempt_id = $2
-          OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+          OR (
+            request.attempt_id IS NULL
+            AND request.external_submission_started_at IS NULL
+            AND request.external_request_id IS NULL
+          )
         )
       ORDER BY request.updated_at DESC, request.id DESC
       LIMIT 1
     `,
     [taskId, attemptId],
+  );
+}
+
+async function findAnyUnstartedProviderRequestForTask(
+  db: SqlDatabase,
+  taskId: string,
+) {
+  return queryOne<{
+    provider_request_id: string;
+    status: string;
+    external_submission_started_at: Date | string | null;
+    external_request_id: string | null;
+    failure_code: string | null;
+    provider_response_redacted_json: Record<string, unknown> | string | null;
+  }>(
+    db,
+    `
+      SELECT
+        request.id AS provider_request_id,
+        request.status,
+        request.external_submission_started_at,
+        request.external_request_id,
+        request.failure_code,
+        request.response_redacted_json AS provider_response_redacted_json
+      FROM provider_requests request
+      WHERE request.task_id = $1
+        AND request.external_submission_started_at IS NULL
+        AND request.external_request_id IS NULL
+      ORDER BY request.updated_at DESC, request.id DESC
+      LIMIT 1
+    `,
+    [taskId],
+  );
+}
+
+async function repairSeedanceUnstartedProviderRequestPayload(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    providerName: string;
+    providerOperation: string;
+    requestKey: string;
+    requestHash: string;
+    payloadRef: string;
+    payloadHash: string;
+    redactedPayload: Record<string, unknown>;
+    attemptId: string;
+    now: Date;
+  },
+) {
+  const repaired = await queryOne<{ id: string }>(
+    db,
+    `
+      UPDATE provider_requests
+      SET attempt_id = COALESCE(attempt_id, $2),
+          payload_hash = $3,
+          payload_redacted_json = $4::jsonb,
+          request_hash = $9,
+          payload_ref = $10,
+          updated_at = $5
+      WHERE task_id = $1
+        AND provider_name = $6
+        AND provider_operation = $7
+        AND request_key = $8
+        AND status = 'created'
+        AND external_submission_started_at IS NULL
+        AND external_request_id IS NULL
+      RETURNING id
+    `,
+    [
+      input.taskId,
+      input.attemptId,
+      input.payloadHash,
+      JSON.stringify(input.redactedPayload),
+      input.now,
+      input.providerName,
+      input.providerOperation,
+      input.requestKey,
+      input.requestHash,
+      input.payloadRef,
+    ],
+  );
+  return Boolean(repaired?.id);
+}
+
+function hasExternalProviderSubmission(
+  providerRequest: {
+    external_submission_started_at: Date | string | null;
+    external_request_id: string | null;
+  } | null | undefined,
+) {
+  return Boolean(providerRequest?.external_submission_started_at || providerRequest?.external_request_id);
+}
+
+async function readSeedanceSubmissionState(
+  db: SqlDatabase,
+  taskId: string,
+  attemptId: string,
+  providerRequestId: string,
+) {
+  return queryOne<{
+    task_status: string;
+    task_current_attempt_id: string | null;
+    attempt_status: string | null;
+    provider_status: string | null;
+    provider_attempt_id: string | null;
+    provider_external_submission_started_at: Date | string | null;
+    provider_external_request_id: string | null;
+  }>(
+    db,
+    `
+      SELECT
+        task.status AS task_status,
+        task.current_attempt_id AS task_current_attempt_id,
+        attempt.status AS attempt_status,
+        request.status AS provider_status,
+        request.attempt_id AS provider_attempt_id,
+        request.external_submission_started_at AS provider_external_submission_started_at,
+        request.external_request_id AS provider_external_request_id
+      FROM tasks task
+      LEFT JOIN task_attempts attempt ON attempt.id = $2
+      LEFT JOIN provider_requests request ON request.id = $3
+      WHERE task.id = $1
+    `,
+    [taskId, attemptId, providerRequestId],
   );
 }
 
@@ -859,6 +1233,145 @@ async function keepSeedanceTaskWaitingForExternalId(
   );
 }
 
+// A current attempt can be observed before its provider request is bound. In
+// that window there is no external side effect, so the attempt is safe to
+// reopen instead of reporting a provider failure.
+async function requeueSeedanceTaskBeforeProviderSubmission(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    attemptId: string;
+    providerRequestId: string;
+    failureCode?: string | null;
+    now: Date;
+  },
+) {
+  await db.query("BEGIN");
+  try {
+    // Requeueing has to clear failure_code so the row can be re-submitted, but
+    // the cleared value is the only classified cause recorded for this cycle.
+    // Previously it was simply NULLed, so after the retry budget was spent the
+    // last (generic) code was all that remained and the first real cause was
+    // unrecoverable. Fold it into response_redacted_json first.
+    const providerRequest = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE provider_requests
+        SET status = 'created',
+            attempt_id = NULL,
+            external_submission_started_at = NULL,
+            external_request_id = NULL,
+            response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb)
+              || jsonb_build_object(
+                'preSubmissionRetryHistory',
+                COALESCE(response_redacted_json->'preSubmissionRetryHistory', '[]'::jsonb)
+                  || jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+                    'failureCode', COALESCE($5::text, failure_code),
+                    'previousStatus', status,
+                    'requeuedAttemptId', $3::text,
+                    'requeuedAt', $4::timestamptz
+                  )))
+              ),
+            failure_code = NULL,
+            next_poll_at = NULL,
+            updated_at = $4
+        WHERE id = $1
+          AND task_id = $2
+          AND EXISTS (
+            SELECT 1 FROM task_attempts current_attempt
+            WHERE current_attempt.id = $3
+              AND current_attempt.task_id = $2
+              AND current_attempt.status IN ('created', 'running', 'result_unknown')
+          )
+          AND external_submission_started_at IS NULL
+          AND external_request_id IS NULL
+        RETURNING id
+      `,
+      [
+        input.providerRequestId,
+        input.taskId,
+        input.attemptId,
+        input.now,
+        input.failureCode ?? null,
+      ],
+    );
+    const attempt = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE task_attempts
+        SET status = 'canceled',
+            failure_code = 'provider_submission_not_started',
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            finished_at = $3,
+            updated_at = $3
+        WHERE id = $2
+          AND task_id = $1
+          AND status IN ('created', 'running', 'result_unknown')
+        RETURNING id
+      `,
+      [input.taskId, input.attemptId, input.now],
+    );
+    const task = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE tasks
+        SET status = 'queued',
+            failure_code = NULL,
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            current_attempt_id = NULL,
+            max_attempts = GREATEST(max_attempts, attempt_count + 1),
+            updated_at = $3
+        WHERE id = $1
+          AND current_attempt_id = $2
+          AND status IN ('running', 'result_unknown')
+          AND EXISTS (
+            SELECT 1 FROM task_attempts current_attempt
+            WHERE current_attempt.id = $2
+              AND current_attempt.task_id = $1
+              AND current_attempt.status = 'canceled'
+              AND current_attempt.failure_code = 'provider_submission_not_started'
+          )
+        RETURNING id
+      `,
+      [input.taskId, input.attemptId, input.now],
+    );
+    if (!providerRequest || !attempt || !task) {
+      await db.query("ROLLBACK");
+      return false;
+    }
+    await markGenerationTaskSnapshotQueued(db, {
+      taskId: input.taskId,
+      progressStage: "provider_submission_retry",
+      progressPercent: 10,
+      now: input.now,
+    });
+    await db.query("COMMIT");
+    return true;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+const PRE_SUBMISSION_RETRY_LIMIT = 3;
+
+async function countPreSubmissionRetries(db: SqlDatabase, taskId: string) {
+  const result = await db.query<{ count: number | string }>(
+    `
+      SELECT COUNT(*) AS count
+      FROM task_attempts
+      WHERE task_id = $1
+        AND failure_code = 'provider_submission_not_started'
+    `,
+    [taskId],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 export async function failSeedanceVideoTaskBeforeProviderSubmission(
   db: SqlDatabase,
   input: {
@@ -891,7 +1404,11 @@ export async function failSeedanceVideoTaskBeforeProviderSubmission(
         ON pr.task_id = t.id
        AND (
          pr.attempt_id = t.current_attempt_id
-         OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+         OR (
+           pr.attempt_id IS NULL
+           AND pr.external_submission_started_at IS NULL
+           AND pr.external_request_id IS NULL
+         )
        )
       LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
@@ -905,7 +1422,11 @@ export async function failSeedanceVideoTaskBeforeProviderSubmission(
           WHERE started.task_id = t.id
             AND (
               started.attempt_id = t.current_attempt_id
-              OR (started.attempt_id IS NULL AND t.attempt_count = 1)
+              OR (
+                started.attempt_id IS NULL
+                AND started.external_submission_started_at IS NULL
+                AND started.external_request_id IS NULL
+              )
             )
             AND started.external_submission_started_at IS NOT NULL
         )
@@ -918,17 +1439,31 @@ export async function failSeedanceVideoTaskBeforeProviderSubmission(
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const errorMessage = "模型请求未成功发送，任务已停止并返还积分。";
+  const submissionDiagnostics = {
+    localStage: "stale_before_provider_submission",
+    localState: {
+      taskStatus: "running",
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      externalSubmissionStartedAt: null,
+      externalRequestId: row.external_request_id,
+      staleBefore: input.staleBefore.toISOString(),
+    },
+    failureCode: input.failureCode,
+    errorMessage,
+    phase: "submit",
+  };
   if (row.provider_request_id) {
     await markProviderRequestFailed(db, {
       providerRequestId: row.provider_request_id,
       failureCode: input.failureCode,
-      redactedResponse: { errorMessage },
+      redactedResponse: submissionDiagnostics,
       now: input.now,
     });
     await completeUserModelRequestLog(db, {
       providerRequestId: row.provider_request_id,
       status: "failed",
-      responseText: buildSeedanceFailureResponseText({ failureCode: input.failureCode, errorMessage }),
+      responseText: JSON.stringify(submissionDiagnostics, null, 2),
       responseUsage: null,
       finishReasons: [],
       failureCode: input.failureCode,
@@ -1055,8 +1590,35 @@ export async function processSeedanceVideoPollJob(
         redactedResponse: error.toRedactedProviderRecord(),
       };
     }
+    await recordGlobalAiOpcLifecycleStep(db, {
+      providerRequestId: row.provider_request_id,
+      stage: "poll_response_received",
+      details: {
+        externalRequestId: row.external_request_id,
+        providerStatus: poll.status,
+        providerResponse: poll.redactedResponse,
+      },
+      now: input.now,
+    });
 
     if (poll.status === "accepted" || poll.status === "running") {
+      if (poll.status === "running") {
+        await advanceProviderRequestStage(db, {
+          providerRequestId: row.provider_request_id,
+          externalRequestId: row.external_request_id,
+          redactedResponse: poll.redactedResponse,
+          now: input.now,
+        });
+      }
+      await appendProviderRequestDiagnostics(db, {
+        providerRequestId: row.provider_request_id,
+        diagnostics: {
+          ...poll.redactedResponse,
+          externalRequestId: row.external_request_id,
+          pollStatus: poll.status,
+        },
+        now: input.now,
+      });
       await markGenerationTaskSnapshotRunning(db, {
         taskId: row.task_id,
         attemptId: row.attempt_id,
@@ -1134,6 +1696,16 @@ export async function processSeedanceVideoPollJob(
     }
 
     if (!poll.videoUrl) {
+      await appendProviderRequestDiagnostics(db, {
+        providerRequestId: row.provider_request_id,
+        diagnostics: {
+          ...poll.redactedResponse,
+          externalRequestId: row.external_request_id,
+          pollStatus: poll.status,
+          artifactStatus: "missing",
+        },
+        now: input.now,
+      });
       return { status: "waiting" };
     }
 
@@ -1170,9 +1742,32 @@ export async function processSeedanceVideoPollJob(
       },
       now: input.now,
     });
+    // renewSeedancePollLease holds a 5-minute lease under
+    // 'seedance-video-poll-worker'. The fetch stage runs about a second later and
+    // markSeedanceFinalizeLease only claims an unheld, expired, or self-owned
+    // lease, so leaving it in place made every successful poll hand the artifact
+    // chain a lease it could not take: fetch returned skipped and the task waited
+    // for the repair sweeper, which itself only picks up expired leases. Release
+    // it here so the successor stage can claim the task immediately.
+    await releaseSeedancePollLeaseForArtifactHandoff(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      now: input.now,
+    });
 
     return { status: "succeeded" };
   } catch (error) {
+    await recordGlobalAiOpcLifecycleStep(db, {
+      providerRequestId: row.provider_request_id,
+      stage: "poll_request_failed",
+      details: {
+        externalRequestId: row.external_request_id,
+        failureCode: readErrorFailureCode(error) ?? "provider_poll_failed",
+        providerDiagnostics: readErrorProviderDiagnostics(error),
+        localError: readLocalErrorDiagnostics(error),
+      },
+      now: input.now,
+    });
     if (isSeedancePollResultNotFoundError(error)) {
       const failureCode = "provider_result_not_found";
       const errorMessage = translateProviderErrorMessage(error, {
@@ -1257,7 +1852,10 @@ export async function expireSeedanceVideoPollJob(
     fetchImpl?: typeof fetch;
     now: Date;
   },
-): Promise<{ status: "failed"; failureCode: "provider_poll_timeout" }> {
+): Promise<
+  | { status: "failed"; failureCode: "provider_poll_timeout" }
+  | { status: "skipped"; nextAction: "finalize" }
+> {
   const row = await findSeedanceTaskForPollExpiration(
     db,
     input.taskId,
@@ -1291,8 +1889,12 @@ export async function expireSeedanceVideoPollJob(
         now: input.now,
       });
       providerStatus = provider.status;
+      // markProviderRequestResultUnknown refuses to touch terminal rows, so a
+      // 'succeeded' status here means the provider really did finish before the
+      // poll budget ran out. Failing the task would throw away a completed
+      // video; hand it to the finalize stage instead.
       if (provider.status === "succeeded") {
-        return { status: "failed", failureCode: "provider_poll_timeout" };
+        return { status: "skipped", nextAction: "finalize" };
       }
     }
     if (row.provider_request_id && !["failed", "canceled"].includes(providerStatus ?? "")) {
@@ -1496,7 +2098,7 @@ export async function cancelGenerationTask(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   if (row.external_request_id) {
     const providerExecutor = readString(snapshot.providerExecutor);
-    const cancelSupported = row.task_type === "episode_generate_video" && providerExecutor === "seedance";
+    const cancelSupported = row.task_type === "episode_generate_video" && isVideoProviderExecutor(providerExecutor);
     if (!cancelSupported) {
       return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "provider_cancel_not_supported" };
     }
@@ -1670,6 +2272,8 @@ export async function finalizeSeedanceVideoArtifactJob(
     owner: leaseOwner,
     now: input.now,
   });
+  // A held lease means a live sibling finalizer owns this task. That is a real
+  // duplicate, not the stalled handoff the poll stage now releases explicitly.
   if (!leaseClaimed) return { status: "skipped" };
   const stopLeaseHeartbeat = startSeedanceFinalizeLeaseHeartbeat(db, {
     taskId: row.task_id,
@@ -2177,7 +2781,14 @@ export async function fetchSeedanceVideoArtifactJob(
     owner: leaseOwner,
     now: input.now,
   });
-  if (!leaseClaimed) return { status: "skipped" };
+  // A held lease means another stage of this same task — typically the poll job
+  // that just observed the finished video — is still releasing. That is transient
+  // contention, not a completed task. Returning a bare "skipped" here ended the
+  // fetch job as "completed" without enqueuing persist, so the task stalled until
+  // the repair sweeper recovered it minutes later. Route through the shared
+  // coordinator instead: a still-live task yields a retryable stage-not-ready
+  // failure, and only a genuinely terminal task skips.
+  if (!leaseClaimed) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   const stopLeaseHeartbeat = startSeedanceFinalizeLeaseHeartbeat(db, {
     taskId: row.task_id,
     owner: leaseOwner,
@@ -2515,7 +3126,7 @@ async function findSeedanceTaskForSubmit(db: SqlDatabase, taskId: string) {
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
         AND t.status = 'queued'
-        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
       LIMIT 1
     `,
     [taskId],
@@ -2571,7 +3182,7 @@ async function findSeedanceTaskForPoll(
             AND t.failure_code = 'lease_expired_after_external_start'
           )
         )
-        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
         AND t.current_attempt_id IS NOT NULL
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
@@ -2627,7 +3238,7 @@ async function findSeedanceTaskForPollExpiration(
         )
         AND t.task_type = 'episode_generate_video'
         AND t.status IN ('running', 'result_unknown')
-        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
       LIMIT 1
     `,
     [taskId, enforceExpectedAttempt, expectedAttemptId],
@@ -2901,7 +3512,7 @@ async function findSeedancePollTimeoutRecoveryTask(
       LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
       WHERE task.id = $1
         AND task.task_type = 'episode_generate_video'
-        AND task.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND task.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
       LIMIT 1
     `,
     [taskId],
@@ -3178,7 +3789,7 @@ async function findSeedanceTaskForFinalize(
           t.status = 'manual_review_required'
           AND t.failure_code = 'provider_output_storage_failed'
         )
-        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
@@ -3326,7 +3937,7 @@ async function findSeedanceTaskForPersist(
             AND t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
           )
         )
-        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
@@ -3893,27 +4504,6 @@ export function buildSeedanceUserModelRequestLogBody(
       requestText: JSON.stringify(providerBody, null, 2),
     };
   }
-  if (input.providerName === "GlobalAiOpc") {
-    const requestFormat = readString(input.providerConfig?.requestFormat) ?? "globalaiopc_video";
-    const providerBody = buildGlobalAiOpcVideoPayload({
-      providerRequestId: "request-log-preview",
-      providerName: input.providerName,
-      providerOperation: operationNames.episodeVideoGenerate,
-      requestKey: "request-log-preview",
-      payloadRef: "request-log-preview",
-      payloadHash: "request-log-preview",
-      redactedPayload: requestBody,
-    }, {
-      model: input.providerModel?.trim() || undefined,
-      defaultRequestParams: readObject(input.providerConfig?.defaultRequestParams),
-      requestFormat: readString(input.providerConfig?.requestFormat),
-    });
-    return {
-      requestFormat,
-      requestBody: providerBody,
-      requestText: JSON.stringify(providerBody, null, 2),
-    };
-  }
   if (
     input.providerProtocol === "lingdong_api" ||
     readString(input.providerConfig?.requestFormat) === "lingdong_video" ||
@@ -3982,6 +4572,7 @@ function buildSeedanceFailureResponseText(input: {
   failureCode: string;
   errorMessage: string;
   providerResponse?: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
 }) {
   const providerSummary = summarizeProviderResponse(input.providerResponse) ?? {};
   return JSON.stringify(
@@ -3989,6 +4580,7 @@ function buildSeedanceFailureResponseText(input: {
       failureCode: input.failureCode,
       errorMessage: translateProviderErrorMessage(input.errorMessage),
       ...providerSummary,
+      ...input.diagnostics,
     }),
     null,
     2,
@@ -4067,7 +4659,7 @@ function fallbackSeedanceModelConfig(env: NodeJS.ProcessEnv) {
         env.SEEDANCE_CREATE_TASK_ENDPOINT?.trim() || "/api/v3/contents/generations/tasks",
       queryTaskEndpoint:
         env.SEEDANCE_QUERY_TASK_ENDPOINT?.trim() || "/api/v3/contents/generations/tasks/{taskId}",
-      apiKeyEnv: env.SEEDANCE_API_KEY_ENV?.trim() || "VOLCENGINE_ARK_API_KEY",
+      apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
     },
   };
 }
@@ -4342,13 +4934,22 @@ function readString(value: unknown) {
 }
 
 function isVideoProviderExecutor(value: string | null | undefined) {
-  return value === "seedance";
+  return value === "seedance" || value === "globalaiopc-video";
 }
 
 function readErrorFailureCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && typeof (error as { failureCode?: unknown }).failureCode === "string"
-    ? String((error as { failureCode: string }).failureCode)
-    : undefined;
+  if (!error || typeof error !== "object") return undefined;
+  const failureCode = (error as { failureCode?: unknown }).failureCode;
+  if (typeof failureCode === "string" && failureCode.trim()) {
+    return failureCode;
+  }
+  // Fall back to a structured `.code` when no `failureCode` is present. Errors
+  // such as ProviderRequestConflictError historically exposed only `.code`,
+  // which caused the submit path to collapse to the generic
+  // "provider_submission_failed" and surface the misleading
+  // "修改素材或提示词" message instead of the real pre-submission cause.
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.trim() ? code : undefined;
 }
 
 function isSeedancePollResultNotFoundError(error: unknown) {
@@ -4359,9 +4960,108 @@ function isSeedancePollResultNotFoundError(error: unknown) {
 }
 
 function readErrorProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
-  return error && typeof error === "object" && typeof (error as { providerDiagnostics?: unknown }).providerDiagnostics === "object"
-    ? (error as { providerDiagnostics: Record<string, unknown> }).providerDiagnostics
-    : undefined;
+  if (!error || typeof error !== "object") return undefined;
+  const diagnostics = (error as { providerDiagnostics?: unknown }).providerDiagnostics;
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return undefined;
+  const rawResponse = readProviderRawResponse(diagnostics);
+  return rawResponse === undefined
+    ? diagnostics as Record<string, unknown>
+    : { ...(diagnostics as Record<string, unknown>), providerRawResponse: rawResponse };
+}
+
+function readLocalErrorDiagnostics(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const record = error as Error & { code?: unknown };
+    return {
+      name: record.name,
+      ...(typeof record.code === "string" ? { code: record.code } : {}),
+      message: record.message,
+    };
+  }
+  return { message: String(error) };
+}
+
+function buildMaterialRefreshDiagnostics(input: {
+  status: string;
+  diagnostics: GenerationInputUrlRefreshDiagnostic[];
+}) {
+  return input.status === "not_requested"
+    ? {}
+    : {
+        materialInputRefresh: {
+          status: input.status,
+          diagnostics: input.diagnostics,
+        },
+      };
+}
+
+async function appendSeedanceSubmitPreparationDiagnostics(
+  db: SqlDatabase,
+  taskId: string,
+  localStage: string,
+  error: unknown,
+  now: Date,
+) {
+  const providerRequest = await findAnyUnstartedProviderRequestForTask(db, taskId).catch(() => undefined);
+  if (!providerRequest?.provider_request_id) return;
+  await appendProviderRequestDiagnostics(db, {
+    providerRequestId: providerRequest.provider_request_id,
+    diagnostics: {
+      phase: "submit",
+      localStage,
+      localError: readLocalErrorDiagnostics(error),
+      failureCode: readErrorFailureCode(error) ?? "provider_submission_prepare_failed",
+      diagnosticNote: "供应商提交尚未开始，异常发生在提交准备阶段。",
+    },
+    now,
+  }).catch(() => undefined);
+}
+
+async function ensureSeedanceFailedResultDiagnostics(
+  db: SqlDatabase,
+  input: { taskId: string; failureCode: string; now: Date },
+) {
+  const providerRequest = await queryOne<{
+    provider_request_id: string;
+    response_redacted_json: Record<string, unknown> | null;
+  }>(
+    db,
+    `
+      SELECT id AS provider_request_id, response_redacted_json
+      FROM provider_requests
+      WHERE task_id = $1
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `,
+    [input.taskId],
+  ).catch(() => undefined);
+  if (!providerRequest?.provider_request_id) return;
+  const existingStage = providerRequest.response_redacted_json?.localStage;
+  if (typeof existingStage === "string" && existingStage.trim()) return;
+  const diagnostics = {
+    phase: "submit",
+    localStage: "submit_result_failed_without_stage",
+    localError: {
+      code: input.failureCode,
+      message: "提交处理器返回失败，但此前没有写入提交阶段诊断。",
+    },
+    failureCode: input.failureCode,
+    diagnosticNote: "已由提交结果审计兜底补写，需继续检查处理器返回路径。",
+  };
+  await appendProviderRequestDiagnostics(db, {
+    providerRequestId: providerRequest.provider_request_id,
+    diagnostics,
+    now: input.now,
+  }).catch(() => undefined);
+  await completeUserModelRequestLog(db, {
+    providerRequestId: providerRequest.provider_request_id,
+    status: "failed",
+    responseText: JSON.stringify(diagnostics, null, 2),
+    responseUsage: null,
+    finishReasons: [],
+    failureCode: input.failureCode,
+    now: input.now,
+  }).catch(() => undefined);
 }
 
 function readErrorStorageObjectId(error: unknown): string | undefined {

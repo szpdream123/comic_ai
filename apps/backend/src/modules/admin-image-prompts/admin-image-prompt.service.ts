@@ -268,8 +268,8 @@ function styleFromRow(row: ImagePromptStyleRow) {
     prompt_category: "image_style",
     category: "image_style",
     summary: row.summary || "",
-    cover_image_url: row.cover_image_url || "",
-    coverImageUrl: row.cover_image_url || "",
+    cover_image_url: imagePromptCoverUrl(row),
+    coverImageUrl: imagePromptCoverUrl(row),
     cover_storage_object_id: row.cover_storage_object_id,
     coverStorageObjectId: row.cover_storage_object_id,
     prompt_content: row.prompt_content,
@@ -286,6 +286,12 @@ function styleFromRow(row: ImagePromptStyleRow) {
     created_at: dateString(row.created_at),
     updated_at: dateString(row.updated_at),
   };
+}
+
+function imagePromptCoverUrl(row: Pick<ImagePromptStyleRow, "cover_image_url" | "cover_storage_object_id">) {
+  return row.cover_storage_object_id
+    ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
+    : row.cover_image_url || "";
 }
 
 function dateString(value: Date | string) {

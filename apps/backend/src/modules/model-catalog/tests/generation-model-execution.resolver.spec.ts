@@ -6,8 +6,13 @@ import {
   GenerationModelExecutionResolutionError,
   resolveGenerationModelExecution,
 } from "../generation-model-execution.resolver.ts";
+import { resolveAudioProviderAdapterKey } from "../provider-adapter-routing.ts";
 
 describe("generation model execution resolver", () => {
+  it("routes both GlobalAiOpc SoundClone protocol spellings to one adapter key", () => {
+    assert.equal(resolveAudioProviderAdapterKey("globalaiopc_sound_clone"), "globalaiopc_sound_clone");
+    assert.equal(resolveAudioProviderAdapterKey("global-ai-opc-sound-clone"), "globalaiopc_sound_clone");
+  });
   it("routes SanBao image and video models through the existing async executors", () => {
     const image = resolveGenerationModelExecution({
       kind: "image", modelCode: "sanbao-gpt-image2",
@@ -84,6 +89,32 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
+  it("routes GlobalAiOpc Model Center video models through the isolated GlobalAiOpc executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "kling-o3",
+      modelConfig: videoModelConfig({
+        modelCode: "kling-o3",
+        providerName: "GlobalAiOpc",
+        providerModel: "KlingO3",
+        providerProtocol: "globalaiopc_video",
+        providerConfig: {
+          baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+          createTaskEndpoint: "/v2/model-center/tasks",
+          queryTaskEndpoint: "/v2/model-center/tasks/{taskId}",
+          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+          requestFormat: "globalaiopc_model_center_video",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: { referenceMode: "image" },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "globalaiopc-video");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
   it("resolves configured image models to the image provider executor and merges default parameters", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",
@@ -119,10 +150,10 @@ describe("generation model execution resolver", () => {
   it("maps shared frontend image controls to provider size fields without losing enum casing", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",
-      modelCode: "global-ai-opc-nano-banana-2",
+      modelCode: "image-parameter-normalization",
       modelConfig: imageModelConfig({
-        modelCode: "global-ai-opc-nano-banana-2",
-        providerProtocol: "global_ai_opc_image",
+        modelCode: "image-parameter-normalization",
+        providerProtocol: "san_bao",
         parameterSchema: {
           resolution: { enum: ["1k", "2k", "4k"] },
           size: { enum: ["1:1", "16:9", "9:16"] },
@@ -433,27 +464,6 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-image");
   });
 
-  it("routes GlobalAiOpc image models to the image executor", () => {
-    const execution = resolveGenerationModelExecution({
-      kind: "image",
-      modelCode: "global-ai-opc-nano-banana-pro",
-      modelConfig: imageModelConfig({
-        modelCode: "global-ai-opc-nano-banana-pro",
-        providerName: "GlobalAiOpc（壹嘉云）",
-        providerProtocol: "global_ai_opc_image",
-        providerModel: "nano-banana-pro",
-      }),
-      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
-      parameters: {
-        mode: "single-image",
-      },
-      fallbackQueueName: "fallback-image-submit",
-    });
-
-    assert.equal(execution.providerExecutor, "gpt-image-2");
-    assert.equal(execution.queueName, "generation-submit-image");
-  });
-
   it("routes Lingdong video models to the video executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",
@@ -549,31 +559,6 @@ describe("generation model execution resolver", () => {
     });
   });
 
-  it("routes GlobalAiOpc video models to the video executor by provider protocol", () => {
-    const execution = resolveGenerationModelExecution({
-      kind: "video",
-      modelCode: "grok_video3",
-      modelConfig: videoModelConfig({
-        modelCode: "grok_video3",
-        providerName: "GlobalAiOpc",
-        providerProtocol: "globalaiopc_video",
-        providerModel: "grok_video3",
-        providerConfig: {
-          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
-          requestFormat: "globalaiopc_grok",
-        },
-      }),
-      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
-      parameters: {
-        mode: "reference-video",
-      },
-      fallbackQueueName: "fallback-video-submit",
-    });
-
-    assert.equal(execution.providerExecutor, "seedance");
-    assert.equal(execution.queueName, "generation-submit-video");
-  });
-
   it("routes explicitly selected Extra Token adapters to the video executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",
@@ -586,57 +571,6 @@ describe("generation model execution resolver", () => {
       }),
       dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
       parameters: { mode: "first-frame" },
-      fallbackQueueName: "fallback-video-submit",
-    });
-
-    assert.equal(execution.providerExecutor, "seedance");
-    assert.equal(execution.queueName, "generation-submit-video");
-  });
-
-  it("routes dedicated GlobalAiOpc video models by key and format", () => {
-    const execution = resolveGenerationModelExecution({
-      kind: "video",
-      modelCode: "sd2_manxue",
-      modelConfig: videoModelConfig({
-        modelCode: "sd2_manxue",
-        providerName: "GlobalAiOpc",
-        providerProtocol: "globalaiopc_video",
-        providerModel: "sd2_manxue",
-        providerConfig: {
-          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
-          requestFormat: "globalaiopc_sd2_manxue",
-        },
-      }),
-      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
-      parameters: {
-        mode: "reference-video",
-      },
-      fallbackQueueName: "fallback-video-submit",
-    });
-
-    assert.equal(execution.providerExecutor, "seedance");
-    assert.equal(execution.queueName, "generation-submit-video");
-  });
-
-  it("routes dedicated GlobalAiOpc video models by key and video endpoint", () => {
-    const execution = resolveGenerationModelExecution({
-      kind: "video",
-      modelCode: "sd2_manxue_fast",
-      modelConfig: videoModelConfig({
-        modelCode: "sd2_manxue_fast",
-        providerName: "GlobalAiOpc",
-        providerProtocol: "globalaiopc_video",
-        providerModel: "sd2_manxue_fast",
-        providerConfig: {
-          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
-          createTaskEndpoint: "/v1/sd2_manxue/videos",
-          requestFormat: "json",
-        },
-      }),
-      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
-      parameters: {
-        mode: "reference-video",
-      },
       fallbackQueueName: "fallback-video-submit",
     });
 
@@ -768,28 +702,24 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.parameters.durationSec, 60);
   });
 
-  it("routes SoundClone through the dedicated GlobalAiOpc audio executor", () => {
+  it("routes GlobalAiOpc SoundClone through its dedicated audio executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "audio",
       modelCode: "soundclone",
       modelConfig: imageModelConfig({
         modelCode: "soundclone",
-        displayName: "SoundClone",
-        providerName: "GlobalAiOpc",
-        providerModel: "soundCloningAudio",
         providerProtocol: "globalaiopc_sound_clone",
         mediaType: "audio",
-        taskModes: ["audio.text_to_speech"],
       }),
-      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
-      parameters: { voiceId: "cloned-voice-1" },
-      fallbackQueueName: "generation-submit-image",
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-audio" }),
+      parameters: { text: "旁白" },
+      fallbackQueueName: "generation-submit-audio",
     });
 
     assert.equal(execution.providerExecutor, "globalaiopc-sound-clone");
-    assert.equal(execution.queueName, "generation-submit-image");
-    assert.equal(execution.taskMode, "audio.text_to_speech");
+    assert.equal(execution.queueName, "generation-submit-audio");
   });
+
 });
 
 function assertExecutionError(callback: () => void, code: string) {

@@ -154,6 +154,7 @@ export async function createUserModelRequestLog(
       )
       ON CONFLICT (provider_request_id)
       DO UPDATE SET
+        attempt_id = COALESCE(EXCLUDED.attempt_id, user_model_request_logs.attempt_id),
         request_format = EXCLUDED.request_format,
         request_body_json = EXCLUDED.request_body_json,
         request_text = EXCLUDED.request_text,

@@ -41,6 +41,15 @@ describe("creator dev detached scripts", () => {
     assert.match(source, /REDIS_URL\(Redis\)/);
     assert.match(source, /await client\.query\("SELECT 1"\)/);
     assert.match(source, /await redis\.ping\(\)/);
+    assert.match(source, /MEDIA_CRAWLER_MANAGED/);
+  });
+
+  it("gates MediaCrawler startup and readiness on MEDIA_CRAWLER_MANAGED", () => {
+    const stackSource = readFileSync(join(process.cwd(), "scripts/run-creator-dev-stack.mjs"), "utf8");
+    const startSource = readFileSync(join(process.cwd(), "scripts/start-dev-detached.mjs"), "utf8");
+    assert.match(stackSource, /const mediaCrawlerManaged = isEnabled\(process\.env\.MEDIA_CRAWLER_MANAGED \?\? "true"\)/);
+    assert.match(stackSource, /if \(mediaCrawlerManaged\) \{[\s\S]*supervisor\.start\("media-crawler"/);
+    assert.match(startSource, /if \(isEnabled\(process\.env\.MEDIA_CRAWLER_MANAGED \?\? "true"\)\) \{[\s\S]*requiredLogMarkers\.push/);
   });
 
   it("hides Windows command windows for startup, status, and stop subprocesses", () => {

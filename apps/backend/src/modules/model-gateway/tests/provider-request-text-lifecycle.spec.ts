@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   createOrReuseProviderRequest,
+  appendProviderRequestDiagnostics,
   markExternalSubmissionStarted,
   markProviderRequestCanceled,
   markProviderRequestFailed,
@@ -76,6 +77,46 @@ describe("provider request text lifecycle", () => {
     }
   });
 
+  it("preserves pre-terminal submission diagnostics when marking a request failed", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createOrReuseProviderRequest(db, providerInput("preserve-diagnostics"));
+      await appendProviderRequestDiagnostics(db, {
+        providerRequestId: prepared.request.id,
+        diagnostics: {
+          localStage: "external_submission_start_guard",
+          localError: { name: "ProviderSubmissionStartGuardError", message: "attempt is stale" },
+          modelError: { code: "provider_request_stale_attempt" },
+        },
+        now: new Date("2026-06-01T10:01:00.000Z"),
+      });
+
+      const failed = await markProviderRequestFailed(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "provider_submission_failed",
+        redactedResponse: {
+          phase: "submit",
+          errorMessage: "生成失败，请修改素材或提示词后重新生成",
+          localStage: "provider_submit",
+          localError: { name: "Error", message: "provider_request_terminal_state_conflict" },
+          modelError: { code: "model_service_unavailable" },
+        },
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.redactedResponse?.localStage, "external_submission_start_guard");
+      assert.deepEqual(failed.redactedResponse?.localError, {
+        name: "ProviderSubmissionStartGuardError",
+        message: "attempt is stale",
+      });
+      assert.deepEqual(failed.redactedResponse?.modelError, { code: "provider_request_stale_attempt" });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("marks an aborted streaming provider request as canceled", async () => {
     const db = await createMigratedTestDb();
 
@@ -116,6 +157,31 @@ describe("provider request text lifecycle", () => {
       assert.equal(failed.externalSubmissionStartedAt, null);
       assert.equal(failed.failureCode, "provider_api_key_missing");
       assert.equal(failed.redactedResponse?.["phase"], "submit");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("adds a terminal fallback stage when a failure has no local diagnostics", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createOrReuseProviderRequest(db, providerInput("terminal-fallback"));
+      const failed = await markProviderRequestFailed(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "provider_submission_failed",
+        redactedResponse: {
+          phase: "submit",
+          errorMessage: "生成失败，请修改素材或提示词后重新生成",
+        },
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+
+      assert.equal(failed.redactedResponse?.localStage, "provider_request_terminal_status");
+      assert.deepEqual(failed.redactedResponse?.localError, {
+        code: "provider_submission_failed",
+        message: "失败请求未携带更早阶段的本地异常详情。",
+      });
     } finally {
       await db.close();
     }
@@ -220,6 +286,11 @@ describe("provider request text lifecycle", () => {
         displayMessage: "模型服务繁忙或暂时不可用，请稍后重试。",
         errorCode: "model_service_unavailable",
         failureCode: "image_provider_503",
+        internalError: {
+          name: "Error",
+          message: "image_provider_503",
+        },
+        localStage: "provider_submit",
         providerErrorCode: "temporarily_unavailable",
         providerMessage: "模型服务繁忙或暂时不可用，请稍后重试。",
         providerRawResponse: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
@@ -249,6 +320,11 @@ describe("provider request text lifecycle", () => {
         providerErrorCode: "temporarily_unavailable",
         errorCode: "model_service_unavailable",
         failureCode: "image_provider_503",
+        internalError: {
+          name: "Error",
+          message: "image_provider_503",
+        },
+        localStage: "provider_submit",
         providerRawResponse: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
       });
     } finally {
@@ -256,7 +332,7 @@ describe("provider request text lifecycle", () => {
     }
   });
 
-  it("compacts binary and oversized provider raw responses before persistence", async () => {
+  it("persists the complete provider raw response", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -281,11 +357,10 @@ describe("provider request text lifecycle", () => {
         data?: Array<Record<string, unknown>>;
         oversized_note?: string;
       };
-      assert.equal(storedRaw.data?.[0]?.b64_json, "[binary omitted: base64, 100000 chars]");
-      assert.equal(storedRaw.data?.[0]?.image_url, "[binary omitted: data URL, 100022 chars]");
+      assert.equal(storedRaw.data?.[0]?.b64_json, "A".repeat(100_000));
+      assert.equal(storedRaw.data?.[0]?.image_url, `data:image/png;base64,${"B".repeat(100_000)}`);
       assert.equal(storedRaw.data?.[0]?.revised_prompt, "保留可审计的文本字段");
-      assert.match(storedRaw.oversized_note ?? "", /\[truncated: 100000 chars total\]$/);
-      assert.ok(JSON.stringify(storedRaw).length < 40_000);
+      assert.equal(storedRaw.oversized_note, "C".repeat(100_000));
     } finally {
       await db.close();
     }
@@ -323,6 +398,49 @@ describe("provider request text lifecycle", () => {
       assert.match(completed?.responseText ?? "", /\[binary omitted: base64, 100000 chars\]/);
       assert.ok((completed?.requestText?.length ?? 0) > 100_000);
       assert.ok((completed?.responseText?.length ?? Infinity) < 5_000);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("binds a pre-created model log to the worker attempt when it becomes known", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createOrReuseProviderRequest(db, providerInput("attempt-binding"));
+      const baseLog = {
+        providerRequestId: prepared.request.id,
+        projectId: prepared.request.projectId,
+        workflowId: prepared.request.workflowId,
+        taskId: prepared.request.taskId,
+        userId: prepared.request.userId,
+        providerName: prepared.request.providerName,
+        providerOperation: prepared.request.providerOperation,
+        modelId: "deepseek-chat",
+        providerModel: "deepseek-chat",
+        requestKey: prepared.request.requestKey,
+        requestHash: prepared.request.requestHash,
+        payloadHash: prepared.request.payloadHash,
+        requestBody: { model: "deepseek-chat", messages: [] },
+        requestText: JSON.stringify({ model: "deepseek-chat", messages: [] }),
+        now: new Date("2026-06-01T10:01:00.000Z"),
+      };
+      const initial = await createUserModelRequestLog(db, baseLog);
+      assert.equal(initial.attemptId, null);
+
+      const attemptId = "60000000-0000-4000-8000-000000000399";
+      const rebound = await createUserModelRequestLog(db, {
+        ...baseLog,
+        attemptId,
+        now: new Date("2026-06-01T10:01:30.000Z"),
+      });
+
+      assert.equal(rebound.attemptId, attemptId);
+      const stored = await db.query<{ attempt_id: string | null }>(
+        "SELECT attempt_id FROM user_model_request_logs WHERE provider_request_id = $1",
+        [prepared.request.id],
+      );
+      assert.equal(stored.rows[0]?.attempt_id, attemptId);
     } finally {
       await db.close();
     }

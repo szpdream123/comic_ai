@@ -6,6 +6,7 @@ import { refreshGenerationInputUrls } from "../generation-input-url-refresh.ts";
 it("re-signs COS generation inputs at provider dispatch time", async () => {
   const now = new Date("2026-08-21T02:30:00.000Z");
   const expiresAtValues: Date[] = [];
+  const diagnostics: Array<{ stage: string; status: string }> = [];
   const db = {
     async query(sql: string, values: unknown[]) {
       if (sql.includes("WHERE bucket=$1")) {
@@ -35,13 +36,57 @@ it("re-signs COS generation inputs at provider dispatch time", async () => {
       firstFrame: { storageObjectId: "00000000-0000-4000-8000-000000000001", url: expired },
       filePaths: [expired],
     },
-  }, { runtime: runtime as never, now, expiresInSeconds: 21_600 }) as Record<string, any>;
+  }, {
+    runtime: runtime as never,
+    now,
+    expiresInSeconds: 21_600,
+    onDiagnostic: ({ stage, status }) => diagnostics.push({ stage, status }),
+  }) as Record<string, any>;
 
   assert.equal(result.firstFrameUrl, "https://signed.example/fresh");
   assert.equal(result.parameters.firstFrame.url, "https://signed.example/fresh");
   assert.equal(result.parameters.firstFrame.storageObjectId, "00000000-0000-4000-8000-000000000001");
   assert.equal(result.parameters.filePaths[0], "https://signed.example/fresh");
   assert.deepEqual(expiresAtValues, [new Date("2026-08-21T08:30:00.000Z")]);
+  assert.deepEqual(
+    diagnostics.filter(({ status }) => status === "failed"),
+    [],
+  );
+  assert.ok(diagnostics.some(({ stage, status }) => stage === "source_storage_lookup" && status === "succeeded"));
+  assert.ok(diagnostics.some(({ stage, status }) => stage === "storage_object_sign" && status === "succeeded"));
+  assert.ok(diagnostics.some(({ stage, status }) => stage === "refresh_inputs" && status === "succeeded"));
+});
+
+it("reports the exact signing stage when storage signing fails", async () => {
+  const diagnostics: Array<{ stage: string; status: string; error?: { message?: string } }> = [];
+  const db = {
+    async query(sql: string) {
+      if (sql.includes("WHERE bucket=$1")) return { rows: [{ id: "storage-1" }] };
+      return { rows: [{ bucket: "creator-test", object_key: "references/frame.png" }] };
+    },
+  };
+  const sourceUrl = "https://creator-test.cos.ap-shanghai.myqcloud.com/references/frame.png";
+
+  await assert.rejects(
+    refreshGenerationInputUrls(db as never, { firstFrameUrl: sourceUrl }, {
+      runtime: {
+        region: "ap-shanghai",
+        adapter: {
+          async createSignedReadUrl() {
+            throw Object.assign(new Error("cos_sign_failed"), { code: "COS_SIGN_FAILED" });
+          },
+        },
+      } as never,
+      now: new Date("2026-08-21T02:30:00.000Z"),
+      expiresInSeconds: 21_600,
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }),
+    /cos_sign_failed/,
+  );
+
+  assert.ok(diagnostics.some(({ stage, status, error }) =>
+    stage === "storage_object_sign" && status === "failed" && error?.message === "cos_sign_failed"));
+  assert.ok(diagnostics.some(({ stage, status }) => stage === "refresh_inputs" && status === "failed"));
 });
 
 it("resolves asset-version references through the project storage object", async () => {

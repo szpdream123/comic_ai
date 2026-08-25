@@ -571,7 +571,7 @@ function sanitizeGenerationSnapshotValue(value: unknown, parentKey?: string): un
 
 function sanitizeProviderIdentityString(value: string): string {
   return value
-    .replace(/\b(OpenAI|GlobalAiOpc|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
+    .replace(/\b(OpenAI|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
     .replace(/\bExtra\s+Token\b/gi, "[provider]");
 }
 

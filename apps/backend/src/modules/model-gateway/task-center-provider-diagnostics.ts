@@ -21,15 +21,49 @@ const TASK_CENTER_PROVIDER_NESTED_FIELDS = [
   "contentType",
   "requestId",
   "request_id",
+  "name",
+  "localStage",
+  "localError",
+  "internalError",
+  "expectedTaskId",
+  "expectedAttemptId",
+  "requestTaskId",
+  "requestAttemptId",
+  "taskStatus",
+  "taskCurrentAttemptId",
+  "attemptStatus",
+  "externalSubmissionStartedAt",
+  "externalRequestId",
+  // Pre-submission classification. The worker records these on every failed
+  // submit, but they were absent from this whitelist, so the projection dropped
+  // them and the admin view showed only a generic failure code with no context.
+  "retryable",
+  "providerStatus",
+  "providerAttemptId",
+  "providerExternalSubmissionStartedAt",
+  "providerExternalRequestId",
+  "lookup",
+  "phase",
+  "diagnosticNote",
+  "submissionWasNotStarted",
+  "preSubmissionRetryCount",
+  "previousStatus",
+  "requeuedAttemptId",
+  "requeuedAt",
 ] as const;
 const TASK_CENTER_PROVIDER_CONTAINER_FIELDS = [
   "diagnostics",
   "providerDiagnostics",
   "error",
   "response",
+  "modelError",
+  "localState",
+  "diagnosticsLookupError",
 ] as const;
 const TASK_CENTER_PROVIDER_SCALAR_FIELDS = [
   ...TASK_CENTER_PROVIDER_NESTED_FIELDS,
+  "preSubmissionRetryLimit",
+  "providerRequestLookup",
 ] as const;
 const TASK_CENTER_PROVIDER_DIAGNOSTIC_FIELDS = [
   ...TASK_CENTER_PROVIDER_CONTAINER_FIELDS,
@@ -45,9 +79,15 @@ export function buildTaskCenterProviderDiagnostics(value: unknown): Record<strin
     if (nested) summary[field] = nested;
   }
   for (const field of TASK_CENTER_PROVIDER_SCALAR_FIELDS) {
-    const scalar = boundedTaskCenterProviderScalar(record[field], taskCenterProviderDiagnosticFieldMaxBytes(field));
-    if (scalar !== undefined) summary[field] = scalar;
+    const scalar = field === "localError" || field === "internalError"
+      ? buildTaskCenterNestedProviderDiagnostics(record[field])
+      : boundedTaskCenterProviderScalar(record[field], taskCenterProviderDiagnosticFieldMaxBytes(field));
+    if (scalar !== undefined && scalar !== null) summary[field] = scalar;
   }
+  // Preserve the pre-submission history appended by the requeue path. It is an
+  // array, so neither the container nor the scalar branch above would keep it.
+  const retryHistory = buildTaskCenterRetryHistory(record.preSubmissionRetryHistory);
+  if (retryHistory) summary.preSubmissionRetryHistory = retryHistory;
   if (Object.keys(summary).length === 0) return null;
   return Buffer.byteLength(JSON.stringify(summary), "utf8") <= TASK_CENTER_PROVIDER_DIAGNOSTICS_MAX_BYTES
     ? summary
@@ -63,6 +103,23 @@ function buildTaskCenterNestedProviderDiagnostics(value: unknown): Record<string
     if (scalar !== undefined) summary[field] = scalar;
   }
   return Object.keys(summary).length > 0 ? summary : null;
+}
+
+const TASK_CENTER_RETRY_HISTORY_MAX_ENTRIES = 10;
+
+function isTaskCenterNestedProjectedField(field: string) {
+  return TASK_CENTER_PROVIDER_CONTAINER_FIELDS.includes(
+    field as (typeof TASK_CENTER_PROVIDER_CONTAINER_FIELDS)[number],
+  );
+}
+
+function buildTaskCenterRetryHistory(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const entries = value
+    .slice(-TASK_CENTER_RETRY_HISTORY_MAX_ENTRIES)
+    .map((entry) => buildTaskCenterNestedProviderDiagnostics(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  return entries.length > 0 ? entries : null;
 }
 
 function boundedTaskCenterProviderScalar(value: unknown, maximumBytes: number): unknown {
@@ -126,23 +183,15 @@ export function taskCenterProviderDiagnosticsSql(responseExpression: string) {
   if (!/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/i.test(responseExpression)) {
     throw new Error("task_center_provider_response_expression_invalid");
   }
-  const extractedColumns = TASK_CENTER_PROVIDER_DIAGNOSTIC_FIELDS
-    .map(([field]) => `"${field}" jsonb`)
-    .join(",\n");
-  const projectedFields = TASK_CENTER_PROVIDER_DIAGNOSTIC_FIELDS.flatMap(([field, maxBytes]) => [
-    `'${field}'`,
-    field === "diagnostics" || field === "providerDiagnostics"
-      ? taskCenterNestedDiagnosticsSql(`provider_diagnostics."${field}"`)
-      : `CASE
-        WHEN octet_length(CASE
-          WHEN jsonb_typeof(provider_diagnostics."${field}") = 'string' THEN provider_diagnostics."${field}" #>> '{}'
-          ELSE COALESCE(provider_diagnostics."${field}", 'null'::jsonb)::text
-        END) <= ${maxBytes}
-        THEN provider_diagnostics."${field}"
-        ELSE jsonb_build_object('omitted', true, 'reason', 'oversized_provider_diagnostic_field')
-      END`,
-  ]).join(",\n");
-  const projectedResponse = `jsonb_strip_nulls(jsonb_build_object(${projectedFields}))`;
+
+  // Simplified approach: directly return the pre-processed task_center_diagnostics_json.
+  // This field is already filtered and size-limited by buildTaskCenterProviderDiagnostics()
+  // when written to the database, so we don't need to re-project it here with 100+ SQL params.
+  return `CASE
+    WHEN ${responseExpression} IS NULL THEN NULL::jsonb
+    WHEN jsonb_typeof(${responseExpression}) = 'object' THEN ${responseExpression}
+    ELSE NULL::jsonb
+  END`;
   return `CASE
     WHEN ${responseExpression} IS NULL THEN NULL::jsonb
     ELSE (

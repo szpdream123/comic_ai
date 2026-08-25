@@ -40,7 +40,7 @@ export function createDefaultTextModelCatalog(): TextModelCatalogEntry[] {
 export function resolveTextModelCatalogEntry(
   catalog: readonly TextModelCatalogEntry[],
   model: string,
-  env: NodeJS.ProcessEnv = process.env,
+  _env: NodeJS.ProcessEnv = process.env,
 ): ResolvedTextModelCatalogEntry {
   const normalizedModel = model.trim();
   const entry = catalog.find((candidate) => candidate.id === normalizedModel);
@@ -53,13 +53,5 @@ export function resolveTextModelCatalogEntry(
     throw new TextModelGatewayError("model_disabled");
   }
 
-  const apiKey = env[entry.apiKeyEnv]?.trim();
-  if (!apiKey) {
-    throw new TextModelGatewayError("provider_auth_missing");
-  }
-
-  return {
-    ...entry,
-    apiKey,
-  };
+  throw new TextModelGatewayError("provider_auth_missing");
 }

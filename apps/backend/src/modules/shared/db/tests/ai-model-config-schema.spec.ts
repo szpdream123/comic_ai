@@ -523,34 +523,42 @@ describe("ai model configuration schema", () => {
         {
           modelCode: "sd_2.0_discount",
           endpoint: "/v1/seedance-discount/videos",
+          queryEndpoint: "/v1/result/{taskId}",
           requestFormat: "globalaiopc_seedance_discount",
           resolutions: ["480p", "720p", "1080p"],
           providerModels: ["sd_2.0_discount_480p", "sd_2.0_discount_720p", "sd_2.0_discount_1080p"],
           withVideoReference: false,
+          providerDocUrl: "https://docs.globalaiopc.com/api-reference/video/seedance-discount/seedance-discount-create",
         },
         {
           modelCode: "sd_2.0_discount_with_video_ref",
           endpoint: "/v1/seedance-discount/videos",
+          queryEndpoint: "/v1/result/{taskId}",
           requestFormat: "globalaiopc_seedance_discount",
           resolutions: ["480p", "720p", "1080p"],
           providerModels: ["sd_2.0_discount_480p_with_video_ref", "sd_2.0_discount_720p_with_video_ref", "sd_2.0_discount_1080p_with_video_ref"],
           withVideoReference: true,
+          providerDocUrl: "https://docs.globalaiopc.com/api-reference/video/seedance-discount/seedance-discount-create",
         },
         {
           modelCode: "sd_2.0_special",
-          endpoint: "/v1/seedance-special/videos",
-          requestFormat: "globalaiopc_seedance_special",
+          endpoint: "/v2/model-center/tasks",
+          queryEndpoint: "/v2/model-center/tasks/{taskId}",
+          requestFormat: "globalaiopc_model_center_video",
           resolutions: ["720p", "1080p", "2k", "4k"],
           providerModels: ["sd_2.0_special_720p", "sd_2.0_special_1080p", "sd_2.0_special_2k", "sd_2.0_special_4k"],
           withVideoReference: false,
+          providerDocUrl: "https://docs.globalaiopc.com/api-reference/model-center/video-gen/sd_2.0_special",
         },
         {
           modelCode: "sd_2.0_special_with_video_ref",
           endpoint: "/v1/seedance-special/videos",
+          queryEndpoint: "/v1/result/{taskId}",
           requestFormat: "globalaiopc_seedance_special",
           resolutions: ["720p", "1080p", "2k", "4k"],
           providerModels: ["sd_2.0_special_720p_with_video_ref", "sd_2.0_special_1080p_with_video_ref", "sd_2.0_special_2k_with_video_ref", "sd_2.0_special_4k_with_video_ref"],
           withVideoReference: true,
+          providerDocUrl: "https://docs.globalaiopc.com/api-reference/video/seedance-special/seedance-special-create",
         },
       ];
 
@@ -561,7 +569,7 @@ describe("ai model configuration schema", () => {
         assert.equal(row.provider_protocol, "globalaiopc_video");
         assert.equal(row.provider_config_json.baseURL, "https://zcbservice.aizfw.cn/kyyReactApiServer");
         assert.equal(row.provider_config_json.createTaskEndpoint, model.endpoint);
-        assert.equal(row.provider_config_json.queryTaskEndpoint, "/v1/result/{taskId}");
+        assert.equal(row.provider_config_json.queryTaskEndpoint, model.queryEndpoint);
         assert.equal(row.provider_config_json.apiKeyEnv, "GLOBAL_AI_OPC_API_KEY");
         assert.equal(row.provider_config_json.requestFormat, model.requestFormat);
         assert.deepEqual(
@@ -571,7 +579,7 @@ describe("ai model configuration schema", () => {
         assert.deepEqual(row.limits_json.supportedResolutions, model.resolutions);
         assert.equal(Boolean(row.parameter_schema_json.sourceVideo), model.withVideoReference);
         assert.equal(Boolean(row.limits_json.requiresReferenceVideo), model.withVideoReference);
-        assert.equal(row.ui_config_json.providerDocUrl, `https://docs.globalaiopc.com/api-reference/video/${model.endpoint.includes("discount") ? "seedance-discount/seedance-discount-create" : "seedance-special/seedance-special-create"}`);
+        assert.equal(row.ui_config_json.providerDocUrl, model.providerDocUrl);
         for (const providerModel of model.providerModels) {
           assert.match(row.remark, new RegExp(providerModel.replaceAll(".", "\\.")));
         }

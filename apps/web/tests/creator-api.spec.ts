@@ -2535,6 +2535,10 @@ test("resolveApiUrl points backend-owned localhost paths at the dev API server",
         "http://127.0.0.1:4310/vendor/cos-js-sdk-v5/dist/cos-js-sdk-v5.min.js",
       );
       assert.equal(
+        resolveApiUrl("/admin/assets/prompt-covers/watercolor.webp"),
+        "http://127.0.0.1:4310/admin/assets/prompt-covers/watercolor.webp",
+      );
+      assert.equal(
         resolveApiUrl("/app.html"),
         "http://127.0.0.1:4321/app.html",
       );

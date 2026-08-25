@@ -954,12 +954,24 @@ function resolveStoryboardGeneratorTaskAsset(ui) {
   }
   return {
     id: storyboardId,
+    isCurrentSubmission: Boolean(
+      generatorResult && isStoryboardGeneratorSubmissionCurrent(ui, generatorResult),
+    ),
     source: "generated",
     generationStatus: status,
     generationTaskId: taskId,
     generationResult,
     prompt: generationResult.promptPreview ?? generationResult.prompt ?? "",
   };
+}
+
+function isStoryboardGeneratorSubmissionCurrent(ui, submission) {
+  const startedAt = Number(ui.assetGeneratorSubmissionStartedAt ?? 0);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) {
+    return true;
+  }
+  const createdAt = Date.parse(String(submission?.createdAt ?? submission?.submittedAt ?? ""));
+  return Number.isFinite(createdAt) && createdAt >= startedAt;
 }
 
 export function renderStoryboardGeneratorTaskOverview(ui) {
@@ -976,7 +988,7 @@ export function renderStoryboardGeneratorTaskOverview(ui) {
     showStoryboardAction: true,
     showRetryForm: false,
     storyboardId: taskAsset.id,
-    isSubmitting: ui.assetGeneratorSubmitting === true,
+    isSubmitting: ui.assetGeneratorSubmitting === true && taskAsset.isCurrentSubmission === true,
     modelCode: generatorConfig.modelCode,
     modelLabel: generatorConfig.modelLabel,
     modelOptions: generatorConfig.models.map((model) => [model.code, model.label || model.code]),
@@ -3076,6 +3088,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           assetPromptDraft: ui.assetPromptDraft ?? null,
           assetConversationHistory: ui.assetConversationHistory ?? {},
           storyboardConversationHistory: ui.storyboardConversationHistory ?? {},
+          taskCenterTasksById: ui.taskCenterTasksById ?? {},
           lipSyncVoiceId: ui.lipSyncVoiceId ?? null,
           lipSyncVoiceName: ui.lipSyncVoiceName ?? "",
           lipSyncVoiceSource: ui.lipSyncVoiceSource ?? null,
@@ -3798,6 +3811,7 @@ function renderEpisodeHubCard(episode, ui) {
     episode.coverStorageObjectId ??
     episode.cover_storage_object_id,
   );
+  const coverSrc = getEpisodeCoverSrc(episode);
   return `
     <article class="episode-card episode-library-card" data-action="open-episode-workbench" data-episode-id="${escapeHtml(episode.id)}">
       <div class="episode-card-preview project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}" aria-label="${escapeAttr(episode.title)}封面">
@@ -3805,7 +3819,7 @@ function renderEpisodeHubCard(episode, ui) {
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
           <strong>上传封面</strong>
         </label>
-        <img class="project-gallery-cover" src="${escapeAttr(getEpisodeCoverSrc(episode))}" alt="${escapeAttr(episode.title)} 封面" loading="lazy" decoding="async" />
+        <img class="project-gallery-cover" data-deferred-src="${escapeAttr(coverSrc)}" alt="${escapeAttr(episode.title)} 封面" loading="lazy" decoding="async" />
         ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-episode-cover" data-episode-id="${escapeAttr(episode.id)}" aria-label="替换 ${escapeAttr(episode.title)} 的剧集封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
       </div>
       <input id="${escapeAttr(coverInputId)}" class="project-cover-input" type="file" accept="image/*" data-action="upload-episode-cover" data-episode-id="${escapeAttr(episode.id)}" />
@@ -3834,7 +3848,7 @@ function renderEpisodeHubCard(episode, ui) {
 function getEpisodeCoverSrc(episode) {
   const storageObjectId = String(episode?.coverStorageObjectId ?? episode?.cover_storage_object_id ?? "").trim();
   if (storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
   }
   const coverImageUrl = String(episode?.coverImageUrl ?? episode?.cover_image_url ?? "").trim();
   return coverImageUrl
@@ -5583,14 +5597,21 @@ function renderAssetImageStyleSkillModal(ui = {}, state = {}) {
     .find((item) => String(item?.code ?? item?.id ?? "") === projectStyleCode)
     ?? ui.projectStyles?.[0]
     ?? null;
-  const toPickerItem = (item, group) => ({
-    id: String(item?.id ?? ""),
-    group,
-    label: String(item?.label ?? item?.title ?? "未命名技能"),
-    description: "生图风格提示词",
-    previewUrl: String(item?.preview ?? item?.coverImageUrl ?? ""),
-    meta: Number(item?.priceCredits ?? 0) > 0 ? `${Math.round(Number(item.priceCredits))}积分` : "免费",
-  });
+  const toPickerItem = (item, group) => {
+    const coverStorageObjectId = String(item?.coverStorageObjectId ?? item?.cover_storage_object_id ?? "").trim();
+    const rawPreviewUrl = coverStorageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+      : item?.preview ?? item?.coverImageUrl ?? item?.cover_image_url ?? "";
+    const previewUrl = rawPreviewUrl ? resolveApiUrl(String(rawPreviewUrl)) : "";
+    return {
+      id: String(item?.id ?? ""),
+      group,
+      label: String(item?.label ?? item?.title ?? "未命名技能"),
+      description: "生图风格提示词",
+      previewUrl,
+      meta: Number(item?.priceCredits ?? 0) > 0 ? `${Math.round(Number(item.priceCredits))}积分` : "免费",
+    };
+  };
   return renderSelectionPickerModal({
     show: ui.assetImageStyleSkillModalOpen === true,
     id: "asset-image-style-skill-picker",
@@ -5606,7 +5627,14 @@ function renderAssetImageStyleSkillModal(ui = {}, state = {}) {
         group: "official",
         label: projectStyle?.name ?? "未使用风格",
         description: projectStyle ? "项目默认风格" : "项目风格暂不可用",
-        previewUrl: String(projectStyle?.coverImageUrl ?? projectStyle?.cover_image_url ?? ""),
+        previewUrl: (() => {
+          const coverStorageObjectId = String(projectStyle?.coverStorageObjectId ?? projectStyle?.cover_storage_object_id ?? "").trim();
+          const rawUrl = coverStorageObjectId
+            ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+            : projectStyle?.coverImageUrl ?? projectStyle?.cover_image_url ?? "";
+          if (!rawUrl) return "";
+          return resolveApiUrl(String(rawUrl));
+        })(),
         meta: "免费",
       },
       ...officialSkills.map((item) => toPickerItem(item, "official")),
@@ -9190,7 +9218,7 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
                     <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
                     <strong>上传封面</strong>
                   </label>
-                  <img class="project-gallery-cover" src="${escapeAttr(getEpisodeCoverSrc(episode))}" alt="${escapeAttr(title)} 封面" loading="lazy" decoding="async" />
+                  <img class="project-gallery-cover" data-deferred-src="${escapeAttr(getEpisodeCoverSrc(episode))}" alt="${escapeAttr(title)} 封面" loading="lazy" decoding="async" />
                   ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}" aria-label="替换 ${escapeAttr(title)} 的剧集封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
                 </div>
                 <input id="${escapeAttr(coverInputId)}" class="project-cover-input" type="file" accept="image/*" data-action="upload-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}" />
@@ -9445,6 +9473,7 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
         projectStyles: ui.projectStyles ?? [],
         projectStyleCode: resolveEpisodeProjectStyleCode(state, ui),
         selectedProjectStyleCode: resolveSelectedEpisodeProjectStyleCode(state, ui),
+        taskCenterTasksById: ui.taskCenterTasksById ?? {},
         },
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
@@ -12378,7 +12407,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
           <div class="home-tv-grid">
             ${ui.homeTvLoading === true ? `<p class="home-tv-empty">正在加载推荐视频</p>` : visibleHomeTvItems.length ? visibleHomeTvItems.map((item) => `<article class="home-tv-card${item.videoUrl ? " has-video-preview" : ""}"${item.videoUrl ? ` data-action="toggle-home-tv-preview"` : ""}>
               <div class="home-tv-cover">
-                <img src="${escapeAttr(item.coverUrl)}" alt="${escapeAttr(item.coverAlt || item.title)}" loading="lazy" />
+                <img data-deferred-src="${escapeAttr(item.coverUrl)}" alt="${escapeAttr(item.coverAlt || item.title)}" loading="lazy" decoding="async" />
                 ${item.videoUrl ? `<video class="home-tv-preview-video" data-home-tv-preview data-home-tv-preview-url="${escapeAttr(item.videoUrl)}" muted loop playsinline preload="none" aria-hidden="true"></video>` : ""}
                 <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
                 ${item.durationLabel ? `<small>${escapeHtml(item.durationLabel)}</small>` : ""}
@@ -12834,6 +12863,8 @@ function buildProjectPageItems(currentPage, totalPages) {
 function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true, isGuideTarget = false) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
+  const coverSrc = getProjectCoverSrc(project);
+  const coverAttribute = coverSrc.startsWith("data:") ? `src="${escapeHtml(coverSrc)}"` : `data-deferred-src="${escapeHtml(coverSrc)}"`;
   return `
     <article class="project-gallery-card${isMenuOpen ? " is-menu-open" : ""} ${isSelected ? "is-selected" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
       <button
@@ -12852,7 +12883,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
           <strong>上传封面</strong>
         </label>
-        <img class="project-gallery-cover" src="${escapeHtml(getProjectCoverSrc(project))}" alt="${escapeHtml(project.name)} 封面" loading="lazy" decoding="async" />
+        <img class="project-gallery-cover" ${coverAttribute} alt="${escapeHtml(project.name)} 封面" loading="lazy" decoding="async" />
         ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}" aria-label="替换 ${escapeHtml(project.name)} 的项目封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
       </div>
       <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
@@ -12882,7 +12913,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
 function getProjectCoverSrc(project) {
   const storageObjectId = String(project?.coverStorageObjectId ?? project?.cover_storage_object_id ?? "").trim();
   if (storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
   }
   if (project.coverImageUrl) {
     return resolveApiUrl(project.coverImageUrl);

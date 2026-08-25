@@ -33,6 +33,7 @@ process.env.GENERATION_QUEUE_REQUIRED ??= "true";
 
 const generationQueueEnabled = isEnabled(process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED) ||
   isEnabled(process.env.BULLMQ_WORKERS_ENABLED);
+const mediaCrawlerManaged = isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true");
 
 let stopping = false;
 let stopRequestPoll = null;
@@ -102,7 +103,11 @@ function runDevFoundationSchema({ runtime, cwd, env }) {
 }
 
 supervisor.start("phone-auth", ["scripts/run-phone-auth-dev-server.mjs"]);
-supervisor.start("media-crawler", ["scripts/run-media-crawler-api.mjs"], { restartOnFailure: true });
+if (mediaCrawlerManaged) {
+  supervisor.start("media-crawler", ["scripts/run-media-crawler-api.mjs"], { restartOnFailure: true });
+} else {
+  console.info("[creator-dev] MEDIA_CRAWLER_MANAGED=false; MediaCrawler must run outside this server.");
+}
 supervisor.start("marketing-competitor-collection", [
   ...resolveTsxRuntimeArgs(runtime),
   "scripts/run-marketing-competitor-collection-worker.mjs",

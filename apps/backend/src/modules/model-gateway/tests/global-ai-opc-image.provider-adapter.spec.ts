@@ -6,6 +6,7 @@ import {
   GlobalAiOpcImageProviderAdapter,
 } from "../global-ai-opc-image.provider-adapter.ts";
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
+import { GlobalAiOpcSoundCloneProviderAdapter } from "../globalaiopc-sound-clone.provider-adapter.ts";
 
 describe("GlobalAiOpc image provider adapter", () => {
   it("ignores requestTimeoutMs and uses the fixed image timeout", async () => {
@@ -274,6 +275,42 @@ describe("GlobalAiOpc image provider adapter", () => {
     assert.equal(polled.artifacts?.[0]?.url, "https://cdn.global-ai-opc.example/seedream.png");
   });
 
+  it("prefers the dedicated create endpoint over a stale request path", async () => {
+    const capturedUrls: string[] = [];
+    const adapter = createProviderAdapterFromModelConfig({
+      providerProtocol: "global_ai_opc_image",
+      providerModel: "seedream-5.0",
+      providerConfig: {
+        baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+        requestPath: "/v1/gpt-image2/images",
+        createTaskEndpoint: "/v2/model-center/tasks",
+        queryTaskEndpoint: "/v2/model-center/tasks/{taskId}",
+        apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+        requestFormat: "global_ai_opc_model_center_seedream_image",
+      },
+    }, { GLOBAL_AI_OPC_API_KEY: "global-ai-opc-key" }, (async (url) => {
+      capturedUrls.push(String(url));
+      return new Response(JSON.stringify({ id: "seedream_task_factory", status: "queued" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "provider-request-seedream-factory",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-seedream-factory:task-seedream-factory",
+      payloadRef: "creator://payload-seedream-factory",
+      payloadHash: "hash-seedream-factory",
+      redactedPayload: { prompt: "A moonlit city" },
+    });
+
+    assert.deepEqual(capturedUrls, [
+      "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks",
+    ]);
+  });
+
   it("submits and polls GlobalAiOpc image tasks until completion", async () => {
     const capturedUrls: string[] = [];
     let capturedCreateBody = "";
@@ -479,5 +516,20 @@ describe("GlobalAiOpc image provider adapter", () => {
     });
     assert.equal(result.status, "succeeded");
     assert.equal(result.artifacts?.[0]?.url, "https://cdn.global-ai-opc.example/image-2.png");
+  });
+
+  it("builds the GlobalAiOpc SoundClone adapter from its dedicated protocol", () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      providerProtocol: "globalaiopc_sound_clone",
+      providerModel: "soundclone",
+      mediaType: "audio",
+      providerConfig: {
+        baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+        createTaskEndpoint: "/v1/soundCloning/audios",
+        queryTaskEndpoint: "/v1/result/{taskId}",
+        apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+      },
+    }, { GLOBAL_AI_OPC_API_KEY: "global-ai-opc-key" });
+    assert.ok(adapter instanceof GlobalAiOpcSoundCloneProviderAdapter);
   });
 });

@@ -32,9 +32,11 @@ const listening = isProjectProcess(listenerProcess, process.cwd(), "phone-auth-d
 const children = alive ? listWindowsChildProcesses(pid) : [];
 const expectedServices = [
   "run-phone-auth-dev-server.mjs",
-  "run-media-crawler-api.mjs",
   "run-marketing-competitor-collection-worker.mjs",
 ];
+if (isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true")) {
+  expectedServices.push("run-media-crawler-api.mjs");
+}
 if (generationQueueEnabled()) {
   expectedServices.push(
     "run-generation-outbox-dispatcher.mjs",
@@ -125,6 +127,10 @@ function safeErrorCode(error) {
     return String(error.code);
   }
   return error instanceof Error ? error.name : "CONNECTION_ERROR";
+}
+
+function isEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 }
 
 function readPidFile(path) {

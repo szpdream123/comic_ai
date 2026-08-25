@@ -1327,6 +1327,30 @@ test("admin user service lists model request logs by user", async () => {
     assert.equal(result.meta.totalPages, 1);
 
     await db.query(
+      `UPDATE provider_requests SET response_redacted_json = $1::jsonb WHERE id = $2`,
+      [
+        JSON.stringify({
+          phase: "submit",
+          failureCode: "provider_submission_failed",
+          errorMessage: "供应商返回失败",
+          redactedRequest: { model: "deepseek-chat" },
+        }),
+        "99000000-0000-4000-8000-000000002101",
+      ],
+    );
+    const diagnosticResult = await service.listUserModelRequestLogs({
+      userId: "93000000-0000-4000-8000-000000002001",
+      page: 1,
+      pageSize: 15,
+      modelType: "text",
+    });
+    assert.deepEqual(diagnosticResult.data[0]?.providerResponseBody, {
+      phase: "submit",
+      failureCode: "provider_submission_failed",
+      errorMessage: "供应商返回失败",
+    });
+
+    await db.query(
       `
         INSERT INTO provider_requests (
           id,
@@ -1417,10 +1441,8 @@ test("admin user service lists model request logs by user", async () => {
       modelType: "image",
     });
     const imageLog = imageResult.data.find((item) => item.modelId === "gpt-image-large");
-    const displayResponse = JSON.stringify(imageLog?.providerResponseBody);
-    assert.match(displayResponse, /oversized_provider_response/);
-    assert.match(displayResponse, /originalCharacters/);
-    assert.ok(displayResponse.length < 5_000);
+    const displayResponse = imageLog?.providerResponseBody as { data?: Array<{ b64_json?: string }> };
+    assert.equal(displayResponse.data?.[0]?.b64_json, "A".repeat(100_000));
   } finally {
     await db.close();
   }

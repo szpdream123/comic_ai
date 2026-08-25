@@ -11,7 +11,6 @@ import {
 import { maskCnPhone, normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 import { calculateMembershipWindow } from "../membership/membership-period.service.ts";
 import {
-  compactProviderAuditValue,
   preserveProviderRequestValue,
 } from "../model-gateway/provider-response-diagnostics.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
@@ -85,6 +84,9 @@ export interface AdminUserModelRequestLogItem {
   providerResponseBody: unknown;
   providerRequestStatus: string | null;
   providerFailureCode: string | null;
+  providerDiagnostics: Record<string, unknown> | null;
+  attemptId: string | null;
+  taskAttemptId: string | null;
   externalSubmissionStartedAt: string | null;
   externalRequestId: string | null;
   taskStatus: string | null;
@@ -152,6 +154,9 @@ interface AdminUserModelRequestLogRow {
   provider_response_redacted_json: Record<string, unknown> | null;
   provider_request_status: string | null;
   provider_failure_code: string | null;
+  provider_diagnostics_json: Record<string, unknown> | null;
+  attempt_id: string | null;
+  task_attempt_id: string | null;
   external_submission_started_at: Date | string | null;
   external_request_id: string | null;
   task_status: string | null;
@@ -1371,27 +1376,18 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             )
           END AS provider_request_body_json,
           model.provider_config_json AS provider_request_url_config_json,
-          CASE
-            WHEN octet_length(COALESCE(requests.response_redacted_json, '{}'::jsonb)::text) > 65536
-              THEN jsonb_build_object(
-                'omitted', true,
-                'reason', 'oversized_provider_response',
-                'originalCharacters', octet_length(requests.response_redacted_json::text)
-              )
-            ELSE requests.response_redacted_json
-          END AS provider_response_redacted_json,
+          requests.response_redacted_json AS provider_response_redacted_json,
+          requests.task_center_diagnostics_json AS provider_diagnostics_json,
           requests.status AS provider_request_status,
           requests.failure_code AS provider_failure_code,
+          requests.attempt_id,
+          task.current_attempt_id AS task_attempt_id,
           requests.external_submission_started_at,
           requests.external_request_id,
           task.status AS task_status,
           task.failure_code AS task_failure_code,
           logs.request_text AS request_text,
-          CASE
-            WHEN char_length(COALESCE(logs.response_text, '')) > 65536
-              THEN concat('[oversized response text omitted: ', char_length(logs.response_text), ' chars]')
-            ELSE logs.response_text
-          END AS response_text,
+          logs.response_text AS response_text,
           logs.response_usage_json,
           logs.response_finish_reasons_json,
           logs.status,
@@ -2317,9 +2313,17 @@ function modelRequestLogFromRow(
     providerResponseBody: readProviderResponseBody(
       row.provider_response_redacted_json,
       row.request_format,
+      {
+        providerRequestId: row.provider_request_id,
+        providerRequestStatus: row.provider_request_status,
+        externalSubmissionStartedAt: row.external_submission_started_at,
+      },
     ),
     providerRequestStatus: row.provider_request_status,
     providerFailureCode: row.provider_failure_code,
+    providerDiagnostics: buildAdminProviderDiagnostics(row),
+    attemptId: row.attempt_id,
+    taskAttemptId: row.task_attempt_id,
     externalSubmissionStartedAt: row.external_submission_started_at
       ? new Date(row.external_submission_started_at).toISOString()
       : null,
@@ -2345,6 +2349,33 @@ function modelRequestLogFromRow(
   };
 }
 
+function buildAdminProviderDiagnostics(row: AdminUserModelRequestLogRow): Record<string, unknown> | null {
+  const existing = row.provider_diagnostics_json
+    ? compactAdminModelRequestRecord(stripLegacyAttemptBindingDiagnostics(row.provider_diagnostics_json))
+    : {};
+  if (row.external_submission_started_at || row.provider_request_status !== "failed") {
+    return Object.keys(existing).length > 0 ? existing : null;
+  }
+  const state = {
+    localStage: "provider_submission_not_started",
+    failureCode: row.provider_failure_code || row.task_failure_code || row.failure_code,
+    providerRequestId: row.provider_request_id,
+    externalSubmissionStartedAt: null,
+    externalRequestId: row.external_request_id,
+    providerRequestStatus: row.provider_request_status,
+    taskStatus: row.task_status,
+    observedState: {
+      externalSubmissionStartedAt: null,
+      externalRequestId: row.external_request_id,
+    },
+    diagnosticNote: "供应商提交尚未开始，当前记录没有供应商原始 HTTP 返回；请查看提交阶段的本地异常记录。",
+  };
+  return {
+    ...state,
+    ...existing,
+  };
+}
+
 function resolveProviderRequestUrl(value: unknown): string | null {
   const config = normalizeJson(value);
   const baseUrl = readNonEmptyString(config.baseURL);
@@ -2358,19 +2389,67 @@ function resolveProviderRequestUrl(value: unknown): string | null {
   return endpoint ?? baseUrl ?? null;
 }
 
-function readProviderResponseBody(value: unknown, requestFormat: string | null): unknown {
+function readProviderResponseBody(
+  value: unknown,
+  requestFormat: string | null,
+  context?: {
+    providerRequestId: string;
+    providerRequestStatus: string | null;
+    externalSubmissionStartedAt: Date | string | null;
+  },
+): unknown {
   const response = normalizeJson(value);
   if (response.omitted === true) return response;
-  if (response.providerRawResponse !== undefined) return compactProviderAuditValue(response.providerRawResponse);
-  if (response.providerResponse !== undefined) return compactProviderAuditValue(response.providerResponse);
+  if (response.providerRawResponse !== undefined) return response.providerRawResponse;
+  if (response.providerResponse !== undefined) return response.providerResponse;
   const diagnostics = normalizeJson(response.diagnostics);
   if (Object.prototype.hasOwnProperty.call(diagnostics, "responseBody")) {
-    return compactProviderAuditValue(diagnostics.responseBody);
+    return stripLegacyAttemptBindingDiagnostics(diagnostics.responseBody);
   }
-  if (Object.keys(diagnostics).length > 0) return compactProviderAuditValue(diagnostics);
-  if (requestFormat !== "generation_task") return null;
+  if (Object.keys(diagnostics).length > 0) return stripLegacyAttemptBindingDiagnostics(diagnostics);
   const { redactedRequest: _redactedRequest, diagnostics: _diagnostics, ...summary } = response;
-  return Object.keys(summary).length > 0 ? compactProviderAuditValue(summary) : null;
+  const providerSubmissionNotStarted = context
+    && context.providerRequestStatus === "failed"
+    && !context.externalSubmissionStartedAt
+    && summary.localStage === undefined;
+  if (Object.keys(summary).length === 0 && !providerSubmissionNotStarted) return null;
+  if (providerSubmissionNotStarted) {
+    return {
+      ...summary,
+      localStage: "provider_submission_not_started",
+      localState: {
+        providerRequestId: context.providerRequestId,
+        providerRequestStatus: context.providerRequestStatus,
+        externalSubmissionStartedAt: null,
+      },
+      diagnosticNote: "供应商提交尚未开始，当前记录没有供应商原始 HTTP 返回。",
+    };
+  }
+  return stripLegacyAttemptBindingDiagnostics(summary);
+}
+
+function stripLegacyAttemptBindingDiagnostics(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  const cleaned = { ...source };
+  delete cleaned.requestAttemptId;
+  delete cleaned.expectedAttemptId;
+  if (typeof cleaned.diagnosticNote === "string" && cleaned.diagnosticNote.includes("未绑定当前 task attempt")) {
+    delete cleaned.diagnosticNote;
+  }
+  if (cleaned.modelError && typeof cleaned.modelError === "object" && !Array.isArray(cleaned.modelError)) {
+    const modelError = { ...(cleaned.modelError as Record<string, unknown>) };
+    if (modelError.code === "provider_request_stale_attempt") delete modelError.code;
+    if (Object.keys(modelError).length > 0) cleaned.modelError = modelError;
+    else delete cleaned.modelError;
+  }
+  if (cleaned.observedState && typeof cleaned.observedState === "object" && !Array.isArray(cleaned.observedState)) {
+    const observedState = { ...(cleaned.observedState as Record<string, unknown>) };
+    delete observedState.requestAttemptId;
+    delete observedState.expectedAttemptId;
+    cleaned.observedState = observedState;
+  }
+  return cleaned;
 }
 
 function compactAdminModelRequestRecord(value: unknown): Record<string, unknown> {

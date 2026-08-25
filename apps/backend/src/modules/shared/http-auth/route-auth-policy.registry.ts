@@ -452,6 +452,8 @@ const userApiRouteAuthRegistrations = inventoryRegistrations("user", [
   ["POST", "/api/billing/enterprise-contact-requests"],
   ["GET", "/api/storage/upload-sessions/{uploadSessionId}"],
   ["GET", "/api/storage/upload-sessions/{uploadSessionId}/content"],
+  ["GET", "/api/storage/resolve"],
+  ["GET", "/api/storage/proxy"],
   ["PUT", "/api/storage/upload-sessions/{uploadSessionId}/blob"],
   ["POST", "/api/storage/upload-sessions/{uploadSessionId}/complete"],
   ["POST", "/api/storage/upload-sessions/{uploadSessionId}/abort"],

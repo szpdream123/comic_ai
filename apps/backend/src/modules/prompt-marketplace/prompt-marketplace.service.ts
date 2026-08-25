@@ -1087,9 +1087,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
       category: row.prompt_category,
       title: row.name,
       content: row.prompt_content,
-      coverImageUrl: row.cover_image_url || (row.cover_storage_object_id
-        ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-        : ""),
+      coverImageUrl: promptSkillCoverUrl(row),
       coverStorageObjectId: row.cover_storage_object_id,
       priceCredits: row.owner_user_id === input.userId ? 0 : Number(row.price_credits || 0),
       official: Boolean(row.is_official),
@@ -1215,9 +1213,7 @@ function promptSkillListItemFromRow(row: PromptSkillListRow) {
     title: row.name,
     category: row.prompt_category,
     summary: row.summary,
-    coverImageUrl: row.cover_image_url || (row.cover_storage_object_id
-      ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-      : ""),
+    coverImageUrl: promptSkillCoverUrl(row),
     coverStorageObjectId: row.cover_storage_object_id,
     priceCredits: owned ? 0 : Number(row.price_credits || 0),
     official: Boolean(row.is_official),
@@ -1247,9 +1243,7 @@ function marketplaceItemFromRow(row: PromptMarketplaceRow, userId: string | null
     title: row.name,
     category: row.prompt_category,
     summary: row.summary,
-    coverImageUrl: row.cover_image_url || (row.cover_storage_object_id
-      ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-      : ""),
+    coverImageUrl: promptSkillCoverUrl(row),
     coverStorageObjectId: row.cover_storage_object_id,
     priceCredits: Number(row.price_credits || 0),
     status: marketplaceStatus(row),
@@ -1271,6 +1265,12 @@ function marketplaceItemFromRow(row: PromptMarketplaceRow, userId: string | null
   };
 }
 
+function promptSkillCoverUrl(row: Pick<PromptSkillListRow, "cover_image_url" | "cover_storage_object_id">) {
+  return row.cover_storage_object_id
+    ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
+    : row.cover_image_url || "";
+}
+
 function adminMarketplaceItemFromRow(row: PromptMarketplaceRow) {
   const ratingCount = Number(row.rating_count || 0);
   const isOfficial = Boolean(row.is_official);
@@ -1279,9 +1279,7 @@ function adminMarketplaceItemFromRow(row: PromptMarketplaceRow) {
     title: row.name,
     category: row.prompt_category,
     summary: row.summary,
-    coverImageUrl: row.cover_image_url || (row.cover_storage_object_id
-      ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-      : ""),
+    coverImageUrl: promptSkillCoverUrl(row),
     coverStorageObjectId: row.cover_storage_object_id,
     priceCredits: Number(row.price_credits || 0),
     status: marketplaceStatus(row),

@@ -355,6 +355,109 @@ describe("generation BullMQ worker handlers", () => {
     });
   });
 
+  it("routes GlobalAiOpc video submissions only to the isolated GlobalAiOpc processor", async () => {
+    const added: Array<{ data: Record<string, unknown> }> = [];
+    let globalAiOpcSubmitCalls = 0;
+    const result = await handleGenerationSubmitVideoJob({
+      job: { data: {
+        taskId: "task-globalaiopc-submit",
+        workflowId: "workflow-globalaiopc",
+        mediaType: "video",
+        modelCode: "kling-o3",
+        providerExecutor: "globalaiopc-video",
+      } },
+      config: loadGenerationQueueConfig({}),
+      publisher: {
+        async add(_queueName, _name, data) {
+          added.push({ data: data as Record<string, unknown> });
+        },
+      },
+      processors: {
+        async submitSeedanceVideo() { throw new Error("Seedance submit must not run for GlobalAiOpc jobs"); },
+        async pollSeedanceVideo() { throw new Error("Seedance poll must not run for GlobalAiOpc jobs"); },
+        async submitGlobalAiOpcVideo() {
+          globalAiOpcSubmitCalls += 1;
+          return { status: "submitted", externalRequestId: "kyy-task-1" };
+        },
+      },
+      now: new Date("2026-08-25T00:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "submitted", queuedPoll: true });
+    assert.equal(globalAiOpcSubmitCalls, 1);
+    assert.equal(added[0]?.data.providerExecutor, "globalaiopc-video");
+  });
+
+  it("routes GlobalAiOpc video polling only to the isolated GlobalAiOpc processor", async () => {
+    const added: Array<{ data: Record<string, unknown> }> = [];
+    let globalAiOpcPollCalls = 0;
+    const result = await handleGenerationPollVideoJob({
+      job: { data: {
+        taskId: "task-globalaiopc-poll",
+        workflowId: "workflow-globalaiopc",
+        mediaType: "video",
+        modelCode: "kling-o3",
+        providerExecutor: "globalaiopc-video",
+        pollAttempt: 1,
+      } },
+      config: loadGenerationQueueConfig({}),
+      publisher: {
+        async add(_queueName, _name, data) {
+          added.push({ data: data as Record<string, unknown> });
+        },
+      },
+      processors: {
+        async submitSeedanceVideo() { throw new Error("Seedance submit must not run for GlobalAiOpc jobs"); },
+        async pollSeedanceVideo() { throw new Error("Seedance poll must not run for GlobalAiOpc jobs"); },
+        async pollGlobalAiOpcVideo() {
+          globalAiOpcPollCalls += 1;
+          return { status: "succeeded" };
+        },
+      },
+      now: new Date("2026-08-25T00:00:10.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "succeeded", queuedPoll: false, queuedFinalize: true });
+    assert.equal(globalAiOpcPollCalls, 1);
+    assert.equal(added[0]?.data.providerExecutor, "globalaiopc-video");
+  });
+
+  it("keeps GlobalAiOpc video artifact transfer on the isolated processor", async () => {
+    const added: Array<{ data: Record<string, unknown> }> = [];
+    let globalAiOpcFetchCalls = 0;
+    const result = await handleGenerationFetchArtifactJob({
+      job: { data: {
+        taskId: "task-globalaiopc-fetch",
+        workflowId: "workflow-globalaiopc",
+        mediaType: "video",
+        modelCode: "kling-o3",
+        providerExecutor: "globalaiopc-video",
+        artifactKind: "video",
+        artifactStage: "fetch",
+      } },
+      config: loadGenerationQueueConfig({}),
+      publisher: {
+        async add(_queueName, _name, data) {
+          added.push({ data: data as Record<string, unknown> });
+        },
+      },
+      processors: {
+        async submitSeedanceVideo() { return { status: "settled" }; },
+        async pollSeedanceVideo() { return { status: "skipped" }; },
+        async fetchSeedanceVideoArtifact() { throw new Error("Seedance fetch must not run for GlobalAiOpc jobs"); },
+        async fetchGlobalAiOpcVideoArtifact() {
+          globalAiOpcFetchCalls += 1;
+          return { status: "succeeded" };
+        },
+      },
+      now: new Date("2026-08-25T00:00:20.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "succeeded", queuedPersist: true });
+    assert.equal(globalAiOpcFetchCalls, 1);
+    assert.equal(added[0]?.data.providerExecutor, "globalaiopc-video");
+  });
+
   it("does not poll when video submission has no durable external id", async () => {
     const added: Array<unknown> = [];
     const result = await handleGenerationSubmitVideoJob({

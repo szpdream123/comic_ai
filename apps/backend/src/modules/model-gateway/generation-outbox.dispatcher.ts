@@ -75,6 +75,7 @@ export async function dispatchGenerationOutboxBatch(
       generationTaskFinalizeRequestedEventType,
       generationTaskPollRequestedEventType,
     ],
+    taskEnvironment: input.config.workerEnvironment,
     fairnessScope: "generation",
     membershipQuantum: input.config.outbox.membershipQuantum,
   });
@@ -101,25 +102,34 @@ export async function dispatchClaimedGenerationOutboxEvents(
     input.config.sharding.publishConcurrency,
     async (event) => {
     try {
+      const taskId = readString(event.payload.taskId);
+      console.log(`[generation-outbox] Processing event ${event.id} for task ${taskId}`);
+
       const routedEvent = await routeGenerationOutboxEvent(db, event, input);
+      console.log(`[generation-outbox] Routed event, queueAssignmentKey: ${readString(routedEvent.payload.queueAssignmentKey) || 'none'}`);
+
       await publish(routedEvent, {
         config: input.config,
         publisher: input.publisher,
       });
+
       const assignmentKey = readString(routedEvent.payload.queueAssignmentKey);
       if (assignmentKey && input.shardStore) {
+        console.log(`[generation-outbox] Marking shard published for task ${taskId}, key: ${assignmentKey}`);
         try {
           await input.shardStore.markPublished(db, {
             assignmentKey,
             redisJobId: buildGenerationBullMQJob(routedEvent, input.config).jobId,
             now: input.now,
           });
-        } catch {
+        } catch (err) {
+          console.log(`[generation-outbox] Failed to mark shard published: ${err instanceof Error ? err.message : String(err)}`);
           // Redis accepted the job; assignment reconciliation owns DB repair.
         }
       }
     } catch (error) {
       const errorMessage = errorMessageFromUnknown(error);
+      console.log(`[generation-outbox] Event ${event.id} failed: ${errorMessage}`);
       await markFailed(db, {
         outboxEventId: event.id,
         errorMessage,
@@ -128,6 +138,7 @@ export async function dispatchClaimedGenerationOutboxEvents(
       });
       return { status: "failed" as const, eventId: event.id };
     }
+    console.log(`[generation-outbox] Event ${event.id} processed successfully`);
     await markProcessed(db, {
       outboxEventId: event.id,
       now: input.now,
