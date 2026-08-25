@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
+import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
 const runtime = findNodeRuntime(18);
 const serverEntrypoint = join(
@@ -13,7 +14,7 @@ const serverEntrypoint = join(
   "entrypoints",
   "phone-auth-dev-server.ts",
 );
-const envFilePath = join(process.cwd(), ".env");
+const envFilePath = runtimeEnvFilePath(process.cwd(), { production: false });
 
 if (!existsSync(serverEntrypoint)) {
   console.error(`Unable to find dev server entrypoint at ${serverEntrypoint}`);

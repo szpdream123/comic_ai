@@ -10,6 +10,7 @@ import {
   loadDotEnvFile,
   readWindowsProcess,
 } from "./creator-dev-process-utils.mjs";
+import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
 const runtime = findNodeRuntime(18);
 const runDir = join(process.cwd(), ".local", "run");
@@ -23,7 +24,7 @@ const stackEntrypoint = join(projectRoot, "scripts", "run-creator-dev-stack.mjs"
 const statusEntrypoint = join(projectRoot, "scripts", "status-dev-detached.mjs");
 const stopRequestFile = join(runDir, "creator-dev-stack.stop");
 
-loadDotEnvFile(join(projectRoot, ".env"), { override: true });
+loadDotEnvFile(runtimeEnvFilePath(projectRoot, { production: false }), { override: true });
 const port = configuredPort();
 
 mkdirSync(runDir, { recursive: true });

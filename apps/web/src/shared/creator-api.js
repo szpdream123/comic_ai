@@ -369,6 +369,12 @@ export function resolveApiUrl(url) {
   if (/^(?:https?:|data:|blob:)/i.test(url)) {
     return url;
   }
+  const officialStyleCoverMatch = typeof url === "string"
+    ? url.match(/^\/api\/public\/style-covers\/([A-Za-z0-9_-]+)$/i)
+    : null;
+  if (officialStyleCoverMatch) {
+    url = `/admin/assets/prompt-covers/${officialStyleCoverMatch[1]}.webp`;
+  }
   const backendOwnedPath = /^\/(?:api|admin|uploads|vendor)(?:\/|$)/.test(url);
   const localHttpHost = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
     window.location.host ?? "",

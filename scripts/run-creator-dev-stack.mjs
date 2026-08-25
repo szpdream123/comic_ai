@@ -4,9 +4,10 @@ import { join } from "node:path";
 
 import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
+import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
 const runtime = findNodeRuntime(18);
-const envFilePath = join(process.cwd(), ".env");
+const envFilePath = runtimeEnvFilePath(process.cwd(), { production: false });
 const logDir = join(process.cwd(), ".local", "logs");
 const runDir = join(process.cwd(), ".local", "run");
 const stopRequestFile = join(runDir, "creator-dev-stack.stop");

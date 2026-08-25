@@ -2539,6 +2539,10 @@ test("resolveApiUrl points backend-owned localhost paths at the dev API server",
         "http://127.0.0.1:4310/admin/assets/prompt-covers/watercolor.webp",
       );
       assert.equal(
+        resolveApiUrl("/api/public/style-covers/animation"),
+        "http://127.0.0.1:4310/admin/assets/prompt-covers/animation.webp",
+      );
+      assert.equal(
         resolveApiUrl("/app.html"),
         "http://127.0.0.1:4321/app.html",
       );

@@ -5,6 +5,7 @@ import { buildConfiguredGenerationSettingsSections, normalizeGenerationPricingOb
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
+import { renderSelectionPickerModal, syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
@@ -489,6 +490,7 @@ export function renderEpisodeWorkbench({
       ${renderEpisodeExportPreview(exportPreviewResult)}
       ${renderEpisodeExportOptionModal(exportOptionModal)}
       ${isWorkflowLayout ? "" : renderEpisodeBatchModal(episodeBatchModal)}
+      ${isWorkflowLayout ? "" : renderEpisodeBatchStyleModal(episodeBatchModal ?? {})}
       ${renderStoryboardDescriptionModal({
         show: isStoryboardDescriptionModalOpen,
         value: storyboardDescriptionDraft,
@@ -2400,7 +2402,7 @@ function renderEnhancedUserMessage({
     ...(attachmentItems ?? []).filter((item) => String(item?.type ?? item?.kind ?? "") !== "audio"),
   ];
   const compactVisualItems = filterComposerQuickReferenceItems(visualItems).slice(0, 3);
-  const compactAudioItems = audioItems.slice(0, 1);
+  const compactAudioItems = audioItems.slice(0, 3);
   const generationMeta = userMeta || renderGenerationUserMeta({
     createdAt,
     taskId,
@@ -2452,12 +2454,16 @@ function renderUserMessageCopyWithPopover(promptPreview = "", fullPromptPreview 
 
 function renderCompactUserReferenceItem(item) {
   const previewUrl = resolveReferencePreview(item);
-  const isAudio = String(item?.type ?? item?.kind ?? "") === "audio";
+  const mediaType = resolveComposerReferenceMediaType(item);
+  const isAudio = mediaType === "audio";
+  const isVideo = mediaType === "video";
   return `
-    <span class="episode-replica-user-ref-chip ${isAudio ? "audio" : "visual"}" title="${escapeAttr(item?.name ?? "")}">
+    <span class="episode-replica-user-ref-chip ${isAudio ? "audio" : isVideo ? "video" : "visual"}" title="${escapeAttr(item?.name ?? "")}">
       ${
         isAudio
           ? `<span class="episode-replica-user-ref-art audio"><span aria-hidden="true">◉</span></span>`
+          : isVideo
+            ? `<span class="episode-replica-user-ref-art video"><span aria-hidden="true">▶</span></span>`
           : previewUrl
             ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" loading="lazy" decoding="async" fetchpriority="low" /></span>`
             : ""
@@ -4986,28 +4992,28 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const hasAspectRatioParameter = batchImageSettings.ratioOptions.length > 0;
   const ratioOptions = batchImageSettings.ratioOptions;
   const clarityOptions = batchImageSettings.clarityOptions;
+
+  // 准备风格选择器的标签，显示当前选中的风格
+  const selectedStyleLabel = selectedStyle?.label ?? "选择生图风格";
+  // preview 字段已经在 normalizeEpisodeBatchImageStyleSkills 中处理好了
+  const selectedStylePreview = selectedStyle?.preview ? resolveApiUrl(String(selectedStyle.preview)) : "";
+
   return `
     <div class="episode-batch-image-panel">
       <section class="episode-batch-style-panel">
-        ${selectedStyle ? `<div class="episode-batch-selected-style episode-batch-selected-style-top" title="已选风格：${escapeAttr(selectedStyle.label)}"><span class="episode-batch-selected-style-thumb">${selectedStyle.preview ? `<img src="${escapeAttr(resolveApiUrl(selectedStyle.preview))}" alt="" />` : escapeHtml([...selectedStyle.label][0] ?? "风")}</span><span>${escapeHtml(selectedStyle.label)}</span></div>` : ""}
-        <div class="episode-batch-style-tabs">
-          <button class="${styleTab === "public" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="public">官方技能</button>
-          <button class="${styleTab === "custom" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="custom">私人技能库</button>
-        </div>
-        <div class="episode-batch-style-grid">
-          ${styleCards.length ? styleCards.map((card) => `
-            <button
-              class="episode-batch-style-card ${card.preview ? "has-preview" : "no-preview"} ${card.id === selectedStyleId ? "selected" : ""}"
-              type="button"
-              data-action="select-episode-batch-style"
-              data-style-id="${escapeAttr(card.id)}"
-            >
-              ${card.preview ? `<img src="${escapeAttr(resolveApiUrl(card.preview))}" alt="${escapeAttr(card.label)}" />` : ""}
-              <strong>${escapeHtml(card.label)}</strong>
-              <small>${formatEpisodeBatchSkillCredits(card.priceCredits)}</small>
-            </button>
-          `).join("") : `<div class="episode-replica-right-empty">当前没有可用${styleTab === "custom" ? "私人" : "官方"}生图风格技能。</div>`}
-        </div>
+        <button
+          class="episode-batch-style-picker-trigger"
+          type="button"
+          data-action="open-episode-batch-style-modal"
+          title="点击选择生图风格"
+        >
+          <span class="episode-batch-style-picker-label">
+            ${selectedStylePreview ? `<img src="${escapeAttr(selectedStylePreview)}" alt="" />` : `<span class="episode-batch-style-picker-icon">✦</span>`}
+            <strong>${escapeHtml(selectedStyleLabel)}</strong>
+            <small>${formatEpisodeBatchSkillCredits(selectedStyle?.priceCredits ?? 0)}</small>
+          </span>
+          <span class="episode-batch-style-picker-arrow">▼</span>
+        </button>
       </section>
       <footer class="episode-batch-footer image-composer">
         <div class="episode-batch-footer-controls">
@@ -5114,6 +5120,50 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
       </footer>
     </div>
   `;
+}
+
+function renderEpisodeBatchStyleModal(modal) {
+  if (!modal?.styleModalOpen) {
+    return "";
+  }
+  const publicStyles = Array.isArray(modal.publicStyles) ? modal.publicStyles : [];
+  const customStyles = Array.isArray(modal.customStyles) ? modal.customStyles : [];
+  const styleTab = modal.styleTab === "custom" ? "custom" : "public";
+  const selectedStyleId = modal.selectedStyleId ?? "";
+
+  const toPickerItem = (style, group) => {
+    // preview 字段已经在 normalizeEpisodeBatchImageStyleSkills 中处理好了
+    const previewUrl = style?.preview ? resolveApiUrl(String(style.preview)) : "";
+    return {
+      id: String(style.id ?? ""),
+      group,
+      label: String(style.label ?? "未命名风格"),
+      description: "生图风格提示词",
+      previewUrl,
+      meta: formatEpisodeBatchSkillCredits(style.priceCredits ?? 0),
+    };
+  };
+
+  return renderSelectionPickerModal({
+    show: true,
+    id: "episode-batch-style-picker",
+    title: "选择生图风格",
+    tabs: [
+      { id: "public", label: "官方技能", count: publicStyles.length },
+      { id: "custom", label: "私人技能库", count: customStyles.length },
+    ],
+    activeTab: styleTab,
+    items: [
+      ...publicStyles.map((style) => toPickerItem(style, "public")),
+      ...customStyles.map((style) => toPickerItem(style, "custom")),
+    ],
+    selectedId: selectedStyleId,
+    emptyLabel: styleTab === "custom" ? "暂无私人生图风格技能" : "暂无官方生图风格技能",
+    closeAction: "close-episode-batch-style-modal",
+    tabAction: "set-episode-batch-style-modal-tab",
+    selectAction: "select-episode-batch-style-draft",
+    confirmAction: "confirm-episode-batch-style",
+  });
 }
 
 function renderEpisodeBatchSelectField(field, label, value, open, options, displayOptions = {}) {

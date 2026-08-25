@@ -94,6 +94,20 @@ it("falls back to a valid COS URL when a historical storage proxy id is stale", 
   assert.equal(sourceCalls, 1);
 });
 
+it("drops optional references when a storage object was deleted", async () => {
+  const staleObjectId = "51000000-0000-4000-8000-000000000097";
+  const staleProxy = `/api/storage/objects/${staleObjectId}/content`;
+  const resolved = await resolveGenerationStorageObjectReferences({
+    parameters: {
+      referenceImages: [{ storageObjectId: staleObjectId, url: staleProxy }],
+      filePaths: [staleProxy, "https://cdn.example.test/valid.png"],
+    },
+  }, async () => "") as Record<string, any>;
+
+  assert.deepEqual(resolved.parameters.referenceImages, []);
+  assert.deepEqual(resolved.parameters.filePaths, ["https://cdn.example.test/valid.png"]);
+});
+
 it("serves an authenticated user's completed upload through the credentialed content route", async () => {
   const db = await createMigratedTestDb();
   const panoramaBytes = Buffer.from("panorama-image");
