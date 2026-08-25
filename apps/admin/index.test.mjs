@@ -485,6 +485,228 @@ test("admin GEO content details expose actionable quality issues and version his
   assert.match(markup, /geoArchiveContent\('content-1'\)/);
 });
 
+test("admin GEO content actions recover missing details without a page refresh", async () => {
+  const runtimeStart = script.indexOf("function geoOperationsState");
+  const runtimeEnd = script.indexOf("const geoPlatformGroups", runtimeStart);
+  const editorStart = script.indexOf("async function openGeoDraftEditor");
+  const editorEnd = script.indexOf("async function geoSaveDraftEdit", editorStart);
+  const actionsStart = script.indexOf("async function geoSubmitReview");
+  const actionsEnd = script.indexOf("async function geoSaveSettings", actionsStart);
+  assert.notEqual(runtimeStart, -1, "GEO detail loader exists");
+  assert.notEqual(editorStart, -1, "GEO draft editor action exists");
+  assert.notEqual(actionsStart, -1, "GEO review actions exist");
+
+  const requests = [];
+  const toasts = [];
+  let failDetailRequest = false;
+  let invalidDetailResponse = false;
+  let promptCount = 0;
+  const detail = {
+    item: {
+      id: "content-1",
+      status: "in_review",
+      lockVersion: 7,
+      currentDraftVersionId: "version-1",
+      currentPublishedVersionId: null,
+    },
+    versions: [{
+      id: "version-1",
+      title: "无需刷新的草稿",
+      document: { title: "无需刷新的草稿", blocks: [] },
+      qualityReport: { blockers: [], warnings: [] },
+    }],
+  };
+  const store = {
+    platforms: [], questions: [], evidence: [],
+    content: [{ id: "content-1", status: "in_review", lockVersion: 3, currentDraftVersionId: "version-1", currentPublishedVersionId: null }],
+    details: {}, settings: null, selectedQuestionId: "", selectedQuestionIds: [], selectedEvidenceIds: [], loadError: "",
+  };
+  const context = {
+    result: {}, requests, state: { page: "geoOperations", geoOperations: store }, structuredClone,
+    renderShell() {}, setPageLoading() {}, clearPageForbidden() {}, setPageForbidden() {},
+    showToast(message) { toasts.push(message); }, geoMountDraftEditor() { context.result.editorMounted = true; },
+    geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "无需刷新的草稿" }),
+    window: { prompt: () => { promptCount += 1; return "人工审核通过"; } },
+    api: async (path, options = {}) => {
+      requests.push({ path, method: options.method || "GET", payload: options.body ? JSON.parse(options.body) : null });
+      if (options.method === "POST") return { data: {} };
+      if (failDetailRequest) throw new Error("detail unavailable");
+      if (invalidDetailResponse) return { data: { item: { id: "content-1" }, versions: {} } };
+      return { data: structuredClone(detail) };
+    },
+  };
+
+  vm.runInNewContext(`${script.slice(runtimeStart, runtimeEnd)}
+    ${script.slice(editorStart, editorEnd)}
+    ${script.slice(actionsStart, actionsEnd)}
+    result.loadGeoOperations = loadGeoOperations;
+    loadGeoOperations = async () => undefined;
+    result.openEditor = openGeoDraftEditor;
+    result.submitReview = geoSubmitReview;
+    result.publish = geoPublishContent;
+  `, context);
+
+  await context.result.openEditor("content-1");
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1"]);
+  assert.equal(context.result.editorMounted, true);
+
+  requests.length = 0;
+  await context.result.submitReview("content-1", 3);
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1/submit-review"]);
+  assert.equal(requests[0].payload.expectedLockVersion, 3);
+
+  requests.length = 0;
+  delete store.details["content-1"];
+  store.content[0].lockVersion = 3;
+  await context.result.submitReview("content-1", 3);
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/admin/geo/content/content-1",
+    "/api/admin/geo/content/content-1/submit-review",
+  ]);
+  assert.equal(requests[1].payload.expectedLockVersion, 3);
+
+  requests.length = 0;
+  await context.result.publish("content-1");
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1/publish"]);
+
+  requests.length = 0;
+  delete store.details["content-1"];
+  await context.result.publish("content-1");
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/admin/geo/content/content-1",
+    "/api/admin/geo/content/content-1/publish",
+  ]);
+
+  requests.length = 0;
+  toasts.length = 0;
+  delete store.details["content-1"];
+  failDetailRequest = true;
+  await context.result.submitReview("content-1", 7);
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1"]);
+  assert.deepEqual(toasts, ["detail unavailable"]);
+
+  requests.length = 0;
+  toasts.length = 0;
+  context.result.editorMounted = false;
+  await context.result.openEditor("content-1");
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1"]);
+  assert.equal(context.result.editorMounted, false);
+  assert.deepEqual(toasts, ["detail unavailable"]);
+
+  requests.length = 0;
+  toasts.length = 0;
+  const promptCountBeforeFailure = promptCount;
+  await context.result.publish("content-1");
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1"]);
+  assert.equal(promptCount, promptCountBeforeFailure);
+  assert.deepEqual(toasts, ["detail unavailable"]);
+
+  requests.length = 0;
+  toasts.length = 0;
+  failDetailRequest = false;
+  invalidDetailResponse = true;
+  await context.result.submitReview("content-1", 3);
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1"]);
+  assert.deepEqual(toasts, ["内容详情加载失败，请稍后重试"]);
+
+  requests.length = 0;
+  toasts.length = 0;
+  invalidDetailResponse = false;
+  store.details["content-1"] = { item: { id: "content-1" }, versions: [null] };
+  context.result.editorMounted = false;
+  await context.result.openEditor("content-1");
+  assert.deepEqual(requests.map((request) => request.path), ["/api/admin/geo/content/content-1"]);
+  assert.equal(context.result.editorMounted, true);
+
+  context.api = async (path) => {
+    if (path === "/api/admin/geo/content") return { data: [{ id: "content-1" }] };
+    if (path === "/api/admin/geo/content/content-1") return { data: { item: { id: "other-content" }, versions: [] } };
+    return { data: [] };
+  };
+  await context.result.loadGeoOperations();
+  assert.equal(store.details["content-1"], null);
+
+});
+
+test("admin GEO draft editor ignores stale detail loads", async () => {
+  const invalidateStart = script.indexOf("function invalidateGeoContentRequests");
+  const invalidateEnd = script.indexOf("async function loadGeoOperations", invalidateStart);
+  const helperStart = script.indexOf("async function loadGeoContentDetail");
+  const helperEnd = script.indexOf("const geoPlatformGroups", helperStart);
+  const editorStart = script.indexOf("async function openGeoDraftEditor");
+  const editorEnd = script.indexOf("async function geoSaveDraftEdit", editorStart);
+  const pending = {};
+  const mounted = [];
+  const store = {
+    content: [
+      { id: "content-1", currentDraftVersionId: "version-1" },
+      { id: "content-2", currentDraftVersionId: "version-2" },
+    ],
+    details: {},
+  };
+  const detailFor = (id, versionId) => ({
+    item: { id, currentDraftVersionId: versionId },
+    versions: [{ id: versionId, document: { title: id, blocks: [] } }],
+  });
+  const context = {
+    result: {}, state: { page: "geoOperations", geoOperations: store }, structuredClone,
+    geoOperationsState: () => store,
+    api: (path) => new Promise((resolve) => {
+      const contentId = decodeURIComponent(path.split("/").pop());
+      pending[contentId] = (detail) => resolve({ data: detail });
+    }),
+    geoMountDraftEditor: () => mounted.push(store.activeDraftEditor.item.id),
+    showToast() {},
+  };
+
+  vm.runInNewContext(`${script.slice(invalidateStart, invalidateEnd)}
+    ${script.slice(helperStart, helperEnd)}
+    ${script.slice(editorStart, editorEnd)}
+    result.invalidateRequests = invalidateGeoContentRequests;
+    result.openEditor = openGeoDraftEditor;
+  `, context);
+
+  const first = context.result.openEditor("content-1");
+  const second = context.result.openEditor("content-2");
+  pending["content-2"](detailFor("content-2", "version-2"));
+  await second;
+  pending["content-1"](detailFor("content-1", "version-1"));
+  await first;
+  assert.deepEqual(mounted, ["content-2"]);
+  assert.equal(store.details["content-1"].item.id, "content-1");
+
+  delete store.details["content-1"];
+  const leaving = context.result.openEditor("content-1");
+  context.state.page = "dashboard";
+  context.result.invalidateRequests();
+  context.state.page = "geoOperations";
+  pending["content-1"](detailFor("content-1", "version-1"));
+  await leaving;
+  assert.deepEqual(mounted, ["content-2"]);
+  assert.equal(store.details["content-1"], undefined);
+  assert.match(script, /state\.page === "geoOperations" && nextPage !== "geoOperations"\) invalidateGeoContentRequests\(\)/);
+
+  const geoInstallStart = script.indexOf("const previousNavigate = navigate;", script.indexOf("(function installGeoOperationsPage"));
+  const geoInstallEnd = script.indexOf("const previousRenderPage", geoInstallStart);
+  const standaloneStart = script.indexOf("const previousNavigate = navigate;", script.indexOf("(function installStandaloneMarketingSkillsRoute"));
+  const standaloneEnd = script.indexOf("const previousRenderPage", standaloneStart);
+  const navigationContext = {
+    result: {}, state: { page: "geoOperations" }, invalidations: 0,
+    navigate(page) { navigationContext.state.page = page; },
+    invalidateGeoContentRequests() { navigationContext.invalidations += 1; },
+    history: { pushState() {} }, renderShell() {},
+    ensureAdminPageData: () => Promise.resolve(),
+  };
+  vm.runInNewContext(`{ ${script.slice(geoInstallStart, geoInstallEnd)} }
+    { ${script.slice(standaloneStart, standaloneEnd)} }
+    result.navigate = navigate;
+  `, navigationContext);
+  navigationContext.result.navigate("marketingSkills");
+  assert.equal(navigationContext.invalidations, 1);
+  navigationContext.result.navigate("geoOperations");
+  assert.equal(navigationContext.state.page, "geoOperations");
+});
+
 test("admin GEO rollback and archive operations send guarded mutation payloads", async () => {
   const detailsStart = script.indexOf("function geoContentDetailMarkup");
   const detailsEnd = script.indexOf("function geoOperationsPage", detailsStart);
