@@ -356,6 +356,9 @@ async function resolveQueueTargets(deps: GenerationQueueHealthServiceDeps) {
       const targets = discovered
         .filter((target) => target && typeof target.name === "string" && target.name.trim())
         .map((target) => ({ role: target.role?.trim() || "generation_shard", name: target.name.trim() }));
+      if (targets.length === 0) {
+        return configuredQueueTargets(deps.config);
+      }
       const deadLetter = { role: "dead_letter", name: deps.config.queues.deadLetter };
       const unique = new Map<string, { role: string; name: string }>();
       for (const target of [...targets, deadLetter]) unique.set(target.name, target);

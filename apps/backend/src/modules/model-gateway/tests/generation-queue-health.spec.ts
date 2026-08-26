@@ -315,6 +315,39 @@ describe("generation queue health service", () => {
     ]);
     assert.deepEqual(queueNames.sort(), health.queues.map((queue) => queue.name).sort());
   });
+
+  it("falls back to configured queues when no active shards are discovered", async () => {
+    const queueNames: string[] = [];
+    const service = createGenerationQueueHealthService({
+      config: testConfig(),
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return new Date().toISOString(); },
+      },
+      queueDiscovery: async () => [],
+      queueFactory: (queueName) => ({
+        name: queueName,
+        async getJobCounts() {
+          queueNames.push(queueName);
+          return { waiting: 0, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 };
+        },
+        async getJobs() { return []; },
+        async close() {},
+      }),
+    });
+
+    const health = await service.inspect();
+    assert.deepEqual(health.queues.map((queue) => queue.name), [
+      "generation-submit-image",
+      "generation-submit-video",
+      "generation-poll-image",
+      "generation-poll-video",
+      "generation-poll-audio",
+      "generation-finalize-artifact",
+      "generation-dead-letter",
+    ]);
+    assert.deepEqual(queueNames.sort(), health.queues.map((queue) => queue.name).sort());
+  });
 });
 
 function testConfig(): GenerationQueueConfig {
