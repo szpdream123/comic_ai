@@ -1,5 +1,5 @@
 import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderAssetInspectorModal, renderEpisodeBatchModal, renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
+import { renderAssetInspectorModal, renderEpisodeBatchModal, renderEpisodeBatchStyleModal, renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
 import {
   CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES,
   normalizeCanvasTextSkills,
@@ -9258,6 +9258,7 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
             projectPanelMode: "episode-workbench",
             episodeWorkbenchLayout: "workflow",
             workflowGenerationWorkbenchOpen: ui.workflowGenerationWorkbenchOpen === true,
+            episodeBatchModal: null,
           },
           session,
         });
@@ -9274,6 +9275,7 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
         <div class="home-project-workflow-body">${content}</div>
       </div>
       ${renderEpisodeBatchModal(ui.episodeBatchModal)}
+      ${renderEpisodeBatchStyleModal(ui.episodeBatchModal ?? {})}
     </section>
   `;
 }

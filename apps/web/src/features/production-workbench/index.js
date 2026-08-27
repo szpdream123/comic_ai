@@ -4258,6 +4258,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   document.addEventListener("keydown", (event) => {
+    if (
+      event.key === "Tab" &&
+      workbench.ui.episodeBatchModal?.styleModalOpen === true &&
+      trapEpisodeBatchStylePickerFocus(workbench, event)
+    ) {
+      return;
+    }
     if (event.key !== "Escape") {
       return;
     }
@@ -4278,6 +4285,28 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
           ));
         previewTarget?.focus?.();
       });
+      return;
+    }
+    if (workbench.ui.episodeBatchModal?.styleModalOpen === true) {
+      event.preventDefault();
+      workbench.ui.episodeBatchModal.styleModalOpen = false;
+      workbench.ui.episodeBatchModal.styleDraftId = "";
+      render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
+      return;
+    }
+    if (workbench.ui.episodeBatchModal?.show === true) {
+      event.preventDefault();
+      if (workbench.ui.episodeBatchModal.isSubmitting === true) {
+        return;
+      }
+      if (workbench.ui.episodeBatchModal.openField) {
+        workbench.ui.episodeBatchModal.openField = null;
+        render(workbench);
+        return;
+      }
+      workbench.ui.episodeBatchModal = null;
+      render(workbench);
       return;
     }
     if (workbench.ui.homeProjectWorkflowProjectId) {
@@ -11690,6 +11719,43 @@ function syncEpisodeBatchModalOnly(workbench) {
     "[data-episode-batch-modal-layer]",
     renderEpisodeBatchModal(workbench.ui.episodeBatchModal),
   );
+}
+
+function focusEpisodeBatchStylePicker(workbench) {
+  queueMicrotask(() => {
+    const picker = workbench.root?.querySelector?.('[data-selection-picker-id="episode-batch-style-picker"]');
+    (picker?.querySelector?.(".selection-picker-item.active") ?? picker?.querySelector?.(".selection-picker-close"))?.focus?.();
+  });
+}
+
+function restoreEpisodeBatchStylePickerTriggerFocus(workbench) {
+  queueMicrotask(() => {
+    workbench.root?.querySelector?.('[data-action="open-episode-batch-style-modal"]')?.focus?.();
+  });
+}
+
+function trapEpisodeBatchStylePickerFocus(workbench, event) {
+  const dialog = workbench.root?.querySelector?.(
+    '[data-selection-picker-id="episode-batch-style-picker"] .selection-picker-modal',
+  );
+  const focusable = [...(dialog?.querySelectorAll?.(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  ) ?? [])];
+  if (!dialog || focusable.length === 0) {
+    return false;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = globalThis.document?.activeElement;
+  const target = event.shiftKey
+    ? (!dialog.contains?.(active) || active === first ? last : null)
+    : (!dialog.contains?.(active) || active === last ? first : null);
+  if (!target) {
+    return false;
+  }
+  event.preventDefault();
+  target.focus?.();
+  return true;
 }
 
 function syncGenerationResultDeleteModalOnly(workbench) {
@@ -22783,6 +22849,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleModalOpen = true;
       workbench.ui.episodeBatchModal.styleDraftId = workbench.ui.episodeBatchModal.selectedStyleId;
       render(workbench);
+      focusEpisodeBatchStylePicker(workbench);
     }
     return;
   }
@@ -22792,6 +22859,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleModalOpen = false;
       workbench.ui.episodeBatchModal.styleDraftId = "";
       render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
     }
     return;
   }
@@ -22858,6 +22926,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleDraftId = "";
       workbench.ui.episodeBatchModal = syncEpisodeBatchModal(workbench.ui.episodeBatchModal);
       render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
     }
     return;
   }
