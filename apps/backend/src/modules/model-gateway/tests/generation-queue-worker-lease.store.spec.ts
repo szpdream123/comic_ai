@@ -5,6 +5,8 @@ import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
+  markGenerationQueueWorkerNotReady,
+  markGenerationQueueWorkerReady,
   reconcileGenerationQueueWorkerLeases,
   releaseGenerationQueueWorkerLeases,
 } from "../generation-queue-worker-lease.store.ts";
@@ -23,6 +25,11 @@ describe("generation queue worker leases", { concurrency: false }, () => {
         "utf8",
       );
       await db.query(dbClockMigration);
+      const readinessMigration = await readFile(
+        join(process.cwd(), "packages", "db", "migrations", "20260827-generation-queue-worker-readiness.sql"),
+        "utf8",
+      );
+      await db.query(readinessMigration);
       await db.query(`
         INSERT INTO generation_queue_routes (route_key, route_code)
         VALUES ('lease-route', 'rlease');
@@ -43,6 +50,23 @@ describe("generation queue worker leases", { concurrency: false }, () => {
       assert.deepEqual(await reconcileGenerationQueueWorkerLeases(db, {
         ownerId: "worker-a", candidateQueueNames: candidates, limit: 2, now, leaseMs: 20_000,
       }), candidates.slice(0, 2));
+      assert.equal(await markGenerationQueueWorkerReady(db, {
+        ownerId: "worker-a", queueName: candidates[0],
+      }), true);
+      assert.equal((await db.query<{ worker_ready_at: Date | null }>(
+        `SELECT worker_ready_at FROM generation_queue_worker_leases WHERE queue_name = $1`,
+        [candidates[0]],
+      )).rows[0]?.worker_ready_at instanceof Date, true);
+      assert.equal(await markGenerationQueueWorkerNotReady(db, {
+        ownerId: "worker-a", queueName: candidates[0],
+      }), true);
+      assert.equal((await db.query<{ worker_ready_at: Date | null }>(
+        `SELECT worker_ready_at FROM generation_queue_worker_leases WHERE queue_name = $1`,
+        [candidates[0]],
+      )).rows[0]?.worker_ready_at, null);
+      assert.equal(await markGenerationQueueWorkerReady(db, {
+        ownerId: "worker-a", queueName: candidates[0],
+      }), true);
       assert.deepEqual(await reconcileGenerationQueueWorkerLeases(db, {
         ownerId: "worker-b", candidateQueueNames: candidates, limit: 2, now, leaseMs: 20_000,
       }), candidates.slice(2));
@@ -61,6 +85,11 @@ describe("generation queue worker leases", { concurrency: false }, () => {
       assert.deepEqual(await reconcileGenerationQueueWorkerLeases(db, {
         ownerId: "worker-b", candidateQueueNames: candidates, limit: 2, now, leaseMs: 20_000,
       }), candidates.slice(0, 2));
+      const takenOverLease = await db.query<{ owner_id: string; worker_ready_at: Date | null }>(
+        `SELECT owner_id, worker_ready_at FROM generation_queue_worker_leases WHERE queue_name = $1`,
+        [candidates[0]],
+      );
+      assert.deepEqual(takenOverLease.rows[0], { owner_id: "worker-b", worker_ready_at: null });
       assert.equal(await releaseGenerationQueueWorkerLeases(db, "worker-b"), 2);
       const leases = await db.query(`SELECT queue_name FROM generation_queue_worker_leases`);
       assert.deepEqual(leases.rows, []);

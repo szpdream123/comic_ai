@@ -4,7 +4,7 @@ export const generationTimeoutPolicy = {
   audio: 60 * 60 * 1000,
 } as const;
 
-export const generationPollIntervalMs = 30_000;
+export const generationPollIntervalMs = 20_000;
 
 export type GenerationTimeoutMediaType = keyof typeof generationTimeoutPolicy;
 

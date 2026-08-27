@@ -115,7 +115,7 @@ export async function dispatchClaimedGenerationOutboxEvents(
       // retryable so a later scan can route it to an owned shard.
       if (input.config.workerEnvironment === "production") {
         const queueName = readString(routedEvent.payload.queueName);
-        if (queueName && !(await hasLiveGenerationQueueWorkerLease(db, queueName, input.now))) {
+        if (queueName && !(await hasLiveGenerationQueueWorkerLease(db, queueName))) {
           throw new Error(`generation_queue_worker_unavailable:${queueName}`);
         }
       }
@@ -169,16 +169,17 @@ export async function dispatchClaimedGenerationOutboxEvents(
   };
 }
 
-async function hasLiveGenerationQueueWorkerLease(db: SqlDatabase, queueName: string, now: Date) {
+async function hasLiveGenerationQueueWorkerLease(db: SqlDatabase, queueName: string) {
   const row = await queryOne<{ matched: boolean }>(
     db,
     `SELECT EXISTS (
        SELECT 1
        FROM generation_queue_worker_leases
        WHERE queue_name = $1
-         AND lease_until > $2
+         AND worker_ready_at IS NOT NULL
+         AND lease_until > clock_timestamp()
      ) AS matched`,
-    [queueName, now],
+    [queueName],
   );
   return row?.matched === true;
 }

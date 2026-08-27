@@ -12,7 +12,7 @@ describe("generation queue config", () => {
   it("defaults Seedance video polling to 3 hours at the 30 second interval", () => {
     const config = loadGenerationQueueConfig({});
 
-    assert.equal(config.poll.video.intervalMs, 30_000);
+    assert.equal(config.poll.video.intervalMs, 20_000);
     assert.equal(config.poll.video.maxAttempts, 360);
     assert.equal(config.queues.pollImage, "generation-poll-image");
     assert.equal(config.queues.pollAudio, "generation-poll-audio");
@@ -26,7 +26,7 @@ describe("generation queue config", () => {
       workerQueuesPerProcess: 16,
       publishConcurrency: 32,
     });
-    assert.equal(config.poll.image.intervalMs, 30_000);
+    assert.equal(config.poll.image.intervalMs, 20_000);
     assert.equal(config.poll.image.maxAttempts, 120);
     assert.equal(config.poll.audio.intervalMs, 30_000);
     assert.equal(config.poll.audio.maxAttempts, 120);

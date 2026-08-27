@@ -254,6 +254,25 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     assert.match(productionMigrationScript, /cursor = batch\.rows\[0\]\?\.next_id/);
   });
 
+  it("registers generation queue worker readiness in application and production runtime migrations", async () => {
+    const migrationName = "20260827-generation-queue-worker-readiness.sql";
+    const names = (await loadSqlMigrations()).map((migration) => migration.name);
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+
+    assert.ok(names.includes(migrationName));
+    assert.match(
+      productionMigrationScript,
+      /\["20260827-generation-queue-worker-readiness\.sql", "packages\/db\/migrations\/20260827-generation-queue-worker-readiness\.sql"\]/,
+    );
+    assert.match(
+      productionMigrationScript,
+      /runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20260827-generation-queue-worker-readiness\.sql"/,
+    );
+  });
+
   it("registers failed image submission repair indexes in application and production migrations", async () => {
     const names = (await loadSqlMigrations()).map((migration) => migration.name);
     const productionMigrationScript = await readFile(

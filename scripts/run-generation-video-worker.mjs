@@ -25,7 +25,7 @@ const [
   { loadGenerationQueueConfig },
   { hasReleasedGenerationQueueStageAssignment, listGenerationQueueShards, markGenerationQueueStagePublished, releaseGenerationQueueStage, reserveGenerationQueueStageForPublish },
   { createGenerationShardWorkerRunner, prioritizeGenerationShards },
-  { reconcileGenerationQueueWorkerLeases, releaseGenerationQueueWorkerLeases },
+  { markGenerationQueueWorkerNotReady, markGenerationQueueWorkerReady, reconcileGenerationQueueWorkerLeases, releaseGenerationQueueWorkerLeases },
   { createGenerationWorkerOperationTracker },
   { publishReservedGenerationJob },
   { createGenerationProviderRouteIdentity },
@@ -346,10 +346,10 @@ const submitImageWorker = new Worker(
   {
     ...workerOptions,
     concurrency: config.submit.image.concurrency,
-    limiter: {
+    ...(config.submit.image.limiter.max > 0 ? { limiter: {
       max: config.submit.image.limiter.max,
       duration: config.submit.image.limiter.durationMs,
-    },
+    } } : {}),
   },
 );
 
@@ -365,10 +365,10 @@ const submitVideoWorker = new Worker(
   {
     ...workerOptions,
     concurrency: config.submit.video.concurrency,
-    limiter: {
+    ...(config.submit.video.limiter.max > 0 ? { limiter: {
       max: config.submit.video.limiter.max,
       duration: config.submit.video.limiter.durationMs,
-    },
+    } } : {}),
   },
 );
 
@@ -536,11 +536,30 @@ const dynamicShardRunner = config.sharding.enabled
               : spec.stage === "poll"
                 ? spec.mediaType === "video" ? config.poll.video.concurrency : spec.mediaType === "audio" ? config.poll.audio.concurrency : config.poll.image.concurrency
                 : config.finalize.artifact.concurrency,
-            limiter: { max: spec.rateLimitMax, duration: spec.rateLimitDurationMs },
+            ...(spec.stage === "submit" ? {} : {
+              limiter: { max: spec.rateLimitMax, duration: spec.rateLimitDurationMs },
+            }),
           },
         );
+        const markWorkerReady = () => {
+          void markGenerationQueueWorkerReady(db, {
+            ownerId: generationWorkerLeaseOwnerId,
+            queueName: spec.queueName,
+          }).catch((error) => {
+            console.error(`[generation-video] failed to mark dynamic worker ready queue=${spec.queueName} ${error instanceof Error ? error.message : String(error)}`);
+          });
+        };
+        const markWorkerNotReady = () => markGenerationQueueWorkerNotReady(db, {
+          ownerId: generationWorkerLeaseOwnerId,
+          queueName: spec.queueName,
+        });
+        worker.on("ready", markWorkerReady);
         worker.on("completed", (job) => { trackGenerationAssignmentRelease(job, "completed"); });
-        worker.on("error", redisErrorReporter);
+        worker.on("error", (error) => {
+          void markWorkerNotReady().catch(() => undefined);
+          redisErrorReporter(error);
+        });
+        worker.on("closed", () => { void markWorkerNotReady().catch(() => undefined); });
         worker.on("ready", redisErrorReporter.reset);
         worker.on("failed", (job, error) => {
           const attempts = Math.max(1, Number(job?.opts?.attempts ?? 1));
@@ -558,7 +577,12 @@ const dynamicShardRunner = config.sharding.enabled
           }
           if (job) console.error(`[generation-video] dynamic job failed queue=${spec.queueName} id=${job.id ?? "unknown"} ${error.message}`);
         });
-        return worker;
+        return {
+          async close() {
+            await markWorkerNotReady().catch(() => undefined);
+            await worker.close();
+          },
+        };
       },
     })
   : null;

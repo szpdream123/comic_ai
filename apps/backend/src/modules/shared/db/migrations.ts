@@ -83,6 +83,7 @@ const TASK_CENTER_PROVIDER_DIAGNOSTICS_MIGRATION_NAME = "20260824-task-center-pr
 const BANANAROUTER_IMAGE_ASYNC_RECOVERY_RELATIVE_PATH = ["packages", "db", "migrations", "20260825-bananarouter-image-async-recovery.sql"];
 const PROVIDER_PROTOCOL_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260826-converge-provider-protocol-constraint.sql"];
 const CANVAS_AGENT_SHARD_CONSTRAINT_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260827-converge-canvas-agent-shard-constraint.sql"];
+const GENERATION_QUEUE_WORKER_READINESS_RELATIVE_PATH = ["packages", "db", "migrations", "20260827-generation-queue-worker-readiness.sql"];
 const BANANAROUTER_IMAGE_ASYNC_CONFIG_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260828-bananarouter-image-async-config-convergence.sql"];
 const PROMPT_REVERSE_TOOL_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260829-enable-prompt-reverse-tool-model.sql"];
 const MODELFLARE_RESPONSES_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260830-add-modelflare-responses-model.sql"];
@@ -510,6 +511,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260827-converge-canvas-agent-shard-constraint.sql",
       sql: await readFile(join(rootDir, ...CANVAS_AGENT_SHARD_CONSTRAINT_CONVERGENCE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260827-generation-queue-worker-readiness.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_WORKER_READINESS_RELATIVE_PATH), "utf8"),
     },
     {
       name: "20260828-bananarouter-image-async-config-convergence.sql",
