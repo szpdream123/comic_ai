@@ -7124,6 +7124,355 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(result.references.length, 1);
   });
 
+  it("maps every storyboard asset mention when multiple assets share one reference image", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-shared-reference-image",
+      description: [
+        "视频角色对照表：凌羽=【@凌羽】；六道傀儡=【@六道傀儡】",
+        "视频道具对照表：旋星丸=【@旋星丸】",
+      ].join("\n"),
+      references: [
+        { role: "character", assetId: "character-lingyu", name: "凌羽", previewUrl: "/uploads/shared-sheet.png" },
+        { role: "character", assetId: "character-puppet", name: "六道傀儡", previewUrl: "/uploads/shared-sheet.png" },
+        { role: "prop", assetId: "prop-orb", name: "旋星丸", previewUrl: "/uploads/shared-sheet.png" },
+      ],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.references.length, 1);
+    assert.deepEqual(result.references[0].generationReferenceAliases, ["凌羽", "六道傀儡", "旋星丸"]);
+    assert.equal(storyboard.references.some((item) => "generationReferenceAliases" in item), false);
+    assert.equal(
+      workbench.ui.prompt,
+      [
+        "视频角色对照表：凌羽=【@图1】的角色形象；六道傀儡=【@图1】的角色形象",
+        "视频道具对照表：旋星丸=【@图1】的道具形象",
+      ].join("\n"),
+    );
+  });
+
+  it("imports mentioned storyboard assets that are missing from the rendered reference preview", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-incomplete-reference-preview",
+      description: [
+        "视频场景对照表：茶舍方桌侧逆光=【@茶舍方桌侧逆光】",
+        "视频角色对照表：唐海西=【@唐海西】；Jack唐=@Jack唐；同框（@Jack唐）和(@唐海西)",
+        "视频道具对照表：花生酥=【@花生酥】",
+      ].join("\n"),
+      references: [
+        { role: "character", assetId: "character-tang", name: "唐海西", previewUrl: "/uploads/tang-shared-sheet.png" },
+      ],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    storyboard.generationState = {
+      ...storyboard.generationState,
+      quickReferenceItems: [{
+        id: "stale-character-sheet-reference",
+        assetId: "character-tang",
+        kind: "image",
+        name: "分镜 4 图片 1",
+        previewUrl: "/uploads/stale-unrelated.png",
+        url: "/uploads/stale-unrelated.png",
+      }],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [
+            { id: "character-tang", name: "唐海西", previewUrl: "/uploads/tang-shared-sheet.png" },
+            { id: "character-jack", name: "Jack唐", previewUrl: "/uploads/tang-shared-sheet.png" },
+          ],
+          scene: [
+            { id: "scene-teahouse", name: "茶舍方桌侧逆光", previewUrl: "/uploads/teahouse-side-light.png" },
+          ],
+          prop: [
+            { id: "prop-peanut-crisp", name: "花生酥", previewUrl: "/uploads/peanut-crisp.png" },
+          ],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.references.length, 3);
+    assert.equal(
+      workbench.ui.prompt,
+      [
+        "视频场景对照表：茶舍方桌侧逆光=【@图2】",
+        "视频角色对照表：唐海西=【@图1】的角色形象；Jack唐=【@图1】的角色形象；同框（【@图1】的角色形象）和(【@图1】的角色形象)",
+        "视频道具对照表：花生酥=【@图3】的道具形象",
+      ].join("\n"),
+    );
+  });
+
+  it("does not import storyboard assets from embedded at-sign text", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-embedded-at-sign",
+      description: "联系方式：foo@Jack唐",
+      references: [],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [
+            { id: "character-jack", name: "Jack唐", previewUrl: "/uploads/jack.png" },
+          ],
+          scene: [],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.references.length, 0);
+    assert.equal(workbench.ui.prompt, "联系方式：foo@Jack唐");
+  });
+
+  it("keeps same-name storyboard mentions bound to their scene and character asset kinds", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-cross-kind-same-name",
+      description: [
+        "视频场景对照表：故城=【@故城】",
+        "视频角色对照表：故城=【@故城】",
+      ].join("；"),
+      references: [],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [
+            { id: "character-old-city", name: "故城", previewUrl: "/uploads/old-city-character.png" },
+          ],
+          scene: [
+            { id: "scene-old-city", name: "故城", previewUrl: "/uploads/old-city-scene.png" },
+          ],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.references.map((item) => item.url), [
+      "/uploads/old-city-scene.png",
+      "/uploads/old-city-character.png",
+    ]);
+    assert.equal(
+      workbench.ui.prompt,
+      [
+        "视频场景对照表：故城=【@图1】",
+        "视频角色对照表：故城=【@图2】的角色形象",
+      ].join("；"),
+    );
+  });
+
+  it("ignores stale quick references when numbering a newly imported storyboard", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-stale-reference-numbering",
+      description: "视频角色对照表：小明=【@小明】",
+      references: [],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+      generationState: {
+        quickReferenceItems: [{
+          id: "stale-reference",
+          assetId: "stale-reference",
+          kind: "image",
+          name: "旧图片",
+          previewUrl: "/uploads/stale.png",
+          url: "/uploads/stale.png",
+        }],
+      },
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [{ id: "character-xiaoming", name: "小明", previewUrl: "/uploads/xiaoming.png" }],
+          scene: [],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.references.map((item) => item.url), ["/uploads/xiaoming.png"]);
+    assert.equal(workbench.ui.prompt, "视频角色对照表：小明=【@图1】的角色形象");
+  });
+
+  it("uses explicit image-shape suffixes to resolve bracketed and bare same-name assets", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-explicit-kind-suffix",
+      description: [
+        "镜头特写【@故城】的角色形象",
+        "补充参考：@故城的角色形象",
+      ].join("\n"),
+      references: [],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [{ id: "character-old-city", name: "故城", previewUrl: "/uploads/old-city-character.png" }],
+          scene: [{ id: "scene-old-city", name: "故城", previewUrl: "/uploads/old-city-scene.png" }],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.references.map((item) => item.url), ["/uploads/old-city-character.png"]);
+    assert.equal(
+      workbench.ui.prompt,
+      [
+        "镜头特写【@图1】的角色形象",
+        "补充参考：【@图1】的角色形象",
+      ].join("\n"),
+    );
+  });
+
+  it("recognizes quoted bare mentions and strips unresolved bare mentions when other images resolve", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-quoted-and-unresolved-bare-mentions",
+      description: "台词：“@小明！”；台词结束！@无图",
+      references: [],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        museBoardMode: "operation",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        episodeWorkbenchAttachments: [],
+        episodeWorkbenchSelectedAttachmentIds: [],
+        importedAssets: {
+          character: [{
+            id: "character-xiaoming",
+            name: "小明",
+            previewUrl: "/uploads/xiaoming.png",
+            voiceId: "voice-xiaoming",
+            voiceName: "小明音色",
+            voiceSource: "custom",
+          }, {
+            id: "character-no-image",
+            name: "无图",
+          }],
+          scene: [],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.references.map((item) => item.url), ["/uploads/xiaoming.png"]);
+    assert.equal(workbench.ui.episodeWorkbenchAttachments.length, 1);
+    assert.equal(workbench.ui.episodeWorkbenchAttachments[0]?.voiceId, "voice-xiaoming");
+    assert.equal(workbench.ui.prompt, "台词：“【@图1】！”；台词结束！无图");
+  });
+
   it("shows a non-blocking yellow warning when importing a storyboard without its own image", async () => {
     const storyboards = [{
       ...addStoryboard([])[0],
