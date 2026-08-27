@@ -4300,6 +4300,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       if (workbench.ui.episodeBatchModal.isSubmitting === true) {
         return;
       }
+      if (workbench.ui.episodeBatchModal.openField) {
+        workbench.ui.episodeBatchModal.openField = null;
+        render(workbench);
+        return;
+      }
       workbench.ui.episodeBatchModal = null;
       render(workbench);
       return;

@@ -101,10 +101,15 @@ it("keeps the nested style picker keyboard-safe above the workflow", () => {
     "utf8",
   );
   const styleEscapeIndex = source.indexOf('if (workbench.ui.episodeBatchModal?.styleModalOpen === true)');
+  const batchEscapeIndex = source.indexOf('if (workbench.ui.episodeBatchModal?.show === true)');
+  const fieldEscapeIndex = source.indexOf('if (workbench.ui.episodeBatchModal.openField)', batchEscapeIndex);
+  const batchCloseIndex = source.indexOf('workbench.ui.episodeBatchModal = null', batchEscapeIndex);
   const workflowEscapeIndex = source.indexOf("if (workbench.ui.homeProjectWorkflowProjectId)");
 
   assert.notEqual(styleEscapeIndex, -1);
   assert.ok(styleEscapeIndex < workflowEscapeIndex);
+  assert.ok(batchEscapeIndex < fieldEscapeIndex);
+  assert.ok(fieldEscapeIndex < batchCloseIndex);
   assert.match(source, /episodeBatchModal\.isSubmitting === true[\s\S]*return;/);
   assert.match(source, /event\.key === "Tab"[\s\S]*trapEpisodeBatchStylePickerFocus\(workbench, event\)/);
   assert.match(source, /focusEpisodeBatchStylePicker\(workbench\)/);
