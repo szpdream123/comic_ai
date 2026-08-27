@@ -11,6 +11,165 @@ import {
   serializePromptEditorDocument,
 } from "../src/features/production-workbench/prompt-editor-document.js";
 import { renderPromptDock } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
+import {
+  EPISODE_PROMPT_PLACEHOLDER,
+  buildEpisodePromptPlaceholderFrames,
+  installEpisodePromptPlaceholderAnimation,
+} from "../src/features/production-workbench/episode-prompt-placeholder.js";
+
+function createAnimatedPlaceholderHarness() {
+  let empty = true;
+  let nextTimeoutId = 1;
+  const scheduled = new Map();
+  const mediaQueries = new Map();
+  const observers = [];
+  const documentListeners = new Map();
+  const hostListeners = new Map();
+
+  const createClassList = () => {
+    const values = new Set();
+    return {
+      add: (...names) => names.forEach((name) => values.add(name)),
+      contains: (name) => values.has(name),
+      remove: (...names) => names.forEach((name) => values.delete(name)),
+      toggle(name, enabled) {
+        if (enabled) {
+          values.add(name);
+        } else {
+          values.delete(name);
+        }
+      },
+    };
+  };
+  const createElement = () => ({
+    attributes: new Map(),
+    children: [],
+    classList: createClassList(),
+    removed: false,
+    append(child) {
+      this.children.push(child);
+    },
+    remove() {
+      this.removed = true;
+    },
+    setAttribute(name, value) {
+      this.attributes.set(name, value);
+    },
+    textContent: "",
+  });
+  const mediaQuery = (query) => {
+    if (!mediaQueries.has(query)) {
+      const listeners = new Set();
+      mediaQueries.set(query, {
+        listeners,
+        matches: false,
+        addEventListener(_event, listener) {
+          listeners.add(listener);
+        },
+        removeEventListener(_event, listener) {
+          listeners.delete(listener);
+        },
+        emit() {
+          listeners.forEach((listener) => listener());
+        },
+      });
+    }
+    return mediaQueries.get(query);
+  };
+  const view = {
+    clearTimeout(timeoutId) {
+      scheduled.delete(timeoutId);
+    },
+    matchMedia: mediaQuery,
+    MutationObserver: class {
+      constructor(callback) {
+        this.callback = callback;
+        this.disconnected = false;
+        this.observedOptions = null;
+        this.observedTarget = null;
+        observers.push(this);
+      }
+      disconnect() {
+        this.disconnected = true;
+      }
+      observe(target, options) {
+        this.observedTarget = target;
+        this.observedOptions = options;
+      }
+    },
+    setTimeout(callback, delay) {
+      const timeoutId = nextTimeoutId;
+      nextTimeoutId += 1;
+      scheduled.set(timeoutId, { callback, delay });
+      return timeoutId;
+    },
+  };
+  const ownerDocument = {
+    createElement,
+    defaultView: view,
+    visibilityState: "visible",
+    addEventListener(event, listener) {
+      documentListeners.set(event, listener);
+    },
+    removeEventListener(event, listener) {
+      if (documentListeners.get(event) === listener) {
+        documentListeners.delete(event);
+      }
+    },
+  };
+  const editorContent = {
+    attributes: new Map(),
+    querySelector: () => (empty ? {} : null),
+    setAttribute(name, value) {
+      this.attributes.set(name, value);
+    },
+  };
+  const editorHost = {
+    children: [],
+    ownerDocument,
+    append(child) {
+      this.children.push(child);
+    },
+    addEventListener(event, listener) {
+      hostListeners.set(event, listener);
+    },
+    querySelector: () => editorContent,
+    removeEventListener(event, listener) {
+      if (hostListeners.get(event) === listener) {
+        hostListeners.delete(event);
+      }
+    },
+  };
+
+  return {
+    editorHost,
+    editorContent,
+    mediaQuery,
+    observer: () => observers[0],
+    pending: () => [...scheduled.values()],
+    runNext() {
+      const [timeoutId, timeout] = scheduled.entries().next().value ?? [];
+      assert.ok(timeout, "expected an animation timer");
+      scheduled.delete(timeoutId);
+      timeout.callback();
+      return timeout.delay;
+    },
+    setEmpty(value) {
+      empty = value;
+      assert.equal(observers[0].observedTarget, editorContent);
+      observers[0].callback();
+    },
+    setVisible(value) {
+      ownerDocument.visibilityState = value ? "visible" : "hidden";
+      documentListeners.get("visibilitychange")?.();
+    },
+    focusEditor() {
+      hostListeners.get("focusin")?.();
+    },
+    hostListeners,
+    visibilityListeners: documentListeners,
+  };
+}
 
 test("prompt editor preserves legacy mention tokens through the structured document", () => {
   const prompt = "镜头缓慢推进【@图1】，角色转身。\n保持暖色逆光。";
@@ -170,9 +329,121 @@ test("prompt dock renders the structured editor host with a textarea fallback", 
   });
 
   assert.match(html, /class="episode-prompt-editor-host" data-prompt-editor/);
-  assert.match(html, /<textarea id="video-prompt-input" placeholder="请输入您的生图要求">镜头推进【@图1】<\/textarea>/);
+  assert.match(html, /<textarea id="video-prompt-input" placeholder="先上传参考图，输入你的想法，再用@引用素材">镜头推进【@图1】<\/textarea>/);
   assert.match(html, /data-prompt-character-count>9 \/ 5000/);
   assert.doesNotMatch(html, /episode-replica-mention-strip/);
+});
+
+test("prompt dock types the full empty-editor guidance one character at a time in a loop", () => {
+  const html = renderPromptDock({
+    busy: false,
+    generationControls: {},
+    generationUiState: {},
+    mediaMode: "image",
+    prompt: "",
+  });
+
+  assert.match(html, /class="episode-prompt-editor-host" data-prompt-editor data-animated-placeholder/);
+  assert.match(html, /placeholder="先上传参考图，输入你的想法，再用@引用素材"/);
+
+  const frames = buildEpisodePromptPlaceholderFrames();
+  assert.equal(frames.length, [...EPISODE_PROMPT_PLACEHOLDER].length);
+  assert.equal(frames[0], "先");
+  assert.equal(frames[1], "先上");
+  assert.equal(frames.at(-1), EPISODE_PROMPT_PLACEHOLDER);
+  frames.forEach((frame, index) => {
+    assert.equal([...frame].length, index + 1);
+  });
+
+  const harness = createAnimatedPlaceholderHarness();
+  const stop = installEpisodePromptPlaceholderAnimation(
+    harness.editorHost,
+    EPISODE_PROMPT_PLACEHOLDER,
+  );
+  const placeholder = harness.editorHost.children[0];
+  const visibleCharacters = () => placeholder.children.filter(
+    (character) => character.classList.contains("is-visible"),
+  );
+
+  assert.equal(placeholder.classList.contains("is-active"), true);
+  assert.equal(harness.editorContent.attributes.get("aria-placeholder"), EPISODE_PROMPT_PLACEHOLDER);
+  assert.equal(harness.observer().observedTarget, harness.editorContent);
+  assert.deepEqual(harness.observer().observedOptions, {
+    attributeFilter: ["class"],
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+  assert.equal(harness.pending()[0].delay, 450);
+  assert.equal(harness.runNext(), 450);
+  assert.equal(visibleCharacters().map((character) => character.textContent).join(""), "先");
+  assert.equal(harness.pending()[0].delay, 300);
+  for (let index = 1; index < frames.length; index += 1) {
+    harness.runNext();
+  }
+  assert.equal(visibleCharacters().map((character) => character.textContent).join(""), EPISODE_PROMPT_PLACEHOLDER);
+  assert.equal(harness.pending()[0].delay, 1600);
+  assert.equal(harness.runNext(), 1600);
+  assert.equal(visibleCharacters().length, 0);
+  assert.equal(harness.pending()[0].delay, 650);
+  assert.equal(harness.runNext(), 650);
+  assert.equal(visibleCharacters()[0].textContent, "先");
+
+  harness.setEmpty(false);
+  assert.equal(placeholder.classList.contains("is-active"), false);
+  assert.equal(visibleCharacters().length, 0);
+  assert.equal(harness.pending().length, 0);
+  harness.setEmpty(true);
+  assert.equal(placeholder.classList.contains("is-active"), true);
+  assert.equal(harness.pending()[0].delay, 450);
+
+  const reducedMotion = harness.mediaQuery("(prefers-reduced-motion: reduce)");
+  reducedMotion.matches = true;
+  reducedMotion.emit();
+  assert.equal(visibleCharacters().length, frames.length);
+  assert.equal(harness.pending().length, 0);
+  reducedMotion.matches = false;
+  reducedMotion.emit();
+  assert.equal(visibleCharacters().length, 0);
+  assert.equal(harness.pending()[0].delay, 450);
+
+  harness.setVisible(false);
+  assert.equal(harness.pending().length, 0);
+  assert.equal(visibleCharacters().length, 0);
+  harness.setVisible(true);
+  assert.equal(harness.pending()[0].delay, 450);
+
+  harness.focusEditor();
+  assert.equal(visibleCharacters().length, frames.length);
+  assert.equal(harness.pending().length, 0);
+
+  stop();
+  stop();
+  assert.equal(placeholder.removed, true);
+  assert.equal(harness.observer().disconnected, true);
+  assert.equal(reducedMotion.listeners.size, 0);
+  assert.equal(harness.hostListeners.size, 0);
+  assert.equal(harness.visibilityListeners.size, 0);
+  assert.equal(harness.pending().length, 0);
+
+  let removedFallbackAttribute = "";
+  const stopFallback = installEpisodePromptPlaceholderAnimation({
+    ownerDocument: { defaultView: {} },
+    querySelector: () => ({}),
+    removeAttribute(name) {
+      removedFallbackAttribute = name;
+    },
+  }, EPISODE_PROMPT_PLACEHOLDER);
+  stopFallback();
+  assert.equal(removedFallbackAttribute, "data-animated-placeholder");
+
+  const stylesheet = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(stylesheet, /episode-prompt-animated-placeholder > span \{[\s\S]*?opacity:\s*0;[\s\S]*?transition:\s*opacity 240ms ease/);
+  assert.match(stylesheet, /episode-prompt-animated-placeholder > span\.is-visible \{[\s\S]*?opacity:\s*1/);
+  assert.match(stylesheet, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?episode-prompt-animated-placeholder > span[\s\S]*?transition:\s*none/);
 });
 
 test("prompt editor opens mentions at any cursor position and portals the menu outside page zoom", () => {

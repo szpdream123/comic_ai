@@ -47537,6 +47537,49 @@ button.asset-generator-task-preview:focus-visible {
   pointer-events: none;
 }
 
+.episode-prompt-editor-host[data-animated-placeholder] {
+  position: relative;
+}
+
+.episode-prompt-editor-host[data-animated-placeholder] .episode-prompt-editor-content p.is-editor-empty:first-child::before {
+  content: "";
+}
+
+.episode-prompt-animated-placeholder {
+  position: absolute;
+  top: 1.2rem;
+  right: 1rem;
+  left: 1rem;
+  z-index: 1;
+  display: none;
+  color: rgba(173, 183, 198, 0.72);
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.episode-prompt-animated-placeholder.is-active {
+  display: block;
+}
+
+.episode-prompt-animated-placeholder > span {
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+
+.episode-prompt-animated-placeholder > span.is-visible {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .episode-prompt-animated-placeholder > span {
+    transition: none;
+  }
+}
+
 .episode-prompt-editor-mention {
   box-sizing: border-box;
   display: inline-flex;

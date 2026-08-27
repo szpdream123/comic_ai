@@ -6,6 +6,7 @@ import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 import { renderSelectionPickerModal, syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
+import { EPISODE_PROMPT_PLACEHOLDER } from "./episode-prompt-placeholder.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
@@ -3275,8 +3276,8 @@ export function renderPromptDock({
       }
       <div class="episode-replica-textarea ${hasPromptAttachmentTray ? "has-inline-attachments" : ""}">
         ${hasPromptAttachmentTray ? promptAttachmentTray : ""}
-        <div class="episode-prompt-editor-host" data-prompt-editor>
-          <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
+        <div class="episode-prompt-editor-host" data-prompt-editor data-animated-placeholder>
+          <textarea id="video-prompt-input" placeholder="${EPISODE_PROMPT_PLACEHOLDER}">${escapeHtml(promptValue)}</textarea>
         </div>
         <em data-prompt-character-count>${[...promptValue].length} / 5000</em>
       </div>
