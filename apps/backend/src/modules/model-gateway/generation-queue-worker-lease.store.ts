@@ -32,3 +32,40 @@ export async function releaseGenerationQueueWorkerLeases(
   );
   return row?.released_count ?? 0;
 }
+
+export async function markGenerationQueueWorkerReady(
+  db: SqlDatabase,
+  input: { ownerId: string; queueName: string },
+) {
+  const row = await queryOne<{ marked: boolean }>(
+    db,
+    `
+      UPDATE generation_queue_worker_leases
+      SET worker_ready_at = clock_timestamp()
+      WHERE queue_name = $1
+        AND owner_id = $2
+        AND lease_until > clock_timestamp()
+      RETURNING true AS marked
+    `,
+    [input.queueName, input.ownerId],
+  );
+  return row?.marked === true;
+}
+
+export async function markGenerationQueueWorkerNotReady(
+  db: SqlDatabase,
+  input: { ownerId: string; queueName: string },
+) {
+  const row = await queryOne<{ marked: boolean }>(
+    db,
+    `
+      UPDATE generation_queue_worker_leases
+      SET worker_ready_at = NULL
+      WHERE queue_name = $1
+        AND owner_id = $2
+      RETURNING true AS marked
+    `,
+    [input.queueName, input.ownerId],
+  );
+  return row?.marked === true;
+}

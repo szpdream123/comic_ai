@@ -202,9 +202,9 @@ export function loadGenerationQueueConfig(
       image: {
         concurrency: submitImageConcurrency,
         limiter: {
-          max: parsePositiveInteger(
+          max: parseNonNegativeInteger(
             env.GENERATION_SUBMIT_IMAGE_RATE_LIMIT_MAX,
-            submitImageConcurrency,
+            0,
             10_000,
           ),
           durationMs: parsePositiveInteger(
@@ -218,9 +218,9 @@ export function loadGenerationQueueConfig(
       video: {
         concurrency: submitVideoConcurrency,
         limiter: {
-          max: parsePositiveInteger(
+          max: parseNonNegativeInteger(
             env.GENERATION_SUBMIT_VIDEO_RATE_LIMIT_MAX,
-            submitVideoConcurrency,
+            0,
             10_000,
           ),
           durationMs: parsePositiveInteger(

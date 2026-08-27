@@ -74,6 +74,9 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /markGenerationQueueStagePublished/);
     assert.doesNotMatch(launcherScript, /runGenerationAssignedJob/);
     assert.match(launcherScript, /reconcileGenerationQueueWorkerLeases/);
+    assert.match(launcherScript, /markGenerationQueueWorkerReady/);
+    assert.match(launcherScript, /markGenerationQueueWorkerNotReady/);
+    assert.match(launcherScript, /worker\.on\("ready", markWorkerReady\)/);
     assert.match(
       launcherScript,
       /config\.workerEnvironment === "production"[\s\S]*reconcileGenerationQueueWorkerLeases[\s\S]*prioritizedQueueNames\.slice/,

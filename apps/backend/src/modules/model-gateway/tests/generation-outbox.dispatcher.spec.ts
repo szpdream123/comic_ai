@@ -254,6 +254,40 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     assert.equal(taskFailureCalled, false);
   });
 
+  it("retries production delivery when a leased queue worker is not ready", async () => {
+    const event = generationOutboxEvent(
+      "90000000-0000-4000-8000-000000000024",
+      "50000000-0000-4000-8000-000000000024",
+    );
+    let published = false;
+    let failureMessage = "";
+    const db = {
+      async query(sql: string, params?: unknown[]) {
+        assert.deepEqual(params, ["generation-submit-image"]);
+        return { rows: [{ matched: !sql.includes("worker_ready_at IS NOT NULL") }] };
+      },
+    };
+
+    const result = await dispatchClaimedGenerationOutboxEvents(db as never, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [event],
+      config: loadGenerationQueueConfig({ WORKER_ENVIRONMENT: "production" }),
+      publisher: { async add() {} },
+    }, {
+      async publish() {
+        published = true;
+      },
+      async markFailed(_db, input) {
+        failureMessage = input.errorMessage;
+        return event;
+      },
+    });
+
+    assert.equal(published, false);
+    assert.equal(failureMessage, "generation_queue_worker_unavailable:generation-submit-image");
+    assert.deepEqual(result, { processedEventIds: [], failedEventIds: [event.id] });
+  });
+
   it("bounds concurrent BullMQ publishes while preserving claimed event order", async () => {
     const startedTaskIds: string[] = [];
     const publishResolvers: Array<() => void> = [];
