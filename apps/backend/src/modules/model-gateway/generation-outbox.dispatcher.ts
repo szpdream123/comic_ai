@@ -1,4 +1,5 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { queryOne } from "../shared/db/sql.ts";
 import {
   claimOutboxEventsForDispatch,
   markOutboxEventFailed,
@@ -108,6 +109,17 @@ export async function dispatchClaimedGenerationOutboxEvents(
       const routedEvent = await routeGenerationOutboxEvent(db, event, input);
       console.log(`[generation-outbox] Routed event, queueAssignmentKey: ${readString(routedEvent.payload.queueAssignmentKey) || 'none'}`);
 
+      // In production a shard queue is only consumable while a worker lease
+      // is held for it. Do not mark the outbox event processed when a stale
+      // shard assignment points at a queue with no live worker; leave it
+      // retryable so a later scan can route it to an owned shard.
+      if (input.config.workerEnvironment === "production") {
+        const queueName = readString(routedEvent.payload.queueName);
+        if (queueName && !(await hasLiveGenerationQueueWorkerLease(db, queueName, input.now))) {
+          throw new Error(`generation_queue_worker_unavailable:${queueName}`);
+        }
+      }
+
       await publish(routedEvent, {
         config: input.config,
         publisher: input.publisher,
@@ -155,6 +167,20 @@ export async function dispatchClaimedGenerationOutboxEvents(
       .filter((outcome) => outcome.status === "failed")
       .map((outcome) => outcome.eventId),
   };
+}
+
+async function hasLiveGenerationQueueWorkerLease(db: SqlDatabase, queueName: string, now: Date) {
+  const row = await queryOne<{ matched: boolean }>(
+    db,
+    `SELECT EXISTS (
+       SELECT 1
+       FROM generation_queue_worker_leases
+       WHERE queue_name = $1
+         AND lease_until > $2
+     ) AS matched`,
+    [queueName, now],
+  );
+  return row?.matched === true;
 }
 
 async function routeGenerationOutboxEvent(

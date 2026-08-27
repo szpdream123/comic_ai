@@ -1200,6 +1200,8 @@ test("home tv uses a six-column responsive grid and scroll sentinel for incremen
   });
   assert.match(html, /推荐视频 6/);
   assert.doesNotMatch(html, /推荐视频 7/);
+  assert.match(html, /<img src="\/cover-1\.png"[^>]*loading="lazy"/);
+  assert.doesNotMatch(html, /<img data-deferred-src="\/cover-1\.png"/);
   assert.match(html, /data-home-tv-load-more-sentinel/);
   assert.match(html, /data-home-tv-total="7"/);
   assert.doesNotMatch(html, /toggle-home-tv-expanded/);
