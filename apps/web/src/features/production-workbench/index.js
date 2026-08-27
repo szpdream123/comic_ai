@@ -51,6 +51,10 @@ import {
   mergeGenerationTaskCenterState,
 } from "./episode-workbench-rebuilt.js?video-category=2&storyboard-style-picker=1";
 import {
+  EPISODE_PROMPT_PLACEHOLDER,
+  installEpisodePromptPlaceholderAnimation,
+} from "./episode-prompt-placeholder.js";
+import {
   isStoryboardPromptClearedForSelection,
   resolveEpisodeWorkbenchPrompt,
   resolveStoryboardPromptForMode,
@@ -12382,11 +12386,20 @@ async function syncEpisodePromptEditor(workbench, options = {}) {
           });
         }
       },
-      placeholder: "请输入您的生图要求，输入 @ 引用素材",
+      placeholder: EPISODE_PROMPT_PLACEHOLDER,
       prompt,
       restoreState: options.restoreState ?? null,
       getSuggestions: () => buildPromptEditorSuggestions(workbench),
     });
+    const stopPlaceholderAnimation = installEpisodePromptPlaceholderAnimation(
+      editorHost,
+      EPISODE_PROMPT_PLACEHOLDER,
+    );
+    const destroyPromptEditor = handle.destroy.bind(handle);
+    handle.destroy = () => {
+      stopPlaceholderAnimation();
+      destroyPromptEditor();
+    };
     editorHost.dataset.promptEditorStatus = "ready";
     workbench.promptEditorMount = { element: editorHost, handle };
   } catch (error) {
