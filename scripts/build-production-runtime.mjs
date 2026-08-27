@@ -14,7 +14,6 @@ const runtimeEntrySources = {
   generationWorker: join("scripts", "run-generation-video-worker.mjs"),
   canvasAgent: join("scripts", "run-canvas-agent-worker.mjs"),
   mediaCrawler: join("scripts", "run-media-crawler-api.mjs"),
-  marketingCompetitorCollection: join("scripts", "run-marketing-competitor-collection-worker.mjs"),
 };
 
 export async function buildProductionRuntime({ cwd = process.cwd() } = {}) {

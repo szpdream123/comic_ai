@@ -78,6 +78,11 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
     displayMessage: "参考素材数量超出模型限制。",
     retryable: false,
   },
+  model_reference_media_required: {
+    code: "model_reference_media_required",
+    displayMessage: "模型需要上传至少一个参考素材，请上传后重试。",
+    retryable: false,
+  },
   model_reference_not_found: {
     code: "model_reference_not_found",
     displayMessage: "参考素材不存在或无权访问。",
@@ -96,6 +101,16 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
   model_reference_too_large: {
     code: "model_reference_too_large",
     displayMessage: "参考素材不可大于20M",
+    retryable: false,
+  },
+  model_real_person_detected: {
+    code: "model_real_person_detected",
+    displayMessage: "素材包含真人信息，请修改后再试",
+    retryable: false,
+  },
+  model_service_overloaded: {
+    code: "model_service_overloaded",
+    displayMessage: "模型负载过高，请更换模型再试",
     retryable: false,
   },
   model_prompt_too_long: {
@@ -239,6 +254,18 @@ const modelErrorRules: readonly ModelErrorRule[] = [
     pattern: /image_provider_reference_too_large|file\s+size\s+exceeds?\s+(?:the\s+)?maximum\s+allowed\s+size|maximum\s+allowed\s+size\s+of\s+\d+\s*bytes|file\s+too\s+large|文件大小.*(?:超过|超出)|参考素材.*(?:过大|超限)/i,
   },
   {
+    code: "model_reference_media_required",
+    displayMessage: "模型需要上传至少一个参考素材，请上传后重试。",
+    retryable: false,
+    pattern: /requires?\s+(?:(?:at\s+least\s+)?(?:one|1)\s+)?(?:a\s+)?media\b|media\s+(?:is\s+)?required|参考素材.*(?:至少|需要).*(?:上传|提供)/i,
+  },
+  {
+    code: "model_real_person_detected",
+    displayMessage: "素材包含真人信息，请修改后再试",
+    retryable: false,
+    pattern: /may contain (?:a |an )?real person|real person detected|真人信息/i,
+  },
+  {
     code: "model_content_policy_rejected",
     displayMessage: "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。",
     retryable: false,
@@ -297,6 +324,12 @@ const modelErrorRules: readonly ModelErrorRule[] = [
     displayMessage: "模型服务结果已不存在，系统已停止继续轮询，请重新发起生成。",
     retryable: false,
     pattern: /ResourceNotFound|specified resource.*not found|task.*not found/i,
+  },
+  {
+    code: "model_service_overloaded",
+    displayMessage: "模型负载过高，请更换模型再试",
+    retryable: false,
+    pattern: /system\s+under\s+load|under\s+load|model\s+overloaded/i,
   },
   {
     code: "model_service_unavailable",

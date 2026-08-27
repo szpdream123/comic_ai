@@ -1078,7 +1078,6 @@ test("panel account settings renders as a right drawer with profile and security
         notifications: {
           projectUpdates: true,
           renderComplete: true,
-          marketing: false,
         },
       },
     },

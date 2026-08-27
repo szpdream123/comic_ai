@@ -41,7 +41,6 @@
     "check:user-scope-zero-refs": "node scripts/check-user-scope-zero-refs.mjs",
     "admin:qa": "node scripts/admin-browser-qa.mjs",
     "test:admin:ui": "node --test apps/admin/index.test.mjs",
-    "test:marketing:qianfan-interop": "node --import tsx scripts/verify-marketing-qianfan-connector.mjs",
     "test:admin:http": "node scripts/run-tests.mjs apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts",
     "test:admin:http:auth": "node scripts/run-tests.mjs apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts -- --test-name-pattern \"admin shell|admin login|sessions|profile|password\"",
     "smoke:text-gateway": "node --import tsx scripts/run-text-model-gateway-smoke.mjs",
@@ -52,11 +51,7 @@
     "worker:generation-repair": "node --import tsx scripts/run-generation-queue-maintenance.mjs",
     "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs",
     "worker:canvas-agent": "node --import tsx scripts/run-canvas-agent-worker.mjs",
-    "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs",
-    "worker:marketing-maintenance": "node --import tsx scripts/run-marketing-maintenance.mjs",
-    "worker:marketing-agent": "node --import tsx scripts/run-marketing-agent-worker.mjs",
-    "worker:marketing-generation": "node --import tsx scripts/run-marketing-generation-worker.mjs",
-    "worker:marketing-competitor-collection": "node --import tsx scripts/run-marketing-competitor-collection-worker.mjs"
+    "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs"
   },
   "dependencies": {
     "@antv/x6": "^3.1.7",

@@ -47,6 +47,7 @@ interface PromptSkillListRow {
   prompt_category: PromptMarketplaceCategory;
   name: string;
   summary: string;
+  prompt_content: string | null;
   cover_image_url: string | null;
   cover_storage_object_id: string | null;
   price_credits: number | string;
@@ -353,6 +354,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
           item.prompt_category,
           item.name,
           item.summary,
+          item.prompt_content,
           item.cover_image_url,
           item.cover_storage_object_id,
           item.price_credits,
@@ -451,6 +453,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
           item.prompt_category,
           item.name,
           item.summary,
+          item.prompt_content,
           item.cover_image_url,
           item.cover_storage_object_id,
           item.price_credits,
@@ -1208,7 +1211,7 @@ function promptSkillListResponse(input: {
 function promptSkillListItemFromRow(row: PromptSkillListRow) {
   const owned = row.user_relation_type === "owner";
   const purchased = row.user_relation_type === "added";
-  return {
+  const item = {
     id: row.id,
     title: row.name,
     category: row.prompt_category,
@@ -1227,6 +1230,21 @@ function promptSkillListItemFromRow(row: PromptSkillListRow) {
     publishedAt: dateString(row.published_at),
     updatedAt: dateString(row.updated_at),
   };
+  // Image-style skills are composed into generation prompts on the client.
+  // Keep other skill categories content-free, and only expose private content
+  // after the current user owns or has added the skill.
+  if (
+    row.prompt_category === "image_style" &&
+    (row.is_official || owned || purchased) &&
+    String(row.prompt_content ?? "").trim()
+  ) {
+    return {
+      ...item,
+      prompt_content: row.prompt_content,
+      promptContent: row.prompt_content,
+    };
+  }
+  return item;
 }
 
 function promptSkillKeyword(value: unknown) {

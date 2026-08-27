@@ -33,7 +33,6 @@ const listening = isProjectProcess(listenerProcess, process.cwd(), "phone-auth-d
 const children = alive ? listWindowsChildProcesses(pid) : [];
 const expectedServices = [
   "run-phone-auth-dev-server.mjs",
-  "run-marketing-competitor-collection-worker.mjs",
 ];
 if (isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true")) {
   expectedServices.push("run-media-crawler-api.mjs");

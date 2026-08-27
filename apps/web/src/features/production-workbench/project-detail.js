@@ -312,8 +312,6 @@ function resolveStorageObjectThumbnailUrl(asset, fallback = "") {
     asset?.previewImageStorageObjectId,
     asset?.latestVersion?.storageObjectId,
     asset?.latestVersion?.fixedImageStorageObjectId,
-    asset?.latestVersion?.metadata?.storageObjectId,
-    asset?.latestVersion?.metadata?.fixedImageStorageObjectId,
   ]
     .map((value) => String(value ?? "").trim())
     .find((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
@@ -2586,7 +2584,6 @@ function normalizeAccountSettingsForm(form = {}, session = {}, membershipStatus 
     notifications: {
       projectUpdates: notifications.projectUpdates !== false,
       renderComplete: notifications.renderComplete !== false,
-      marketing: notifications.marketing === true,
     },
     planLabel: resolveMembershipPlanLabel(membershipStatus),
   };
@@ -3393,8 +3390,6 @@ function resolveEpisodeAssetPreviewUrl(asset) {
     asset?.storageObjectId ??
     asset?.latestVersion?.fixedImageStorageObjectId ??
     asset?.latestVersion?.storageObjectId ??
-    asset?.metadata?.storageObjectId ??
-    asset?.latestVersion?.metadata?.storageObjectId ??
     "",
   ).trim();
   if (storageObjectId) {

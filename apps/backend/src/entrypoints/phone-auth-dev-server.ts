@@ -23,7 +23,6 @@ import {
   type AdminPermission,
 } from "../modules/admin-auth/admin-auth.service.ts";
 import { createAdminHttpAuth } from "../modules/admin-auth/admin-http-auth.ts";
-import { routeMarketingHttpRequest } from "../modules/marketing/http/marketing-http.ts";
 import { createAdminDashboardService } from "../modules/admin-dashboard/admin-dashboard.service.ts";
 import { createAdminModelConfigService } from "../modules/admin-models/admin-model-config.service.ts";
 import type { CanvasAgentModelCompatibilityProbeResult } from "../modules/canvas-agent/canvas-agent-model-compatibility-probe.service.ts";
@@ -162,6 +161,10 @@ import {
   type AuthenticatedUser,
   userAuthCacheWrite,
 } from "../modules/identity/user-auth.service.ts";
+import {
+  ComicAiIntegrationHmacError,
+  verifyComicAiIntegrationHmac,
+} from "../modules/integrations/comic-ai-integration-hmac.ts";
 import {
   rememberRequestAuthenticatedUser,
   runWithUserAuthRequestContext,
@@ -6843,6 +6846,72 @@ async function mapGenerationTaskResponse(
   };
 }
 
+async function mapMoneyPrinterGenerationResponse(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    task: Record<string, unknown>;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    request: IncomingMessage;
+    now: Date;
+  },
+) {
+  const task = input.task;
+  const rawStatus = readString(task.status).toLowerCase();
+  const status = rawStatus === "completed" || rawStatus === "succeeded"
+    ? "succeeded"
+    : ["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(rawStatus)
+      ? "failed"
+      : rawStatus === "running" || rawStatus === "processing"
+        ? "running"
+        : "queued";
+  const result = readJsonRecord(task.result);
+  const failure = readJsonRecord(task.failure);
+  let videoUrl = readString(result.videoUrl) ||
+    readString(result.sourceUrl) ||
+    readString(result.downloadUrl) ||
+    readString(result.url);
+  const storageObjectId = readString(result.storageObjectId);
+  if (storageObjectId) {
+    try {
+      const signed = await buildSignedObjectUrls(db, {
+        sessionToken: input.sessionToken,
+        storageObjectId,
+        adapter: input.runtime.adapter,
+        now: input.now,
+        expiresInSeconds: input.signedUrlExpiresInSeconds,
+        publicBaseUrl: input.runtime.publicBaseUrl,
+        region: input.runtime.region,
+      });
+      videoUrl = signed.downloadUrl;
+    } catch {
+      // The task response can still contain a provider URL or a local relative
+      // URL; keep that information available to the caller if signing fails.
+    }
+  }
+  if (videoUrl && !/^https?:\/\//i.test(videoUrl)) {
+    videoUrl = new URL(videoUrl, resolveRequestOrigin(input.request)).toString();
+  }
+  const failureMessage = readString(failure.displayMessage) ||
+    readString(failure.providerMessage) ||
+    readString(failure.errorMessage) ||
+    readString(failure.message) ||
+    readString(task.failureCode);
+  return {
+    taskId: readString(task.taskId),
+    status,
+    model: readString(task.model),
+    progressPercent: Number.isFinite(Number(task.progressPercent)) ? Number(task.progressPercent) : null,
+    ...(status === "succeeded" && videoUrl ? { videoUrl } : {}),
+    ...(status === "failed" ? {
+      error: failureMessage || "Comic AI video generation failed",
+      failure,
+      failureCode: readString(task.failureCode) || readString(failure.failureCode) || null,
+    } : {}),
+  };
+}
+
 function generationArtifactRecoveryProjection(
   value: unknown,
   providerSucceeded: boolean,
@@ -8505,9 +8574,12 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     model_task_mode_unsupported: "\u5f53\u524d\u6a21\u578b\u4e0d\u652f\u6301\u8fd9\u4e2a\u751f\u6210\u6a21\u5f0f\u3002",
     model_media_type_mismatch: "\u5f53\u524d\u6a21\u578b\u5a92\u4f53\u7c7b\u578b\u4e0e\u8bf7\u6c42\u4e0d\u5339\u914d\u3002",
     model_reference_limit_exceeded: "\u53c2\u8003\u7d20\u6750\u6570\u91cf\u8d85\u8fc7\u6a21\u578b\u9650\u5236\u3002",
+    model_reference_media_required: "模型需要上传至少一个参考素材，请上传后重试。",
     model_reference_not_found: "\u53c2\u8003\u7d20\u6750\u4e0d\u5b58\u5728\u6216\u65e0\u6743\u8bbf\u95ee\u3002",
     model_reference_unavailable: "\u53c2\u8003\u7d20\u6750\u8fd8\u672a\u51c6\u5907\u597d\u3002",
     model_reference_mime_not_allowed: "\u53c2\u8003\u7d20\u6750\u683c\u5f0f\u4e0d\u53d7\u6a21\u578b\u652f\u6301\u3002",
+    model_real_person_detected: "素材包含真人信息，请修改后再试",
+    model_service_overloaded: "模型负载过高，请更换模型再试",
     model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
     insufficient_credits: "积分余额不足，请充值。",
   };
@@ -10731,6 +10803,9 @@ async function createGenerationTask(
     : {};
   const requestHost = input.request ? extractRequestHost(input.request) : undefined;
   const workerEnvironment = resolveWorkerIsolationConfig(input.env).workerEnvironment;
+  const requestPrompt = input.kind === "video"
+    ? (resolvedBody.prompt ?? resolvedBody.promptOverride ?? resolvedBody.motionPrompt ?? resolvedBody.text ?? "")
+    : (resolvedBody.text ?? resolvedBody.prompt ?? resolvedBody.promptOverride ?? resolvedBody.motionPrompt ?? "");
   const requestSnapshot = {
     kind: input.kind,
     episodeId,
@@ -10741,7 +10816,7 @@ async function createGenerationTask(
     projectAssetName: readString(resolvedBody.projectAssetName) ?? null,
     assetType: readString(resolvedBody.assetType) ?? null,
     sourceSurface: readString(resolvedBody.sourceSurface) ?? null,
-    prompt: String(resolvedBody.text ?? resolvedBody.prompt ?? resolvedBody.promptOverride ?? resolvedBody.motionPrompt ?? ""),
+    prompt: String(requestPrompt),
     text: input.kind === "audio" ? String(resolvedBody.text ?? resolvedBody.prompt ?? "") : undefined,
     model: requestedModelCode,
     referenceAssetVersionIds,
@@ -10818,7 +10893,10 @@ async function createGenerationTask(
       ? requestSnapshot.targetType
       : requestSnapshot.targetType === "canvas" ? "canvas" : "episode";
   const targetEntityId = resolvedSnapshotTargetId;
-  const activeVideoTask = input.kind === "video"
+  // Storyboard/shot generation supports concurrent attempts so users can
+  // submit a new variation while an earlier one is still rendering. Keep the
+  // existing single-flight guard for episode-level video requests.
+  const activeVideoTask = input.kind === "video" && targetEntityType !== "shot"
     ? await queryOne<{ id: string; team_member_id: string | null }>(
         db,
         `
@@ -12491,6 +12569,45 @@ function appendImageStylePromptForGeneration(
     return promptLines.join("\n");
   }
   return [prompt, formattedStyle].filter(Boolean).join("\n");
+}
+
+async function resolveVideoGenerationStyleBody(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+  body: Record<string, unknown>,
+) {
+  const styleSkillId = readString(body.imageStyleSkillId);
+  const styleCode = readString(body.imageStyleCode);
+  let styleContent = "";
+  try {
+    if (styleSkillId && isUuid(styleSkillId)) {
+      const skill = await createPromptMarketplaceService({ db }).resolveWorkflowPromptSkill({
+        userId,
+        itemId: styleSkillId,
+        category: "image_style",
+        now: new Date(),
+      });
+      styleContent = String(skill.content ?? "").trim();
+    } else if (styleCode) {
+      const styles = await createAdminImagePromptService({ db }).listStyles({ status: "enabled", pageSize: 500 });
+      const style = styles.data.find((item) => String(item.code ?? item.id ?? "").trim() === styleCode);
+      styleContent = String(style?.prompt_content ?? style?.promptContent ?? "").trim();
+    }
+  } catch {
+    return body;
+  }
+  if (!styleContent) return body;
+  const sourcePrompt = String(body.prompt ?? body.motionPrompt ?? body.promptOverride ?? "").trim();
+  if (!sourcePrompt) return body;
+  const promptLines = sourcePrompt
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*视频风格：/u.test(line) && line.trim() !== styleContent);
+  const finalPrompt = [...promptLines, `视频风格：${styleContent}`].filter(Boolean).join("\n");
+  return {
+    ...body,
+    prompt: finalPrompt,
+    ...(body.motionPrompt === undefined ? {} : { motionPrompt: finalPrompt }),
+  };
 }
 
 async function createUnifiedImageGenerationTask(
@@ -19514,6 +19631,87 @@ export function createPhoneAuthDevServer(
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
   const authSessionCache = options.authSessionCache ?? createAuthSessionCacheFromEnv(runtimeEnv);
+  let comicAiIntegrationAuth: {
+    token: string;
+    expiresAt: Date;
+  } | null = null;
+  let comicAiIntegrationAuthPromise: Promise<{ sessionToken: string; session: AuthSession; user: AuthenticatedUser } | undefined> | null = null;
+  async function resolveComicAiIntegrationAuthenticated(
+    db: Awaited<ReturnType<typeof createDevDb>>,
+    now: Date,
+  ) {
+    if (comicAiIntegrationAuth && comicAiIntegrationAuth.expiresAt.getTime() - now.getTime() > 60_000) {
+      const cached = await findAuthenticatedUser(
+        db,
+        `auth_session=${comicAiIntegrationAuth.token}`,
+        now,
+        authSessionCache,
+        { includeCredit: true },
+      );
+      if (cached) return cached;
+      comicAiIntegrationAuth = null;
+    }
+    if (comicAiIntegrationAuthPromise) return comicAiIntegrationAuthPromise;
+    comicAiIntegrationAuthPromise = (async () => {
+      const configuredToken = runtimeEnv.COMIC_AI_INTEGRATION_SESSION_TOKEN?.trim();
+      if (configuredToken) {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          `auth_session=${configuredToken}`,
+          now,
+          authSessionCache,
+          { includeCredit: true },
+        );
+        if (authenticated) {
+          comicAiIntegrationAuth = {
+            token: configuredToken,
+            expiresAt: authenticated.session.expiresAt,
+          };
+          return authenticated;
+        }
+      }
+
+      const account = (
+        runtimeEnv.COMIC_AI_INTEGRATION_ACCOUNT?.trim() ||
+        runtimeEnv.COMIC_AI_SERVICE_ACCOUNT?.trim()
+      );
+      const password = (
+        runtimeEnv.COMIC_AI_INTEGRATION_PASSWORD ||
+        runtimeEnv.COMIC_AI_SERVICE_PASSWORD ||
+        ""
+      );
+      if (!account || !password) {
+        throw new Error("comic_ai_integration_service_account_not_configured");
+      }
+      const verified = await verifyPersistentPasswordLogin(db, {
+        account,
+        password,
+        remember: true,
+        now,
+      });
+      if (verified.kind !== "verified") {
+        throw new Error(`comic_ai_integration_service_account_${verified.kind}`);
+      }
+      comicAiIntegrationAuth = {
+        token: verified.token,
+        expiresAt: verified.session.expiresAt,
+      };
+      const authenticated = await findAuthenticatedUser(
+        db,
+        `auth_session=${verified.token}`,
+        now,
+        authSessionCache,
+        { includeCredit: true },
+      );
+      if (!authenticated) {
+        throw new Error("comic_ai_integration_service_account_session_unavailable");
+      }
+      return authenticated;
+    })().finally(() => {
+      comicAiIntegrationAuthPromise = null;
+    });
+    return comicAiIntegrationAuthPromise;
+  }
   const devPaymentProviderRegistry = createEnvPaymentProviderRegistry(runtimeEnv);
   const devPaymentMerchantId =
     runtimeEnv.PAYMENT_MERCHANT_ID?.trim() ||
@@ -19705,29 +19903,6 @@ export function createPhoneAuthDevServer(
         }
 
         const db = await getDb();
-        const marketingResponse = await routeMarketingHttpRequest({
-          request,
-          pathname,
-          search: url.search,
-          db,
-          env: runtimeEnv,
-          storageAdapter: storageRuntime.adapter,
-          requireSuperAdmin: async () => {
-            const adminRoute = await requireAdminRouteSession({
-              db,
-              cookieHeader: request.headers.cookie,
-              requiredRoles: ["super_admin"],
-            });
-            if (!adminRoute.ok) return adminRoute;
-            return {
-              ok: true as const,
-              adminAccountId: adminRoute.session.admin_account_id,
-            };
-          },
-        });
-        if (marketingResponse) {
-          return writeJson(response, marketingResponse);
-        }
         const creatorApplication = createCreatorApplication({
           db,
           creatorApps,
@@ -19765,6 +19940,263 @@ export function createPhoneAuthDevServer(
           env: runtimeEnv,
         }),
       });
+
+      const moneyPrinterTaskMatch = pathname.match(
+        /^\/api\/integrations\/moneyprinter\/video-generations\/([^/]+)$/,
+      );
+      const isMoneyPrinterIntegrationRoute =
+        pathname === "/api/integrations/moneyprinter/models" ||
+        pathname === "/api/integrations/moneyprinter/video-generations" ||
+        Boolean(moneyPrinterTaskMatch);
+      if (isMoneyPrinterIntegrationRoute) {
+        try {
+          const rawBody = request.method === "GET"
+            ? Buffer.alloc(0)
+            : Buffer.from(await readLimitedTextBody(request, maximumJsonBodyBytes), "utf8");
+          const verified = verifyComicAiIntegrationHmac({
+            env: runtimeEnv,
+            method: request.method ?? "GET",
+            pathWithQuery: `${pathname}${url.search}`,
+            headers: request.headers,
+            body: rawBody,
+            now: new Date(),
+          });
+
+          if (request.method === "GET" && pathname === "/api/integrations/moneyprinter/models") {
+            const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
+            const models = activeVideoModels
+              .filter((modelConfig) => modelConfigSupportsGenerationExecution("video", modelConfig))
+              .map((modelConfig) => ({
+                ...modelConfigToGenerationConfigModel(modelConfig),
+                displayName: modelConfig.displayName,
+                limits: modelConfig.limits,
+                uiConfig: modelConfig.uiConfig,
+              }));
+            return writeJson(response, {
+              status: 200,
+              body: {
+                models,
+                workerId: verified.workerId,
+              },
+            });
+          }
+
+          if (request.method === "POST" && pathname === "/api/integrations/moneyprinter/video-generations") {
+            let body: Record<string, unknown>;
+            try {
+              const parsed = rawBody.length ? JSON.parse(rawBody.toString("utf8")) : {};
+              body = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                ? parsed as Record<string, unknown>
+                : {};
+            } catch {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "invalid_json", message: "Request body must be valid JSON" },
+              });
+            }
+            const modelCode = typeof body.model === "string"
+              ? body.model.trim()
+              : typeof body.modelCode === "string" ? body.modelCode.trim() : "";
+            const prompt = typeof body.prompt === "string"
+              ? body.prompt
+              : typeof body.motionPrompt === "string"
+                ? body.motionPrompt
+                : typeof body.text === "string" ? body.text : "";
+            const parameters = body.parameters && typeof body.parameters === "object" && !Array.isArray(body.parameters)
+              ? body.parameters as Record<string, unknown>
+              : {};
+            if (!modelCode) {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "model_required", message: "model is required" },
+              });
+            }
+            if (!prompt.trim()) {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "prompt_required", message: "prompt is required" },
+              });
+            }
+
+            const now = new Date();
+            const authenticated = await resolveComicAiIntegrationAuthenticated(db, now);
+            if (!authenticated) {
+              return writeJson(response, {
+                status: 503,
+                body: {
+                  error: "comic_ai_integration_service_account_unavailable",
+                  message: "Comic AI integration service account is unavailable",
+                },
+              });
+            }
+            const idempotencyKey = requiredIdempotencyKeyFromRequest(request) ?? verified.nonce;
+            const targetId = uuidFromIdempotencyKey(`comic-ai-moneyprinter:${idempotencyKey}`);
+            const result = await createGenerationTask(db, {
+              kind: "video",
+              episodeId: null,
+              body: {
+                ...body,
+                model: modelCode,
+                prompt,
+                motionPrompt: typeof body.motionPrompt === "string" ? body.motionPrompt : prompt,
+                text: typeof body.text === "string" ? body.text : prompt,
+                parameters,
+                targetType: "standalone_video",
+                targetId,
+                sourceSurface: "moneyprinter",
+              },
+              idempotencyKey,
+              authenticated,
+              context: {
+                actor: actorContextFromAuthenticatedUser(authenticated.user),
+                project: null,
+                userId: authenticated.user.id,
+              },
+              runtime: storageRuntime,
+              env: runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              now,
+              request,
+            });
+            if (!result.body) {
+              return writeJson(response, {
+                status: 404,
+                body: { error: "resource_not_found", message: "Generation task was not created" },
+              });
+            }
+            const task = await mapMoneyPrinterGenerationResponse(db, {
+              task: result.body as Record<string, unknown>,
+              sessionToken: authenticated.sessionToken,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              request,
+              now,
+            });
+            return writeJson(response, {
+              status: result.status,
+              body: {
+                ...task,
+                modelCode,
+                status: task.status === "succeeded" || task.status === "failed" ? task.status : "queued",
+              },
+            });
+          }
+
+          if (request.method === "GET" && moneyPrinterTaskMatch) {
+            const taskId = decodeURIComponent(moneyPrinterTaskMatch[1] ?? "");
+            if (!isUuid(taskId)) {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "task_id_invalid", message: "taskId must be a UUID" },
+              });
+            }
+            const now = new Date();
+            const authenticated = await resolveComicAiIntegrationAuthenticated(db, now);
+            if (!authenticated) {
+              return writeJson(response, {
+                status: 503,
+                body: {
+                  error: "comic_ai_integration_service_account_unavailable",
+                  message: "Comic AI integration service account is unavailable",
+                },
+              });
+            }
+            const task = await readGenerationTaskResponseForSession(db, {
+              taskId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              now,
+              synchronizeReadMetadata: false,
+            });
+            if (!task) {
+              return writeJson(response, {
+                status: 404,
+                body: { error: "resource_not_found", message: "Generation task was not found" },
+              });
+            }
+            return writeJson(response, {
+              status: 200,
+              body: await mapMoneyPrinterGenerationResponse(db, {
+                task: task as Record<string, unknown>,
+                sessionToken: authenticated.sessionToken,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                request,
+                now,
+              }),
+            });
+          }
+
+          return writeJson(response, {
+            status: 405,
+            body: { error: "method_not_allowed", message: "Method not allowed" },
+          });
+        } catch (error) {
+          if (error instanceof ComicAiIntegrationHmacError) {
+            return writeJson(response, {
+              status: error.status,
+              body: { error: error.code, message: error.message },
+            });
+          }
+          if (error instanceof IdempotencyConflictError) {
+            return writeJson(response, {
+              status: 409,
+              body: { error: error.code, message: "Idempotency key was reused with a different request" },
+            });
+          }
+          if (error instanceof IdempotencyProcessingError) {
+            return writeJson(response, {
+              status: 202,
+              body: {
+                error: error.code,
+                message: "Generation request is still processing",
+                taskId: error.record.responseResourceId ?? null,
+                status: "queued",
+              },
+            });
+          }
+          if (error instanceof InsufficientCreditsError) {
+            return writeJson(response, {
+              status: 402,
+              body: { error: error.code, message: "Comic AI integration account has insufficient credits" },
+            });
+          }
+          if (error instanceof GenerationMembershipRequiredError) {
+            return writeJson(response, {
+              status: 403,
+              body: { error: error.code, message: error.message },
+            });
+          }
+          if (error instanceof GenerationTargetBusyError) {
+            return writeJson(response, {
+              status: 409,
+              body: { error: error.code, message: error.message, taskId: error.taskId },
+            });
+          }
+          if (error instanceof GenerationModelRequestValidationError || error instanceof GenerationRequestValidationError) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: error.code, message: error.message },
+            });
+          }
+          if (error instanceof Error && error.message.startsWith("comic_ai_integration_service_account_")) {
+            return writeJson(response, {
+              status: 503,
+              body: { error: error.message, message: "Comic AI integration service account is unavailable" },
+            });
+          }
+          console.error("[comic-ai-integration] request failed", error);
+          return writeJson(response, {
+            status: 500,
+            body: { error: "comic_ai_integration_failed", message: "Comic AI integration request failed" },
+          });
+        }
+      }
       if ((pathname === "/api/admin/geo" || pathname.startsWith("/api/admin/geo/")) && pathname !== "/api/admin/geo/assets/uploads") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -25551,21 +25983,29 @@ export function createPhoneAuthDevServer(
           status: url.searchParams.get("status") ?? "enabled",
           pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 500),
         });
+        const styles = await Promise.all(result.data.map(async (style) => {
+          const coverStorageObjectId = style.coverStorageObjectId;
+          const coverObject = coverStorageObjectId
+            ? await findStorageObject(db, coverStorageObjectId)
+            : null;
+          const coverAvailable = !coverStorageObjectId || (coverObject?.status === "available" && !coverObject.deletedAt);
+          return {
+            id: style.id,
+            code: style.code,
+            name: style.name,
+            coverImageUrl: coverAvailable ? style.coverImageUrl : "",
+            cover_image_url: coverAvailable ? style.cover_image_url : "",
+            coverStorageObjectId: coverAvailable ? coverStorageObjectId : null,
+            cover_storage_object_id: coverAvailable ? style.cover_storage_object_id : null,
+            prompt_content: style.prompt_content,
+            promptContent: style.promptContent,
+            status: style.status,
+          };
+        }));
         return writeJson(response, {
           status: 200,
           body: {
-            styles: result.data.map((style) => ({
-              id: style.id,
-              code: style.code,
-              name: style.name,
-              coverImageUrl: style.coverImageUrl,
-              cover_image_url: style.cover_image_url,
-              coverStorageObjectId: style.coverStorageObjectId,
-              cover_storage_object_id: style.cover_storage_object_id,
-              prompt_content: style.prompt_content,
-              promptContent: style.promptContent,
-              status: style.status,
-            })),
+            styles,
           },
         });
       }
@@ -26243,13 +26683,18 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
           }
           try {
+            const proxyRequested = url.searchParams.get("proxy") === "1";
+            const downloadRequested = url.searchParams.get("download") === "1";
+            const thumbnailRequested = url.searchParams.get("thumbnail") === "1";
             const signed = object.bucket === storageBucket
               && isOfficialAssetObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix })
               ? await storageRuntime.adapter.createSignedReadUrl({
                 bucket: object.bucket,
                 objectKey: object.objectKey,
                 expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
-                responseContentDisposition: object.contentType.startsWith("video/") ? "inline" : undefined,
+                responseContentDisposition: downloadRequested
+                  ? "attachment"
+                  : object.contentType.startsWith("video/") ? "inline" : undefined,
               })
               : await createSignedReadUrl(db, {
                 sessionToken: authenticated.sessionToken,
@@ -26257,16 +26702,29 @@ export function createPhoneAuthDevServer(
                 adapter: storageRuntime.adapter,
                 now: new Date(),
                 expiresInSeconds: signedUrlExpiresInSeconds,
-                responseContentDisposition: object.contentType.startsWith("video/") ? "inline" : undefined,
+                responseContentDisposition: downloadRequested
+                  ? "attachment"
+                  : object.contentType.startsWith("video/") ? "inline" : undefined,
               });
             if (object.status !== "available") {
               return writeJson(response, envelopedError(409, "storage_object_not_ready", "Storage object is not ready"));
             }
-            const proxyRequested = url.searchParams.get("proxy") === "1";
-            const downloadRequested = url.searchParams.get("download") === "1";
-            const thumbnailRequested = url.searchParams.get("thumbnail") === "1";
             const image = object.contentType.startsWith("image/");
             const video = object.contentType.startsWith("video/");
+            const directReadUrl = /^https?:\/\//i.test(signed.url);
+            if (
+              storageRuntime.mode !== "dev" &&
+              directReadUrl &&
+              !thumbnailRequested &&
+              (proxyRequested || downloadRequested)
+            ) {
+              response.statusCode = 307;
+              response.setHeader("location", signed.url);
+              response.setHeader("cache-control", "private, no-store");
+              response.setHeader("referrer-policy", "no-referrer");
+              response.end();
+              return;
+            }
             if (thumbnailRequested && (image || video)) {
               const thumbnailCacheKey = `${object.id}:${object.etag ?? ""}:${object.versionId ?? ""}:${object.contentType}`;
               let thumbnail = storageMediaThumbnailCache.get(thumbnailCacheKey);
@@ -30316,8 +30774,9 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(400, "idempotency_key_required", "缂傚搫鐨?Idempotency-Key"));
           }
           const episodeId = decodeURIComponent(pathname.split("/").at(3) ?? "");
-          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          let body = (await readJsonBody(request)) as Record<string, unknown>;
           try {
+            body = await resolveVideoGenerationStyleBody(db, authenticated.user.id, body);
             const result = await createGenerationTask(db, {
               kind: "video",
               episodeId,
@@ -34944,10 +35403,13 @@ export function createPhoneAuthDevServer(
           if (!idempotencyKey) {
             return writeIdempotencyKeyRequired(response);
           }
-          const body = (await readJsonBody(request)) as {
+          const body = await resolveVideoGenerationStyleBody(db, authenticated.user.id, (await readJsonBody(request)) as Record<string, unknown>) as {
             shotId?: string | null;
+            prompt?: string | null;
             motionPrompt?: string | null;
             model?: string | null;
+            imageStyleSkillId?: string | null;
+            imageStyleCode?: string | null;
             parameters?: Record<string, unknown> | null;
             audioEnabled?: boolean | null;
             musicEnabled?: boolean | null;
@@ -35823,6 +36285,7 @@ export type { Server };
 export const __phoneAuthDevServerTestUtils = {
   appendCanvasGenerationSkillReference,
   appendImageStylePromptForGeneration,
+  resolveVideoGenerationStyleBody,
   imageGenerationSkillReference,
   appendCanvasAnimationSpritePrompt,
   prependCanvasGenerationSkill,

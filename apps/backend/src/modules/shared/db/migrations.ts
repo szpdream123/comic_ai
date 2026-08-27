@@ -100,6 +100,7 @@ const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_RELATIVE_PATH = ["packages", "db", "
 const TEAM_ASSET_PROXY_URLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-allow-bound-team-asset-proxy-urls.sql"];
 const GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-repair-globalaiopc-model-center-video-classification.sql"];
 const MINIMAX_H3_768P_REPLACEMENT_RELATIVE_PATH = ["packages", "db", "migrations", "20261001-replace-minimax-h3-c4-with-768p.sql"];
+const REMOVE_MARKETING_MODULE_RELATIVE_PATH = ["packages", "db", "migrations", "20261019-remove-marketing-module.sql"];
 const MARKETING_MODULE_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-create-marketing-module.sql"];
 const PROJECT_UPLOAD_STORAGE_OBJECT_INDEX_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-project-upload-storage-object-index.sql"];
 const MARKETING_BRAND_PROFILES_RELATIVE_PATH = ["packages", "db", "migrations", "20260912-create-marketing-brand-profiles.sql"];
@@ -139,9 +140,7 @@ const GLOBALAIOPC_KLINGO3_WAN27_SCHEMA_FIX_RELATIVE_PATH = ["packages", "db", "m
 const GLOBALAIOPC_WAN27_DURATION_OPTIONS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261016-correct-globalaiopc-wan27-duration-options.sql"];
 const GLOBALAIOPC_KLINGO3_FRAME_PARAMETERS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261017-disable-klingo3-frame-parameters.sql"];
 const GLOBALAIOPC_SD25_SPECIAL_FRAME_PARAMETERS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql"];
-const GEO_MONITORING_RELATIVE_PATH = ["packages", "db", "migrations", "20261020-create-geo-monitoring.sql"];
-const GEO_MONITORING_HARDENING_RELATIVE_PATH = ["packages", "db", "migrations", "20261021-harden-geo-monitoring.sql"];
-const GEO_MONITORING_RUN_FENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20261022-fence-geo-monitor-runs.sql"];
+const GLOBALAIOPC_WAN30_R2V_RELATIVE_PATH = ["packages", "db", "migrations", "20261020-add-globalaiopc-wan30-r2v.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -741,16 +740,12 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_SPECIAL_FRAME_PARAMETERS_FIX_RELATIVE_PATH), "utf8"),
     },
     {
-      name: "20261020-create-geo-monitoring.sql",
-      sql: await readFile(join(rootDir, ...GEO_MONITORING_RELATIVE_PATH), "utf8"),
+      name: "20261019-remove-marketing-module.sql",
+      sql: await readFile(join(rootDir, ...REMOVE_MARKETING_MODULE_RELATIVE_PATH), "utf8"),
     },
     {
-      name: "20261021-harden-geo-monitoring.sql",
-      sql: await readFile(join(rootDir, ...GEO_MONITORING_HARDENING_RELATIVE_PATH), "utf8"),
-    },
-    {
-      name: "20261022-fence-geo-monitor-runs.sql",
-      sql: await readFile(join(rootDir, ...GEO_MONITORING_RUN_FENCE_RELATIVE_PATH), "utf8"),
+      name: "20261020-add-globalaiopc-wan30-r2v.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_WAN30_R2V_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

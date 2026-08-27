@@ -29,7 +29,6 @@ test("account settings drawer omits email and notification sections", () => {
         notifications: {
           projectUpdates: true,
           renderComplete: true,
-          marketing: false,
         },
       },
     },
@@ -122,7 +121,6 @@ test("invite gift drawer shows only invite link and user-visible invite details"
         notifications: {
           projectUpdates: true,
           renderComplete: true,
-          marketing: false,
         },
       },
     },
@@ -170,7 +168,6 @@ test("account settings drawer promotes success toast above the overlay", () => {
         notifications: {
           projectUpdates: true,
           renderComplete: true,
-          marketing: false,
         },
       },
     },

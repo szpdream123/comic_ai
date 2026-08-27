@@ -7389,6 +7389,42 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(JSON.stringify(payload), /选中的技能正文/);
   });
 
+  it("replaces stale automatic image style text when a new style is selected", () => {
+    const payload = buildImageGenerationPayload({
+      state: { project: { id: "project-1", aspectRatio: "16:9" } },
+      ui: {
+        museScopeMode: "assets",
+        imageGenerationMode: "single-image",
+        selectedModelId: "gpt-image-2-cn",
+        prompt: "角色固定图\n国风3D批量生图风格，保留三维材质、国风装饰细节。\n图片风格：古典油画风格，厚重笔触。",
+        assetImageStyleSkillId: "portrait-style",
+        assetImageStyleSkillProjectId: "project-1",
+        projectStyles: [{
+          id: "national-3d",
+          code: "national-3d",
+          name: "国风3D",
+          promptContent: "国风3D批量生图风格，保留三维材质、国风装饰细节。",
+        }],
+        episodeBatchOfficialImageStyleSkills: [{
+          id: "oil-style",
+          label: "油画",
+          promptContent: "古典油画风格，厚重笔触。",
+        }, {
+          id: "portrait-style",
+          label: "人像摄影",
+          promptContent: "真实人像摄影风格，皮肤质感自然。",
+          preview: "/uploads/styles/portrait.png",
+        }],
+      },
+    });
+
+    assert.equal(
+      payload.promptOverride,
+      "角色固定图\n图片风格：参考【@图1】不要出现参考图内容，真实人像摄影风格，皮肤质感自然。",
+    );
+    assert.doesNotMatch(payload.promptOverride, /国风3D|油画/);
+  });
+
   it("keeps storyboard prompt skill and image style skill independent in one payload", () => {
     const payload = buildImageGenerationPayload({
       state: {
@@ -7615,7 +7651,192 @@ describe("workbench generation payloads and inspectors", () => {
       },
     });
 
-    assert.equal(payload.motionPrompt, "镜头缓慢推进\n厚涂油画质感");
+    assert.equal(payload.motionPrompt, "镜头缓慢推进\n视频风格：厚涂油画质感");
+    assert.equal(payload.imageStyleCode, "oil_painting");
+  });
+
+  it("replaces stale automatic video style text when the project style changes", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-style-2",
+      description: "镜头缓慢推进；水彩插画风格，透明颜料晕染，纸张纹理明显。\n视频风格：水彩插画风格，透明颜料晕染，纸张纹理明显。",
+      generationState: {},
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { id: "project-style-2", aspectRatio: "16:9" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "vidu-q3-pro",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        projectStyles: [
+          { code: "watercolor", name: "水彩画", prompt_content: "水彩插画风格，透明颜料晕染，纸张纹理明显。" },
+          { code: "portrait", name: "电影写真", prompt_content: "电影剧照写真风格，胶片色调，侧逆光。" },
+        ],
+        episodeGenerationStyleCode: "portrait",
+        episodeGenerationStyleProjectId: "project-style-2",
+      },
+    });
+
+    assert.equal(payload.motionPrompt, "镜头缓慢推进\n视频风格：电影剧照写真风格，胶片色调，侧逆光。");
+    assert.doesNotMatch(payload.motionPrompt, /水彩/);
+  });
+
+  it("uses the currently selected image style skill for video prompts", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-style-skill",
+      description: "镜头缓慢推进；水彩插画风格，透明颜料晕染，纸张纹理明显。",
+      generationState: {},
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { id: "project-style-skill", aspectRatio: "16:9" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "vidu-q3-pro",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        projectStyles: [
+          { code: "watercolor", name: "水彩画", prompt_content: "水彩插画风格，透明颜料晕染，纸张纹理明显。" },
+        ],
+        episodeGenerationStyleCode: "watercolor",
+        episodeGenerationStyleProjectId: "project-style-skill",
+        assetImageStyleSkillId: "83000000-0000-4000-8000-000000000415",
+        assetImageStyleSkillProjectId: "project-style-skill",
+        episodeBatchOfficialImageStyleSkills: [
+          { id: "83000000-0000-4000-8000-000000000415", label: "人像摄影", prompt_content: "人像摄影风格，真实皮肤质感，柔和棚拍光线。" },
+        ],
+      },
+    });
+
+    assert.equal(payload.motionPrompt, "镜头缓慢推进\n视频风格：人像摄影风格，真实皮肤质感，柔和棚拍光线。");
+    assert.equal(payload.imageStyleSkillId, "83000000-0000-4000-8000-000000000415");
+    assert.doesNotMatch(payload.motionPrompt, /水彩/);
+  });
+
+  it("uses the confirmed style skill when the project-style id is still present", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      description: "镜头缓慢推进；水彩插画风格，透明颜料晕染。",
+      generationState: {},
+    };
+    const payload = buildVideoGenerationPayload({
+      state: { project: { id: "project-style-skill-2", aspectRatio: "16:9" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "vidu-q3-pro",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        projectStyles: [{ code: "watercolor", name: "水彩画", prompt_content: "水彩插画风格，透明颜料晕染。" }],
+        episodeGenerationStyleCode: "watercolor",
+        episodeGenerationStyleProjectId: "project-style-skill-2",
+        episodeGenerationStyleSnapshot: {
+          id: "watercolor",
+          code: "watercolor",
+          prompt_content: "水彩插画风格，透明颜料晕染。",
+          projectId: "project-style-skill-2",
+        },
+        assetImageStyleSkillId: "project-style",
+        selectedEpisodePromptSkillIds: { image_style: "skill-portrait-2" },
+        episodeBatchOfficialImageStyleSkills: [{
+          id: "skill-portrait-2",
+          label: "人像摄影",
+          prompt_content: "人像摄影风格，真实皮肤质感。",
+        }],
+      },
+    });
+
+    assert.equal(payload.prompt, "镜头缓慢推进\n视频风格：人像摄影风格，真实皮肤质感。");
+    assert.doesNotMatch(payload.prompt, /水彩/);
+  });
+
+  it("uses the style prompt selected through the workbench action in the submitted prompt", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-confirmed-style-action",
+      description: "镜头缓慢推进",
+      generationState: {},
+    };
+    const projectStyles = [
+      { code: "watercolor", name: "水彩画", prompt_content: "水彩插画风格，透明颜料晕染。" },
+      { code: "portrait", name: "人像摄影", prompt_content: "人像摄影风格，真实皮肤质感，柔和棚拍光线。" },
+    ];
+    const workbench = {
+      state: { project: { id: "project-confirmed-style", aspectRatio: "16:9" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "happyhorse-1.1-r2v",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        projectStyles,
+        episodeGenerationStyleCode: "watercolor",
+        episodeGenerationStyleProjectId: "project-confirmed-style",
+        assetImageStyleSkillId: "project-style",
+        selectedEpisodePromptSkillIds: { image_style: "" },
+      },
+      root: { querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-episode-generation-style",
+        value: "portrait",
+      },
+    });
+
+    const payload = buildVideoGenerationPayload(workbench);
+    assert.equal(workbench.ui.episodeGenerationStyleSnapshot.prompt_content, projectStyles[1].prompt_content);
+    assert.match(payload.prompt, /人像摄影风格/u);
+    assert.doesNotMatch(payload.prompt, /水彩/u);
+    assert.equal(payload.prompt, payload.motionPrompt);
+  });
+
+  it("uses the confirmed image style skill prompt in the video prompt", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-confirmed-image-style-action",
+      description: "镜头缓慢推进",
+      generationState: {},
+    };
+    const workbench = {
+      state: { project: { id: "project-confirmed-image-style", aspectRatio: "16:9" } },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "happyhorse-1.1-r2v",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        projectStyles: [{ code: "watercolor", name: "水彩画", prompt_content: "水彩插画风格，透明颜料晕染。" }],
+        episodeGenerationStyleCode: "watercolor",
+        episodeGenerationStyleProjectId: "project-confirmed-image-style",
+        assetImageStyleSkillId: "project-style",
+        assetImageStyleSkillDraftId: "portrait-style",
+        episodeBatchOfficialImageStyleSkills: [{
+          id: "portrait-style",
+          label: "人像摄影",
+          prompt_content: "人像摄影风格，真实皮肤质感。",
+        }],
+      },
+      root: { querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-asset-image-style-skill" },
+    });
+
+    const payload = buildVideoGenerationPayload(workbench);
+    assert.equal(workbench.ui.episodeGenerationStyleSnapshot.prompt_content, "人像摄影风格，真实皮肤质感。");
+    assert.match(payload.prompt, /人像摄影风格/u);
+    assert.doesNotMatch(payload.prompt, /水彩/u);
   });
 
   it("submits generated voice preview data URLs as reference audio", () => {
@@ -33246,7 +33467,7 @@ describe("production workbench project tab", () => {
         linkedShotId: "shot-batch-video-1",
         title: "1",
         displayTitle: "分镜 1",
-        description: "角色推门进入雨夜街巷。",
+        description: "角色推门进入雨夜街巷。\n水彩插画风格，透明颜料晕染，纸张纹理明显。",
         references: [
           { role: "character", assetId: "character-1", name: "白野", kind: "character", preview: "/uploads/character-1.png" },
         ],
@@ -33257,7 +33478,7 @@ describe("production workbench project tab", () => {
         linkedShotId: "shot-batch-video-2",
         title: "2",
         displayTitle: "分镜 2",
-        description: "镜头跟随旧式通讯器亮起。\n视频风格：旧风格。",
+        description: "镜头跟随旧式通讯器亮起。\n视频风格：旧风格。\n水彩插画风格，透明颜料晕染，纸张纹理明显。",
         references: [
           { role: "prop", assetId: "prop-1", name: "旧式通讯器", kind: "prop", preview: "/uploads/prop-1.png" },
         ],
@@ -33369,10 +33590,15 @@ describe("production workbench project tab", () => {
         videoResolution: "1080p",
         videoDurationSec: "5",
         projectStyles: [{
+          id: "watercolor-style",
+          code: "watercolor_style",
+          name: "水彩画",
+          prompt_content: "水彩插画风格，透明颜料晕染，纸张纹理明显。",
+        }, {
           id: "batch-video-style",
           code: "batch_video_style",
-          name: "动画",
-          prompt_content: "保持统一动画画风。",
+          name: "电影写真",
+          prompt_content: "电影剧照写真风格，胶片色调，侧逆光。",
         }],
         episodeGenerationStyleCode: "batch_video_style",
         openGenerationSelectMenu: "video-settings-panel",
@@ -33475,28 +33701,30 @@ describe("production workbench project tab", () => {
       assert.deepEqual(updateShotCalls, [
         {
           shotId: "shot-batch-video-1",
-          description: "角色推门进入雨夜街巷。\n视频风格：保持统一动画画风。",
+          description: "角色推门进入雨夜街巷。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。",
         },
         {
           shotId: "shot-batch-video-2",
-          description: "镜头跟随旧式通讯器亮起。\n视频风格：保持统一动画画风。",
+          description: "镜头跟随旧式通讯器亮起。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。",
         },
       ]);
-      assert.equal(createVideoTaskCalls[0].payload.prompt, "角色推门进入雨夜街巷。\n视频风格：保持统一动画画风。");
-      assert.equal(createVideoTaskCalls[0].payload.motionPrompt, "角色推门进入雨夜街巷。\n视频风格：保持统一动画画风。");
+      assert.equal(createVideoTaskCalls[0].payload.prompt, "角色推门进入雨夜街巷。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。");
+      assert.equal(createVideoTaskCalls[0].payload.motionPrompt, "角色推门进入雨夜街巷。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。");
+      assert.doesNotMatch(createVideoTaskCalls[0].payload.prompt, /水彩/);
       assert.equal(createVideoTaskCalls[0].payload.parameters.aspectRatio, "9:16");
       assert.equal(createVideoTaskCalls[0].payload.parameters.resolution, "720p");
       assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, "10");
       assert.equal(createVideoTaskCalls[0].payload.parameters.mode, "reference-video");
       assert.equal(createVideoTaskCalls[1].payload.targetId, "shot-batch-video-2");
-      assert.equal(createVideoTaskCalls[1].payload.prompt, "镜头跟随旧式通讯器亮起。\n视频风格：保持统一动画画风。");
+      assert.equal(createVideoTaskCalls[1].payload.prompt, "镜头跟随旧式通讯器亮起。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。");
+      assert.doesNotMatch(createVideoTaskCalls[1].payload.prompt, /水彩/);
       assert.equal(
         workbench.ui.episodeStoryboardMap["episode-new"].find((storyboard) => storyboard.id === "storyboard-batch-video-1")?.description,
-        "角色推门进入雨夜街巷。\n视频风格：保持统一动画画风。",
+        "角色推门进入雨夜街巷。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。",
       );
       assert.equal(
         workbench.ui.episodeStoryboardMap["episode-new"].find((storyboard) => storyboard.id === "storyboard-batch-video-2")?.description,
-        "镜头跟随旧式通讯器亮起。\n视频风格：保持统一动画画风。",
+        "镜头跟随旧式通讯器亮起。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。",
       );
       assert.equal(workbench.ui.episodeBatchModal ?? null, null);
       assert.deepEqual(workbench.ui.selectedStoryboardIds, []);
@@ -56494,7 +56722,6 @@ describe("account settings drawer interactions", () => {
           notifications: {
             projectUpdates: true,
             renderComplete: true,
-            marketing: false,
           },
         },
       },
@@ -56543,7 +56770,6 @@ describe("account settings drawer interactions", () => {
           notifications: {
             projectUpdates: true,
             renderComplete: false,
-            marketing: true,
           },
         },
       },
@@ -56562,7 +56788,6 @@ describe("account settings drawer interactions", () => {
           notifications: {
             projectUpdates: true,
             renderComplete: false,
-            marketing: true,
           },
         },
       },
@@ -56612,7 +56837,6 @@ describe("account settings drawer interactions", () => {
           notifications: {
             projectUpdates: true,
             renderComplete: true,
-            marketing: false,
           },
         },
       },

@@ -2511,7 +2511,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 404, body: { error: "episode_not_found" } };
       }
       const hydratedEpisode = deps.storageRuntime
-        ? await hydrateEpisodeCoverUrl({ episode, runtime: deps.storageRuntime })
+        ? await hydrateEpisodeCoverUrl({ episode, runtime: deps.storageRuntime, db: deps.db })
         : episode;
       return { status: 200, body: { episode: hydratedEpisode } };
     },
@@ -3525,6 +3525,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       user: AuthenticatedCreatorUser;
       body?: {
         shotId?: string | null;
+        prompt?: string | null;
         motionPrompt?: string | null;
         model?: string | null;
         parameters?: Record<string, unknown> | null;
@@ -3586,7 +3587,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           now: input.now,
           options: {
             shotId: input.body?.shotId ?? null,
-            motionPrompt: input.body?.motionPrompt ?? null,
+            motionPrompt: input.body?.prompt ?? input.body?.motionPrompt ?? null,
             model: input.body?.model ?? null,
             parameters: input.body?.parameters ?? null,
             audioEnabled: input.body?.audioEnabled ?? null,
@@ -5892,6 +5893,7 @@ async function loadProjectAssetSummary(
     total_count: number | string;
     storage_object_id: string | null;
     storage_object_key: string | null;
+    storage_status: string | null;
     metadata_json: Record<string, unknown> | string | null;
   }>(
     `
@@ -5907,6 +5909,7 @@ async function loadProjectAssetSummary(
           asset.id,
           version.storage_object_id,
           version.storage_object_key,
+          storage.status AS storage_status,
           version.metadata_json
         FROM assets asset
         LEFT JOIN LATERAL (
@@ -5919,6 +5922,7 @@ async function loadProjectAssetSummary(
           ORDER BY asset_version.version_number DESC
           LIMIT 1
         ) version ON true
+        LEFT JOIN storage_objects storage ON storage.id = version.storage_object_id
         WHERE asset.project_id = $1
           AND NOT COALESCE(
             jsonb_typeof(version.metadata_json) = 'object'
@@ -5941,6 +5945,7 @@ async function loadProjectAssetSummary(
         total_count,
         storage_object_id,
         storage_object_key,
+        storage_status,
         metadata_json
       FROM ranked_assets
       WHERE preview_rank <= 3
@@ -5956,7 +5961,7 @@ async function loadProjectAssetSummary(
     const previewUrl = input.runtime
       ? await resolveStorageBackedPreviewUrl(db, {
           sessionToken: input.sessionToken,
-          storageObjectId: row.storage_object_id,
+          storageObjectId: row.storage_status === "available" ? row.storage_object_id : null,
           storageObjectKey: row.storage_object_key,
           metadata,
           now: input.now,
@@ -6127,6 +6132,15 @@ async function projectEpisodeSummaryFromRow(
     row.video_storage_object_key,
     row.video_metadata_json,
   );
+  const coverStorageObject = row.cover_storage_object_id
+    ? await findStorageObject(db, row.cover_storage_object_id)
+    : null;
+  const coverStorageObjectId = coverStorageObject?.status === "available" && !coverStorageObject.deletedAt
+    ? row.cover_storage_object_id
+    : null;
+  const fallbackCoverImageUrl = row.cover_image_url && !/\/api\/storage\/objects\/[0-9a-f-]{36}\/content(?:[/?#]|$)/i.test(row.cover_image_url)
+    ? row.cover_image_url
+    : null;
   return {
     id: row.id,
     title: row.title,
@@ -6135,10 +6149,10 @@ async function projectEpisodeSummaryFromRow(
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
     storyboardCount: Number(row.storyboard_count),
-    coverImageUrl: row.cover_storage_object_id && input.runtime
-      ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-      : row.cover_image_url,
-    coverStorageObjectId: row.cover_storage_object_id,
+    coverImageUrl: coverStorageObjectId && input.runtime
+      ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+      : fallbackCoverImageUrl,
+    coverStorageObjectId,
     previewUrl,
   };
 }
@@ -6320,7 +6334,7 @@ async function buildProjectDetail(
       : [];
   const signedProjectEpisodes = input.runtime
     ? await Promise.all(
-        projectEpisodes.map((episode) => hydrateEpisodeCoverUrl({ episode, runtime: input.runtime! })),
+        projectEpisodes.map((episode) => hydrateEpisodeCoverUrl({ episode, runtime: input.runtime!, db })),
       )
     : projectEpisodes;
   const signedProject = runtime
@@ -6415,6 +6429,7 @@ async function listAssetsForProject(
     version_number: number | string | null;
     storage_object_id: string | null;
     storage_object_key: string | null;
+    storage_status: string | null;
     metadata_json: Record<string, unknown> | null;
     version_created_at: Date | string | null;
     generation_task_status: string | null;
@@ -6431,6 +6446,7 @@ async function listAssetsForProject(
         v.version_number,
         v.storage_object_id,
         v.storage_object_key,
+        storage.status AS storage_status,
         v.metadata_json,
         v.created_at AS version_created_at,
         generation_task.status AS generation_task_status,
@@ -6443,6 +6459,7 @@ async function listAssetsForProject(
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
+      LEFT JOIN storage_objects storage ON storage.id = v.storage_object_id
       LEFT JOIN LATERAL (
         SELECT task.status, task.failure_code
         FROM tasks task
@@ -6497,7 +6514,7 @@ async function listAssetsForProject(
           ? {
               id: row.version_id,
               versionNumber: Number(row.version_number),
-              storageObjectId: row.storage_object_id,
+              storageObjectId: row.storage_status === "available" ? row.storage_object_id : null,
               storageObjectKey: row.storage_object_key,
               metadata,
               previewUrl: getAssetPreviewUrl(row.storage_object_key, metadata),
@@ -6526,6 +6543,7 @@ async function listCurrentAssetVersionsForProject(
     version_number: number | string;
     storage_object_id: string | null;
     storage_object_key: string;
+    storage_status: string | null;
     metadata_json: Record<string, unknown> | null;
     source_task_id: string | null;
     source_attempt_id: string | null;
@@ -6540,6 +6558,7 @@ async function listCurrentAssetVersionsForProject(
         v.version_number,
         v.storage_object_id,
         v.storage_object_key,
+        storage.status AS storage_status,
         v.metadata_json,
         v.source_task_id,
         v.source_attempt_id,
@@ -6547,6 +6566,7 @@ async function listCurrentAssetVersionsForProject(
       FROM assets a
       JOIN asset_versions v
         ON v.asset_id = a.id
+      LEFT JOIN storage_objects storage ON storage.id = v.storage_object_id
       WHERE a.project_id = $1
         AND v.id IN (
           SELECT current_image_asset_version_id
@@ -6572,7 +6592,7 @@ async function listCurrentAssetVersionsForProject(
       assetKey: row.asset_key,
       id: row.version_id,
       versionNumber: Number(row.version_number),
-      storageObjectId: row.storage_object_id,
+      storageObjectId: row.storage_status === "available" ? row.storage_object_id : null,
       storageObjectKey: row.storage_object_key,
       metadata,
       sourceTaskId: row.source_task_id,
@@ -6817,17 +6837,32 @@ async function resolveStorageBackedPreviewUrl(
   },
 ) {
   if (input.storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(input.storageObjectId)}/content?proxy=1`;
+    const storageObject = await findStorageObject(db, input.storageObjectId);
+    if (storageObject?.status === "available" && !storageObject.deletedAt) {
+      return `/api/storage/objects/${encodeURIComponent(input.storageObjectId)}/content?proxy=1`;
+    }
   }
   const explicitPreviewUrl = getAssetPreviewUrl(input.storageObjectKey, input.metadata);
-  if (explicitPreviewUrl) return explicitPreviewUrl;
+  if (explicitPreviewUrl) {
+    const storageUrlMatch = explicitPreviewUrl.match(/\/api\/storage\/objects\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+    if (storageUrlMatch?.[1]) {
+      const previewStorageObject = await findStorageObject(db, storageUrlMatch[1]);
+      if (previewStorageObject?.status === "available" && !previewStorageObject.deletedAt) {
+        return explicitPreviewUrl;
+      }
+    } else {
+      return explicitPreviewUrl;
+    }
+  }
   if (
     typeof input.metadata?.generationTaskId === "string" &&
     input.metadata.generationTaskId.trim()
   ) {
     return null;
   }
-  return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+  return explicitPreviewUrl && /\/api\/storage\/objects\/[0-9a-f-]{36}\/content(?:[/?#]|$)/i.test(explicitPreviewUrl)
+    ? null
+    : getAssetPreviewUrl(input.storageObjectKey, input.metadata);
 }
 
 async function hydrateProjectCoverUrl(
@@ -6843,17 +6878,31 @@ async function hydrateProjectCoverUrl(
   if (!input.project?.coverStorageObjectId) {
     return input.project;
   }
+  const storageObject = await findStorageObject(db, input.project.coverStorageObjectId);
+  if (!storageObject || storageObject.status !== "available" || storageObject.deletedAt) {
+    return {
+      ...input.project,
+      coverImageUrl: input.project.coverImageUrl ?? null,
+      coverStorageObjectId: null,
+    };
+  }
   return {
     ...input.project,
     coverImageUrl: `/api/storage/objects/${encodeURIComponent(input.project.coverStorageObjectId)}/content?proxy=1`,
   };
 }
 
-function hydrateEpisodeCoverUrl<T extends { coverStorageObjectId?: string | null; coverImageUrl?: string | null }>(
-  input: { episode: T; runtime: UploadSessionRuntime },
-): T {
+async function hydrateEpisodeCoverUrl<T extends { coverStorageObjectId?: string | null; coverImageUrl?: string | null }>(
+  input: { episode: T; runtime: UploadSessionRuntime; db?: SqlDatabase },
+): Promise<T> {
   if (!input.episode.coverStorageObjectId) {
     return input.episode;
+  }
+  if (input.db) {
+    const storageObject = await findStorageObject(input.db, input.episode.coverStorageObjectId);
+    if (!storageObject || storageObject.status !== "available" || storageObject.deletedAt) {
+      return { ...input.episode, coverImageUrl: input.episode.coverImageUrl ?? null, coverStorageObjectId: null };
+    }
   }
   return {
     ...input.episode,
@@ -6873,6 +6922,14 @@ async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string |
 ): Promise<T> {
   if (!input.script?.coverStorageObjectId) {
     return input.script;
+  }
+  const storageObject = await findStorageObject(db, input.script.coverStorageObjectId);
+  if (!storageObject || storageObject.status !== "available" || storageObject.deletedAt) {
+    return {
+      ...input.script,
+      coverImageUrl: input.script.coverImageUrl ?? null,
+      coverStorageObjectId: null,
+    };
   }
   return {
     ...input.script,

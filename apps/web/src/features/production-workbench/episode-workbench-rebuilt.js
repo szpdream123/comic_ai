@@ -5814,10 +5814,6 @@ function resolveStorageObjectId(...items) {
       item?.currentVideoStorageObjectId,
       item?.latestVersion?.storageObjectId,
       item?.latestVersion?.fileId,
-      item?.metadata?.storageObjectId,
-      item?.metadata?.fileId,
-      item?.latestVersion?.metadata?.storageObjectId,
-      item?.latestVersion?.metadata?.fileId,
     ]
       .map((value) => String(value ?? "").trim())
       .find((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));

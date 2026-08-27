@@ -124,6 +124,7 @@ it("serves an authenticated user's completed upload through the credentialed con
   const unavailableStorageObjectId = randomUUID();
   const unavailableUploadSessionId = randomUUID();
   const upstreamRanges: Array<string | null> = [];
+  const signedContentDispositions: Array<string | null | undefined> = [];
   const server = createPhoneAuthDevServer({
     db,
     env: {
@@ -158,7 +159,8 @@ it("serves an authenticated user's completed upload through the credentialed con
       bucket: "creator-test",
       region: "ap-shanghai",
       adapter: {
-        async createSignedReadUrl({ expiresAt }) {
+        async createSignedReadUrl({ expiresAt, responseContentDisposition }) {
+          signedContentDispositions.push(responseContentDisposition);
           return { url: "https://storage.example.test/director/panorama.jpg", expiresAt };
         },
         async putObject() {
@@ -350,19 +352,26 @@ it("serves an authenticated user's completed upload through the credentialed con
     assert.equal(objectContentResponse.status, 307);
     assert.equal(objectContentResponse.headers.get("location"), "https://storage.example.test/director/panorama.jpg");
     assert.equal(objectContentResponse.headers.get("cache-control"), "private, no-store");
+    const upstreamCallsBeforeProxyCompatibilityRedirect = upstreamRanges.length;
     const proxiedObjectContentResponse = await fetch(`${objectContentUrl}?proxy=1`, {
       headers: { cookie },
+      redirect: "manual",
     });
-    const proxiedObjectEtag = proxiedObjectContentResponse.headers.get("etag");
-    assert.equal(proxiedObjectContentResponse.status, 200);
-    assert.equal(proxiedObjectContentResponse.headers.get("content-type"), "image/jpeg");
-    assert.equal(proxiedObjectContentResponse.headers.get("cache-control"), "private, max-age=3600");
-    assert.ok(proxiedObjectEtag);
-    assert.deepEqual(Buffer.from(await proxiedObjectContentResponse.arrayBuffer()), panoramaBytes);
+    assert.equal(proxiedObjectContentResponse.status, 307);
+    assert.equal(proxiedObjectContentResponse.headers.get("location"), "https://storage.example.test/director/panorama.jpg");
     const revalidatedProxiedObjectResponse = await fetch(`${objectContentUrl}?proxy=1`, {
-      headers: { cookie, "if-none-match": proxiedObjectEtag ?? "" },
+      headers: { cookie, "if-none-match": '"stale-proxy-etag"' },
+      redirect: "manual",
     });
-    assert.equal(revalidatedProxiedObjectResponse.status, 304);
+    assert.equal(revalidatedProxiedObjectResponse.status, 307);
+    const downloadObjectContentResponse = await fetch(`${objectContentUrl}?download=1`, {
+      headers: { cookie },
+      redirect: "manual",
+    });
+    assert.equal(downloadObjectContentResponse.status, 307);
+    assert.equal(downloadObjectContentResponse.headers.get("location"), "https://storage.example.test/director/panorama.jpg");
+    assert.equal(signedContentDispositions.at(-1), "attachment");
+    assert.equal(upstreamRanges.length, upstreamCallsBeforeProxyCompatibilityRedirect);
 
     const completedResponse = await fetch(
       `${server.origin}/api/storage/upload-sessions/${completedUploadSessionId}/content`,

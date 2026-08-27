@@ -62,6 +62,50 @@ describe("provider error message", () => {
     assert.doesNotMatch(JSON.stringify(failure), /image_url must be/i);
   });
 
+  it("maps provider real-person detection errors to the material guidance", () => {
+    for (const mediaType of ["image", "video", "audio"] as const) {
+      assert.equal(
+        translateProviderErrorMessage(
+          "The request failed because the input image 'content[1]' may contain real person.",
+          { mediaType },
+        ),
+        "素材包含真人信息，请修改后再试",
+      );
+    }
+  });
+
+  it("maps provider missing-media errors to the reference material guidance", () => {
+    for (const mediaType of ["image", "video", "audio"] as const) {
+      assert.equal(
+        translateProviderErrorMessage('HTTP_400: {"detail":"happyhorse-1.1-r2v requires media"}', { mediaType }),
+        "模型需要上传至少一个参考素材，请上传后重试。",
+      );
+    }
+    assert.equal(
+      translateProviderErrorMessage('HTTP_400: {"detail":"model requires at least one media"}'),
+      "模型需要上传至少一个参考素材，请上传后重试。",
+    );
+    assert.equal(
+      translateProviderErrorMessage(new Error("model_reference_media_required"), {
+        failureCode: "model_reference_media_required",
+      }),
+      "模型需要上传至少一个参考素材，请上传后重试。",
+    );
+  });
+
+  it("maps provider overload errors to model-switch guidance", () => {
+    assert.equal(
+      translateProviderErrorMessage('Video submit failed: 408 {"error_code":"timeout_error","message":"system under load"}'),
+      "模型负载过高，请更换模型再试",
+    );
+    assert.equal(
+      translateProviderErrorMessage(new Error("model_service_overloaded"), {
+        failureCode: "model_service_overloaded",
+      }),
+      "模型负载过高，请更换模型再试",
+    );
+  });
+
   it("unifies oversized reference material provider errors", () => {
     assert.equal(
       translateProviderErrorMessage(

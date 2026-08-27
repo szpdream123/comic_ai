@@ -340,7 +340,6 @@ function createDefaultAccountSettingsForm(session = {}, current = {}) {
     notifications: {
       projectUpdates: notifications.projectUpdates !== false,
       renderComplete: notifications.renderComplete !== false,
-      marketing: notifications.marketing === true,
     },
     planLabel: String(current.planLabel ?? user.planLabel ?? "当前方案 · 创作者版"),
   };
@@ -8379,15 +8378,49 @@ function resolveAssetImageStyleSkillId(workbench) {
     : "project-style";
 }
 
-function resolveSelectedImageStyle(workbench) {
-  const selectedId = resolveAssetImageStyleSkillId(workbench);
-  if (selectedId === "project-style") {
-    return resolveEpisodeGenerationStyle(workbench);
+function resolveSelectedGenerationStyle(workbench) {
+  const selectedSkillId = String(
+    workbench?.ui?.selectedEpisodePromptSkillIds?.image_style ?? "",
+  ).trim();
+  const selectedId = selectedSkillId || String(
+    workbench?.ui?.assetImageStyleSkillId ?? "project-style",
+  ).trim();
+  const persistedStyle = workbench?.ui?.episodeGenerationStyleSnapshot;
+  const persistedProjectId = String(persistedStyle?.projectId ?? "").trim();
+  const activeProjectId = String(resolveActiveProjectId(workbench) ?? "").trim();
+  const persistedStyleIds = [persistedStyle?.id, persistedStyle?.code]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  const selectedProjectStyleCode = String(workbench?.ui?.episodeGenerationStyleCode ?? "").trim();
+  const snapshotMatchesSelection = !selectedId || (
+    selectedId === "project-style"
+      ? persistedStyleIds.includes(selectedProjectStyleCode)
+      : persistedStyleIds.includes(selectedId)
+  );
+  if (
+    persistedStyle &&
+    typeof persistedStyle === "object" &&
+    (!persistedProjectId || !activeProjectId || persistedProjectId === activeProjectId)
+    && snapshotMatchesSelection
+  ) {
+    const persistedPrompt = String(persistedStyle.prompt_content ?? persistedStyle.promptContent ?? "").trim();
+    if (persistedPrompt) {
+      return persistedStyle;
+    }
   }
-  return [
+  const availableStyles = [
     ...(Array.isArray(workbench.ui.episodeBatchOfficialImageStyleSkills) ? workbench.ui.episodeBatchOfficialImageStyleSkills : []),
     ...(Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills) ? workbench.ui.episodeBatchPrivateImageStyleSkills : []),
-  ].find((style) => String(style?.id ?? "").trim() === selectedId) ?? null;
+  ];
+  if (selectedId && selectedId !== "project-style") {
+    const selectedStyle = availableStyles.find((style) => String(style?.id ?? "").trim() === selectedId);
+    if (selectedStyle) return selectedStyle;
+  }
+  return resolveEpisodeGenerationStyle(workbench);
+}
+
+function resolveSelectedImageStyle(workbench) {
+  return resolveSelectedGenerationStyle(workbench);
 }
 
 function resolveStoryboardGeneratorStyle(workbench) {
@@ -8580,6 +8613,82 @@ function appendGenerationStylePrompt(prompt, style) {
     return basePrompt || null;
   }
   return [basePrompt, stylePrompt].filter(Boolean).join("\n");
+}
+
+function videoGenerationStyleSelectionFields(workbench, style) {
+  const styleId = String(style?.id ?? "").trim();
+  const availableSkillIds = new Set([
+    ...(Array.isArray(workbench.ui.episodeBatchOfficialImageStyleSkills) ? workbench.ui.episodeBatchOfficialImageStyleSkills : []),
+    ...(Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills) ? workbench.ui.episodeBatchPrivateImageStyleSkills : []),
+  ].map((item) => String(item?.id ?? "").trim()).filter(Boolean));
+  if (availableSkillIds.has(styleId)) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(styleId)
+      ? { imageStyleSkillId: styleId }
+      : {};
+  }
+  const styleCode = String(style?.code ?? styleId).trim();
+  return styleCode ? { imageStyleCode: styleCode } : {};
+}
+
+function collectAutomaticStyleEntries(workbench, selectedStyle, additionalStyles = []) {
+  const selectedIds = new Set([
+    selectedStyle?.id,
+    selectedStyle?.code,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean));
+  return [
+    ...(Array.isArray(workbench?.ui?.projectStyles) ? workbench.ui.projectStyles : []),
+    ...(Array.isArray(workbench?.ui?.batchImageStyles) ? workbench.ui.batchImageStyles : []),
+    ...(Array.isArray(workbench?.ui?.episodeBatchOfficialImageStyleSkills) ? workbench.ui.episodeBatchOfficialImageStyleSkills : []),
+    ...(Array.isArray(workbench?.ui?.episodeBatchPrivateImageStyleSkills) ? workbench.ui.episodeBatchPrivateImageStyleSkills : []),
+    ...(Array.isArray(additionalStyles) ? additionalStyles : []),
+  ].filter((style) => {
+    const ids = [style?.id, style?.code].map((value) => String(value ?? "").trim());
+    return !ids.some((id) => id && selectedIds.has(id));
+  });
+}
+
+function stripAutomaticStyleFragments(line, contents, names) {
+  let value = String(line ?? "");
+  for (const content of contents) {
+    const prefixes = [content, content.split(/[，。；、,.;!?！？]/u)[0].trim()]
+      .filter((item, index, list) => item.length >= 4 && list.indexOf(item) === index);
+    for (const prefix of prefixes) {
+      const index = value.indexOf(prefix);
+      if (index < 0) continue;
+      return value.slice(0, index).replace(/[，。；、,.;!?！？\s]+$/u, "").trim();
+    }
+  }
+  for (const name of names) {
+    const index = value.indexOf(name);
+    if (index >= 0 && value.slice(index).includes("风格")) {
+      return value.slice(0, index).replace(/[，。；、,.;!?！？\s]+$/u, "").trim();
+    }
+  }
+  return value;
+}
+
+function stripConflictingImageStylePrompt(workbench, prompt, selectedStyle, additionalStyles = []) {
+  const styles = collectAutomaticStyleEntries(workbench, selectedStyle, additionalStyles);
+  const contents = styles.map((style) => String(style?.prompt_content ?? style?.promptContent ?? "").trim()).filter(Boolean);
+  const names = styles.map((style) => String(style?.name ?? style?.label ?? style?.title ?? "").trim())
+    .filter(Boolean).map((name) => name.replace(/风格$/u, "").trim()).filter(Boolean);
+  return String(prompt ?? "").split(/\r?\n/u).map((line) => {
+    const value = line.trim();
+    if (!value || /^图片风格：/u.test(value) || /^(?:视觉|画面)?风格(?:为|：|:)/u.test(value)) return value;
+    return stripAutomaticStyleFragments(value, contents, names);
+  }).filter(Boolean).join("\n").trim();
+}
+
+function stripConflictingVideoStylePrompt(workbench, prompt, selectedStyle, additionalStyles = []) {
+  const styles = collectAutomaticStyleEntries(workbench, selectedStyle, additionalStyles);
+  const contents = styles.map((style) => String(style?.prompt_content ?? style?.promptContent ?? "").trim()).filter(Boolean);
+  const names = styles.map((style) => String(style?.name ?? style?.label ?? style?.title ?? "").trim())
+    .filter(Boolean).map((name) => name.replace(/风格$/u, "").trim()).filter(Boolean);
+  return String(prompt ?? "").split(/\r?\n/u).map((line) => {
+    const value = line.trim();
+    if (!value || /^视频风格：/u.test(value)) return "";
+    return stripAutomaticStyleFragments(value, contents, names);
+  }).filter(Boolean).join("\n").trim();
 }
 
 function appendImageGenerationStylePrompt(prompt, style, referenceName = "") {
@@ -24190,11 +24299,37 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!availableIds.has(skillId)) return;
     workbench.ui.assetImageStyleSkillId = skillId;
     workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    const selectedStyle = skillId === "project-style"
+      ? resolveEpisodeGenerationStyle(workbench)
+      : [
+          ...(Array.isArray(workbench.ui.episodeBatchOfficialImageStyleSkills) ? workbench.ui.episodeBatchOfficialImageStyleSkills : []),
+          ...(Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills) ? workbench.ui.episodeBatchPrivateImageStyleSkills : []),
+        ].find((item) => String(item?.id ?? "").trim() === skillId) ?? null;
+    const selectedStylePrompt = String(selectedStyle?.prompt_content ?? selectedStyle?.promptContent ?? "").trim();
+    workbench.ui.episodeGenerationStyleSnapshot = selectedStylePrompt
+      ? {
+          ...selectedStyle,
+          id: String(selectedStyle?.id ?? skillId).trim(),
+          prompt_content: selectedStylePrompt,
+          promptContent: selectedStylePrompt,
+          projectId: resolveActiveProjectId(workbench),
+        }
+      : null;
     workbench.ui.selectedEpisodePromptSkillIds = {
       ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
       image_style: skillId === "project-style" ? "" : skillId,
     };
     workbench.ui.assetImageStyleSkillModalOpen = false;
+    if (
+      workbench.ui.assetGeneratorTarget !== "storyboard" &&
+      !isAssetScope(workbench) &&
+      (workbench.ui.episodeMediaMode === "video" || workbench.ui.episodeMediaMode === "lip-sync")
+    ) {
+      setCurrentScopePrompt(
+        workbench,
+        appendStoryboardVideoStylePrompt(workbench, getCurrentScopePrompt(workbench)),
+      );
+    }
     if (workbench.ui.assetGeneratorTarget === "storyboard") {
       if (skillId === "project-style") {
         const projectStyle = resolveEpisodeGenerationStyle(workbench);
@@ -26647,6 +26782,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.episodeGenerationStyleCode = String(style.code ?? style.id);
     workbench.ui.episodeGenerationStyleProjectId = resolveActiveProjectId(workbench);
+    workbench.ui.assetImageStyleSkillId = "project-style";
+    workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    const stylePrompt = String(style.prompt_content ?? style.promptContent ?? "").trim();
+    workbench.ui.episodeGenerationStyleSnapshot = stylePrompt
+      ? {
+          ...style,
+          id: String(style.id ?? style.code ?? "").trim(),
+          prompt_content: stylePrompt,
+          promptContent: stylePrompt,
+          projectId: resolveActiveProjectId(workbench),
+        }
+      : null;
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: "",
+    };
     syncImportedAssetGenerationStyle(workbench, style);
     if (
       !isAssetScope(workbench) &&
@@ -39658,12 +39809,46 @@ function formatSingleEpisodeAiSegmentTimeRange(value) {
   return `${Number(match[1]).toFixed(1)}-${Number(match[2]).toFixed(1)}秒`;
 }
 
+const AI_PER_SHOT_PROMPT_COMMENTARY_PATTERN = new RegExp(
+  [
+    "无法在分镜内填完",
+    "按规则",
+    "实际上",
+    "不需要\\d*镜头",
+    "合规则",
+    "已构成完整叙事",
+    "但原要求",
+    "上面\\d*个镜头",
+    "闭环",
+    "可以到此结束",
+  ].join("|"),
+  "u",
+);
+
+const AI_PER_SHOT_PROMPT_SECTION_BOUNDARY = /^\s*(【镜头\d+】|资产对照表|视频场景对照表|视频角色对照表|视频道具对照表)/u;
+
 function sanitizeSingleEpisodeAiPerShotVideoPrompt(prompt) {
   const text = String(prompt ?? "").trim();
   if (!text) {
     return "";
   }
-  return text;
+  const lines = text
+    .replace(/[（(][^）)]*[）)]/gu, (segment) => (
+      AI_PER_SHOT_PROMPT_COMMENTARY_PATTERN.test(segment) ? "" : segment
+    ))
+    .split(/\r?\n/u)
+    .filter((line) => !AI_PER_SHOT_PROMPT_COMMENTARY_PATTERN.test(line));
+  return lines
+    .filter((line, index) => {
+      if (!/^\s*【镜头\d+】\s*$/u.test(line)) {
+        return true;
+      }
+      const next = lines.slice(index + 1).find((candidate) => candidate.trim());
+      return Boolean(next) && !AI_PER_SHOT_PROMPT_SECTION_BOUNDARY.test(next);
+    })
+    .join("\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
 }
 
 function normalizeSingleEpisodeAiPerShotTimeRange(timeRange, durationSec) {
@@ -45942,7 +46127,7 @@ export function buildImageGenerationPayload(workbench) {
   const orderedImageReferences = filterOrderedGenerationReferences(orderedReferences, "image");
   const styleReferenceIndex = orderedImageReferences.findIndex((item) => isAutomaticImageStyleReference(item));
   const promptOverride = appendImageGenerationStylePrompt(
-    normalizedPrompt,
+    stripConflictingImageStylePrompt(workbench, normalizedPrompt, selectedImageStyle),
     selectedImageStyle,
     styleReferenceIndex >= 0 ? `图${styleReferenceIndex + 1}` : "",
   ) ?? normalizedPrompt;
@@ -46835,14 +47020,14 @@ export function buildVideoGenerationPayload(workbench) {
     getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
     orderedImageReferences,
   );
-  const motionPrompt = appendGenerationStylePrompt(
-    baseMotionPrompt,
-    resolveEpisodeGenerationStyle(workbench),
-  );
+  const selectedVideoStyle = resolveSelectedGenerationStyle(workbench);
+  const motionPrompt = appendStoryboardVideoStylePrompt(workbench, baseMotionPrompt);
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
+    prompt: motionPrompt,
     motionPrompt,
     model,
+    ...videoGenerationStyleSelectionFields(workbench, selectedVideoStyle),
     parameters: {
       ...configuredParameters,
       mode: videoMode,
@@ -47281,11 +47466,11 @@ function buildStoryboardImportPrompt(workbench, prompt) {
 }
 
 function appendStoryboardVideoStylePrompt(workbench, prompt, fallbackStylePrompt = "") {
-  const selectedStyle = resolveEpisodeGenerationStyle(workbench);
+  const selectedStyle = resolveSelectedGenerationStyle(workbench);
   const stylePrompt = String(
     selectedStyle?.prompt_content ?? selectedStyle?.promptContent ?? fallbackStylePrompt,
   ).trim();
-  const basePrompt = String(prompt ?? "").trim();
+  const basePrompt = stripConflictingVideoStylePrompt(workbench, prompt, selectedStyle);
   if (!stylePrompt) {
     return basePrompt;
   }
@@ -47952,7 +48137,7 @@ export async function generateStoryboardVideos(workbench) {
             ...payload,
             targetType: "storyboard",
             targetId: selectedStoryboard.linkedShotId ?? selectedStoryboard.id,
-            prompt: payload.motionPrompt ?? submission.promptPreview,
+            prompt: payload.prompt ?? payload.motionPrompt ?? submission.promptPreview,
           }),
           submission,
           "video",
@@ -48105,7 +48290,9 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
     : [];
   const videoPayload = isVideo ? buildVideoGenerationPayload(workbench) : null;
   const imagePayload = !isVideo ? buildImageGenerationPayload(workbench) : null;
-  const submissionPrompt = imagePayload?.promptOverride || scopePrompt || storyboard?.description || "";
+  const submissionPrompt = isVideo
+    ? videoPayload?.prompt || scopePrompt || storyboard?.description || ""
+    : imagePayload?.promptOverride || scopePrompt || storyboard?.description || "";
   const selectedModelId = isVideo
     ? videoPayload?.model ?? workbench.ui.selectedModelId ?? null
     : imagePayload?.model ?? workbench.ui.selectedModelId ?? null;
@@ -50158,12 +50345,25 @@ function buildEpisodeBatchModal(workbench, {
   const selectedImageStyleSkillId = resolveAssetImageStyleSkillId(workbench);
   const selectedImageStyleSkill = [...officialImageStyleSkills, ...privateImageStyleSkills]
     .find((item) => item.id === selectedImageStyleSkillId) ?? null;
+  const selectedVideoStyleOption = selectedImageStyleSkillId !== "project-style" && selectedImageStyleSkill
+    ? {
+        id: String(selectedImageStyleSkill.id ?? "").trim(),
+        label: String(selectedImageStyleSkill.label ?? selectedImageStyleSkill.name ?? "").trim(),
+        preview: String(selectedImageStyleSkill.preview ?? selectedImageStyleSkill.coverImageUrl ?? "").trim(),
+        prompt_content: String(selectedImageStyleSkill.prompt_content ?? selectedImageStyleSkill.promptContent ?? "").trim(),
+        promptContent: String(selectedImageStyleSkill.promptContent ?? selectedImageStyleSkill.prompt_content ?? "").trim(),
+        priceCredits: Number(selectedImageStyleSkill.priceCredits) || 0,
+      }
+    : null;
   const publicStyles = mode === "image"
     ? [
         ...(projectStyleOption ? [projectStyleOption] : []),
         ...officialImageStyleSkills.filter((style) => style.id !== projectStyleOption?.id),
       ]
-    : projectStyles;
+    : [
+        ...(selectedVideoStyleOption ? [selectedVideoStyleOption] : []),
+        ...projectStyles.filter((style) => style.id !== selectedVideoStyleOption?.id),
+      ];
   const customStyles = mode === "image" ? privateImageStyleSkills : [];
   const imageModelOptions = resolveEpisodeBatchImageModelOptions(workbench);
   const batchPromptPresetCategories = resolveBatchPromptPresetCategories(workbench);
@@ -50193,7 +50393,7 @@ function buildEpisodeBatchModal(workbench, {
     customStyles,
     selectedStyleId: mode === "image"
       ? String(selectedImageStyleSkill?.id ?? projectStyleOption?.id ?? publicStyles[0]?.id ?? customStyles[0]?.id ?? "")
-      : String(resolveEpisodeGenerationStyle(workbench)?.id ?? resolveEpisodeGenerationStyle(workbench)?.code ?? publicStyles[0]?.id ?? ""),
+      : String(selectedVideoStyleOption?.id ?? resolveEpisodeGenerationStyle(workbench)?.id ?? resolveEpisodeGenerationStyle(workbench)?.code ?? publicStyles[0]?.id ?? ""),
     batchPromptPresetCategories,
     videoModelId: defaultVideoModelId,
     videoModelOptions,
@@ -50833,7 +51033,13 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
     Object.prototype.hasOwnProperty.call(item, "priceCredits")
   ));
   const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, selectedSkillId, modal);
-  const batchPromptPreview = normalizeEpisodeBatchImagePrompt(promptPreview, []);
+  const batchPromptPreview = normalizeEpisodeBatchImagePrompt(
+    stripConflictingImageStylePrompt(workbench, promptPreview, selectedStyle, [
+      ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
+      ...(Array.isArray(modal?.customStyles) ? modal.customStyles : []),
+    ]),
+    [],
+  );
   return {
     turnId: createAssetConversationTurnId(),
     mediaKind: "image",
@@ -50891,7 +51097,10 @@ function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, su
   ].sort(compareComposerReferenceOrder);
   const styleReferenceIndex = quickReferences.findIndex((reference) => isAutomaticImageStyleReference(reference));
   const promptOverride = appendImageGenerationStylePrompt(
-    submission?.promptPreview ?? "",
+    stripConflictingImageStylePrompt(workbench, submission?.promptPreview ?? "", selectedStyle, [
+      ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
+      ...(Array.isArray(modal?.customStyles) ? modal.customStyles : []),
+    ]),
     selectedStyle,
     styleReferenceIndex >= 0 ? `图${styleReferenceIndex + 1}` : "",
   ) ?? submission?.promptPreview ?? "";
@@ -50982,7 +51191,7 @@ async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, n
       id: `batch-video-${storyboard.id}-${Date.now()}`,
       turnId: createAssetConversationTurnId(),
       mediaKind: "video",
-      promptPreview: payload.motionPrompt,
+      promptPreview: payload.prompt,
       selectedModelId: payload.model,
       resolution: payload.parameters.resolution ?? null,
       aspectRatio: payload.parameters.aspectRatio ?? null,
@@ -51010,7 +51219,7 @@ async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, n
       ...payload,
       targetType: "storyboard",
       targetId: storyboard.linkedShotId ?? storyboard.id,
-      prompt: payload.motionPrompt,
+      prompt: payload.prompt ?? payload.motionPrompt,
     });
     const result = normalizeEpisodeTaskForLegacyResult(task, submission, "video");
     applyEpisodeGenerationTaskResult(workbench, result, storyboard.id, "video");
@@ -51059,14 +51268,18 @@ function buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboar
   const prompt = storyboardBoardMode
     ? buildEpisodeBatchStoryboardVideoPrompt(workbench, modal, storyboard?.description ?? storyboard?.prompt ?? "")
     : appendEpisodeBatchVideoStylePrompt(workbench, modal, storyboard?.description ?? storyboard?.prompt ?? "");
+  const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, modal?.selectedStyleId, modal)
+    ?? resolveSelectedGenerationStyle(workbench);
   const quickReferences = storyboardBoardMode
     ? buildSelectedStoryboardQuickReference(workbench, storyboard, prompt, { storyboardOnly: true })
     : generationState.quickReferenceItems ?? [];
   const referenceUploads = storyboardBoardMode ? [] : generationState.referenceUploads ?? [];
   return {
     shotId: storyboard?.linkedShotId ?? null,
+    prompt,
     motionPrompt: prompt,
     model,
+    ...videoGenerationStyleSelectionFields(workbench, selectedStyle),
     parameters: {
       ...configuredParameters,
       ...modalParameters,
@@ -51100,8 +51313,13 @@ function buildEpisodeBatchStoryboardVideoPrompt(workbench, modal, prompt) {
 }
 
 function appendEpisodeBatchVideoStylePrompt(workbench, modal, prompt) {
-  const basePrompt = String(prompt ?? "").trim();
-  const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, modal?.selectedStyleId, modal);
+  const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, modal?.selectedStyleId, modal)
+    ?? resolveSelectedGenerationStyle(workbench);
+  const modalStyles = [
+    ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
+    ...(Array.isArray(modal?.customStyles) ? modal.customStyles : []),
+  ];
+  const basePrompt = stripConflictingVideoStylePrompt(workbench, prompt, selectedStyle, modalStyles);
   const stylePrompt = String(selectedStyle?.prompt_content ?? selectedStyle?.promptContent ?? "").trim();
   if (!stylePrompt) {
     return basePrompt;
@@ -52137,7 +52355,7 @@ async function runTaskCenterPolling(workbench, options = {}) {
         }
         renderWorkbenchChrome(workbench);
       } else {
-        render(workbench);
+        syncTaskCenterActionCountDom(workbench);
       }
     }
   } catch (error) {

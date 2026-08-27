@@ -77,6 +77,24 @@ describe("generation failure display messages", () => {
     assert.equal(message, "生成失败，请修改素材或提示词后重新生成");
   });
 
+  it("keeps shared reference-material failure codes model-neutral", () => {
+    for (const failureCode of ["model_reference_media_required", "model_real_person_detected"]) {
+      assert.equal(
+        generationFailureDisplayMessage({ failureCode }),
+        failureCode === "model_reference_media_required"
+          ? "模型需要上传至少一个参考素材，请上传后重试。"
+          : "素材包含真人信息，请修改后再试",
+      );
+    }
+  });
+
+  it("uses shared overload guidance when only the failure code remains", () => {
+    assert.equal(
+      generationFailureDisplayMessage({ failureCode: "model_service_overloaded" }),
+      "模型负载过高，请更换模型再试",
+    );
+  });
+
   it("prefers a concrete provider response over a persisted generic image failure", () => {
     const message = generationFailureDisplayMessage({
       failureCode: "provider_failed",

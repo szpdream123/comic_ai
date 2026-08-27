@@ -35,7 +35,6 @@ describe("creator dev detached scripts", () => {
     assert.match(source, /run-generation-video-worker\.mjs/);
     assert.match(source, /run-canvas-agent-worker\.mjs/);
     assert.match(source, /run-media-crawler-api\.mjs/);
-    assert.match(source, /run-marketing-competitor-collection-worker\.mjs/);
     assert.match(source, /isProjectProcess/);
     assert.match(source, /DATABASE_URL\(PostgreSQL\)/);
     assert.match(source, /REDIS_URL\(Redis\)/);

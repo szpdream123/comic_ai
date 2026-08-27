@@ -11081,6 +11081,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           body: JSON.stringify({
             targetType: "episode",
             targetId: episodeId,
+            prompt: "stale episode video",
             motionPrompt: "fixed episode video",
             model: "video_mock_1",
             parameters: { durationSec: 5 },
@@ -11089,6 +11090,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
       const videoTask = videoTaskEnvelope.data;
+      const persistedVideoTask = await db.query<{ input_snapshot_json: Record<string, unknown> | string }>(
+        "SELECT input_snapshot_json FROM tasks WHERE id = $1",
+        [videoTask.taskId],
+      );
+      const videoSnapshot = typeof persistedVideoTask.rows[0]?.input_snapshot_json === "string"
+        ? JSON.parse(persistedVideoTask.rows[0].input_snapshot_json as string)
+        : persistedVideoTask.rows[0]?.input_snapshot_json ?? {};
 
       const lipSyncTaskResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
@@ -11288,6 +11296,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(videoTask.kind, "video");
       assert.equal(videoTask.status, "succeeded");
       assert.equal(videoTask.result.mediaKind, "video");
+      assert.equal(videoSnapshot.prompt, "stale episode video");
       assert.match(videoTask.result.videoUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
       assert.doesNotMatch(videoTask.result.videoUrl, /C:\\Users\\/);
       assert.ok(videoTask.creditBalance < 10000);
@@ -11445,9 +11454,31 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
+      await db.query("UPDATE tasks SET status = 'running' WHERE id = $1", [videoTaskEnvelope.data?.taskId]);
+
+      const concurrentVideoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "local-storyboard-video-task-concurrent",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "storyboard",
+            targetId: localStoryboardId,
+            motionPrompt: "local storyboard video variation",
+            model: "video_mock_1",
+            parameters: { durationSec: 5 },
+          }),
+        },
+      );
+      const concurrentVideoTaskEnvelope = await concurrentVideoTaskResponse.json();
 
       assert.equal(imageTaskResponse.status, 200, JSON.stringify(imageTaskEnvelope));
       assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskEnvelope));
+      assert.equal(concurrentVideoTaskResponse.status, 200, JSON.stringify(concurrentVideoTaskEnvelope));
 
       const snapshots = await db.query<{
         task_id: string;
@@ -11460,17 +11491,17 @@ describe("phone auth dev server", { concurrency: false }, () => {
           WHERE task_id = ANY($1::uuid[])
           ORDER BY task_id
         `,
-        [[imageTaskEnvelope.data?.taskId, videoTaskEnvelope.data?.taskId]],
+        [[imageTaskEnvelope.data?.taskId, videoTaskEnvelope.data?.taskId, concurrentVideoTaskEnvelope.data?.taskId]],
       );
 
-      assert.equal(snapshots.rows.length, 2);
+      assert.equal(snapshots.rows.length, 3);
       assert.deepEqual(
         snapshots.rows.map((row) => row.target_type),
-        ["storyboard", "storyboard"],
+        ["storyboard", "storyboard", "storyboard"],
       );
       assert.deepEqual(
         snapshots.rows.map((row) => row.target_id),
-        [episodeId, episodeId],
+        [episodeId, episodeId, episodeId],
       );
     } finally {
       await server.close();
@@ -15835,8 +15866,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(productionLauncherScript, /generation-worker/);
     assert.match(productionRuntimeBuildScript, /run-generation-video-worker\.mjs/);
     assert.match(productionRuntimeBuildScript, /run-canvas-agent-worker\.mjs/);
-    assert.match(productionLauncherScript, /marketing-competitor-collection/);
-    assert.match(productionRuntimeBuildScript, /run-marketing-competitor-collection-worker\.mjs/);
     assert.match(productionLauncherScript, /media-crawler/);
     assert.match(productionRuntimeBuildScript, /run-media-crawler-api\.mjs/);
     assert.match(productionRuntimeBuildScript, /bundle:\s*true/);

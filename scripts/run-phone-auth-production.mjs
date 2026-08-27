@@ -134,11 +134,8 @@ supervisor.start("generation-worker", [
 supervisor.start("canvas-agent", [
   productionRuntime.canvasAgent,
 ], { restartOnFailure: true });
-supervisor.start("marketing-competitor-collection", [
-  productionRuntime.marketingCompetitorCollection,
-], { restartOnFailure: true });
 console.info(
-  `[production] API, ${mediaCrawlerManaged ? "media-crawler, " : ""}generation-outbox, generation-repair, generation-worker, canvas-agent, and marketing-competitor-collection are supervised.`,
+  `[production] API, ${mediaCrawlerManaged ? "media-crawler, " : ""}generation-outbox, generation-repair, generation-worker, and canvas-agent are supervised.`,
 );
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

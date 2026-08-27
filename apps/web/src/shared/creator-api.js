@@ -2733,6 +2733,9 @@ export const creatorApi = {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(input.pageSize) || 12)));
     params.set("page", String(page));
     params.set("pageSize", String(pageSize));
+    // Image-style skills include their prompt body for client-side generation
+    // composition. Keep a distinct cache key from the older metadata-only response.
+    if (input.category === "image_style") params.set("includeContent", "1");
     const source = input.source === "private" ? "library" : "catalog";
     const path = `/api/creator/prompt-skills/${source}?${params.toString()}`;
     return fetchJsonWithTtl(path, {

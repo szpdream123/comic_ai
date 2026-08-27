@@ -497,6 +497,22 @@ test("prompt skill catalog uses a longer cache than a personal skill library", a
   ]);
 });
 
+test("image-style skill requests use the prompt-content cache variant", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ items: [] }) };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?prompt-skill-content-cache=${Date.now()}`);
+  await creatorApi.getPromptSkills({ source: "official", category: "image_style" });
+  await creatorApi.getPromptSkills({ source: "official", category: "image_style" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/creator/prompt-skills/catalog?category=image_style&page=1&pageSize=12&includeContent=1",
+  ]);
+});
+
 test("prompt reverse allows image models enough time to complete", async () => {
   const timeoutCalls = [];
   const previousSetTimeout = globalThis.setTimeout;

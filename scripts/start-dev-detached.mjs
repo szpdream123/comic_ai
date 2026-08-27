@@ -176,7 +176,6 @@ async function waitForStackReady(input) {
   let lastStatus = "status unavailable";
   const requiredLogMarkers = [
     "Phone auth dev server listening on",
-    "[marketing-competitor-collection] Worker started.",
   ];
   if (isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true")) {
     requiredLogMarkers.push("[media-crawler] API started on http://127.0.0.1:4312");

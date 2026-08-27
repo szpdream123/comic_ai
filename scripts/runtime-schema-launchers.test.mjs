@@ -186,7 +186,6 @@ describe("runtime schema migration launchers", () => {
     assert.match(buildSource, /run-generation-video-worker\.mjs/);
     assert.match(buildSource, /run-canvas-agent-worker\.mjs/);
     assert.match(buildSource, /run-media-crawler-api\.mjs/);
-    assert.match(buildSource, /run-marketing-competitor-collection-worker\.mjs/);
     assert.match(buildSource, /production-foundation-schema\.ts/);
   });
 

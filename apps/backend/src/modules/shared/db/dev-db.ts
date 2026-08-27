@@ -133,6 +133,7 @@ interface TransactionState {
   client: PoolClient | PooledDevDatabaseClient | null;
   clientPromise: Promise<PoolClient | PooledDevDatabaseClient>;
   released: boolean;
+  clientErrorHandler?: (error: unknown) => void;
 }
 
 interface DatabaseExecutionContext {
@@ -183,6 +184,25 @@ export function createPostgresDatabase(pool: Pool, schemaName?: string): DevData
           released: false,
           clientPromise: pool.connect().then(async (client) => {
             transactionState.client = client;
+            const clientErrorHandler = (error: unknown) => {
+              if (transactionState.released) {
+                return;
+              }
+              transactionState.released = true;
+              const code = typeof (error as { code?: unknown })?.code === "string"
+                ? (error as { code: string }).code
+                : "PG_TRANSACTION_CLIENT_ERROR";
+              const message = error instanceof Error ? error.message : String(error);
+              console.error(`[database] transaction PostgreSQL client error ${code}: ${message}`);
+              try {
+                client.release(error instanceof Error ? error : new Error(message));
+              } catch {
+                // The pool may already be removing this failed client.
+              }
+            };
+            transactionState.clientErrorHandler = clientErrorHandler;
+            (client as PoolClient & { on?: (event: string, listener: (error: unknown) => void) => void })
+              .on?.("error", clientErrorHandler);
             try {
               await setSearchPathIfNeeded(client, schemaName);
               return client;
@@ -257,6 +277,12 @@ function releaseTransactionClient(transactionState: TransactionState) {
     return;
   }
   transactionState.released = true;
+  if (transactionState.clientErrorHandler) {
+    (transactionState.client as PoolClient & {
+      removeListener?: (event: string, listener: (error: unknown) => void) => void;
+    }).removeListener?.("error", transactionState.clientErrorHandler);
+    transactionState.clientErrorHandler = undefined;
+  }
   transactionState.client.release();
 }
 
@@ -272,7 +298,7 @@ interface PooledDevDatabasePool {
 
 interface PooledDevDatabaseClient {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<SqlQueryResult<T>>;
-  release(): void;
+  release(error?: Error): void;
 }
 
 async function setSearchPathIfNeeded(client: PoolClient, schemaName?: string) {

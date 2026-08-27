@@ -21,6 +21,7 @@ function createRoot() {
 function createTaskCenterActionRoot() {
   const attributes = new Map();
   let badge = null;
+  let renderWrites = 0;
   const action = {
     ownerDocument: {
       createElement() {
@@ -50,10 +51,20 @@ function createTaskCenterActionRoot() {
     getBadge() {
       return badge;
     },
+    getRenderWrites() {
+      return renderWrites;
+    },
     root: {
+      get innerHTML() {
+        return "";
+      },
+      set innerHTML(_value) {
+        renderWrites += 1;
+      },
       querySelector(selector) {
         return selector === ".task-center-action" ? action : null;
       },
+      querySelectorAll() { return []; },
     },
   };
 }
@@ -421,6 +432,45 @@ describe("production workbench task center", () => {
 
     assert.equal(dom.attributes.get("aria-label"), "任务中心");
     assert.equal(dom.getBadge(), null);
+  });
+
+  it("polls task updates on background surfaces without a full render", async () => {
+    const dom = createTaskCenterActionRoot();
+    const workbench = {
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      root: dom.root,
+      taskCenterPollInFlight: false,
+      taskCenterPageLoadInFlight: false,
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: false,
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+      },
+      api: {
+        async getGenerationTask() {
+          return {
+            taskId: "task-background-poll",
+            kind: "image",
+            status: "completed",
+            updatedAt: "2026-08-27T08:00:00.000Z",
+          };
+        },
+      },
+    };
+    registerTaskCenterTaskForTest(workbench, "task-background-poll", {
+      status: "queued",
+      kind: "image",
+    });
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.equal(workbench.ui.taskCenterTasksById["task-background-poll"].status, "completed");
+    assert.equal(dom.attributes.get("aria-label"), "任务中心");
+    assert.equal(dom.getBadge(), null);
+    assert.equal(dom.getRenderWrites(), 0);
   });
 
   it("keeps a known running task running when canvas polling registers its id again", () => {

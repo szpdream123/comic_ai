@@ -109,15 +109,6 @@ if (mediaCrawlerManaged) {
 } else {
   console.info("[creator-dev] MEDIA_CRAWLER_MANAGED=false; MediaCrawler must run outside this server.");
 }
-supervisor.start("marketing-competitor-collection", [
-  ...resolveTsxRuntimeArgs(runtime),
-  "scripts/run-marketing-competitor-collection-worker.mjs",
-], { restartOnFailure: true });
-supervisor.start("marketing-generation", [
-  ...resolveTsxRuntimeArgs(runtime),
-  "scripts/run-marketing-generation-worker.mjs",
-], { restartOnFailure: true });
-
 if (generationQueueEnabled) {
   supervisor.start("generation-outbox", [
     ...resolveTsxRuntimeArgs(runtime),

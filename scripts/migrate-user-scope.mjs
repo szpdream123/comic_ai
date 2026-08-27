@@ -127,8 +127,10 @@ const migrations = [
   ["20260921-marketing-generation-confirmations.sql", "packages/db/migrations/20260921-marketing-generation-confirmations.sql"],
   ["20260922-marketing-generation-skills.sql", "packages/db/migrations/20260922-marketing-generation-skills.sql"],
   ["20260923-marketing-skill-kinds.sql", "packages/db/migrations/20260923-marketing-skill-kinds.sql"],
+  ["20260930-marketing-skill-admin-fields.sql", "packages/db/migrations/20260930-marketing-skill-admin-fields.sql"],
   ["20260924-add-episode-cover-storage.sql", "packages/db/migrations/20260924-add-episode-cover-storage.sql"],
   ["20260925-add-marketing-competitor-collection.sql", "packages/db/migrations/20260925-add-marketing-competitor-collection.sql"],
+  ["20260926-optimize-home-recommendation-covers.sql", "packages/db/migrations/20260926-optimize-home-recommendation-covers.sql"],
   ["20260927-require-prompt-reverse-vision-model.sql", "packages/db/migrations/20260927-require-prompt-reverse-vision-model.sql"],
   ["20260928-fix-prompt-reverse-modelflare-pricing.sql", "packages/db/migrations/20260928-fix-prompt-reverse-modelflare-pricing.sql"],
   ["20260929-restore-cumob-prompt-reverse-model.sql", "packages/db/migrations/20260929-restore-cumob-prompt-reverse-model.sql"],
@@ -150,9 +152,9 @@ const migrations = [
   ["20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql", "packages/db/migrations/20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql"],
   ["20261016-correct-globalaiopc-wan27-duration-options.sql", "packages/db/migrations/20261016-correct-globalaiopc-wan27-duration-options.sql"],
   ["20261017-disable-klingo3-frame-parameters.sql", "packages/db/migrations/20261017-disable-klingo3-frame-parameters.sql"],
-  ["20261020-create-geo-monitoring.sql", "packages/db/migrations/20261020-create-geo-monitoring.sql"],
-  ["20261021-harden-geo-monitoring.sql", "packages/db/migrations/20261021-harden-geo-monitoring.sql"],
-  ["20261022-fence-geo-monitor-runs.sql", "packages/db/migrations/20261022-fence-geo-monitor-runs.sql"],
+  ["20261018-disable-globalaiopc-sd25-special-frame-parameters.sql", "packages/db/migrations/20261018-disable-globalaiopc-sd25-special-frame-parameters.sql"],
+  ["20261019-remove-marketing-module.sql", "packages/db/migrations/20261019-remove-marketing-module.sql"],
+  ["20261020-add-globalaiopc-wan30-r2v.sql", "packages/db/migrations/20261020-add-globalaiopc-wan30-r2v.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -192,8 +194,10 @@ const runtimeSafeMigrationNames = new Set([
   "20260921-marketing-generation-confirmations.sql",
   "20260922-marketing-generation-skills.sql",
   "20260923-marketing-skill-kinds.sql",
+  "20260930-marketing-skill-admin-fields.sql",
   "20260924-add-episode-cover-storage.sql",
   "20260925-add-marketing-competitor-collection.sql",
+  "20260926-optimize-home-recommendation-covers.sql",
   "20260927-require-prompt-reverse-vision-model.sql",
   "20260928-fix-prompt-reverse-modelflare-pricing.sql",
   "20260929-restore-cumob-prompt-reverse-model.sql",
@@ -208,9 +212,9 @@ const runtimeSafeMigrationNames = new Set([
   "20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql",
   "20261016-correct-globalaiopc-wan27-duration-options.sql",
   "20261017-disable-klingo3-frame-parameters.sql",
-  "20261020-create-geo-monitoring.sql",
-  "20261021-harden-geo-monitoring.sql",
-  "20261022-fence-geo-monitor-runs.sql",
+  "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql",
+  "20261019-remove-marketing-module.sql",
+  "20261020-add-globalaiopc-wan30-r2v.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
