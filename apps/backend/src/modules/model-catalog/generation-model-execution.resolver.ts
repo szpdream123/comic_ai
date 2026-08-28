@@ -118,6 +118,7 @@ function providerExecutorFromProtocol(
       protocol === "saier_video" ||
       protocol === "banana_router" ||
       protocol === "san_bao" ||
+      protocol === "chiyuan_video" ||
       (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
     )
   ) {

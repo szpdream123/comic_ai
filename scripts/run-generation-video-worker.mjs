@@ -7,6 +7,7 @@ import { Worker } from "bullmq";
 import Redis from "ioredis";
 
 import { runWithRedisStartupRetry } from "../apps/backend/src/modules/model-gateway/redis-readiness.ts";
+import { acquireRuntimeScopedProcessInstanceLock } from "./process-instance-lock.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
@@ -68,6 +69,14 @@ const { resolveWorkerIsolationConfig } = await import("../apps/backend/src/modul
 const isolationConfig = resolveWorkerIsolationConfig(process.env);
 
 const config = loadGenerationQueueConfig(process.env);
+const releaseLocalWorkerInstanceLock = isolationConfig.workerEnvironment === "local"
+  ? acquireRuntimeScopedProcessInstanceLock([
+      isolationConfig.workerEnvironment,
+      process.env.DATABASE_URL ?? "",
+      config.redisUrl,
+      config.queuePrefix,
+    ].join("\n"), { label: "generation_video_worker" })
+  : () => {};
 const db = await createDevDb();
 const generationWorkerLeaseOwnerId = `${hostname()}:${process.pid}:${randomUUID()}`;
 const generationWorkerLeaseMs = 20_000;
@@ -891,6 +900,7 @@ async function shutdown(signal) {
     queueDirectoryRedis.quit(),
     db.close(),
   ]);
+  releaseLocalWorkerInstanceLock();
   console.info("[generation-video] Worker stopped.");
 }
 

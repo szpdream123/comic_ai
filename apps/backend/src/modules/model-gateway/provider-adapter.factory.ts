@@ -3,6 +3,11 @@ import { AliyunBailianAudioProviderAdapter } from "./aliyun-bailian-audio.provid
 import { ApiMartAudioProviderAdapter } from "./apimart-audio.provider-adapter.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { BananaRouterProviderAdapter } from "./bananarouter.provider-adapter.ts";
+import {
+  ChiYuanVideoProviderAdapter,
+  isChiYuanVideoRequestFormat,
+  validateChiYuanVideoProviderConfig,
+} from "./chiyuan-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
@@ -136,6 +141,39 @@ export function createProviderAdapterFromModelConfig(
       editEndpoint: resolveBananaRouterEndpoint(providerConfig, "editEndpoint"),
       queryTaskEndpoint: resolveBananaRouterEndpoint(providerConfig, "queryTaskEndpoint"),
       resultFormat: resolveProviderResultFormat(providerConfig),
+      fetchImpl,
+    });
+  }
+  if (providerProtocol === "chiyuan_video") {
+    const configError = validateChiYuanVideoProviderConfig({
+      mediaType: modelConfig.mediaType,
+      providerModel: modelConfig.providerModel,
+      providerConfig,
+    }, { allowRuntimeResolvedApiKey: true });
+    if (configError) {
+      throw providerAdapterConfigError(configError, { providerProtocol });
+    }
+    if (modelConfig.mediaType?.trim() !== "video") {
+      throw providerAdapterConfigError("provider_request_format_media_mismatch", { providerProtocol });
+    }
+    const requestFormat = readNonEmptyString(providerConfig.requestFormat);
+    if (!isChiYuanVideoRequestFormat(requestFormat)) {
+      throw providerAdapterConfigError("provider_request_format_required", { providerProtocol });
+    }
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!createTaskEndpoint) {
+      throw providerAdapterConfigError("provider_endpoint_required", { providerProtocol });
+    }
+    if (!queryTaskEndpoint) {
+      throw providerAdapterConfigError("provider_query_endpoint_required", { providerProtocol });
+    }
+    return new ChiYuanVideoProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      requestFormat,
+      createTaskEndpoint,
+      queryTaskEndpoint,
       fetchImpl,
     });
   }

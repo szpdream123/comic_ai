@@ -5,6 +5,7 @@ import {
   CanvasAgentModelCompatibilityProbeService,
   type CanvasAgentModelCompatibilityProbeResult,
 } from "../canvas-agent/canvas-agent-model-compatibility-probe.service.ts";
+import { validateChiYuanVideoProviderConfig } from "../model-gateway/chiyuan-video.provider-adapter.ts";
 import { generationPollIntervalMs } from "../model-gateway/generation-timeout.policy.ts";
 import { validateBananaRouterProviderConfig } from "../model-gateway/provider-adapter.factory.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
@@ -1321,6 +1322,12 @@ export function createAdminModelConfigService(deps: {
     if (!["active", "disabled", "archived"].includes(input.status)) {
       return error(400, "invalid_model_status", "模型状态不支持");
     }
+    if (input.status === "active" && existing.providerProtocol === "chiyuan_video") {
+      const launchCheck = modelLaunchCheck(existing);
+      if (!launchCheck.ok) {
+        return error(400, "model_launch_check_failed", launchCheck.failedItems[0]?.message ?? "模型配置未通过启用校验");
+      }
+    }
     await deps.db.query(
       "UPDATE ai_model_configs SET status = $2, updated_at = $3 WHERE id = $1",
       [input.id, input.status, input.now],
@@ -2350,7 +2357,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "chiyuan_video", "custom_http"].includes(providerProtocol);
 }
 
 function providerRequiresApiKey(providerProtocol: string | undefined) {
@@ -2377,7 +2384,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "chiyuan_video", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
@@ -2412,6 +2419,20 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
   const apiKeyEnv = readString(input.providerConfig?.apiKeyEnv);
   if (apiKeyEnv && looksLikeSecretValue(apiKeyEnv)) {
     return error(400, "api_key_env_must_be_reference", "密钥引用不能保存明文密钥");
+  }
+  if (input.providerProtocol === "chiyuan_video" && validateChiYuanVideoProviderConfig(input)) {
+    return error(400, "chiyuan_provider_config_invalid", "驰源模型必须使用固定域名、ChiYuan_API_KEY、匹配的 Seedance 模型与接口格式");
+  }
+  if (input.providerProtocol === "chiyuan_video" && input.status === "active") {
+    if (!Number.isFinite(Number(input.pricing?.baseCredits)) || Number(input.pricing?.baseCredits) <= 0) {
+      return error(400, "model_launch_check_failed", "启用驰源模型前必须配置大于 0 的基础积分");
+    }
+    if (!input.parameterSchema || Object.keys(input.parameterSchema).length === 0) {
+      return error(400, "model_launch_check_failed", "启用驰源模型前必须配置参数 schema");
+    }
+    if (!readString(input.dispatchPolicy?.submitQueueName) || !readString(input.dispatchPolicy?.pollQueueName)) {
+      return error(400, "model_launch_check_failed", "启用驰源模型前必须配置提交与轮询队列");
+    }
   }
   const sanBaoProviderConfigIssue = validateAdminSanBaoProviderConfig(input)[0];
   if (sanBaoProviderConfigIssue) {
@@ -2462,6 +2483,13 @@ function modelLaunchCheck(model: AdminModelConfigView) {
       key: issue.field,
       label: "三宝影像配置",
       message: issue.message,
+    });
+  }
+  if (model.providerProtocol === "chiyuan_video" && validateChiYuanVideoProviderConfig(model)) {
+    failedItems.push({
+      key: "providerConfig",
+      label: "驰源配置",
+      message: "驰源模型必须使用固定域名、ChiYuan_API_KEY、匹配的 Seedance 模型与接口格式。",
     });
   }
   const bananaRouterError = validateBananaRouterProviderConfig(model);
