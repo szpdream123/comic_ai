@@ -1,9 +1,27 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { generationFailureDisplayMessage } from "../phone-auth-dev-server.ts";
+import {
+  generationFailureDisplayMessage,
+  moneyPrinterGenerationFailureMessage,
+} from "../phone-auth-dev-server.ts";
 
 describe("generation failure display messages", () => {
+  it("localizes MoneyPrinter provider failures before returning them to the integration client", () => {
+    assert.equal(
+      moneyPrinterGenerationFailureMessage({
+        displayMessage: "provider video generation failed",
+      }),
+      "模型视频生成失败，可尝试重新生成",
+    );
+    assert.equal(
+      moneyPrinterGenerationFailureMessage({
+        displayMessage: "The request failed because the input image 'content[1]' may contain real person.",
+      }),
+      "素材包含真人信息，请修改后再试",
+    );
+  });
+
   it("keeps generic fetch failures provider-neutral for video models", () => {
     const message = generationFailureDisplayMessage({
       failureCode: "provider_failed",
