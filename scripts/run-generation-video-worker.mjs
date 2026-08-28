@@ -578,6 +578,9 @@ const dynamicShardRunner = config.sharding.enabled
           if (job) console.error(`[generation-video] dynamic job failed queue=${spec.queueName} id=${job.id ?? "unknown"} ${error.message}`);
         });
         return {
+          onClosed(handler) {
+            worker.on("closed", handler);
+          },
           async close() {
             await markWorkerNotReady().catch(() => undefined);
             await worker.close();

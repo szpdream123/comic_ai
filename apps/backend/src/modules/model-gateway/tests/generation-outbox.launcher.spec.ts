@@ -54,6 +54,10 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /repairExpiredGenerationSubmitLeases/);
     assert.match(launcherScript, /repairQueuedGenerationTaskOutbox/);
     assert.match(launcherScript, /repairRunningSeedancePollJobs/);
+    assert.match(
+      launcherScript,
+      /repairStaleGenerationQueueStageAssignments[\s\S]*staleAssignmentMs:\s*config\.repair\.staleDispatchMs/,
+    );
     assert.match(launcherScript, /enqueueDueGenerationPolls/);
     assert.match(launcherScript, /reconcileActiveCanvasGenerationBatches/);
     assert.match(launcherScript, /createCanvasGenerationBatchDispatch/);

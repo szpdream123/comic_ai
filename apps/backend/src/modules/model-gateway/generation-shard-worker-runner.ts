@@ -22,6 +22,8 @@ export interface GenerationShardWorkerSpec {
 
 export interface GenerationShardWorkerHandle {
   close(): Promise<void>;
+  /** Called when the underlying consumer has terminated unexpectedly. */
+  onClosed?(handler: () => void): void;
 }
 
 export interface GenerationShardWorkerRunner {
@@ -78,6 +80,7 @@ export function createGenerationShardWorkerRunner(
   };
   const workers = new Map<string, GenerationShardWorkerHandle>();
   const closingWorkers = new Set<Promise<void>>();
+  const intentionallyClosingWorkers = new WeakSet<GenerationShardWorkerHandle>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let refreshInFlight: Promise<void> | undefined;
   let closed = false;
@@ -117,18 +120,26 @@ export function createGenerationShardWorkerRunner(
     for (const spec of selected) {
       if (closed) return;
       if (workers.has(spec.queueName)) continue;
-      workers.set(spec.queueName, deps.createWorker({
+      const worker = deps.createWorker({
         ...spec,
         rateLimitMax: positiveInteger(spec.rateLimitMax ?? defaultRateLimitMax, "generation_worker_rate_limit_invalid"),
         rateLimitDurationMs: positiveInteger(
           spec.rateLimitDurationMs ?? defaultRateLimitDurationMs,
           "generation_worker_rate_limit_invalid",
         ),
-      }));
+      });
+      workers.set(spec.queueName, worker);
+      worker.onClosed?.(() => {
+        if (closed || intentionallyClosingWorkers.has(worker)) return;
+        if (workers.get(spec.queueName) !== worker) return;
+        workers.delete(spec.queueName);
+        void refresh().catch((error) => deps.onRefreshError?.(error));
+      });
     }
   }
 
   function trackClosingWorker(worker: GenerationShardWorkerHandle) {
+    intentionallyClosingWorkers.add(worker);
     let closeResult: Promise<void>;
     try {
       closeResult = worker.close();

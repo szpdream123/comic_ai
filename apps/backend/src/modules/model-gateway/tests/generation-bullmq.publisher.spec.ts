@@ -6,12 +6,56 @@ import type { OutboxEventRecord } from "../../shared/outbox/outbox-dispatch-repa
 import {
   assertGenerationQueueName,
   buildGenerationBullMQJob,
+  confirmGenerationBullMQJob,
+  publishGenerationBullMQJobWithConfirmation,
   publishGenerationDeadLetter,
   publishGenerationTaskCreatedToBullMQ,
 } from "../generation-bullmq.publisher.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 
 describe("generation BullMQ publisher", () => {
+  it("confirms the exact published job is still present", async () => {
+    const confirmed = await confirmGenerationBullMQJob(
+      "generation-submit-video",
+      "job-1",
+      async (jobId) => ({ id: jobId }),
+    );
+    assert.deepEqual(confirmed, { id: "job-1" });
+  });
+
+  it("keeps publication retryable when Redis cannot confirm the job", async () => {
+    await assert.rejects(
+      () => confirmGenerationBullMQJob("generation-submit-video", "job-2", async () => undefined),
+      /generation_queue_publish_unconfirmed:generation-submit-video:job-2/,
+    );
+    await assert.rejects(
+      () => confirmGenerationBullMQJob("generation-submit-video", "job-3", async () => {
+        throw new Error("ECONNRESET");
+      }),
+      /ECONNRESET/,
+    );
+  });
+
+  it("re-publishes the same stable job until Redis confirms it", async () => {
+    let addCalls = 0;
+    let getJobCalls = 0;
+    const job = await publishGenerationBullMQJobWithConfirmation({
+      queueName: "generation-submit-video",
+      retryDelayMs: 0,
+      add: async () => {
+        addCalls += 1;
+        return { id: "job-retry" };
+      },
+      getJob: async () => {
+        getJobCalls += 1;
+        return getJobCalls < 2 ? undefined : { id: "job-retry" };
+      },
+    });
+    assert.deepEqual(job, { id: "job-retry" });
+    assert.equal(addCalls, 2);
+    assert.equal(getJobCalls, 2);
+  });
+
   it("bounds connected Redis commands within the publish cancellation fence", async () => {
     const source = await readFile(new URL("../generation-bullmq.publisher.ts", import.meta.url), "utf8");
     assert.match(source, /connectTimeout:\s*2_000/);

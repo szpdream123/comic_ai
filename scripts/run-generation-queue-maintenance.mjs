@@ -169,6 +169,7 @@ try {
           now,
           limit: config.outbox.dispatchBatchSize,
           inspector: assignmentInspector,
+          staleAssignmentMs: config.repair.staleDispatchMs,
           reopenThreshold: config.sharding.reopenThreshold,
         }),
     );

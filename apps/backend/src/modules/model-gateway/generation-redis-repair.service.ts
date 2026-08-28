@@ -31,6 +31,7 @@ import {
 import {
   hasRecoverableGenerationQueueSuccessor,
   markGenerationQueueStagePublished,
+  drainGenerationQueueShard,
   releaseGenerationQueueStage,
 } from "./generation-queue-shard.store.ts";
 import { resolveGptImageArtifactRecoveryDispatch } from "./gpt-image-artifact-recovery.policy.ts";
@@ -106,6 +107,7 @@ export type GenerationQueueAssignmentJobState =
 
 interface StaleGenerationQueueAssignmentRow {
   assignment_key: string;
+  shard_id: string;
   queue_name: string;
   admitted_at: Date | string;
   assignment_status: "publishing" | "admitted";
@@ -210,6 +212,12 @@ export async function repairStaleGenerationQueueStageAssignments(
       }
       const requireNoActiveOutbox = jobState === "missing";
       if (requireNoActiveOutbox && candidate.has_active_outbox) continue;
+      if (jobState === "missing") {
+        await drainGenerationQueueShard(db, {
+          shardId: candidate.shard_id,
+          now: input.now,
+        });
+      }
       if (await releaseStaleGenerationQueueAssignmentIfStageExited(db, {
         assignmentKey: candidate.assignment_key,
         now: input.now,
@@ -257,6 +265,7 @@ async function listStaleGenerationQueueAssignmentCandidates(
   return db.query<StaleGenerationQueueAssignmentRow>(
     `
       SELECT assignment.assignment_key,
+             assignment.shard_id,
              shard.queue_name,
              assignment.admitted_at,
              assignment.status AS assignment_status,
@@ -265,7 +274,7 @@ async function listStaleGenerationQueueAssignmentCandidates(
                SELECT 1
                FROM outbox_events event
                WHERE event.payload_json->>'taskId' = task.id::text
-                 AND event.status IN ('pending', 'processing', 'failed')
+                AND event.status IN ('pending', 'processing')
                  AND (
                    (assignment.stage = 'submit' AND event.event_type = 'generation.task.created')
                    OR (assignment.stage = 'poll' AND event.event_type = 'generation.task.poll_requested')

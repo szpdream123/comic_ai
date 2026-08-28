@@ -1,4 +1,5 @@
 import { Queue, type JobsOptions } from "bullmq";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { OutboxEventRecord } from "../shared/outbox/outbox-dispatch-repair.service.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
@@ -317,6 +318,43 @@ export function assertGenerationQueueName(queueName: string) {
   return queueName;
 }
 
+export async function confirmGenerationBullMQJob(
+  queueName: string,
+  jobId: string,
+  getJob: (jobId: string) => Promise<unknown>,
+) {
+  const job = await getJob(jobId);
+  if (!job) {
+    throw new Error(`generation_queue_publish_unconfirmed:${queueName}:${jobId}`);
+  }
+  return job;
+}
+
+export async function publishGenerationBullMQJobWithConfirmation(input: {
+  queueName: string;
+  add: () => Promise<{ id: string }>;
+  getJob: (jobId: string) => Promise<unknown>;
+  retryAttempts?: number;
+  retryDelayMs?: number;
+}) {
+  const retryAttempts = Math.max(1, Math.floor(input.retryAttempts ?? 3));
+  const retryDelayMs = Math.max(0, Math.floor(input.retryDelayMs ?? 250));
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    try {
+      const job = await input.add();
+      await confirmGenerationBullMQJob(input.queueName, job.id, input.getJob);
+      return job;
+    } catch (error) {
+      lastError = error;
+      if (attempt < retryAttempts && retryDelayMs > 0) {
+        await sleep(retryDelayMs * attempt);
+      }
+    }
+  }
+  throw lastError;
+}
+
 export function createBullMQGenerationPublisher(
   config: GenerationQueueConfig,
 ): CloseableGenerationBullMQPublisher {
@@ -352,7 +390,12 @@ export function createBullMQGenerationPublisher(
 
   return {
     async add(queueName, name, data, options) {
-      await getQueue(queueName).add(name, data, options);
+      const queue = getQueue(queueName);
+      await publishGenerationBullMQJobWithConfirmation({
+        queueName,
+        add: () => queue.add(name, data, options),
+        getJob: (jobId) => queue.getJob(jobId),
+      });
       await evictIdleQueues(queueName);
     },
     async close() {

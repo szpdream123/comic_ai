@@ -242,6 +242,11 @@ describe("generation Redis dispatch repair", () => {
         WHERE assignment_key LIKE 'repair:exact-%'
         ORDER BY assignment_key
       `);
+      const shard = await db.query<{ state: string }>(`
+        SELECT state
+        FROM generation_queue_shards
+        WHERE id = '71000000-0000-4000-8000-000000000109'
+      `);
 
       assert.deepEqual(inspectedJobIds.sort(), ["job-completed", "job-failed", "job-live", "job-missing"]);
       assert.deepEqual(repaired, {
@@ -260,6 +265,7 @@ describe("generation Redis dispatch repair", () => {
         { assignmentKey: "repair:exact-live", status: "admitted", published: true, releaseReason: null },
         { assignmentKey: "repair:exact-missing", status: "released", published: false, releaseReason: "auto_repair_redis_missing" },
       ]);
+      assert.equal(shard.rows[0]?.state, "draining");
     } finally {
       await db.close();
     }

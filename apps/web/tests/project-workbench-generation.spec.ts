@@ -4982,7 +4982,7 @@ describe("workbench generation payloads and inspectors", () => {
 
     assert.equal(
       workbench.ui.validationMessage,
-      "请先选择至少一个素材或上传参考素材后再提交视频生成任务",
+      "视频生成至少需要一张素材图片，请先添加或生成图片素材。",
     );
     assert.equal(workbench.ui.toast, workbench.ui.validationMessage);
   });
@@ -33817,9 +33817,8 @@ describe("production workbench project tab", () => {
         title: "1",
         displayTitle: "分镜 1",
         description: "角色推门进入雨夜街巷。\n水彩插画风格，透明颜料晕染，纸张纹理明显。",
-        references: [
-          { role: "character", assetId: "character-1", name: "白野", kind: "character", preview: "/uploads/character-1.png" },
-        ],
+        sceneAnalysis: "【@白野】进入画面。",
+        references: [],
       },
       {
         ...addStoryboard([])[0],
@@ -33828,9 +33827,8 @@ describe("production workbench project tab", () => {
         title: "2",
         displayTitle: "分镜 2",
         description: "镜头跟随旧式通讯器亮起。\n视频风格：旧风格。\n水彩插画风格，透明颜料晕染，纸张纹理明显。",
-        references: [
-          { role: "prop", assetId: "prop-1", name: "旧式通讯器", kind: "prop", preview: "/uploads/prop-1.png" },
-        ],
+        sceneAnalysis: "桌面摆放【@旧式通讯器】。",
+        references: [],
       },
     ];
     const generationConfigCalls = [];
@@ -33956,6 +33954,16 @@ describe("production workbench project tab", () => {
         selectedStoryboard: storyboards[0],
         selectedStoryboardId: "storyboard-batch-video-1",
         selectedStoryboardIds: ["storyboard-batch-video-1", "storyboard-batch-video-2"],
+        importedAssets: {
+          character: [
+            { id: "character-1", assetId: "character-1", name: "白野", kind: "character", preview: "/uploads/character-1.png" },
+          ],
+          scene: [],
+          prop: [
+            { id: "prop-1", assetId: "prop-1", name: "旧式通讯器", kind: "prop", preview: "/uploads/prop-1.png" },
+          ],
+          other: { image: [] },
+        },
         episodeStoryboardMap: {
           "episode-new": storyboards,
         },
@@ -34064,9 +34072,19 @@ describe("production workbench project tab", () => {
       assert.equal(createVideoTaskCalls[0].payload.parameters.resolution, "720p");
       assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, "10");
       assert.equal(createVideoTaskCalls[0].payload.parameters.mode, "reference-video");
+      assert.deepEqual(
+        createVideoTaskCalls[0].payload.parameters.referenceImages.map((item) => item.url),
+        ["/uploads/character-1.png"],
+      );
+      assert.deepEqual(createVideoTaskCalls[0].payload.parameters.filePaths, ["/uploads/character-1.png"]);
       assert.equal(createVideoTaskCalls[1].payload.targetId, "shot-batch-video-2");
       assert.equal(createVideoTaskCalls[1].payload.prompt, "镜头跟随旧式通讯器亮起。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。");
       assert.doesNotMatch(createVideoTaskCalls[1].payload.prompt, /水彩/);
+      assert.deepEqual(
+        createVideoTaskCalls[1].payload.parameters.referenceImages.map((item) => item.url),
+        ["/uploads/prop-1.png"],
+      );
+      assert.deepEqual(createVideoTaskCalls[1].payload.parameters.filePaths, ["/uploads/prop-1.png"]);
       assert.equal(
         workbench.ui.episodeStoryboardMap["episode-new"].find((storyboard) => storyboard.id === "storyboard-batch-video-1")?.description,
         "角色推门进入雨夜街巷。\n视频风格：电影剧照写真风格，胶片色调，侧逆光。",
@@ -34228,7 +34246,7 @@ describe("production workbench project tab", () => {
         dataset: { action: "open-episode-batch-actions" },
       });
       assert.equal(workbench.ui.episodeBatchModal ?? null, null);
-      assert.equal(workbench.ui.toast, "已选中分镜有未生成的故事板。请先生成故事板。");
+      assert.equal(workbench.ui.toast, "视频生成至少需要一张素材图片，请先添加或生成图片素材。");
 
       storyboards[1].previewImageUrl = "/uploads/storyboard-board-batch-2.png";
       await handleWorkbenchActionForTest(workbench, {
@@ -34241,7 +34259,7 @@ describe("production workbench project tab", () => {
         dataset: { action: "submit-episode-batch-modal" },
       });
       assert.equal(createVideoTaskCalls.length, 0);
-      assert.equal(workbench.ui.toast, "已选中分镜有未生成的故事板。请先生成故事板。");
+      assert.equal(workbench.ui.toast, "视频生成至少需要一张素材图片，请先添加或生成图片素材。");
       assert.equal(workbench.ui.episodeBatchModal?.storyboardBoardMode, true);
 
       storyboards[1].previewImageUrl = "/uploads/storyboard-board-batch-2.png";
@@ -34261,6 +34279,14 @@ describe("production workbench project tab", () => {
       );
       assert.deepEqual(
         createVideoTaskCalls.map((call) => call.payload.parameters.quickReferences.map((item) => item.url)),
+        [["/uploads/storyboard-board-batch-1.png"], ["/uploads/storyboard-board-batch-2.png"]],
+      );
+      assert.deepEqual(
+        createVideoTaskCalls.map((call) => call.payload.parameters.referenceImages.map((item) => item.url)),
+        [["/uploads/storyboard-board-batch-1.png"], ["/uploads/storyboard-board-batch-2.png"]],
+      );
+      assert.deepEqual(
+        createVideoTaskCalls.map((call) => call.payload.parameters.filePaths),
         [["/uploads/storyboard-board-batch-1.png"], ["/uploads/storyboard-board-batch-2.png"]],
       );
       for (const { payload } of createVideoTaskCalls) {

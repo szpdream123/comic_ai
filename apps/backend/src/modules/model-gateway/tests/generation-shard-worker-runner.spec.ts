@@ -190,6 +190,65 @@ describe("generation shard worker runner", () => {
     await runner.close();
   });
 
+  it("recreates a shard worker after an unexpected closed event", async () => {
+    const discovered = [spec("generation-image-submit-r1-000")];
+    const closedHandlers = new Map<string, () => void>();
+    let createCount = 0;
+    const runner = createGenerationShardWorkerRunner({
+      discover: async () => discovered,
+      maxQueuesPerProcess: 1,
+      refreshIntervalMs: 0,
+      createWorker: (item) => {
+        createCount += 1;
+        return {
+          onClosed(handler) {
+            closedHandlers.set(item.queueName, handler);
+          },
+          async close() {},
+        };
+      },
+    });
+
+    await runner.start();
+    closedHandlers.get("generation-image-submit-r1-000")?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(runner.activeQueueNames(), ["generation-image-submit-r1-000"]);
+    assert.equal(createCount, 2);
+    await runner.close();
+  });
+
+  it("does not recreate a worker when the runner intentionally closes it", async () => {
+    let discovered = [spec("generation-image-submit-r1-000")];
+    const closedHandlers = new Map<string, () => void>();
+    let createCount = 0;
+    const runner = createGenerationShardWorkerRunner({
+      discover: async () => discovered,
+      maxQueuesPerProcess: 1,
+      refreshIntervalMs: 0,
+      createWorker: (item) => {
+        createCount += 1;
+        return {
+          onClosed(handler) {
+            closedHandlers.set(item.queueName, handler);
+          },
+          async close() {
+            closedHandlers.get(item.queueName)?.();
+          },
+        };
+      },
+    });
+
+    await runner.start();
+    discovered = [];
+    await runner.refresh();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(runner.activeQueueNames(), []);
+    assert.equal(createCount, 1);
+    await runner.close();
+  });
+
   it("closes active workers when lease discovery cannot confirm ownership", async () => {
     let failDiscovery = false;
     let closed = 0;
