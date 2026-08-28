@@ -9,11 +9,11 @@ import {
 } from "../generation-timeout.policy.ts";
 
 describe("generation queue config", () => {
-  it("defaults Seedance video polling to 3 hours at the 30 second interval", () => {
+  it("defaults Seedance video polling to 3 hours at the 20 second interval", () => {
     const config = loadGenerationQueueConfig({});
 
     assert.equal(config.poll.video.intervalMs, 20_000);
-    assert.equal(config.poll.video.maxAttempts, 360);
+    assert.equal(config.poll.video.maxAttempts, 540);
     assert.equal(config.queues.pollImage, "generation-poll-image");
     assert.equal(config.queues.pollAudio, "generation-poll-audio");
     assert.deepEqual(config.sharding, {
@@ -27,18 +27,18 @@ describe("generation queue config", () => {
       publishConcurrency: 32,
     });
     assert.equal(config.poll.image.intervalMs, 20_000);
-    assert.equal(config.poll.image.maxAttempts, 120);
-    assert.equal(config.poll.audio.intervalMs, 30_000);
-    assert.equal(config.poll.audio.maxAttempts, 120);
+    assert.equal(config.poll.image.maxAttempts, 180);
+    assert.equal(config.poll.audio.intervalMs, 20_000);
+    assert.equal(config.poll.audio.maxAttempts, 180);
     assert.equal(config.finalize.artifact.concurrency, 40);
     assert.deepEqual(config.submit.image, {
       concurrency: 20,
-      limiter: { max: 20, durationMs: 1000 },
+      limiter: { max: 0, durationMs: 1000 },
       userConcurrencyLimit: 20,
     });
     assert.deepEqual(config.submit.video, {
       concurrency: 10,
-      limiter: { max: 10, durationMs: 1000 },
+      limiter: { max: 0, durationMs: 1000 },
       userConcurrencyLimit: 10,
     });
     assert.deepEqual(config.health, {
@@ -61,8 +61,8 @@ describe("generation queue config", () => {
     assert.equal(generationTimeoutMsFor("image"), 60 * 60 * 1000);
     assert.equal(generationTimeoutMsFor("audio"), 60 * 60 * 1000);
     assert.equal(generationTimeoutMsFor("video"), 3 * 60 * 60 * 1000);
-    assert.equal(generationPollMaxAttempts("audio"), 120);
-    assert.equal(generationPollMaxAttempts("video"), 360);
+    assert.equal(generationPollMaxAttempts("audio"), 180);
+    assert.equal(generationPollMaxAttempts("video"), 540);
   });
 
   it("configures the image polling window without changing the 60 minute default", () => {
@@ -72,7 +72,7 @@ describe("generation queue config", () => {
     }), 2 * 60 * 60 * 1000);
     assert.equal(loadGenerationQueueConfig({
       GENERATION_IMAGE_TIMEOUT_MS: String(2 * 60 * 60 * 1000),
-    }).poll.image.maxAttempts, 240);
+    }).poll.image.maxAttempts, 360);
   });
 
   it("loads active BullMQ queue and per-account generation settings from env", () => {
@@ -169,22 +169,22 @@ describe("generation queue config", () => {
     });
     assert.deepEqual(config.retry.poll, { attempts: 25, backoffMs: 45_000 });
     assert.deepEqual(config.poll.video, {
-      intervalMs: 30_000,
-      maxAttempts: 360,
+      intervalMs: 20_000,
+      maxAttempts: 540,
       concurrency: 40,
       limiter: { max: 40, durationMs: 1000 },
     });
     assert.equal(config.queues.pollImage, "generation-poll-image-custom");
     assert.deepEqual(config.poll.image, {
-      intervalMs: 30_000,
-      maxAttempts: 120,
+      intervalMs: 20_000,
+      maxAttempts: 180,
       concurrency: 30,
       limiter: { max: 25, durationMs: 1500 },
     });
     assert.equal(config.queues.pollAudio, "generation-poll-audio-custom");
     assert.deepEqual(config.poll.audio, {
-      intervalMs: 30_000,
-      maxAttempts: 120,
+      intervalMs: 20_000,
+      maxAttempts: 180,
       concurrency: 22,
       limiter: { max: 18, durationMs: 1700 },
     });
@@ -195,12 +195,12 @@ describe("generation queue config", () => {
 
     assert.deepEqual(config.submit.video, {
       concurrency: 10,
-      limiter: { max: 10, durationMs: 1000 },
+      limiter: { max: 0, durationMs: 1000 },
       userConcurrencyLimit: 10,
     });
     assert.deepEqual(config.submit.image, {
       concurrency: 20,
-      limiter: { max: 20, durationMs: 1000 },
+      limiter: { max: 0, durationMs: 1000 },
       userConcurrencyLimit: 20,
     });
     assert.equal(config.outbox.dispatchBatchSize, 20_000);

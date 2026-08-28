@@ -744,6 +744,7 @@ async function processSeedanceVideoSubmitJobInternal(
     const shouldRetryBeforeExternalStart = Boolean(submissionWasNotStarted && providerRequest?.provider_request_id)
       && !hasExternalProviderSubmission(providerRequest)
       && preSubmissionRetryCount < PRE_SUBMISSION_RETRY_LIMIT
+      && submissionModelError.retryable
       && (
         submissionModelError.httpStatus === null
         || submissionFailureCode === "provider_submission_failed"
@@ -1709,13 +1710,19 @@ export async function processSeedanceVideoPollJob(
       return { status: "waiting" };
     }
 
+    const auditVideoUrl = redactProviderArtifactAuditUrl(poll.videoUrl);
+    const artifactUrlRequiresRefresh = auditVideoUrl !== poll.videoUrl;
+    const providerAuditResponse = {
+      ...poll.redactedResponse,
+      videoUrl: auditVideoUrl,
+      ...(artifactUrlRequiresRefresh ? { artifactUrlRequiresRefresh: true } : {}),
+    };
     await markProviderRequestSucceeded(db, {
       providerRequestId: row.provider_request_id,
       externalRequestId: row.external_request_id,
-      redactedResponse: attachProviderRawResponse({
-        ...poll.redactedResponse,
-        videoUrl: poll.videoUrl,
-      }, readProviderRawResponse(poll.redactedResponse)),
+      redactedResponse: artifactUrlRequiresRefresh
+        ? providerAuditResponse
+        : attachProviderRawResponse(providerAuditResponse, readProviderRawResponse(poll.redactedResponse)),
       now: input.now,
     });
     await completeUserModelRequestLog(db, {
@@ -1723,7 +1730,7 @@ export async function processSeedanceVideoPollJob(
       status: "succeeded",
       responseText: buildSeedanceSuccessResponseText({
         externalRequestId: row.external_request_id,
-        videoUrl: poll.videoUrl,
+        videoUrl: auditVideoUrl,
         providerResponse: poll.redactedResponse,
       }),
       responseUsage: null,
@@ -1736,10 +1743,7 @@ export async function processSeedanceVideoPollJob(
       providerRequestId: row.provider_request_id,
       progressStage: "saving_asset",
       progressPercent: 75,
-      providerStatus: {
-        ...poll.redactedResponse,
-        videoUrl: poll.videoUrl,
-      },
+      providerStatus: providerAuditResponse,
       now: input.now,
     });
     // renewSeedancePollLease holds a 5-minute lease under
@@ -2247,8 +2251,7 @@ export async function finalizeSeedanceVideoArtifactJob(
     });
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
-  const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
-  const videoUrl = readString(providerResponse.videoUrl);
+  const videoUrl = await resolveSeedanceArtifactUrlForTransfer(db, row, snapshot, input);
   if (!videoUrl) {
     return resolveGenerationArtifactStageUnavailable(db, {
       taskId: input.taskId,
@@ -2503,6 +2506,7 @@ export async function recoverSeedanceVideoAfterPollTimeout(
   if (!isSeedancePollTimeoutRecoveryCandidate(row)) {
     return { status: "skipped", reason: "task_not_recoverable" };
   }
+  const recoveryReason = seedanceProviderResultRecoveryReason(row);
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
@@ -2531,7 +2535,12 @@ export async function recoverSeedanceVideoAfterPollTimeout(
     taskId: row.task_id,
     attemptId: row.attempt_id!,
     providerRequestId: row.provider_request_id!,
-    providerResponse: { ...poll.redactedResponse, videoUrl },
+    initialFailureCode: row.failure_code!,
+    providerResponse: {
+      ...poll.redactedResponse,
+      videoUrl: redactProviderArtifactAuditUrl(videoUrl),
+      recoveryReason,
+    },
     now: input.now,
   });
   if (!claimed) {
@@ -2647,6 +2656,7 @@ export async function recoverSeedanceVideoAfterPollTimeout(
         resultAsset: persisted,
         releasedAmount: Number(row.amount_released ?? 0),
         externalRequestId: row.external_request_id!,
+        recoveryReason,
         now: input.now,
       });
     },
@@ -2759,7 +2769,7 @@ export async function fetchSeedanceVideoArtifactJob(
     return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
-  const videoUrl = readString(parseProviderResponse(row.provider_response_redacted_json).videoUrl);
+  const videoUrl = await resolveSeedanceArtifactUrlForTransfer(db, row, snapshot, input);
   if (!videoUrl) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   const leaseOwner = `seedance-video-finalizer:${randomUUID()}`;
   row = await ensureSeedanceFinalizeAttempt(db, {
@@ -3535,11 +3545,21 @@ function isSeedancePollTimeoutRecoveryCandidate(row: SeedancePollTimeoutRecovery
     && row.failure_code === "provider_poll_timeout"
     && row.attempt_status === "failed"
     && row.attempt_failure_code === "provider_poll_timeout";
+  const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
+  const missingResultUrlFailure = row.task_status === "failed"
+    && row.failure_code === "provider_failed"
+    && row.attempt_status === "failed"
+    && row.attempt_failure_code === "provider_failed"
+    && row.provider_status === "failed"
+    && ["succeeded", "success", "completed", "done", "finished"].includes(
+      readString(providerResponse.providerStatus)?.toLowerCase() ?? "",
+    )
+    && readString(providerResponse.providerMessage) === "provider_succeeded_without_video_url";
   const interruptedRecovery = row.task_status === "running"
     && row.failure_code === "provider_poll_timeout_recovery"
     && row.attempt_status === "running";
   const amountTotal = Number(row.amount_total ?? 0);
-  return (initialFailure || interruptedRecovery)
+  return (initialFailure || missingResultUrlFailure || interruptedRecovery)
     && Boolean(row.attempt_id && row.provider_request_id && row.external_request_id && row.reservation_id)
     && row.reservation_status === "released"
     && Number(row.amount_reserved ?? 0) === 0
@@ -3548,12 +3568,23 @@ function isSeedancePollTimeoutRecoveryCandidate(row: SeedancePollTimeoutRecovery
     && Number(row.amount_released ?? 0) >= amountTotal;
 }
 
+function seedanceProviderResultRecoveryReason(row: SeedancePollTimeoutRecoveryRow) {
+  const recordedReason = readString(
+    parseProviderResponse(row.provider_response_redacted_json).recoveryReason,
+  );
+  if (recordedReason === "provider_result_url_recovered") return recordedReason;
+  return row.failure_code === "provider_failed"
+    ? "provider_result_url_recovered"
+    : "provider_completed_after_timeout";
+}
+
 async function claimSeedancePollTimeoutRecovery(
   db: SqlDatabase,
   input: {
     taskId: string;
     attemptId: string;
     providerRequestId: string;
+    initialFailureCode: string;
     providerResponse: Record<string, unknown>;
     now: Date;
   },
@@ -3573,7 +3604,7 @@ async function claimSeedancePollTimeoutRecovery(
         WHERE id = $1
           AND current_attempt_id = $2
           AND (
-            (status = 'failed' AND failure_code = 'provider_poll_timeout')
+            (status = 'failed' AND failure_code = $5)
             OR (
               status = 'running'
               AND failure_code = 'provider_poll_timeout_recovery'
@@ -3591,7 +3622,7 @@ async function claimSeedancePollTimeoutRecovery(
           )
         RETURNING workflow_id
       `,
-      [input.taskId, input.attemptId, seedanceVideoLeaseUntil(input.now), input.now],
+      [input.taskId, input.attemptId, seedanceVideoLeaseUntil(input.now), input.now, input.initialFailureCode],
     );
     if (!claimed) {
       await db.query("ROLLBACK");
@@ -3679,6 +3710,7 @@ async function markSeedancePollTimeoutRecoverySnapshotSucceeded(
     resultAsset: Record<string, unknown>;
     releasedAmount: number;
     externalRequestId: string;
+    recoveryReason: string;
     now: Date;
   },
 ) {
@@ -3707,14 +3739,14 @@ async function markSeedancePollTimeoutRecoverySnapshotSucceeded(
       JSON.stringify({
         provider: "model-gateway",
         externalRequestId: input.externalRequestId,
-        recoveryReason: "provider_completed_after_timeout",
+        recoveryReason: input.recoveryReason,
       }),
       JSON.stringify([input.resultAsset]),
       JSON.stringify({
         released: input.releasedAmount,
         consumed: 0,
         recoveryCharge: 0,
-        recoveryReason: "provider_completed_after_timeout",
+        recoveryReason: input.recoveryReason,
         settledAt: input.now.toISOString(),
       }),
       input.now,
@@ -4154,7 +4186,7 @@ async function uploadProviderArtifactToStorage(
           projectId: input.projectId,
           canvasProjectId: input.canvasProjectId ?? null,
           bucket: input.runtime.bucket,
-          objectName: input.objectName,
+          objectName: normalizeVideoArtifactObjectName(input.objectName, contentType),
           contentType,
           sizeBytes: knownSizeBytes,
           provider: input.runtime.provider,
@@ -4406,6 +4438,26 @@ function isLingdongContentEndpoint(value: string) {
   }
 }
 
+function redactProviderArtifactAuditUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[redacted-url]";
+  }
+}
+
+function normalizeVideoArtifactObjectName(objectName: string, contentType: string) {
+  const extension = contentType.toLowerCase() === "video/quicktime" ? "mov"
+    : contentType.toLowerCase() === "video/mp4" ? "mp4"
+      : null;
+  return extension ? objectName.replace(/\.(?:mp4|mov)$/i, `.${extension}`) : objectName;
+}
+
 function resolveProviderApiKeyForDownload(providerConfig: Record<string, unknown>, env: NodeJS.ProcessEnv) {
   const directApiKey = readString(providerConfig.apiKey);
   if (directApiKey) {
@@ -4440,6 +4492,40 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
   } catch {
     return {};
   }
+}
+
+async function resolveSeedanceArtifactUrlForTransfer(
+  db: SqlDatabase,
+  row: SeedanceTaskRow,
+  snapshot: Record<string, unknown>,
+  input: { env: NodeJS.ProcessEnv; fetchImpl?: typeof fetch },
+) {
+  const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
+  const recordedVideoUrl = readString(providerResponse.videoUrl);
+  if (providerResponse.artifactUrlRequiresRefresh !== true) {
+    return recordedVideoUrl;
+  }
+  if (!row.external_request_id) return undefined;
+  const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
+  const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
+  const adapter = createProviderAdapterFromModelConfig(
+    modelConfig
+      ? {
+          providerProtocol: modelConfig.providerProtocol,
+          providerModel: modelConfig.providerModel,
+          mediaType: modelConfig.mediaType,
+          providerConfig: modelConfig.providerConfig,
+          invocationMode: modelConfig.invocationMode,
+        }
+      : fallbackSeedanceModelConfig(input.env),
+    input.env,
+    resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
+  ) as unknown as SeedancePollAdapter;
+  const refreshed = await adapter.poll({
+    externalRequestId: row.external_request_id,
+    redactedPayload: snapshot,
+  });
+  return refreshed.status === "succeeded" ? readString(refreshed.videoUrl) : undefined;
 }
 
 function readProviderRedactedRequest(error: unknown) {

@@ -115,6 +115,7 @@ function fetchProjectShotImageBatch(origin: string, init: RequestInit = {}) {
 describe("phone auth dev server", { concurrency: false }, () => {
   it("polls SanBao video tasks on read without the unrelated Seedance feature flag", () => {
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("san_bao", {}), true);
+    assert.equal(shouldSyncSeedanceVideoTaskOnRead("chiyuan_video", {}), true);
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("globalaiopc_video", {}), true);
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("global_ai_opc_video", {}), true);
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("volcengine_ark_video", {}), false);

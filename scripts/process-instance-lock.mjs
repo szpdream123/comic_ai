@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -7,7 +8,20 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+export function acquireRuntimeScopedProcessInstanceLock(
+  runtimeIdentity,
+  { label = "process", lockRoot = join(tmpdir(), "comic-ai-runtime-locks") } = {},
+) {
+  const normalizedIdentity = String(runtimeIdentity ?? "").trim();
+  if (!normalizedIdentity) {
+    throw new Error(`${label}_runtime_identity_required`);
+  }
+  const digest = createHash("sha256").update(normalizedIdentity).digest("hex").slice(0, 32);
+  return acquireProcessInstanceLock(join(lockRoot, `${digest}.pid`), { label });
+}
 
 export function acquireProcessInstanceLock(lockPath, { label = "process" } = {}) {
   mkdirSync(dirname(lockPath), { recursive: true });

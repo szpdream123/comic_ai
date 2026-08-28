@@ -707,8 +707,9 @@ test("batch generation task reads preserve unrelated read caches", async () => {
   };
 
   const { creatorApi } = await import(`../src/shared/creator-api.js?batch-read-cache=${Date.now()}`);
+  const controller = new AbortController();
   await creatorApi.getCustomerSupportConfig();
-  await creatorApi.getGenerationTasks(["task-1", "task-1"]);
+  await creatorApi.getGenerationTasks(["task-1", "task-1"], { signal: controller.signal });
   await creatorApi.getCustomerSupportConfig();
 
   assert.deepEqual(calls.map((call) => call.url), [
@@ -716,6 +717,26 @@ test("batch generation task reads preserve unrelated read caches", async () => {
     "/api/generation-tasks/batch",
   ]);
   assert.deepEqual(JSON.parse(calls[1].options.body), { taskIds: ["task-1"] });
+});
+
+test("batch generation task reads honor caller cancellation", async () => {
+  globalThis.fetch = (url, options = {}) => new Promise((resolve, reject) => {
+    options.signal?.addEventListener?.(
+      "abort",
+      () => reject(new DOMException("aborted", "AbortError")),
+      { once: true },
+    );
+    setTimeout(() => {
+      resolve({ ok: true, text: async () => JSON.stringify({ items: [] }) });
+    }, 25);
+  });
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?batch-read-abort=${Date.now()}`);
+  const controller = new AbortController();
+  const request = creatorApi.getGenerationTasks(["task-1"], { signal: controller.signal });
+  controller.abort();
+
+  await assert.rejects(request, (error) => error?.name === "AbortError");
 });
 
 test("getCreditBalance reads the dedicated balance endpoint", async () => {

@@ -71,6 +71,7 @@ import {
   renderProductionWorkbench,
   scheduleGenerationPollingForTest,
   scheduleTaskCenterPollingForTest,
+  runTaskCenterPollingForTest,
   syncTeamMemberCreateDraftFromDomForTest,
   syncCanvasProjectIdInLocationForTest,
   syncCanvasProjectsFromApiForTest,
@@ -5555,6 +5556,149 @@ describe("workbench generation payloads and inspectors", () => {
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("uses the synchronization-capable batch endpoint for tracked task polling", async () => {
+    const taskId = "storyboard-video-task-provider-completed";
+    const batchCalls = [];
+    const batchSignals = [];
+    const taskCenterListCalls = [];
+    const workbench = {
+      api: {
+        async getGenerationTasks(taskIds, options = {}) {
+          batchCalls.push(taskIds);
+          batchSignals.push(options.signal);
+          return { items: [] };
+        },
+        async listTaskCenterTasks(params) {
+          taskCenterListCalls.push(params);
+          return { items: [] };
+        },
+      },
+      ui: {
+        taskCenterTasksById: {
+          [taskId]: {
+            taskId,
+            status: "running",
+            kind: "video",
+          },
+        },
+        generationPollingActive: true,
+      },
+    };
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.deepEqual(batchCalls, [[taskId]]);
+    assert.equal(batchSignals[0] instanceof AbortSignal, true);
+    assert.deepEqual(taskCenterListCalls, []);
+  });
+
+  it("schedules tracked task polling when only the batch endpoint is available", () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimeout() {},
+    };
+    try {
+      const taskId = "storyboard-video-task-batch-only";
+      const workbench = {
+        api: {
+          async getGenerationTasks() {
+            return { items: [] };
+          },
+        },
+        ui: {
+          taskCenterTasksById: {
+            [taskId]: { taskId, status: "running", kind: "video" },
+          },
+          generationPollingActive: true,
+        },
+      };
+
+      scheduleTaskCenterPollingForTest(workbench, { immediate: true });
+
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0]?.delayMs, 0);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("chunks synchronization-capable polling beyond the backend batch limit", async () => {
+    const taskIds = Array.from({ length: 201 }, (_, index) => `tracked-video-task-${index + 1}`);
+    const batchCalls = [];
+    const workbench = {
+      api: {
+        async getGenerationTasks(ids) {
+          batchCalls.push(ids);
+          return { items: [] };
+        },
+      },
+      ui: {
+        taskCenterTasksById: Object.fromEntries(
+          taskIds.map((taskId) => [taskId, { taskId, status: "running", kind: "video" }]),
+        ),
+        generationPollingActive: true,
+      },
+    };
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.deepEqual(batchCalls.map((ids) => ids.length), [200, 1]);
+    assert.deepEqual(batchCalls.flat(), taskIds);
+  });
+
+  it("applies successful polling batches when a later batch fails", async () => {
+    const taskIds = Array.from({ length: 201 }, (_, index) => `tracked-video-task-partial-${index + 1}`);
+    const firstTaskId = taskIds[0];
+    const workbench = {
+      api: {
+        async getGenerationTasks(ids) {
+          if (ids.includes(taskIds[200])) {
+            throw new Error("tail_batch_unavailable");
+          }
+          return {
+            items: [{
+              taskId: firstTaskId,
+              status: "succeeded",
+              workflowStatus: "succeeded",
+              kind: "video",
+              updatedAt: "2026-08-26T11:00:00.000Z",
+              result: { videoUrl: "/generated/provider-completed.mp4" },
+            }],
+          };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        taskCenterTasksById: Object.fromEntries(
+          taskIds.map((taskId) => [taskId, {
+            taskId,
+            status: "running",
+            kind: "video",
+            ...(taskId === taskIds[200] ? { timeoutAt: "2020-01-01T00:00:00.000Z" } : {}),
+          }]),
+        ),
+        generationPollingActive: true,
+      },
+      root: {
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.equal(workbench.ui.taskCenterTasksById[firstTaskId].status, "completed");
+    assert.equal(workbench.ui.taskCenterTasksById[taskIds[200]].deadlineFinalPollCompletedAt, undefined);
+    assert.match(workbench.ui.taskCenterError, /tail_batch_unavailable/);
   });
 
   it("immediately updates Seedance storyboard video tasks when provider submission fails", async () => {

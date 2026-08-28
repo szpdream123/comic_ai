@@ -74,7 +74,7 @@ describe("generation BullMQ worker handlers", () => {
     });
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.image.poll__task-image-1__outbox-1__1",
-      delay: 30_000,
+      delay: 20_000,
       attempts: 20,
       backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
@@ -211,7 +211,7 @@ describe("generation BullMQ worker handlers", () => {
     assert.equal((added[0]?.data as { pollAttempt?: number }).pollAttempt, 2);
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.image.poll__task-image-skipped__2",
-      delay: 30_000,
+      delay: 20_000,
       attempts: 20,
       backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
@@ -243,7 +243,7 @@ describe("generation BullMQ worker handlers", () => {
     assert.deepEqual(result, { status: "skipped", queuedPoll: false, queuedSubmit: true });
     assert.equal(added[0]?.queueName, "generation-submit-image");
     assert.equal(added[0]?.name, "generation.image.submit.retry");
-    assert.equal((added[0]?.options as { delay?: number }).delay, 30_000);
+    assert.equal((added[0]?.options as { delay?: number }).delay, 20_000);
   });
 
   it("finalizes an image that completed during provider submission", async () => {
@@ -346,7 +346,7 @@ describe("generation BullMQ worker handlers", () => {
     });
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.video.poll__task-1__outbox-1__1",
-      delay: 30_000,
+      delay: 20_000,
       priority: 2,
       attempts: 20,
       backoff: { type: "exponential", delay: 30_000 },
@@ -767,7 +767,7 @@ describe("generation BullMQ worker handlers", () => {
     });
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.video.poll__task-1__outbox-poll-wave-1__3",
-      delay: 30_000,
+      delay: 20_000,
       attempts: 20,
       backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
@@ -977,7 +977,7 @@ describe("generation BullMQ worker handlers", () => {
       (added[0]?.options as { jobId?: string }).jobId,
       "generation.video.poll__task-1__2",
     );
-    assert.equal((added[0]?.options as { delay?: number }).delay, 30_000);
+    assert.equal((added[0]?.options as { delay?: number }).delay, 20_000);
   });
 
   it("records a skipped successor without publishing a delayed job when poll scheduling is durable", async () => {
@@ -1020,7 +1020,7 @@ describe("generation BullMQ worker handlers", () => {
       taskId: "task-durable-poll-1",
       mediaType: "video",
       nextPollAttempt: 2,
-      delayMs: 30_000,
+      delayMs: 20_000,
       now,
     }]);
     assert.deepEqual(successors, [{

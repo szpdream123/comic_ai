@@ -130,9 +130,39 @@ export async function resolveGenerationModelConfigForTask(
 ) {
   const captured = parseGenerationModelConfigSnapshot(taskSnapshot.modelConfigSnapshot);
   if (captured && captured.modelCode === modelCode) {
-    return resolveAiModelConfigSecretReferences(db, captured);
+    return resolveAiModelConfigSecretReferences(db, upgradeCapturedChiYuanSeedance25Contract(captured));
   }
   return findActiveAiModelConfigByCode(db, modelCode);
+}
+
+function upgradeCapturedChiYuanSeedance25Contract(modelConfig: AiModelConfigRecord): AiModelConfigRecord {
+  const providerConfig = modelConfig.providerConfig;
+  const usesLegacyEndpoint = (
+    readString(providerConfig.requestPath) === "/v1/video/generations"
+    && readString(providerConfig.createTaskEndpoint) === "/v1/video/generations"
+    && readString(providerConfig.queryTaskEndpoint) === "/v1/video/generations/{taskId}"
+  ) || (
+    readString(providerConfig.requestPath) === "/v1/videos"
+    && readString(providerConfig.createTaskEndpoint) === "/v1/videos"
+    && readString(providerConfig.queryTaskEndpoint) === "/v1/videos/{taskId}"
+  );
+  if (
+    modelConfig.providerProtocol !== "chiyuan_video"
+    || modelConfig.providerModel !== "doubao-seedance-2-5-260628"
+    || readString(providerConfig.requestFormat) !== "chiyuan_seedance_super_resolution"
+    || !usesLegacyEndpoint
+  ) {
+    return modelConfig;
+  }
+  return {
+    ...modelConfig,
+    providerConfig: {
+      ...providerConfig,
+      requestPath: "/api/v3/contents/generations/tasks",
+      createTaskEndpoint: "/api/v3/contents/generations/tasks",
+      queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+    },
+  };
 }
 
 function parseGenerationModelConfigSnapshot(value: unknown): AiModelConfigRecord | undefined {

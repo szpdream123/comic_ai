@@ -52292,6 +52292,41 @@ async function loadTaskCenterTasksForPolling(workbench, options = {}) {
   if (!trackedTaskIds.length) {
     return { items: [], page: 1, pageSize: 0, total: 0, totalPages: 1, hasNext: false };
   }
+  if (typeof workbench.api?.getGenerationTasks === "function") {
+    const items = [];
+    const polledTaskIds = [];
+    const pollingErrors = [];
+    let successfulBatchCount = 0;
+    const batchSize = 200;
+    for (let offset = 0; offset < trackedTaskIds.length; offset += batchSize) {
+      try {
+        const response = await workbench.api.getGenerationTasks(
+          trackedTaskIds.slice(offset, offset + batchSize),
+          { signal: options.signal },
+        );
+        successfulBatchCount += 1;
+        const batchItems = Array.isArray(response?.items) ? response.items : [];
+        items.push(...batchItems);
+        polledTaskIds.push(...batchItems.map((task) => resolveGenerationTaskIdForConversation(task)).filter(Boolean));
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        pollingErrors.push(error);
+      }
+    }
+    if (!successfulBatchCount && pollingErrors.length) {
+      throw pollingErrors[0];
+    }
+    return {
+      items,
+      page: 1,
+      pageSize: items.length,
+      total: items.length,
+      totalPages: 1,
+      hasNext: false,
+      polledTaskIds,
+      pollingError: pollingErrors[0] ?? null,
+    };
+  }
   if (typeof workbench.api?.listTaskCenterTasks === "function") {
     const items = [];
     const updatedAfter = taskCenterOverlappingWatermark(workbench.taskCenterUpdatedAfter);
@@ -52632,7 +52667,11 @@ async function runTaskCenterPolling(workbench, options = {}) {
       workbench.taskCenterUpdatedAfter,
       response?.items,
     );
+    const polledTaskIds = Array.isArray(response?.polledTaskIds)
+      ? new Set(response.polledTaskIds)
+      : null;
     for (const taskId of deadlineTaskIds) {
+      if (polledTaskIds && !polledTaskIds.has(taskId)) continue;
       const task = workbench.ui.taskCenterTasksById?.[taskId];
       if (task && isTaskCenterActiveStatus(task.status ?? task.workflowStatus)) {
         changed = upsertTaskCenterTask(workbench, {
@@ -52643,8 +52682,8 @@ async function runTaskCenterPolling(workbench, options = {}) {
     }
     const activeTaskIds = collectTaskCenterTrackedTaskIds(workbench);
     workbench.ui.generationPollingActive = activeTaskIds.length > 0;
-    workbench.ui.taskCenterError = "";
-    if (changed || projected) {
+    workbench.ui.taskCenterError = response?.pollingError ? friendlyError(response.pollingError) : "";
+    if (changed || projected || (response?.pollingError && workbench.ui.taskCenterOpen)) {
       if (
         !workbench.ui.taskCenterOpen &&
         workbench.ui.activeNavTab === "project" &&
@@ -52698,7 +52737,8 @@ function scheduleTaskCenterPolling(workbench, options = {}) {
     typeof window.setTimeout !== "function" ||
     (
       typeof workbench.api?.listTaskCenterTasks !== "function" &&
-      typeof workbench.api?.getGenerationTask !== "function"
+      typeof workbench.api?.getGenerationTask !== "function" &&
+      typeof workbench.api?.getGenerationTasks !== "function"
     )
   ) {
     return;

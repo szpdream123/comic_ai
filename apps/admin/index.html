@@ -8662,7 +8662,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-          <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"], defaults.providerProtocol)}</select></label>
+          <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "globalaiopc_sound_clone", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "chiyuan_video", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -12315,6 +12315,7 @@
         { value: "saier_video", label: "塞尔视频适配器", mediaTypes: ["video"] },
         { value: "banana_router", label: "BananaRouter 模型适配器", mediaTypes: ["image", "video"] },
         { value: "san_bao", label: "三宝影像图片 / 视频适配器", mediaTypes: ["image", "video"] },
+        { value: "chiyuan_video", label: "驰源 Seedance 视频适配器", mediaTypes: ["video"] },
         { value: "openai_compatible_chat", label: "OpenAI 兼容文本适配器", mediaTypes: ["text"] },
         { value: "cumob_chat", label: "酷模文本适配器", mediaTypes: ["text"] },
         { value: "modelflare_responses", label: "ModelFlare Responses 适配器", mediaTypes: ["text"] },
@@ -12425,7 +12426,9 @@
               : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json" })
             : isVideo
             ? (
-              protocol === "banana_router"
+              protocol === "chiyuan_video"
+                ? { baseURL: "https://cy.apistudio.cc", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "ChiYuan_API_KEY", requestFormat: "chiyuan_seedance_official" }
+                : protocol === "banana_router"
                 ? { baseURL: "https://api.bananarouter.com", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_seedance_video" }
                 : protocol === "san_bao"
                 ? { baseURL: "https://sanbaobeauty.com", requestPath: "/openapi/v1/videos", createTaskEndpoint: "/openapi/v1/videos", queryTaskEndpoint: "/openapi/v1/videos/{taskId}", apiKeyEnv: "SAN_BAO_API_KEY", requestFormat: "san_bao_video" }

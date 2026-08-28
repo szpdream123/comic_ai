@@ -3237,7 +3237,7 @@ export const creatorApi = {
     return postJson(`/api/generation-tasks/${encodeURIComponent(taskId)}/cancel`, {});
   },
 
-  getGenerationTasks(taskIds) {
+  getGenerationTasks(taskIds, options = {}) {
     const normalizedTaskIds = Array.from(new Set(
       (Array.isArray(taskIds) ? taskIds : [])
         .map((taskId) => String(taskId ?? "").trim())
@@ -3248,6 +3248,7 @@ export const creatorApi = {
     }
     return postJson("/api/generation-tasks/batch", { taskIds: normalizedTaskIds }, {
       cacheInvalidation: "none",
+      signal: options.signal,
     });
   },
 

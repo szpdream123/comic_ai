@@ -156,6 +156,12 @@ const migrations = [
   ["20261018-disable-globalaiopc-sd25-special-frame-parameters.sql", "packages/db/migrations/20261018-disable-globalaiopc-sd25-special-frame-parameters.sql"],
   ["20261019-remove-marketing-module.sql", "packages/db/migrations/20261019-remove-marketing-module.sql"],
   ["20261020-add-globalaiopc-wan30-r2v.sql", "packages/db/migrations/20261020-add-globalaiopc-wan30-r2v.sql"],
+  ["20261020-create-geo-monitoring.sql", "packages/db/migrations/20261020-create-geo-monitoring.sql"],
+  ["20261021-harden-geo-monitoring.sql", "packages/db/migrations/20261021-harden-geo-monitoring.sql"],
+  ["20261022-fence-geo-monitor-runs.sql", "packages/db/migrations/20261022-fence-geo-monitor-runs.sql"],
+  ["20261023-add-chiyuan-video-models.sql", "packages/db/migrations/20261023-add-chiyuan-video-models.sql"],
+  ["20261024-fix-chiyuan-seedance25-api-contract.sql", "packages/db/migrations/20261024-fix-chiyuan-seedance25-api-contract.sql"],
+  ["20261025-use-chiyuan-seedance25-native-contents-contract.sql", "packages/db/migrations/20261025-use-chiyuan-seedance25-native-contents-contract.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -217,6 +223,12 @@ const runtimeSafeMigrationNames = new Set([
   "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql",
   "20261019-remove-marketing-module.sql",
   "20261020-add-globalaiopc-wan30-r2v.sql",
+  "20261020-create-geo-monitoring.sql",
+  "20261021-harden-geo-monitoring.sql",
+  "20261022-fence-geo-monitor-runs.sql",
+  "20261023-add-chiyuan-video-models.sql",
+  "20261024-fix-chiyuan-seedance25-api-contract.sql",
+  "20261025-use-chiyuan-seedance25-native-contents-contract.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
