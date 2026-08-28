@@ -6846,6 +6846,25 @@ async function mapGenerationTaskResponse(
   };
 }
 
+export function moneyPrinterGenerationFailureMessage(
+  failure: Record<string, unknown>,
+  taskFailureCode?: string | null,
+): string {
+  const failureCode = readString(taskFailureCode) || readString(failure.failureCode) || null;
+  const failureMessage = readString(failure.displayMessage) ||
+    readString(failure.providerMessage) ||
+    readString(failure.errorMessage) ||
+    readString(failure.message) ||
+    failureCode;
+  if (failureMessage?.trim().toLowerCase() === "provider video generation failed") {
+    return "模型视频生成失败，可尝试重新生成";
+  }
+  return translateProviderErrorMessage(
+    failureMessage || "provider video generation failed",
+    { failureCode, mediaType: "video" },
+  );
+}
+
 async function mapMoneyPrinterGenerationResponse(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -6893,11 +6912,20 @@ async function mapMoneyPrinterGenerationResponse(
   if (videoUrl && !/^https?:\/\//i.test(videoUrl)) {
     videoUrl = new URL(videoUrl, resolveRequestOrigin(input.request)).toString();
   }
+  const failureCode = readString(task.failureCode) || readString(failure.failureCode) || null;
   const failureMessage = readString(failure.displayMessage) ||
     readString(failure.providerMessage) ||
     readString(failure.errorMessage) ||
     readString(failure.message) ||
-    readString(task.failureCode);
+    failureCode;
+  const localizedFailureMessage = moneyPrinterGenerationFailureMessage(failure, failureCode);
+  const localizedFailure = failureMessage
+    ? {
+        ...failure,
+        displayMessage: localizedFailureMessage,
+        providerMessage: localizedFailureMessage,
+      }
+    : failure;
   return {
     taskId: readString(task.taskId),
     status,
@@ -6905,9 +6933,9 @@ async function mapMoneyPrinterGenerationResponse(
     progressPercent: Number.isFinite(Number(task.progressPercent)) ? Number(task.progressPercent) : null,
     ...(status === "succeeded" && videoUrl ? { videoUrl } : {}),
     ...(status === "failed" ? {
-      error: failureMessage || "Comic AI video generation failed",
-      failure,
-      failureCode: readString(task.failureCode) || readString(failure.failureCode) || null,
+      error: localizedFailureMessage || "生成失败，请修改素材或提示词后重新生成",
+      failure: localizedFailure,
+      failureCode,
     } : {}),
   };
 }
