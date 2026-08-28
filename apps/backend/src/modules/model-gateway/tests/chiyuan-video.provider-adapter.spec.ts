@@ -175,7 +175,7 @@ describe("ChiYuan video provider adapter", () => {
       referenceImages: ["https://cdn.example.com/reference-a.png"],
       parameters: {
         mode: "reference-video",
-        durationSec: 10,
+        durationSec: 30,
         resolution: "1080p",
         aspectRatio: "9:16",
         watermark: false,
@@ -206,7 +206,7 @@ describe("ChiYuan video provider adapter", () => {
         ],
         generate_audio: true,
         ratio: "9:16",
-        duration: 10,
+        duration: 30,
         resolution: "1080p",
         watermark: false,
         omni_reference_task_type: "reference",
