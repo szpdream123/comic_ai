@@ -22592,7 +22592,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     if (storyboardBoardMode && selectedStoryboards.some((storyboard) => !hasUsableStoryboardImage(storyboard))) {
-      workbench.ui.toast = "已选中分镜有未生成的故事板。请先生成故事板。";
+      workbench.ui.toast = "视频生成至少需要一张素材图片，请先添加或生成图片素材。";
       renderEpisodeWorkbenchActionStateOnly(workbench);
       return;
     }
@@ -22881,7 +22881,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const activeStoryboards = getActiveStoryboards(workbench);
       const storyboardById = new Map(activeStoryboards.map((storyboard) => [storyboard.id, storyboard]));
       if (items.some((item) => !hasUsableStoryboardImage(storyboardById.get(item.id)))) {
-        workbench.ui.toast = "已选中分镜有未生成的故事板。请先生成故事板。";
+        workbench.ui.toast = "视频生成至少需要一张素材图片，请先添加或生成图片素材。";
         syncEpisodeBatchModalOnly(workbench);
         renderEpisodeWorkbenchActionStateOnly(workbench);
         return;
@@ -48233,6 +48233,13 @@ export async function generateStoryboardVideos(workbench) {
   }
 
   normalizeCurrentVideoAssetTablePromptByFileOrder(workbench, selectedStoryboard);
+  const payload = buildVideoGenerationPayload(workbench);
+  if (videoGenerationRequiresImageReference(payload) && !hasVideoGenerationImageReference(payload)) {
+    workbench.ui.validationMessage = "视频生成至少需要一张素材图片，请先添加或生成图片素材。";
+    workbench.ui.toast = workbench.ui.validationMessage;
+    renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+    return;
+  }
   stopGenerationPolling(workbench);
   const composerDraft = captureStoryboardGenerationComposerDraft(workbench, selectedStoryboard);
   const previousVideoGenerationResult = workbench.ui.videoGenerationResult ?? null;
@@ -48256,7 +48263,6 @@ export async function generateStoryboardVideos(workbench) {
   let clearedComposerDraft = null;
   try {
     await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
-    const payload = buildVideoGenerationPayload(workbench);
     clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
     clearedComposerDraft = captureStoryboardGenerationComposerDraft(
       workbench,
@@ -51285,6 +51291,14 @@ function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, su
 async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, now) {
   const activeStoryboards = getActiveStoryboards(workbench);
   const storyboardBoardMode = modal?.storyboardBoardMode === true;
+  for (const item of items) {
+    const storyboard = activeStoryboards.find((candidate) => candidate.id === item.id) ?? null;
+    if (!storyboard) continue;
+    const payload = buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboard);
+    if (videoGenerationRequiresImageReference(payload) && !hasVideoGenerationImageReference(payload)) {
+      throw new Error("视频生成至少需要一张素材图片，请先添加或生成图片素材。");
+    }
+  }
   stopGenerationPolling(workbench);
   workbench.ui.generationPollingActive = true;
   let firstResult = null;
@@ -51412,6 +51426,16 @@ function buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboar
     ? buildSelectedStoryboardQuickReference(workbench, storyboard, prompt, { storyboardOnly: true })
     : generationState.quickReferenceItems ?? [];
   const referenceUploads = storyboardBoardMode ? [] : generationState.referenceUploads ?? [];
+  const imageReferences = storyboardBoardMode
+    ? enrichGenerationReferenceNamesFromAssets(
+        workbench,
+        dedupeOrderedGenerationReferenceItems(quickReferences),
+      ).filter((item) => resolveGenerationReferenceMediaKind(item) === "image")
+    : resolveBatchStoryboardImageReferences(workbench, storyboard, generationState, [
+        ...quickReferences,
+        ...referenceUploads,
+      ]);
+  const imageFilePaths = imageReferences.map(resolveGenerationReferenceUrl).filter(Boolean);
   return {
     shotId: storyboard?.linkedShotId ?? null,
     prompt,
@@ -51429,7 +51453,8 @@ function buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboar
         aspectRatio: modal?.imageAspectRatio ?? configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
       } : {}),
       references: storyboardBoardMode ? [] : storyboard?.references ?? [],
-      quickReferences,
+      quickReferences: imageReferences.length ? imageReferences : quickReferences,
+      ...(imageReferences.length ? { referenceImages: imageReferences, filePaths: imageFilePaths } : {}),
       firstFrame: storyboardBoardMode ? null : generationState.firstFrame ?? null,
       lastFrame: storyboardBoardMode ? null : generationState.lastFrame ?? null,
       editSourceVideo: storyboardBoardMode ? null : generationState.editSourceVideo ?? null,
@@ -51440,6 +51465,68 @@ function buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboar
       },
     },
   };
+}
+
+function resolveBatchStoryboardImageReferences(workbench, storyboard, generationState, additional = []) {
+  const storyboardMentionContext = [
+    storyboard?.description,
+    storyboard?.sceneAnalysis,
+    storyboard?.plotPreview,
+    storyboard?.title,
+    storyboard?.displayTitle,
+  ].filter(Boolean).join("\n");
+  const resolvedStoryboardReferences = buildSelectedStoryboardQuickReference(
+    workbench,
+    storyboard,
+    storyboardMentionContext,
+    {
+      includeStoryboardImage: false,
+      includeStoryboardMaterials: true,
+      additionalReferences: additional,
+    },
+  );
+  const candidates = [
+    ...resolvedStoryboardReferences,
+    ...(Array.isArray(storyboard?.references) ? storyboard.references : []),
+    ...(Array.isArray(generationState?.quickReferenceItems) ? generationState.quickReferenceItems : []),
+    ...(Array.isArray(generationState?.referenceUploads) ? generationState.referenceUploads : []),
+    ...(Array.isArray(additional) ? additional : []),
+    generationState?.firstFrame,
+    generationState?.imageReference,
+    storyboard?.previewImageUrl
+      ? { kind: "image", type: "image", url: storyboard.previewImageUrl, name: "分镜图片" }
+      : null,
+  ].filter(Boolean);
+  return enrichGenerationReferenceNamesFromAssets(
+    workbench,
+    dedupeOrderedGenerationReferenceItems(candidates),
+  ).filter((item) => resolveGenerationReferenceMediaKind(item) === "image");
+}
+
+function videoGenerationRequiresImageReference(payload) {
+  const model = String(payload?.model ?? "").trim().toLowerCase();
+  const mode = String(payload?.parameters?.mode ?? "").trim().toLowerCase();
+  if (["reference-video", "reference_image_to_video", "reference"].includes(mode)) return true;
+  return model === "wan3.0-r2v" && ["first-frame", "first-last-frame"].includes(mode);
+}
+
+function hasVideoGenerationImageReference(payload) {
+  const parameters = payload?.parameters ?? {};
+  const candidates = [
+    ...(Array.isArray(parameters.referenceImages) ? parameters.referenceImages : []),
+    ...(Array.isArray(parameters.quickReferences) ? parameters.quickReferences : []),
+    ...(Array.isArray(payload?.referenceImages) ? payload.referenceImages : []),
+    parameters.firstFrame,
+    payload?.firstFrame,
+    parameters.imageReference,
+    payload?.imageReference,
+  ];
+  return candidates.some((item) => {
+    if (typeof item === "string") return Boolean(item.trim());
+    return Boolean(item && typeof item === "object" && (
+      resolveGenerationReferenceUrl(item) || item.assetVersionId || item.storageObjectId
+    ));
+  });
 }
 
 function buildEpisodeBatchStoryboardVideoPrompt(workbench, modal, prompt) {

@@ -237,6 +237,102 @@ describe("generation model request validator", () => {
     });
   });
 
+  it("rejects wan3.0-r2v video generation when no image material is provided", () => {
+    assert.throws(
+      () => validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "wan3.0-r2v",
+        modelConfig: videoModelConfig({
+          modelCode: "wan3.0-r2v",
+          taskModes: ["video.reference_guided_video"],
+          uiConfig: { supportedModes: ["reference-video"] },
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+        },
+        prompt: "animate this panel",
+      }),
+      (error) => error instanceof GenerationModelRequestValidationError &&
+        error.code === "model_reference_media_required" &&
+        error.message === "视频生成至少需要一张素材图片，请先添加或生成图片素材。",
+    );
+  });
+
+  it("accepts wan3.0-r2v video generation when an image material is provided", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "wan3.0-r2v",
+        modelConfig: videoModelConfig({
+          modelCode: "wan3.0-r2v",
+          taskModes: ["video.reference_guided_video"],
+          uiConfig: { supportedModes: ["reference-video"] },
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+          referenceImages: [{ assetVersionId: "image-version-1" }],
+        },
+        prompt: "animate this panel",
+      });
+    });
+  });
+
+  it("rejects video generation when the configured reference image schema is required", () => {
+    assertValidationError(
+      () => validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "happyhorse-1.1-r2v",
+        modelConfig: videoModelConfig({
+          modelCode: "happyhorse-1.1-r2v",
+          taskModes: ["video.reference_image_to_video"],
+          parameterSchema: {
+            referenceImages: { type: "file[]", required: true, minimum: 1, maximum: 9 },
+          },
+          uiConfig: { supportedModes: ["reference-video"] },
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+        },
+        prompt: "animate this panel",
+      }),
+      "model_reference_media_required",
+    );
+  });
+
+  it("rejects reference-video mode without images for other reference-capable models", () => {
+    assertValidationError(
+      () => validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "sd_2.5_special",
+        modelConfig: videoModelConfig({
+          modelCode: "sd_2.5_special",
+          taskModes: ["video.reference_image_to_video", "video.image_to_video"],
+          parameterSchema: {
+            referenceImages: { type: "file[]", maximum: 30 },
+          },
+          uiConfig: { supportedModes: ["reference-video"] },
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+        },
+        prompt: "animate this panel",
+      }),
+      "model_reference_media_required",
+    );
+  });
+
   it("accepts first-last-frame mode when the configured task mode uses provider to-video naming", () => {
     assert.doesNotThrow(() => {
       validateGenerationModelRequest({

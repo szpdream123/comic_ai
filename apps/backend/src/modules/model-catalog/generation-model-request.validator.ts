@@ -42,6 +42,20 @@ function validateGenerationRequiredInputs(
   modelConfig: AiModelConfigRecord,
   parameters: Record<string, unknown>,
 ) {
+  const referenceImageSchema = readObject(modelConfig.parameterSchema.referenceImages);
+  const mode = String(parameters.mode ?? "").trim().toLowerCase();
+  const supportsReferenceImages = Object.keys(referenceImageSchema).length > 0 ||
+    modelConfig.capabilities.referenceImages === true ||
+    modelConfig.limits.supportsReferenceImages === true;
+  const requiresReferenceImage = modelConfig.modelCode === "wan3.0-r2v" ||
+    referenceImageSchema.required === true ||
+    (supportsReferenceImages && ["reference-video", "reference_image_to_video", "reference"].includes(mode));
+  if (requiresReferenceImage && !hasGenerationReferenceImage(parameters)) {
+    throw new GenerationModelRequestValidationError(
+      "model_reference_media_required",
+      "视频生成至少需要一张素材图片，请先添加或生成图片素材。",
+    );
+  }
   const sourceVideoSchema = readObject(modelConfig.parameterSchema.sourceVideo);
   const requiresReferenceVideo = modelConfig.capabilities.requiresReferenceVideo === true ||
     modelConfig.limits.requiresReferenceVideo === true ||
@@ -53,6 +67,19 @@ function validateGenerationRequiredInputs(
     "reference_video_required",
     "当前模型需要参考视频，请上传参考视频后再生成。",
   );
+}
+
+function hasGenerationReferenceImage(parameters: Record<string, unknown>) {
+  return [
+    parameters.firstFrame,
+    parameters.firstFrameUrl,
+    parameters.imageReference,
+    parameters.imageUrl,
+    parameters.referenceImages,
+    parameters.quickReferences,
+    parameters.referenceUploads,
+    parameters.filePaths,
+  ].some(hasGenerationMediaValue);
 }
 
 function hasGenerationReferenceVideo(parameters: Record<string, unknown>) {
@@ -79,7 +106,17 @@ function hasGenerationMediaValue(value: unknown): boolean {
     return false;
   }
   const record = value as Record<string, unknown>;
-  return ["url", "sourceUrl", "downloadUrl", "previewUrl", "publicUrl", "src"]
+  return [
+    "url",
+    "sourceUrl",
+    "downloadUrl",
+    "previewUrl",
+    "publicUrl",
+    "src",
+    "assetVersionId",
+    "storageObjectId",
+    "fileId",
+  ]
     .some((key) => hasGenerationMediaValue(record[key]));
 }
 

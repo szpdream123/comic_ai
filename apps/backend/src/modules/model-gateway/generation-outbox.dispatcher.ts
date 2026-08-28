@@ -1,4 +1,5 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { randomUUID } from "node:crypto";
 import { queryOne } from "../shared/db/sql.ts";
 import {
   claimOutboxEventsForDispatch,
@@ -238,8 +239,25 @@ async function routeGenerationOutboxEvent(
   } catch (error) {
     if (errorMessageFromUnknown(error) !== "generation_queue_assignment_already_released") throw error;
     const released = await queryOneReleasedAssignment(db, { assignmentKey, taskId, redisJobId });
-    if (!released) throw error;
-    assignment = released;
+    if (released) {
+      assignment = released;
+    } else {
+      // A Redis-missing repair drains the old shard. Re-route this retry with
+      // a fresh assignment key so the database allocator can choose a healthy
+      // shard or create a new one instead of reusing the broken queue.
+      const rerouteAssignmentKey = `${assignmentKey}:reroute:${randomUUID()}`;
+      assignment = await input.shardStore.reserve(db, {
+        assignmentKey: rerouteAssignmentKey,
+        taskId,
+        mediaType,
+        stage,
+        routeKey,
+        redisJobId,
+        now: input.now,
+        maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
+        reopenThreshold: input.config.sharding.reopenThreshold,
+      });
+    }
   }
   return {
     ...event,

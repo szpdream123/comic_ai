@@ -692,6 +692,64 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
       failedEventIds: [],
     });
   });
+
+  it("re-routes a Redis-missing assignment instead of reusing its drained queue", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000035";
+    const event = generationOutboxEvent("90000000-0000-0000-0000-000000000035", taskId);
+    const reservedKeys: string[] = [];
+    let publishedQueue = "";
+
+    const result = await dispatchClaimedGenerationOutboxEvents({
+      async query(sql: string) {
+        if (sql.includes("generation_queue_stage_assignments")) return { rows: [] };
+        return { rows: [{ input_snapshot_json: {} }] };
+      },
+    } as never, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [event],
+      config: loadGenerationQueueConfig({ GENERATION_QUEUE_SHARDING_ENABLED: "true" }),
+      publisher: { async add() {} },
+      shardStore: {
+        async reserve(_db, input) {
+          reservedKeys.push(input.assignmentKey);
+          if (reservedKeys.length === 1) {
+            throw new Error("generation_queue_assignment_already_released");
+          }
+          return {
+            assignmentKey: input.assignmentKey,
+            taskId: input.taskId,
+            mediaType: input.mediaType,
+            stage: input.stage,
+            routeKey: input.routeKey,
+            routeCode: "rnew",
+            shardId: "70000000-0000-4000-8000-000000000005",
+            shardNo: 1,
+            queueName: "generation-video-submit-rnew-001",
+            capacity: 600,
+            rateLimitMax: 5,
+            rateLimitDurationMs: 1000,
+            admittedCount: 1,
+            shardState: "accepting" as const,
+            assignmentStatus: "publishing" as const,
+            redisJobId: input.redisJobId,
+          };
+        },
+        async markPublished() { return null; },
+      },
+    }, {
+      async publish(routedEvent) {
+        publishedQueue = String(routedEvent.payload.queueName);
+      },
+      async markProcessed(_db, input) {
+        return generationOutboxEvent(input.outboxEventId, taskId);
+      },
+    });
+
+    assert.equal(reservedKeys.length, 2);
+    assert.match(reservedKeys[1] ?? "", /:reroute:/);
+    assert.equal(publishedQueue, "generation-video-submit-rnew-001");
+    assert.deepEqual(result.failedEventIds, []);
+  });
 });
 
 async function seedOutboxEvents(

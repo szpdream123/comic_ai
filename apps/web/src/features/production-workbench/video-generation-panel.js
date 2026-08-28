@@ -210,7 +210,7 @@ export function validateVideoGeneration(input) {
   const mode = input.mode ?? "first-frame";
   if (mode === "reference-video") {
     if ((input.referenceSelectionCount ?? 0) === 0 && (input.referenceUploadCount ?? 0) === 0) {
-      return { ok: false, message: "请先选择至少一个素材或上传参考素材后再提交视频生成任务" };
+      return { ok: false, message: "视频生成至少需要一张素材图片，请先添加或生成图片素材。" };
     }
     return { ok: true, message: "" };
   }
