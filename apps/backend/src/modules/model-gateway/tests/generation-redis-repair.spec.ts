@@ -15,6 +15,7 @@ import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 import { handleGptImageArtifactQueueExhaustion } from "../gpt-image-artifact-recovery.service.ts";
 import {
   markGenerationQueueStagePublished,
+  reserveGenerationQueueRepairPollForPublish,
   reserveGenerationQueueStageForPublish,
 } from "../generation-queue-shard.store.ts";
 import {
@@ -1064,7 +1065,7 @@ describe("generation Redis dispatch repair", () => {
           GENERATION_QUEUE_SHARDING_ENABLED: "true",
         }),
         shardStore: {
-          async reserve(_database, assignment) {
+          async reserveRepairPoll(_database, assignment) {
             assignments.push(assignment);
             return {
               assignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:51000000-0000-4000-8000-000000000104:1780466400000",
@@ -1140,7 +1141,7 @@ describe("generation Redis dispatch repair", () => {
             GENERATION_QUEUE_SHARDING_ENABLED: "true",
           }),
           shardStore: {
-            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+            reserveRepairPoll: (database, assignment) => reserveGenerationQueueRepairPollForPublish(database, assignment),
             markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
           },
           publisher: {
@@ -1159,7 +1160,7 @@ describe("generation Redis dispatch repair", () => {
           GENERATION_QUEUE_SHARDING_ENABLED: "true",
         }),
         shardStore: {
-          reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+          reserveRepairPoll: (database, assignment) => reserveGenerationQueueRepairPollForPublish(database, assignment),
           markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
         },
         publisher: {
@@ -1595,6 +1596,49 @@ describe("generation Redis dispatch repair", () => {
         "50000000-0000-4000-8000-000000000104",
       ]);
       assert.equal(publishedRepairs, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not publish a repair when a submit assignment reserves after the repair scan", async () => {
+    const db = await createMigratedTestDb();
+    let publishedRepairs = 0;
+    let regularReservationInserted = false;
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({
+          GENERATION_QUEUE_SHARDING_ENABLED: "true",
+        }),
+        shardStore: {
+          async reserveRepairPoll(database, assignment) {
+            regularReservationInserted = true;
+            await reserveGenerationQueueStageForPublish(database, {
+              ...assignment,
+              assignmentKey: `generation.task.created:${assignment.taskId}:submit-race`,
+              stage: "submit",
+              redisJobId: `generation.video.submit__${assignment.taskId}__submit-race`,
+            });
+            return reserveGenerationQueueRepairPollForPublish(database, assignment);
+          },
+          markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
+        },
+        publisher: {
+          async add() {
+            publishedRepairs += 1;
+          },
+        },
+      });
+
+      assert.equal(regularReservationInserted, true);
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(publishedRepairs, 0);
     } finally {
       await db.close();
     }
@@ -2432,6 +2476,18 @@ async function seedGenerationRepairTasks(
           '{}'::jsonb,
           '00000000-0000-4000-8000-000000000101'
         )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO assets (id, project_id, asset_type, asset_key, created_by_user_id)
+      VALUES (
+        '60000000-0000-4000-8000-000000000105',
+        '30000000-0000-4000-8000-000000000101',
+        'shot_image',
+        'generation-repair-target',
+        '00000000-0000-4000-8000-000000000101'
+      )
     `,
   );
   await db.query(

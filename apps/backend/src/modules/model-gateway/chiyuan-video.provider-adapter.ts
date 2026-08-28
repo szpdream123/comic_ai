@@ -176,32 +176,28 @@ export class ChiYuanVideoProviderAdapter implements ProviderAdapter {
       redactedResponse: {
         providerStatus: providerStatus ?? null,
         model: this.config.model ?? null,
+        queryTaskEndpoint: this.config.queryTaskEndpoint,
       },
     };
   }
 
   private async pollSuperResolution(input: ProviderPollInput): Promise<ProviderPollResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    let response = await fetchImpl(
-      taskEndpoint(this.config.queryTaskEndpoint, input.externalRequestId),
-      {
+    const queryEndpoints = superResolutionQueryEndpointCandidates(
+      this.config.queryTaskEndpoint,
+      input.redactedPayload,
+    );
+    let response: Response | undefined;
+    let queryTaskEndpoint = this.config.queryTaskEndpoint;
+    for (const endpoint of queryEndpoints) {
+      queryTaskEndpoint = endpoint;
+      response = await fetchImpl(taskEndpoint(endpoint, input.externalRequestId), {
         method: "GET",
         headers: { authorization: `Bearer ${this.config.apiKey}` },
-      },
-    );
-    if (response.status === 404) {
-      const legacyEndpoints = legacySuperResolutionTaskEndpoints(
-        this.config.queryTaskEndpoint,
-        input.externalRequestId,
-      );
-      for (const legacyEndpoint of legacyEndpoints) {
-        response = await fetchImpl(legacyEndpoint, {
-          method: "GET",
-          headers: { authorization: `Bearer ${this.config.apiKey}` },
-        });
-        if (response.status !== 404) break;
-      }
+      });
+      if (response.status !== 404) break;
     }
+    if (!response) throw new Error("chiyuan_video_query_endpoint_required");
     const payload = await readJsonResponse(response, "chiyuan_video_poll");
     const providerStatus = findProviderStatus(payload);
     return normalizeTerminalVideoResult({
@@ -210,6 +206,7 @@ export class ChiYuanVideoProviderAdapter implements ProviderAdapter {
       redactedResponse: sanitizeChiYuanAuditRecord({
         providerStatus: providerStatus ?? null,
         taskId: input.externalRequestId,
+        queryTaskEndpoint,
         progress: readPath(payload, ["progress"]) ?? readPath(payload, ["data", "progress"]) ?? null,
         providerErrorCode: findFirstScalarString(payload, [
           ["code"], ["error", "code"], ["data", "code"], ["data", "error", "code"],
@@ -388,15 +385,65 @@ function taskEndpoint(endpoint: string, taskId: string) {
   return endpoint.replace("{taskId}", encoded).replace("{task_id}", encoded);
 }
 
-function legacySuperResolutionTaskEndpoints(endpoint: string, taskId: string) {
-  const current = taskEndpoint(endpoint, taskId);
-  if (current.includes("/api/v3/contents/generations/tasks/")) {
-    const v1Generation = current.replace("/api/v3/contents/generations/tasks/", "/v1/video/generations/");
+function superResolutionQueryEndpointCandidates(
+  configuredEndpoint: string,
+  redactedPayload: Record<string, unknown> | undefined,
+) {
+  const payload = redactedPayload ?? {};
+  const recordedEndpoint = readString(readPath(payload, ["providerResponseRedacted", "queryTaskEndpoint"]));
+  const capturedEndpoint = readString(readPath(payload, [
+    "modelConfigSnapshot",
+    "config",
+    "providerConfig",
+    "queryTaskEndpoint",
+  ]));
+  const candidates = [recordedEndpoint, capturedEndpoint, configuredEndpoint]
+    .flatMap((endpoint) => endpoint ? [endpoint, ...legacySiblingQueryEndpoints(endpoint)] : [])
+    .map((endpoint) => normalizeChiYuanQueryEndpoint(configuredEndpoint, endpoint))
+    .filter((endpoint): endpoint is string => Boolean(endpoint));
+  return [...new Set(candidates)];
+}
+
+function legacySiblingQueryEndpoints(endpoint: string) {
+  if (endpoint.includes("/api/v3/contents/generations/tasks/")) {
+    const v1Generation = endpoint.replace(
+      "/api/v3/contents/generations/tasks/",
+      "/v1/video/generations/",
+    );
     return [v1Generation, v1Generation.replace("/v1/video/generations/", "/v1/videos/")];
   }
-  return current.includes("/v1/video/generations/")
-    ? [current.replace("/v1/video/generations/", "/v1/videos/")]
+  if (endpoint.includes("/api/v3/contents/generations/tasks/{")) {
+    const v1Generation = endpoint.replace(
+      "/api/v3/contents/generations/tasks/{",
+      "/v1/video/generations/{",
+    );
+    return [v1Generation, v1Generation.replace("/v1/video/generations/{", "/v1/videos/{")];
+  }
+  if (endpoint.includes("/v1/video/generations/")) {
+    return [endpoint.replace("/v1/video/generations/", "/v1/videos/")];
+  }
+  return endpoint.includes("/v1/video/generations/{")
+    ? [endpoint.replace("/v1/video/generations/{", "/v1/videos/{")]
     : [];
+}
+
+function normalizeChiYuanQueryEndpoint(configuredEndpoint: string, endpoint: string) {
+  try {
+    const configured = new URL(configuredEndpoint);
+    const resolved = new URL(endpoint, `${configured.origin}/`);
+    if (resolved.origin !== configured.origin || resolved.search || resolved.hash) return undefined;
+    const pathname = decodeURIComponent(resolved.pathname);
+    if (![
+      /^\/api\/v3\/contents\/generations\/tasks\/\{task(?:I|_i)d\}$/,
+      /^\/v1\/video\/generations\/\{task(?:I|_i)d\}$/,
+      /^\/v1\/videos\/\{task(?:I|_i)d\}$/,
+    ].some((pattern) => pattern.test(pathname))) {
+      return undefined;
+    }
+    return `${resolved.origin}${pathname}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseRecord(value: string) {

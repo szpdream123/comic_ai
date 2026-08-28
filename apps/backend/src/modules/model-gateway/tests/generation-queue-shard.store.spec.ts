@@ -14,6 +14,7 @@ import {
   listGenerationQueueShards,
   markGenerationQueueStagePublished,
   releaseGenerationQueueStage,
+  reserveGenerationQueueRepairPollForPublish,
   reserveGenerationQueueStageForPublish,
   retireIdleGenerationQueueShards,
 } from "../generation-queue-shard.store.ts";
@@ -218,6 +219,47 @@ describe("generation queue shard store", { concurrency: false }, () => {
         assignGenerationQueueStage(db, input),
         /generation_queue_assignment_already_released/,
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("atomically lets either a repair poll or a regular poll own a task, but never both", async () => {
+    const db = await createShardTestDb();
+    const taskId = "50000000-0000-4000-8000-000000000012";
+    const now = new Date("2026-08-28T00:00:00.000Z");
+
+    try {
+      const [repair, regular] = await Promise.all([
+        reserveGenerationQueueRepairPollForPublish(db, {
+          assignmentKey: `generation.repair.poll:${taskId}:attempt-1:${now.getTime()}`,
+          taskId,
+          mediaType: "video",
+          stage: "poll",
+          routeKey: "provider-repair|executor|account",
+          redisJobId: `generation.video.poll__${taskId}__repair`,
+          now,
+        }).catch((error) => error),
+        reserveGenerationQueueStageForPublish(db, {
+          assignmentKey: `generation.task.poll_requested:${taskId}:attempt-1:poll:event-1`,
+          taskId,
+          mediaType: "video",
+          stage: "poll",
+          routeKey: "provider-repair|executor|account",
+          redisJobId: `generation.video.poll__${taskId}__regular`,
+          now,
+        }).catch((error) => error),
+      ]);
+      const assignments = await db.query<{ assignment_key: string }>(`
+        SELECT assignment_key
+        FROM generation_queue_stage_assignments
+        WHERE task_id = '${taskId}'
+          AND stage IN ('submit', 'poll')
+          AND status IN ('publishing', 'admitted')
+      `);
+
+      assert.equal(assignments.rows.length, 1);
+      assert.equal([repair, regular].filter((value) => !(value instanceof Error)).length, 1);
     } finally {
       await db.close();
     }

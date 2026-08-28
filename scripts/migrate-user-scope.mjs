@@ -162,6 +162,7 @@ const migrations = [
   ["20261023-add-chiyuan-video-models.sql", "packages/db/migrations/20261023-add-chiyuan-video-models.sql"],
   ["20261024-fix-chiyuan-seedance25-api-contract.sql", "packages/db/migrations/20261024-fix-chiyuan-seedance25-api-contract.sql"],
   ["20261025-use-chiyuan-seedance25-native-contents-contract.sql", "packages/db/migrations/20261025-use-chiyuan-seedance25-native-contents-contract.sql"],
+  ["20261026-fence-generation-repair-poll-reservations.sql", "packages/db/migrations/20261026-fence-generation-repair-poll-reservations.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -229,6 +230,7 @@ const runtimeSafeMigrationNames = new Set([
   "20261023-add-chiyuan-video-models.sql",
   "20261024-fix-chiyuan-seedance25-api-contract.sql",
   "20261025-use-chiyuan-seedance25-native-contents-contract.sql",
+  "20261026-fence-generation-repair-poll-reservations.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
@@ -237,6 +239,10 @@ const runtimeRequiredPostconditionMigrationNames = new Set([
 const taskCenterProviderDiagnosticsMigrationName = "20260824-task-center-provider-diagnostics.sql";
 const projectCoverStorageObjectBackfillMigrationName = "20260909-backfill-project-cover-storage-objects.sql";
 const compatibleChecksumTransitions = new Map([
+  ["20261023-add-chiyuan-video-models.sql", {
+    recorded: "6f58b77cbfa22976548252c91e3ad74e5bb732ae5a643d27d8c2f97e8c4dac5c",
+    current: "50c9250ec6ab6dc72b2e023240f31a08fb86a809b8556d0074bc1c1299c4cad2",
+  }],
   ["20260720-add-aliyun-bailian-audio-model.sql", {
     recorded: [
       "e15713b3f69203ec2688d5bc347535f26853dc8024f7cf2f436d04365fa0b67e",

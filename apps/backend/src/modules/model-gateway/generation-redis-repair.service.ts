@@ -1059,7 +1059,7 @@ export async function repairRunningSeedancePollJobs(
     config: GenerationQueueConfig;
     publisher: GenerationBullMQPublisher;
     shardStore?: {
-      reserve(
+      reserveRepairPoll(
         db: SqlDatabase,
         assignment: {
           assignmentKey: string;
@@ -1072,7 +1072,7 @@ export async function repairRunningSeedancePollJobs(
           maxActiveShardsPerStage?: number;
           reopenThreshold?: number;
         },
-      ): Promise<{ assignmentKey: string; queueName: string }>;
+      ): Promise<{ assignmentKey: string; queueName: string } | undefined>;
       markPublished(
         db: SqlDatabase,
         input: { assignmentKey: string; redisJobId: string; now: Date },
@@ -1255,7 +1255,7 @@ export async function repairRunningSeedancePollJobs(
         ],
       );
       redisJobId = existing?.redis_job_id ?? redisJobId;
-      const assignment = existing ? null : await input.shardStore.reserve(db, {
+      const assignment = existing ? null : await input.shardStore.reserveRepairPoll(db, {
           assignmentKey: `generation.repair.poll:${candidate.task_id}:${candidate.current_attempt_id}:${repairToken}`,
           taskId: candidate.task_id,
           mediaType,
@@ -1270,6 +1270,9 @@ export async function repairRunningSeedancePollJobs(
           maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
           reopenThreshold: input.config.sharding.reopenThreshold,
         });
+      if (!existing && !assignment) {
+        continue;
+      }
       queueName = existing?.queue_name ?? assignment!.queueName;
       queueAssignmentKey = existing?.assignment_key ?? assignment!.assignmentKey;
     }

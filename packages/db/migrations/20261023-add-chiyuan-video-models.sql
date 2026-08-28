@@ -1,14 +1,24 @@
 ALTER TABLE ai_model_configs
-  DROP CONSTRAINT IF EXISTS ai_model_configs_provider_protocol_check;
+  DROP CONSTRAINT IF EXISTS ai_model_configs_provider_protocol_check_chiyuan;
 
 ALTER TABLE ai_model_configs
-  ADD CONSTRAINT ai_model_configs_provider_protocol_check CHECK (provider_protocol IN (
+  ADD CONSTRAINT ai_model_configs_provider_protocol_check_chiyuan CHECK (provider_protocol IN (
     'creator_dev','openai_images','openai_compatible_chat','cumob_chat','modelflare_responses',
     'volcengine_ark_image','volcengine_ark_video','aliyun_bailian_video','aliyun_bailian_audio',
     'apimart_audio','globalaiopc_video','globalaiopc_sound_clone','lingdong_api','cumob_image',
     'global_ai_opc_image','extra_token_video','saier_video','banana_router','san_bao','chiyuan_video',
     'custom_http'
-  ));
+  )) NOT VALID;
+
+ALTER TABLE ai_model_configs
+  VALIDATE CONSTRAINT ai_model_configs_provider_protocol_check_chiyuan;
+
+ALTER TABLE ai_model_configs
+  DROP CONSTRAINT IF EXISTS ai_model_configs_provider_protocol_check;
+
+ALTER TABLE ai_model_configs
+  RENAME CONSTRAINT ai_model_configs_provider_protocol_check_chiyuan
+  TO ai_model_configs_provider_protocol_check;
 
 WITH configs AS (
   SELECT *

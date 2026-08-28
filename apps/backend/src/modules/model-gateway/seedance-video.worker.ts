@@ -1583,7 +1583,10 @@ export async function processSeedanceVideoPollJob(
   try {
     let poll: Awaited<ReturnType<SeedancePollAdapter["poll"]>>;
     try {
-      poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+      poll = await adapter.poll({
+        externalRequestId: row.external_request_id,
+        redactedPayload: buildProviderPollPayload(snapshot, row.provider_response_redacted_json),
+      });
     } catch (error) {
       if (modelConfig?.providerProtocol !== "san_bao" || !(error instanceof ModelError)) throw error;
       poll = {
@@ -2524,7 +2527,10 @@ export async function recoverSeedanceVideoAfterPollTimeout(
     input.env,
     resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
   ) as unknown as SeedancePollAdapter;
-  const poll = await adapter.poll({ externalRequestId: row.external_request_id!, redactedPayload: snapshot });
+  const poll = await adapter.poll({
+    externalRequestId: row.external_request_id!,
+    redactedPayload: buildProviderPollPayload(snapshot, row.provider_response_redacted_json),
+  });
   const videoUrl = readString(poll.videoUrl);
   if (poll.status !== "succeeded" || !videoUrl) {
     return { status: "skipped", reason: "provider_result_not_ready" };
@@ -4494,6 +4500,16 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
   }
 }
 
+function buildProviderPollPayload(
+  snapshot: Record<string, unknown>,
+  providerResponse: Record<string, unknown> | string | null | undefined,
+) {
+  const providerResponseRedacted = parseProviderResponse(providerResponse);
+  return Object.keys(providerResponseRedacted).length > 0
+    ? { ...snapshot, providerResponseRedacted }
+    : snapshot;
+}
+
 async function resolveSeedanceArtifactUrlForTransfer(
   db: SqlDatabase,
   row: SeedanceTaskRow,
@@ -4523,7 +4539,7 @@ async function resolveSeedanceArtifactUrlForTransfer(
   ) as unknown as SeedancePollAdapter;
   const refreshed = await adapter.poll({
     externalRequestId: row.external_request_id,
-    redactedPayload: snapshot,
+    redactedPayload: buildProviderPollPayload(snapshot, row.provider_response_redacted_json),
   });
   return refreshed.status === "succeeded" ? readString(refreshed.videoUrl) : undefined;
 }

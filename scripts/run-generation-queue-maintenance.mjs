@@ -15,7 +15,7 @@ const [
   { createBullMQGenerationPublisher },
   { createBullMQGenerationQueueAssignmentInspector },
   { createGenerationQueueAdminRecoveryJobOps, recoverGenerationQueueAdminCommands },
-  { markGenerationQueueStagePublished, reserveGenerationQueueStageForPublish, retireIdleGenerationQueueShards },
+  { markGenerationQueueStagePublished, reserveGenerationQueueRepairPollForPublish, retireIdleGenerationQueueShards },
   { failStaleGenerationTasksBeforeProviderSubmission, repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs, repairStaleGenerationQueueStageAssignments },
   { loadGenerationQueueConfig },
   { enqueueDueGenerationPolls },
@@ -158,7 +158,7 @@ try {
           config,
           publisher,
           shardStore: {
-            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+            reserveRepairPoll: (database, assignment) => reserveGenerationQueueRepairPollForPublish(database, assignment),
             markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
           },
         }),

@@ -182,6 +182,10 @@ describe("ChiYuan video provider adapter", () => {
       },
     }));
     assert.equal(submitted.externalRequestId, "super-task");
+    assert.equal(
+      submitted.redactedResponse.queryTaskEndpoint,
+      "https://cy.apistudio.cc/api/v3/contents/generations/tasks/{taskId}",
+    );
     assert.deepEqual(requests[0], {
       url: "https://cy.apistudio.cc/api/v3/contents/generations/tasks",
       method: "POST",
@@ -574,14 +578,72 @@ describe("ChiYuan video provider adapter", () => {
     );
 
     assert.ok(adapter.poll);
-    const result = await adapter.poll({ externalRequestId: "legacy-task" });
+    const result = await adapter.poll({
+      externalRequestId: "legacy-task",
+      redactedPayload: {
+        modelConfigSnapshot: {
+          config: {
+            providerConfig: {
+              queryTaskEndpoint: "/v1/videos/{taskId}",
+            },
+          },
+        },
+      },
+    });
     assert.deepEqual(urls, [
-      "https://cy.apistudio.cc/api/v3/contents/generations/tasks/legacy-task",
-      "https://cy.apistudio.cc/v1/video/generations/legacy-task",
       "https://cy.apistudio.cc/v1/videos/legacy-task",
     ]);
     assert.equal(result.status, "succeeded");
     assert.equal(result.videoUrl, "https://cdn.example.com/legacy.mp4");
+  });
+
+  it("keeps a retried v3 submission on v3 even when its captured snapshot used a legacy query endpoint", async () => {
+    const urls: string[] = [];
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "chiyuan_video",
+        providerModel: "doubao-seedance-2-5-260628",
+        mediaType: "video",
+        providerConfig: {
+          baseURL: "https://cy.apistudio.cc",
+          createTaskEndpoint: "/api/v3/contents/generations/tasks",
+          queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+          apiKeyEnv: "ChiYuan_API_KEY",
+          requestFormat: "chiyuan_seedance_super_resolution",
+        },
+      },
+      { ChiYuan_API_KEY: "chiyuan-key" },
+      (async (url) => {
+        urls.push(String(url));
+        return Response.json({
+          id: "retried-v3-task",
+          status: "completed",
+          url: "https://cdn.example.com/retried-v3.mp4",
+        });
+      }) as typeof fetch,
+    );
+
+    assert.ok(adapter.poll);
+    const result = await adapter.poll({
+      externalRequestId: "retried-v3-task",
+      redactedPayload: {
+        providerResponseRedacted: {
+          queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+        },
+        modelConfigSnapshot: {
+          config: {
+            providerConfig: {
+              queryTaskEndpoint: "/v1/videos/{taskId}",
+            },
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(urls, [
+      "https://cy.apistudio.cc/api/v3/contents/generations/tasks/retried-v3-task",
+    ]);
+    assert.equal(result.status, "succeeded");
   });
 
   it("sanitizes official-compatible error diagnostics before they can be persisted", async () => {
