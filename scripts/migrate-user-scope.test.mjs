@@ -152,6 +152,91 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     }
   });
 
+  it("applies the Seedance 2.5 duration expansion through the runtime-safe production path", async () => {
+    const connectionString = process.env.DATABASE_URL?.trim();
+    assert.ok(connectionString, "DATABASE_URL is required");
+    const schema = `test_${randomUUID().replaceAll("-", "_")}`;
+    const client = new pg.Client({ connectionString });
+
+    await client.connect();
+    try {
+      await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(
+        "SELECT set_config('search_path', format('%I, pg_catalog', $1::text), false)",
+        [schema],
+      );
+      for (const relativePath of [
+        "../packages/db/baseline/user-centric-schema.sql",
+        "../packages/db/migrations/20261023-add-chiyuan-video-models.sql",
+        "../packages/db/migrations/20261025-use-chiyuan-seedance25-native-contents-contract.sql",
+      ]) {
+        await client.query(await readFile(new URL(relativePath, import.meta.url), "utf8"));
+      }
+      await client.query(`
+        INSERT INTO app_schema_migrations (migration_name, checksum) VALUES
+          ('user-centric-schema.sql', 'baseline-test'),
+          ('model-reference-seed.sql', 'seed-test');
+        UPDATE ai_model_configs
+        SET pricing_json = '{"unit":"video","baseCredits":5000,"billingMode":"fixed"}'::jsonb,
+            status = 'active',
+            parameter_schema_json = jsonb_set(
+              parameter_schema_json,
+              '{durationSec}',
+              '{"label":"视频时长","type":"integer","required":false,"minimum":4,"maximum":30,"options":["5","6","7","8","9","10","11","12","13","14","15"],"providerKey":"duration"}'::jsonb
+            ),
+            default_params_json = jsonb_set(default_params_json, '{durationSec}', '12'::jsonb)
+        WHERE model_code = 'chiyuan-seedance-2.5-super-resolution';
+      `);
+
+      const isolatedUrl = new URL(connectionString);
+      isolatedUrl.searchParams.set("options", `-c search_path=${schema}`);
+      const runMigration = () => spawnSync(
+        process.execPath,
+        [
+          "scripts/migrate-user-scope.mjs",
+          "--apply",
+          "--runtime-safe",
+          "--only",
+          "20261027-expand-chiyuan-seedance25-duration-options.sql",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = runMigration();
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+      }
+
+      const result = await client.query(`
+        SELECT status, pricing_json, parameter_schema_json #> '{durationSec,options}' AS duration_options,
+               parameter_schema_json #>> '{durationSec,providerKey}' AS duration_provider_key,
+               default_params_json->>'durationSec' AS default_duration,
+               (
+                 SELECT count(*)::int
+                 FROM app_schema_migrations
+                 WHERE migration_name = '20261027-expand-chiyuan-seedance25-duration-options.sql'
+               ) AS migration_count
+        FROM ai_model_configs
+        WHERE model_code = 'chiyuan-seedance-2.5-super-resolution'
+      `);
+      assert.deepEqual(result.rows[0], {
+        status: "active",
+        pricing_json: { unit: "video", baseCredits: 5000, billingMode: "fixed" },
+        duration_options: Array.from({ length: 26 }, (_, index) => String(index + 5)),
+        duration_provider_key: "duration",
+        default_duration: "12",
+        migration_count: 1,
+      });
+    } finally {
+      await client.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await client.end();
+    }
+  });
+
   it("rolls back the migration ledger and baseline during an empty-schema dry run", { concurrency: false }, async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");

@@ -59,6 +59,16 @@ describe("ChiYuan video model configuration", () => {
         },
       ]);
 
+      const durationOptions = await db.query<{ duration_options: string[] | null }>(`
+        SELECT parameter_schema_json #> '{durationSec,options}' AS duration_options
+        FROM ai_model_configs
+        WHERE model_code = 'chiyuan-seedance-2.5-super-resolution'
+      `);
+      assert.deepEqual(
+        durationOptions.rows[0]?.duration_options,
+        Array.from({ length: 26 }, (_, index) => String(index + 5)),
+      );
+
       const policies = await db.query<{
         model_code: string;
         submit_queue_name: string;
@@ -197,6 +207,69 @@ describe("ChiYuan video model configuration", () => {
           queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
           apiKeyEnv: "ChiYuan_API_KEY",
           requestFormat: "chiyuan_seedance_super_resolution",
+        },
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("expands Seedance 2.5 duration choices through 30 seconds without changing administrator configuration", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(`
+        UPDATE ai_model_configs
+        SET pricing_json = '{"unit":"video","baseCredits":5000,"billingMode":"fixed"}'::jsonb,
+            status = 'active',
+            parameter_schema_json = jsonb_set(
+              parameter_schema_json,
+              '{durationSec}',
+              '{"label":"视频时长","type":"integer","required":false,"minimum":4,"maximum":30,"options":["5","6","7","8","9","10","11","12","13","14","15"],"providerKey":"duration"}'::jsonb
+            ),
+            default_params_json = jsonb_set(default_params_json, '{durationSec}', '12'::jsonb)
+        WHERE model_code = 'chiyuan-seedance-2.5-super-resolution'
+      `);
+
+      const before = await db.query<{
+        status: string;
+        pricing_json: Record<string, unknown>;
+        parameter_schema_json: Record<string, Record<string, unknown>>;
+        default_params_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(`
+        SELECT status, pricing_json, parameter_schema_json, default_params_json,
+               provider_config_json, limits_json, ui_config_json
+        FROM ai_model_configs
+        WHERE model_code = 'chiyuan-seedance-2.5-super-resolution'
+      `);
+      await applySqlMigration(db, process.cwd(), "20261027-expand-chiyuan-seedance25-duration-options.sql");
+
+      const result = await db.query<{
+        status: string;
+        pricing_json: Record<string, unknown>;
+        parameter_schema_json: Record<string, Record<string, unknown>>;
+        default_params_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+      }>(`
+        SELECT status, pricing_json, parameter_schema_json, default_params_json,
+               provider_config_json, limits_json, ui_config_json
+        FROM ai_model_configs
+        WHERE model_code = 'chiyuan-seedance-2.5-super-resolution'
+      `);
+      const previous = before.rows[0];
+      assert.ok(previous);
+      assert.deepEqual(result.rows[0], {
+        ...previous,
+        parameter_schema_json: {
+          ...previous.parameter_schema_json,
+          durationSec: {
+            ...previous.parameter_schema_json.durationSec,
+            options: Array.from({ length: 26 }, (_, index) => String(index + 5)),
+          },
         },
       });
     } finally {

@@ -149,6 +149,7 @@ const CHIYUAN_VIDEO_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "202
 const CHIYUAN_SEEDANCE25_API_CONTRACT_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261024-fix-chiyuan-seedance25-api-contract.sql"];
 const CHIYUAN_SEEDANCE25_NATIVE_CONTENTS_CONTRACT_RELATIVE_PATH = ["packages", "db", "migrations", "20261025-use-chiyuan-seedance25-native-contents-contract.sql"];
 const GENERATION_REPAIR_POLL_FENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20261026-fence-generation-repair-poll-reservations.sql"];
+const CHIYUAN_SEEDANCE25_DURATION_OPTIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20261027-expand-chiyuan-seedance25-duration-options.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -786,6 +787,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20261026-fence-generation-repair-poll-reservations.sql",
       sql: await readFile(join(rootDir, ...GENERATION_REPAIR_POLL_FENCE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261027-expand-chiyuan-seedance25-duration-options.sql",
+      sql: await readFile(join(rootDir, ...CHIYUAN_SEEDANCE25_DURATION_OPTIONS_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName
