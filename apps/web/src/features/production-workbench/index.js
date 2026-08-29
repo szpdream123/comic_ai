@@ -35082,11 +35082,40 @@ async function ensureGenerationReady(workbench, options = {}) {
 
 async function refreshVideoGenerationConfigBeforeSubmit(workbench) {
   const hadConfiguredVideoModels = hasLoadedGenerationModelsForMedia(workbench, "video");
+  const previousQuote = resolveCurrentVideoGenerationQuote(workbench);
   await refreshActiveGenerationConfigForMedia(workbench, "video");
   if (!hadConfiguredVideoModels && !hasLoadedGenerationModelsForMedia(workbench, "video")) {
     return;
   }
   syncSelectedVideoGenerationParametersWithConfiguredModel(workbench);
+  const currentQuote = resolveCurrentVideoGenerationQuote(workbench);
+  if (
+    previousQuote.modelCode !== currentQuote.modelCode ||
+    previousQuote.creditCost !== currentQuote.creditCost
+  ) {
+    throw new Error("模型或积分配置已更新，已按后台最新配置重新报价，请确认后再次生成。");
+  }
+}
+
+function resolveCurrentVideoGenerationQuote(workbench) {
+  const payload = buildVideoGenerationPayload(workbench);
+  const modelCode = String(payload?.model ?? "").trim();
+  const selectedModel = findConfiguredGenerationModel(workbench, modelCode);
+  const parameters = payload?.parameters && typeof payload.parameters === "object"
+    ? payload.parameters
+    : {};
+  const creditCost = selectedModel
+    ? resolveGenerationCreditCost("video", {
+        videoResolution: parameters.resolution ?? workbench.ui.videoResolution,
+        videoDurationSec: parameters.durationSec ?? workbench.ui.videoDurationSec,
+        imageAspectRatio: parameters.aspectRatio ?? workbench.ui.imageAspectRatio,
+        parameterValues: parameters,
+      }, selectedModel)
+    : null;
+  return {
+    modelCode,
+    creditCost: Number.isFinite(Number(creditCost)) ? Number(creditCost) : null,
+  };
 }
 
 function canUseRealEpisodeGenerationTask(workbench, mediaKind) {
@@ -40065,6 +40094,19 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   const episodeStoryboardsPromise = shouldLoadRemoteEpisode && (requestedScopeMode === "storyboard" || isWorkflowLayout)
     ? loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId)
     : null;
+  let generationConfigError = null;
+  const generationConfigPromise = shouldLoadRemoteEpisode && requestedScopeMode === "storyboard"
+    ? loadEpisodeGenerationConfig(workbench, resolvedEpisodeId, {
+        fresh: true,
+        mediaType: "video",
+        shouldApply: () =>
+          workbench.ui.episodeWorkbenchEnterRequestId === requestId &&
+          workbench.ui.selectedEpisodeId === resolvedEpisodeId,
+      }).catch((error) => {
+        generationConfigError = error;
+        return null;
+      })
+    : null;
   workbench.ui.episodeWorkbenchError = "";
   if (
     workbench.ui.episodeWorkbenchContextLoadedEpisodeId !== resolvedEpisodeId &&
@@ -40126,7 +40168,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       globalThis.window.location.hash = nextHash;
     }
   }
-  if (options.shouldRender !== false) {
+  if (options.shouldRender !== false && !generationConfigPromise) {
     render(workbench);
   }
 
@@ -40138,6 +40180,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
           ? ensureEpisodeWorkbenchAssetsHydrated(workbench)
           : episodeStoryboardsPromise,
         isWorkflowLayout && requestedScopeMode === "assets" ? episodeStoryboardsPromise : null,
+        generationConfigPromise,
       ]);
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
         return;
@@ -40199,6 +40242,16 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     syncSelectedEpisodeAssetForCurrentTab(workbench);
     clearAssetPromptDraftForCurrentSelection(workbench);
   }
+  if (generationConfigError) {
+    workbench.ui.episodeGenerationConfig = mergeGenerationConfigForMedia(
+      workbench.ui.episodeGenerationConfig,
+      { defaultVideoModelCode: null, models: [] },
+      "video",
+    );
+    workbench.ui.episodeWorkbenchError = friendlyError(generationConfigError);
+  } else if (generationConfigPromise) {
+    syncSelectedVideoGenerationParametersWithConfiguredModel(workbench);
+  }
   if (options.toast) {
     workbench.ui.toast = options.toast;
   } else if (workbench.ui.episodeWorkbenchError) {
@@ -40231,10 +40284,10 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       render(workbench);
     }
     if (shouldLoadRemoteEpisode) {
-      const lazyTasks = [
-        loadEpisodeGenerationConfig(workbench, resolvedEpisodeId),
-        ensureProjectAssetLibraryReadyForEpisode(workbench),
-      ];
+      const lazyTasks = [ensureProjectAssetLibraryReadyForEpisode(workbench)];
+      if (!generationConfigPromise) {
+        lazyTasks.unshift(loadEpisodeGenerationConfig(workbench, resolvedEpisodeId));
+      }
       if (
         (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) &&
         typeof workbench.api?.getProjectStyles === "function"
@@ -40758,6 +40811,9 @@ async function loadEpisodeGenerationConfig(workbench, episodeId, options = {}) {
     fresh: options.fresh === true,
     mediaType: options.mediaType,
   });
+  if (typeof options.shouldApply === "function" && !options.shouldApply()) {
+    return workbench.ui.episodeGenerationConfig;
+  }
   workbench.ui.episodeGenerationConfig = {
     ...mergeGenerationConfigForMedia(
       workbench.ui.episodeGenerationConfig,
@@ -48316,6 +48372,10 @@ export async function generateStoryboardVideos(workbench) {
 
   normalizeCurrentVideoAssetTablePromptByFileOrder(workbench, selectedStoryboard);
   const payload = buildVideoGenerationPayload(workbench);
+  const expectedCredits = resolveCurrentVideoGenerationQuote(workbench).creditCost;
+  if (expectedCredits !== null) {
+    payload.expectedCredits = expectedCredits;
+  }
   if (videoGenerationRequiresImageReference(payload) && !hasVideoGenerationImageReference(payload)) {
     workbench.ui.validationMessage = "视频生成至少需要一张素材图片，请先添加或生成图片素材。";
     workbench.ui.toast = workbench.ui.validationMessage;

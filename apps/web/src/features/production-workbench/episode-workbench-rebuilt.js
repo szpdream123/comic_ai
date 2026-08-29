@@ -3162,7 +3162,13 @@ export function renderPromptDock({
   const hasConfiguredModelList = Array.isArray(episodeGenerationConfig?.models);
   const fallbackModels = isVideoMode ? VIDEO_MODELS : IMAGE_MODELS;
   const models = hasConfiguredModelList ? configuredModels : (configuredModels.length ? configuredModels : fallbackModels);
-  const selectedModel = models.find((item) => item.id === selectedModelId) ?? models[0] ?? {
+  const configuredDefaultModelId = isVideoMode
+    ? String(episodeGenerationConfig?.defaultVideoModelCode ?? "").trim()
+    : "";
+  const selectedModel = models.find((item) => item.id === selectedModelId)
+    ?? models.find((item) => item.id === configuredDefaultModelId)
+    ?? models[0]
+    ?? {
     id: "",
     label: "暂无可用模型",
     credits: 0,

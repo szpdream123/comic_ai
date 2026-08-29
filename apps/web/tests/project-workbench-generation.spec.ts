@@ -5406,7 +5406,17 @@ describe("workbench generation payloads and inspectors", () => {
       },
     });
 
+    assert.equal(createVideoTaskCalls.length, 0);
+    assert.match(workbench.ui.toast, /模型或积分配置已更新/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "generate-videos",
+      },
+    });
+
     assert.deepEqual(generationConfigCalls, [
+      { episodeId: "episode-new", options: { fresh: true, mediaType: "video" } },
       { episodeId: "episode-new", options: { fresh: true, mediaType: "video" } },
     ]);
     assert.equal(createVideoTaskCalls.length, 1);
@@ -18455,6 +18465,187 @@ describe("production workbench project tab", () => {
     assert.match(html, /<span>150<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
   });
 
+  it("renders the configured default video model when the selected model is unavailable", () => {
+    const html = renderPromptDock({
+      selectedStoryboard: { generationState: {} },
+      selectedModelId: "removed-video-model",
+      prompt: "",
+      busy: false,
+      validationMessage: "",
+      generationControls: {
+        videoDurationSec: "5",
+        videoResolution: "720P",
+        imageAspectRatio: "16:9",
+        parameterValues: {
+          durationSec: "5",
+          resolution: "720P",
+          aspectRatio: "16:9",
+        },
+      },
+      episodeGenerationConfig: {
+        defaultVideoModelCode: "wan3.0-r2v",
+        models: [
+          {
+            modelCode: "sd_2.0_special",
+            modelLabel: "Seedance 2.0 特价版（图片参考）",
+            mediaType: "video",
+            videoCategory: "reference",
+            pricing: {
+              baseCredits: 650,
+              billingMode: "duration",
+              resolutionCredits: { "720P": 650 },
+            },
+          },
+          {
+            modelCode: "wan3.0-r2v",
+            modelLabel: "Wan3.0（秒计费）",
+            mediaType: "video",
+            videoCategory: "reference",
+            pricing: {
+              baseCredits: 300,
+              billingMode: "duration",
+              resolutionCredits: { "720P": 350 },
+            },
+          },
+        ],
+      },
+      generationUiState: {},
+      mediaMode: "video",
+      videoMode: "reference-video",
+    });
+
+    assert.match(html, /Wan3\.0（秒计费）/);
+    assert.match(html, /<span>1750<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+    assert.doesNotMatch(html, /Seedance 2\.0 特价版（图片参考）/);
+  });
+
+  it("stops video submission for fresh pricing or model changes and retries with the new quote", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-quote-refresh",
+      linkedShotId: "shot-quote-refresh",
+      description: "角色在雨夜道别。",
+      generationState: {
+        firstFrame: {
+          id: "first-frame-quote-refresh",
+          kind: "image",
+          name: "首帧",
+          url: "/uploads/first-frame-quote-refresh.png",
+        },
+      },
+    };
+    const createVideoTaskCalls = [];
+    const freshSeedanceModel = {
+      modelCode: "sd_2.0_special",
+      modelLabel: "Seedance 2.0 特价版（图片参考）",
+      mediaType: "video",
+      videoCategory: "reference",
+      parameterSchema: {
+        resolution: { type: "enum", options: ["720p"] },
+        aspectRatio: { type: "enum", options: ["16:9"] },
+        durationSec: { type: "integer", options: ["5"] },
+      },
+      defaultParams: { resolution: "720p", aspectRatio: "16:9", durationSec: 5 },
+      pricing: {
+        baseCredits: 700,
+        billingMode: "duration",
+        resolutionCredits: { "720p": 700 },
+      },
+    };
+    const freshWanModel = {
+      ...freshSeedanceModel,
+      modelCode: "wan3.0-r2v",
+      modelLabel: "Wan3.0（秒计费）",
+    };
+    let generationConfigCalls = 0;
+    const workbench = {
+      state: {
+        project: { id: "project-1", name: "报价刷新", aspectRatio: "16:9", resolution: "720P" },
+        assetReview: { readyForGeneration: true },
+        calibration: { status: "ready" },
+        shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        episodes: [{ id: "episode-new", title: "第1集" }],
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "报价刷新" },
+          episodes: [{ id: "episode-new", title: "第1集", status: "draft" }],
+          shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        },
+      },
+      api: {
+        async listGenerationConfig() {
+          generationConfigCalls += 1;
+          const model = generationConfigCalls === 1 ? freshSeedanceModel : freshWanModel;
+          return { defaultVideoModelCode: model.modelCode, models: [model] };
+        },
+        async createVideoTask(episodeId, payload) {
+          createVideoTaskCalls.push({ episodeId, payload });
+          return { taskId: "task-must-not-submit", status: "queued", workflowStatus: "queued", result: {} };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "reference-video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        selectedStoryboard: storyboard,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        selectedModelId: "sd_2.0_special",
+        videoResolution: "720p",
+        videoDurationSec: "5",
+        imageAspectRatio: "16:9",
+        generationParameterValues: { resolution: "720p", durationSec: "5", aspectRatio: "16:9" },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sd_2.0_special",
+          models: [{
+            modelCode: "sd_2.0_special",
+            modelLabel: "Seedance 2.0 特价版（图片参考）",
+            mediaType: "video",
+            videoCategory: "reference",
+            parameterSchema: {
+              resolution: { type: "enum", options: ["720p"] },
+              aspectRatio: { type: "enum", options: ["16:9"] },
+              durationSec: { type: "integer", options: ["5"] },
+            },
+            defaultParams: { resolution: "720p", aspectRatio: "16:9", durationSec: 5 },
+            pricing: {
+              baseCredits: 650,
+              billingMode: "duration",
+              resolutionCredits: { "720p": 650 },
+            },
+          }],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await assert.rejects(
+      generateStoryboardVideos(workbench),
+      /模型或积分配置已更新/,
+    );
+    assert.equal(createVideoTaskCalls.length, 0);
+    assert.equal(workbench.ui.selectedModelId, "sd_2.0_special");
+    assert.equal(workbench.ui.episodeGenerationConfig.models[0].pricing.resolutionCredits["720p"], 700);
+
+    await assert.rejects(
+      generateStoryboardVideos(workbench),
+      /模型或积分配置已更新/,
+    );
+    assert.equal(createVideoTaskCalls.length, 0);
+    assert.equal(workbench.ui.selectedModelId, "wan3.0-r2v");
+
+    await generateStoryboardVideos(workbench);
+
+    assert.equal(createVideoTaskCalls.length, 1);
+    assert.equal(createVideoTaskCalls[0].payload.model, "wan3.0-r2v");
+    assert.equal(createVideoTaskCalls[0].payload.expectedCredits, 3500);
+    assert.equal(createVideoTaskCalls[0].payload.parameters.resolution, "720p");
+    assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, 5);
+  });
+
   it("recalculates prompt dock video credits immediately after switching to a priced video mode", async () => {
     const state = buildProjectState();
     const storyboards = addStoryboard([]).map((storyboard) => ({
@@ -18926,6 +19117,254 @@ describe("production workbench project tab", () => {
     assert.deepEqual(assetCalls, [undefined]);
     assert.deepEqual(requestOrder, ["conversation", "assets"]);
     assert.equal(workbench.ui.importedAssets.character[0]?.id, "storyboard-quick-character-1");
+  });
+
+  it("renders fresh backend video pricing on the first storyboard workbench frame", async () => {
+    const episodeId = "episode-fresh-video-pricing";
+    const renderedHtml = [];
+    const generationConfigCalls = [];
+    const staleModel = {
+      modelCode: "sd_2.0_special",
+      modelLabel: "Seedance 2.0 特价版（图片参考）",
+      mediaType: "video",
+      videoCategory: "reference",
+      defaultParams: { resolution: "720p", aspectRatio: "16:9", durationSec: 5 },
+      parameterSchema: {
+        resolution: { type: "enum", options: ["720p"] },
+        aspectRatio: { type: "enum", options: ["16:9"] },
+        durationSec: { type: "integer", options: ["5"] },
+      },
+      pricing: {
+        baseCredits: 700,
+        billingMode: "duration",
+        resolutionCredits: { "720p": 700 },
+      },
+    };
+    const freshModel = {
+      ...staleModel,
+      pricing: {
+        baseCredits: 650,
+        billingMode: "duration",
+        resolutionCredits: { "720p": 650 },
+      },
+    };
+    let innerHTML = "";
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [{ id: episodeId, title: "最新报价", status: "draft" }],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedModelId: "sd_2.0_special",
+        videoGenerationMode: "reference-video",
+        videoResolution: "720p",
+        videoDurationSec: "5",
+        imageAspectRatio: "16:9",
+        generationParameterValues: { resolution: "720p", durationSec: "5", aspectRatio: "16:9" },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sd_2.0_special",
+          models: [staleModel],
+        },
+      }),
+      api: {
+        async getEpisodeWorkbench() {
+          return {
+            project: { projectId: "project-1" },
+            episode: { projectId: "project-1" },
+          };
+        },
+        async listStoryboards() {
+          return {
+            items: [{
+              id: "storyboard-fresh-video-pricing",
+              linkedShotId: "shot-fresh-video-pricing",
+              shotId: "shot-fresh-video-pricing",
+              index: 1,
+              title: "1",
+              description: "雨夜镜头",
+            }],
+          };
+        },
+        async getStoryboardConversationHistory() {
+          return { entries: [] };
+        },
+        async listGenerationConfig(requestedEpisodeId, options = {}) {
+          generationConfigCalls.push({ requestedEpisodeId, options });
+          return {
+            defaultVideoModelCode: "sd_2.0_special",
+            models: [freshModel],
+          };
+        },
+        async listEpisodeAssets() {
+          return { items: [] };
+        },
+        async getAssetLibrary() {
+          return { assets: [] };
+        },
+      },
+      root: {
+        get innerHTML() {
+          return innerHTML;
+        },
+        set innerHTML(value) {
+          innerHTML = value;
+          renderedHtml.push(value);
+        },
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const promptFrames = renderedHtml.filter((html) => html.includes("episode-replica-prompt"));
+    assert.ok(promptFrames.length > 0);
+    assert.equal(promptFrames.some((html) => /<span>3500<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/.test(html)), false);
+    assert.match(promptFrames[0], /<span>3250<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+    assert.deepEqual(generationConfigCalls[0], {
+      requestedEpisodeId: episodeId,
+      options: { fresh: true, mediaType: "video" },
+    });
+
+    workbench.ui.episodeGenerationConfig = {
+      defaultVideoModelCode: "sd_2.0_special",
+      models: [staleModel],
+    };
+    workbench.api.listGenerationConfig = async () => {
+      throw new Error("generation config unavailable");
+    };
+    renderedHtml.length = 0;
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId },
+    });
+
+    const failedConfigFrames = renderedHtml.filter((html) => html.includes("episode-replica-prompt"));
+    assert.equal(failedConfigFrames.some((html) => />3500<\/span>/.test(html)), false);
+    assert.match(failedConfigFrames[0], /暂无可用模型/);
+    assert.match(String(workbench.ui.toast), /generation config unavailable/);
+  });
+
+  it("ignores a stale video pricing response after switching episodes", async () => {
+    const firstEpisodeId = "episode-stale-video-pricing";
+    const secondEpisodeId = "episode-current-video-pricing";
+    const pendingGenerationConfigs = new Map();
+    const createModel = (resolutionCredits) => ({
+      modelCode: "sd_2.0_special",
+      modelLabel: "Seedance 2.0 特价版（图片参考）",
+      mediaType: "video",
+      videoCategory: "reference",
+      defaultParams: { resolution: "720p", aspectRatio: "16:9", durationSec: 5 },
+      parameterSchema: {
+        resolution: { type: "enum", options: ["720p"] },
+        aspectRatio: { type: "enum", options: ["16:9"] },
+        durationSec: { type: "integer", options: ["5"] },
+      },
+      pricing: {
+        baseCredits: resolutionCredits,
+        billingMode: "duration",
+        resolutionCredits: { "720p": resolutionCredits },
+      },
+    });
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [
+            { id: firstEpisodeId, title: "旧剧集", status: "draft" },
+            { id: secondEpisodeId, title: "当前剧集", status: "draft" },
+          ],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedModelId: "sd_2.0_special",
+        videoGenerationMode: "reference-video",
+        videoResolution: "720p",
+        videoDurationSec: "5",
+        imageAspectRatio: "16:9",
+        generationParameterValues: { resolution: "720p", durationSec: "5", aspectRatio: "16:9" },
+      }),
+      api: {
+        async getEpisodeWorkbench(episodeId) {
+          return {
+            project: { projectId: "project-1" },
+            episode: { id: episodeId, projectId: "project-1" },
+          };
+        },
+        async listStoryboards(episodeId) {
+          return {
+            items: [{
+              id: `storyboard-${episodeId}`,
+              linkedShotId: `shot-${episodeId}`,
+              shotId: `shot-${episodeId}`,
+              index: 1,
+              title: "1",
+              description: "雨夜镜头",
+            }],
+          };
+        },
+        async getStoryboardConversationHistory() {
+          return { entries: [] };
+        },
+        listGenerationConfig(episodeId) {
+          return new Promise((resolve) => {
+            pendingGenerationConfigs.set(episodeId, resolve);
+          });
+        },
+        async listEpisodeAssets() {
+          return { items: [] };
+        },
+        async getAssetLibrary() {
+          return { assets: [] };
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    const firstOpen = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId: firstEpisodeId },
+    });
+    const secondOpen = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId: secondEpisodeId },
+    });
+    pendingGenerationConfigs.get(secondEpisodeId)({
+      defaultVideoModelCode: "sd_2.0_special",
+      models: [createModel(650)],
+    });
+    await secondOpen;
+    pendingGenerationConfigs.get(firstEpisodeId)({
+      defaultVideoModelCode: "sd_2.0_special",
+      models: [createModel(700)],
+    });
+    await firstOpen;
+
+    assert.equal(workbench.ui.selectedEpisodeId, secondEpisodeId);
+    assert.equal(
+      workbench.ui.episodeGenerationConfig.models[0].pricing.resolutionCredits["720p"],
+      650,
+    );
   });
 
   it("loads the selected asset conversation before secondary workbench requests", async () => {
@@ -20719,9 +21158,10 @@ describe("production workbench project tab", () => {
     assert.deepEqual(calls, [
       "workbench:start",
       "storyboards:1:10",
+      "generation-config:start",
     ]);
     assert.equal(calls.includes("workbench:done"), false);
-    assert.equal(calls.includes("generation-config:start"), false);
+    assert.equal(calls.includes("generation-config:done"), false);
     assert.equal(calls.includes("generation-tasks"), false);
     assert.equal(calls.includes("conversation"), false);
 
@@ -20731,28 +21171,28 @@ describe("production workbench project tab", () => {
       assetsByType: { character: [], scene: [], prop: [] },
     });
 
+    await Promise.resolve();
+
+    assert.deepEqual(calls, [
+      "workbench:start",
+      "storyboards:1:10",
+      "generation-config:start",
+      "workbench:done",
+    ]);
+    assert.equal(calls.includes("generation-tasks"), false);
+    assert.equal(calls.includes("conversation"), false);
+
+    resolveGenerationConfig({ uploadLimits: {} });
     await openPromise;
     await Promise.resolve();
 
     assert.deepEqual(calls, [
       "workbench:start",
       "storyboards:1:10",
-      "workbench:done",
-      "conversation",
-    ]);
-    assert.equal(calls.includes("generation-tasks"), false);
-    assert.equal(calls.includes("conversation"), true);
-
-    resolveGenerationConfig({ uploadLimits: {} });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    assert.deepEqual(calls, [
-      "workbench:start",
-      "storyboards:1:10",
-      "workbench:done",
-      "conversation",
       "generation-config:start",
+      "workbench:done",
       "generation-config:done",
+      "conversation",
     ]);
   });
 
