@@ -452,8 +452,8 @@ function redisConnectionFromUrl(redisUrl: string) {
 function redisHealthConnectionFromUrl(redisUrl: string) {
   return {
     ...redisConnectionFromUrl(redisUrl),
-    connectTimeout: 500,
-    commandTimeout: 500,
+    connectTimeout: 3_000,
+    commandTimeout: 3_000,
     maxRetriesPerRequest: 1,
     enableReadyCheck: false,
     retryStrategy: null,

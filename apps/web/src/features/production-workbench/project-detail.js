@@ -9001,12 +9001,28 @@ function renderPromptPlazaPage(ui = {}) {
     return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind}${imageUrl ? " has-image" : ""} ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${imageUrl ? `<img src="${escapeAttr(imageUrl)}" alt="" loading="lazy" />` : "<span></span><span></span><span></span>"}</div>`;
   };
 
+  const coverFallbackUrl = (item) => ({
+    shot: "/assets/library/official/scenes/scene-3d-neon-street.png",
+    image_style: "/assets/library/official/scenes/scene-2d-starry.png",
+    scene_extract: "/assets/library/official/scenes/scene-3d-neon-street.png",
+    character_extract: "/assets/library/official/characters/3d-city-heroine.png",
+    prop_extract: "/assets/library/official/props/prop-ancient-sword.png",
+  })[item.category] ?? "";
+
+  const renderCoverImage = (item, coverImageUrl) => {
+    const fallbackUrl = coverFallbackUrl(item);
+    const onError = fallbackUrl
+      ? ` onerror="this.onerror=null;this.src='${escapeAttr(fallbackUrl)}'"`
+      : "";
+    return `<div class="prompt-marketplace-cover"><img src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="${escapeAttr(item.title || "提示词")}封面" loading="lazy"${onError} /></div>`;
+  };
+
   const renderMarketplaceCard = (item) => {
     const inLibrary = item.owned || item.purchased;
     const price = Number(item.priceCredits || 0);
     const coverImageUrl = String(item.coverImageUrl ?? item.cover_image_url ?? "").trim();
     const cover = coverImageUrl
-      ? `<div class="prompt-marketplace-cover"><img src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="${escapeAttr(item.title || "提示词")}封面" loading="lazy" /></div>`
+      ? renderCoverImage(item, coverImageUrl)
       : renderDefaultCover(item);
     return `<article class="prompt-marketplace-card ${item.official ? "is-official" : "is-private"} has-cover">
       <header class="prompt-marketplace-card-head">
@@ -9060,7 +9076,7 @@ function renderPromptPlazaPage(ui = {}) {
     const coverImageUrl = String(item.coverImageUrl ?? item.cover_image_url ?? "").trim();
     const price = Number(item.priceCredits || 0);
     const cover = coverImageUrl
-      ? `<div class="prompt-marketplace-cover"><img src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="${escapeAttr(item.title || "提示词")}封面" loading="lazy" /></div>`
+      ? renderCoverImage(item, coverImageUrl)
       : renderDefaultCover(item);
     const defaultAction = `<button type="button" class="prompt-marketplace-default ${item.isDefault ? "active" : ""}" data-action="${item.isDefault ? "clear" : "set"}-prompt-marketplace-default" data-prompt-id="${escapeAttr(item.id)}" data-prompt-category="${escapeAttr(item.category)}">${item.isDefault ? "取消默认" : "设为默认"}</button>`;
     return `<article class="prompt-marketplace-card ${item.owned ? "is-private" : "is-purchased"} has-cover">
