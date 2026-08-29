@@ -13253,13 +13253,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const generationConfigEnvelope = await generationConfigResponse.json();
 
-      const videoTaskResponse = await fetch(
+      const staleQuoteResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
         {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": `seedance-video-task-key-${idempotencySuffix}`,
+            "idempotency-key": `seedance-video-stale-quote-${idempotencySuffix}`,
             cookie,
           },
           body: JSON.stringify({
@@ -13267,6 +13267,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
             targetId: episodeId,
             motionPrompt: "camera slowly pushes in",
             model: "seedance-i2v-pro",
+            expectedCredits: 59,
             parameters: {
               durationSec: 5,
               resolution: "1080p",
@@ -13279,9 +13280,64 @@ describe("phone auth dev server", { concurrency: false }, () => {
           }),
         },
       );
+      const staleQuoteEnvelope = await staleQuoteResponse.json();
+      assert.equal(staleQuoteResponse.status, 400);
+      assert.equal(staleQuoteEnvelope.errorCode, "generation_quote_stale");
+
+      const videoTaskBody = {
+        targetType: "episode",
+        targetId: episodeId,
+        motionPrompt: "camera slowly pushes in",
+        model: "seedance-i2v-pro",
+        expectedCredits: 60,
+        parameters: {
+          durationSec: 5,
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          firstFrame: {
+            name: "first-frame.png",
+            url: "https://input.example.test/first-frame.png",
+          },
+        },
+      };
+      const videoTaskIdempotencyKey = `seedance-video-task-key-${idempotencySuffix}`;
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": videoTaskIdempotencyKey,
+            cookie,
+          },
+          body: JSON.stringify(videoTaskBody),
+        },
+      );
       const videoTaskEnvelope = await videoTaskResponse.json();
       assert.equal(videoTaskResponse.status, 200, `video task failed: ${JSON.stringify(videoTaskEnvelope)}`);
       const taskId = videoTaskEnvelope.data.taskId;
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET pricing_json = pricing_json || '{"resolutionCredits":{"1080p":13}}'::jsonb
+          WHERE model_code = 'seedance-i2v-pro'
+        `,
+      );
+      const replayedVideoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": videoTaskIdempotencyKey,
+            cookie,
+          },
+          body: JSON.stringify(videoTaskBody),
+        },
+      );
+      const replayedVideoTaskEnvelope = await replayedVideoTaskResponse.json();
+      assert.equal(replayedVideoTaskResponse.status, 200);
+      assert.equal(replayedVideoTaskEnvelope.data.taskId, taskId);
       const duplicateVideoTaskResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
         {

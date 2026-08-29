@@ -10910,6 +10910,15 @@ async function createGenerationTask(
     intakeTransactionOpen = false;
     throw new IdempotencyProcessingError(started.record);
   }
+  if (input.body.expectedCredits !== undefined) {
+    const expectedCredits = Number(input.body.expectedCredits);
+    if (!Number.isFinite(expectedCredits) || Math.round(expectedCredits) !== estimatedCost) {
+      throw new GenerationRequestValidationError(
+        "generation_quote_stale",
+        "模型或积分配置已更新，请按最新报价确认后再次生成。",
+      );
+    }
+  }
 
   const snapshotTargetId = isUuid(requestSnapshot.targetId) ? requestSnapshot.targetId : episodeId;
   const resolvedSnapshotTargetId = snapshotTargetId ?? canvasProjectId;
