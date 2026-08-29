@@ -707,6 +707,7 @@ test("admin GEO draft editor ignores stale detail loads", async () => {
     navigate(page) { navigationContext.state.page = page; },
     invalidateGeoContentRequests() { navigationContext.invalidations += 1; },
     history: { pushState() {} }, renderShell() {},
+    document: { querySelector: () => null },
     ensureAdminPageData: () => Promise.resolve(),
   };
   vm.runInNewContext(`{ ${script.slice(geoInstallStart, geoInstallEnd)} }
@@ -968,7 +969,8 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "验证码",
     "短信内容",
     "成功",
-    "失败",
+      "失败",
+      "重启队列消费者",
     "smsRecordRangeOptions",
     "downloadRiskExport",
     "window.location.assign",

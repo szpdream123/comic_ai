@@ -430,6 +430,7 @@ const adminApiRouteAuthRegistrations = inventoryRegistrations("admin", [
   ["GET", "/api/admin/ops/items"],
   ["GET", "/api/admin/ops/canvas-agent-metrics"],
   ["GET", "/api/admin/ops/canvas-canary-metrics"],
+  ["POST", "/api/admin/ops/generation-queues/restart"],
   ["GET", "/api/admin/ops/generation-queues"],
   ["POST", "/api/admin/ops/generation-queues/jobs"],
   ["POST", "/api/admin/ops/tasks/manual-settle"],

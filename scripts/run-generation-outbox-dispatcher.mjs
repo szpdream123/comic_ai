@@ -19,6 +19,7 @@ const [
   { loadGenerationQueueConfig },
   { createGenerationOutboxWakeSignal, generationOutboxWakeChannel },
   { generationOutboxDispatcherHeartbeatKey, generationOutboxDispatcherHeartbeatTtlMs },
+  { runWithRedisStartupRetry },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
@@ -27,6 +28,7 @@ const [
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-outbox-wakeup.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-outbox-heartbeat.ts"),
+    import("../apps/backend/src/modules/model-gateway/redis-readiness.ts"),
   ]);
 
 const config = loadGenerationQueueConfig(process.env);
@@ -80,7 +82,7 @@ function requestStop(signal) {
 
 try {
   await notificationClient.query(`LISTEN ${generationOutboxWakeChannel}`);
-  await writeDispatcherHeartbeat();
+  await writeDispatcherHeartbeatWithRetry();
   notificationClient.on("notification", (message) => {
     if (message.channel === generationOutboxWakeChannel) wakeSignal.notify();
   });
@@ -103,7 +105,7 @@ try {
         },
       });
     });
-    await writeDispatcherHeartbeat();
+    await writeDispatcherHeartbeatWithRetry();
     lastCompletedLoopAt = Date.now();
 
     if (result.processedEventIds.length || result.failedEventIds.length) {
@@ -135,6 +137,16 @@ async function writeDispatcherHeartbeat() {
     "PX",
     heartbeatTtlMs,
   );
+}
+
+async function writeDispatcherHeartbeatWithRetry() {
+  return runWithRedisStartupRetry({
+    redis: heartbeatRedis,
+    timeoutMs: 10_000,
+    maxAttempts: 3,
+    baseDelayMs: 250,
+    run: writeDispatcherHeartbeat,
+  });
 }
 
 function redisConnectionFromUrl(redisUrl) {

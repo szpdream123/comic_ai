@@ -345,7 +345,7 @@ async function inspectQueue(input: {
       error: errorMessage(error),
     };
   } finally {
-    await input.queue.close();
+    await input.queue.close().catch(() => undefined);
   }
 }
 

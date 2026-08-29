@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildProductionRuntime } from "./build-production-runtime.mjs";
@@ -19,6 +19,7 @@ const serverEntrypoint = join(
 );
 const envFilePath = join(process.cwd(), ".env");
 const productionLockPath = join(process.cwd(), ".local", "run", "comic-ai-production.pid");
+const restartRequestFile = join(process.cwd(), ".local", "run", "creator-dev-stack.restart.json");
 const productionFoundationSchemaTimeoutMs = 20 * 60_000;
 
 if (!existsSync(serverEntrypoint)) {
@@ -144,9 +145,27 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
+const restartRequestPoll = setInterval(() => {
+  if (!existsSync(restartRequestFile)) return;
+  try {
+    const request = JSON.parse(readFileSync(restartRequestFile, "utf8"));
+    rmSync(restartRequestFile, { force: true });
+    for (const name of Array.isArray(request?.services) ? request.services : []) {
+      if (typeof name === "string" && supervisor.restart(name)) {
+        console.info(`[production] Manual restart requested for ${name}.`);
+      }
+    }
+  } catch (error) {
+    rmSync(restartRequestFile, { force: true });
+    console.error(`[production] Invalid restart request: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}, 250);
+restartRequestPoll.unref?.();
+
 function requestStop(signal) {
   if (stopping) return;
   stopping = true;
+  clearInterval(restartRequestPoll);
   console.info(`[production] Received ${signal}; stopping API and generation services...`);
   supervisor.stop(signal);
   const forceStopTimer = setTimeout(() => {

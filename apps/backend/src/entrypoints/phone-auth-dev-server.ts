@@ -21085,6 +21085,12 @@ export function createPhoneAuthDevServer(
           );
         try {
           const healthSnapshot = await queueHealth.inspect();
+          if (healthSnapshot.status === "unavailable") {
+            return writeJson(response, {
+              status: 503,
+              body: healthSnapshot,
+            });
+          }
           const platformMetrics = await inspectGenerationPlatformMetrics(db, {
             now: new Date(),
             outboxStaleMs: generationQueueConfig.repair.staleDispatchMs,
@@ -35633,6 +35639,42 @@ export function createPhoneAuthDevServer(
               now: new Date(),
               windowHours: Number(url.searchParams.get("windowHours") ?? 24),
             }),
+          });
+        }
+
+        if (request.method === "POST" && pathname === "/api/admin/ops/generation-queues/restart") {
+          const body = (await readJsonBody(request)) as { scope?: unknown; reason?: unknown };
+          const scope = String(body.scope ?? "all-generation").trim();
+          const reason = String(body.reason ?? "").trim();
+          if (!reason) {
+            return writeJson(response, { status: 400, body: { error: "reason_required" } });
+          }
+          const servicesByScope: Record<string, string[]> = {
+            "generation-worker": ["generation-worker"],
+            "generation-outbox": ["generation-outbox"],
+            "generation-repair": ["generation-repair"],
+            "canvas-agent": ["canvas-agent"],
+            "all-generation": ["generation-outbox", "generation-repair", "generation-worker", "canvas-agent"],
+          };
+          const services = servicesByScope[scope];
+          if (!services) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "generation_queue_restart_scope_invalid" },
+            });
+          }
+          const runDir = join(process.cwd(), ".local", "run");
+          const requestPath = join(runDir, "creator-dev-stack.restart.json");
+          await mkdir(runDir, { recursive: true });
+          await writeFile(requestPath, JSON.stringify({
+            requestedAt: new Date().toISOString(),
+            requestedBy: adminRoute.session.admin_account_id,
+            reason,
+            services,
+          }), "utf8");
+          return writeJson(response, {
+            status: 202,
+            body: { status: "restart_requested", scope, services },
           });
         }
 

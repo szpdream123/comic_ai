@@ -22,6 +22,8 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /dispatchIntervalMs/);
     assert.match(launcherScript, /generationOutboxDispatcherHeartbeatKey/);
     assert.match(launcherScript, /writeDispatcherHeartbeat/);
+    assert.match(launcherScript, /runWithRedisStartupRetry/);
+    assert.match(launcherScript, /writeDispatcherHeartbeatWithRetry/);
     assert.match(launcherScript, /connectTimeout:\s*2_000/);
     assert.match(launcherScript, /commandTimeout:\s*5_000/);
     assert.match(launcherScript, /maxRetriesPerRequest:\s*1/);

@@ -284,6 +284,30 @@ describe("generation queue health service", () => {
     assert.equal(queueFactoryCalled, false);
   });
 
+  it("does not let a Redis timeout while closing a queue turn health into a server error", async () => {
+    const service = createGenerationQueueHealthService({
+      config: testConfig(),
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return new Date().toISOString(); },
+      },
+      queueFactory: (queueName) => ({
+        name: queueName,
+        async getJobCounts() {
+          return { waiting: 0, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 };
+        },
+        async getJobs() { return []; },
+        async close() { throw new Error("Command timed out"); },
+      }),
+    });
+
+    const health = await service.inspect();
+
+    assert.equal(health.redis.status, "healthy");
+    assert.equal(health.queues.length, 7);
+    assert.equal(health.queues.every((queue) => queue.status === "healthy"), true);
+  });
+
   it("inspects dynamically discovered shards and keeps the dead-letter queue visible", async () => {
     const queueNames: string[] = [];
     const service = createGenerationQueueHealthService({

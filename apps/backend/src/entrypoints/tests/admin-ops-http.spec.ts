@@ -334,7 +334,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(allowedPayload.redis.status, "unavailable");
       assert.equal(allowedPayload.queuePrefix, "admin-ops-http-test");
       assert.deepEqual(allowedPayload.queues, []);
-      assert.equal(dashboardAllowed.status, 200);
+      assert.equal(dashboardAllowed.status, 503);
       assert.equal(dashboardAllowedPayload.status, "unavailable");
       assert.equal(dashboardAllowedPayload.redis.status, "unavailable");
       assert.deepEqual(dashboardAllowedPayload.queues, []);

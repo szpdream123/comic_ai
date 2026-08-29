@@ -74,6 +74,8 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /markGenerationQueueStagePublished/);
     assert.doesNotMatch(launcherScript, /runGenerationAssignedJob/);
     assert.match(launcherScript, /reconcileGenerationQueueWorkerLeases/);
+    assert.match(launcherScript, /dynamicWorkerReadyCallbacks/);
+    assert.match(launcherScript, /generationWorkerLeaseMs = 20_000/);
     assert.match(launcherScript, /markGenerationQueueWorkerReady/);
     assert.match(launcherScript, /markGenerationQueueWorkerNotReady/);
     assert.match(launcherScript, /worker\.on\("ready", markWorkerReady\)/);

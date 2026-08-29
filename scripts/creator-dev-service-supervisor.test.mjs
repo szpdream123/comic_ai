@@ -191,6 +191,32 @@ describe("creator dev service supervisor", () => {
     supervisor.forceStop("SIGTERM");
     assert.equal(child.killed, true);
   });
+
+  it("supports an explicit restart for a named service", () => {
+    const children = [];
+    const messages = [];
+    const supervisor = createCreatorDevServiceSupervisor({
+      now: () => 0,
+      spawnProcess(name) {
+        const child = fakeChild(name);
+        child.connected = true;
+        child.send = (message, callback) => {
+          messages.push(message);
+          callback?.(null);
+          child.emit("exit", 0, "SIGTERM");
+        };
+        children.push(child);
+        return child;
+      },
+      setTimeout(run) { run(); return null; },
+      clearTimeout() {},
+      onFatalExit() {},
+    });
+    supervisor.start("generation-worker", [], { restartOnFailure: true });
+    assert.equal(supervisor.restart("generation-worker"), true);
+    assert.deepEqual(messages, [{ type: "creator-dev-stop", signal: "SIGTERM" }]);
+    assert.equal(children.length, 2);
+  });
 });
 
 function fakeChild(name) {

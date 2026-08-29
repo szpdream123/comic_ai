@@ -64,6 +64,28 @@ export function createCreatorDevServiceSupervisor(input) {
 
   return {
     start,
+    restart(name, signal = "SIGTERM") {
+      const state = services.get(name);
+      if (!state) return false;
+      state.restartAttempt = 0;
+      if (state.restartTimer) {
+        input.clearTimeout(state.restartTimer);
+        state.restartTimer = null;
+      }
+      if (!state.child || state.child.killed) {
+        spawnService(state);
+        return true;
+      }
+      const child = state.child;
+      if (child.connected && typeof child.send === "function") {
+        child.send({ type: "creator-dev-stop", signal }, (error) => {
+          if (error && state.child === child && !child.killed) child.kill(signal);
+        });
+      } else {
+        child.kill(signal);
+      }
+      return true;
+    },
     stop(signal = "SIGTERM") {
       if (stopping) return;
       stopping = true;

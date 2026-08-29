@@ -3235,7 +3235,8 @@
             state.dashboardQueueLoadError = "";
             state.dashboardQueueRefreshNote = `队列已刷新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
           } else {
-            state.dashboardQueueHealth = null;
+            const queueFailure = queueResult.reason?.payload;
+            state.dashboardQueueHealth = queueFailure?.redis ? queueFailure : null;
             state.dashboardQueueLoadError = queueResult.reason?.payload?.error?.message || queueResult.reason?.message || "队列健康状态加载失败";
             state.dashboardQueueRefreshNote = "队列刷新失败";
           }
@@ -3259,9 +3260,31 @@
           state.dashboardQueueLoadError = "";
           state.dashboardQueueRefreshNote = `队列已刷新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
         } catch (error) {
-          state.dashboardQueueHealth = null;
+          state.dashboardQueueHealth = error.payload?.redis ? error.payload : null;
           state.dashboardQueueLoadError = error.payload?.error?.message || "队列健康状态加载失败";
           state.dashboardQueueRefreshNote = "队列刷新失败";
+        }
+      }
+
+      async function restartDashboardQueues() {
+        const reason = window.prompt("请输入重启队列消费者的原因", "队列健康异常，管理员手动重启")?.trim();
+        if (!reason) return;
+        try {
+          const result = await api("/api/admin/ops/generation-queues/restart", {
+            method: "POST",
+            headers: { "idempotency-key": adminIdempotencyKey("generation-queues-restart") },
+            body: JSON.stringify({ scope: "all-generation", reason }),
+          });
+          state.dashboardQueueRefreshNote = "重启请求已提交，正在等待消费者重新上线";
+          await loadDashboardQueueHealth();
+          renderShell();
+          window.alert(result?.data?.status === "restart_requested" || result?.status === "restart_requested"
+            ? "队列重启请求已提交"
+            : "队列重启请求已处理");
+        } catch (error) {
+          state.dashboardQueueLoadError = error.payload?.error?.message || error.message || "队列重启请求失败";
+          state.dashboardQueueRefreshNote = "重启请求失败";
+          renderShell();
         }
       }
 
@@ -3520,7 +3543,7 @@
         if (!health) {
           return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康</h3><p>Redis、BullMQ 与生成 outbox 的当前状态</p></div><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button></div><div class="dashboard-empty">${escapeHtml(state.dashboardQueueLoadError || "尚未读取队列健康状态")}</div></section>`;
         }
-        const queues = Array.isArray(health.queues) ? health.queues : [];
+         const queues = Array.isArray(health.queues) ? health.queues : [];
         const platform = health.platformMetrics || {};
         const outboxPending = Number(platform.outbox?.pendingCount || 0);
         const outboxReady = Number(platform.outbox?.readyCount ?? outboxPending);
@@ -3575,15 +3598,15 @@
             : "";
           return `<article class="dashboard-queue-item ${escapeAttribute(queue.status || "unavailable")}"><div class="dashboard-queue-item-head"><div style="min-width:0"><div class="dashboard-queue-item-name" title="${escapeAttribute(queue.name)}">${escapeHtml(queue.name)}</div><div class="dashboard-queue-item-role">${escapeHtml(queueRoleLabel(queue.role))}</div></div><span class="dashboard-queue-item-status">${statusText} · ${workers}</span></div><div class="dashboard-queue-counts"><div class="dashboard-queue-count"><span>等待</span><strong>${Number(counts.waiting || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>执行中</span><strong>${Number(counts.active || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count"><span>延迟</span><strong>${Number(counts.delayed || 0).toLocaleString()}</strong></div><div class="dashboard-queue-count ${hasFailed ? 'has-failed' : ''}"><span>失败</span><strong>${Number(counts.failed || 0).toLocaleString()}</strong></div></div>${manageAction}</article>`;
         }).join("");
-        const overallLabel = !runtimeDegraded
-          ? "队列系统正常"
-          : health.status === "unavailable"
-            ? "队列系统不可用"
-            : !dispatcherHealthy
-              ? "Dispatcher 离线"
-              : outboxStale
-                ? "Outbox 投递异常"
-                : `${Math.max(degraded, disconnectedQueues).toLocaleString()} 个队列需关注`;
+         const overallLabel = !runtimeDegraded
+           ? "队列系统正常"
+           : health.status === "unavailable"
+             ? "队列系统不可用"
+             : !dispatcherHealthy
+               ? "Dispatcher 离线"
+             : outboxStale
+               ? "Outbox 投递异常"
+               : `${Math.max(degraded, disconnectedQueues).toLocaleString()} 个队列需关注`;
         const outboxTone = !dispatcherHealthy || outboxStale ? "danger" : outboxReady > 0 ? "warning" : "success";
         const outboxLabel = !health.outboxDispatcherEnabled
           ? "Outbox 调度未启用"
@@ -3598,7 +3621,7 @@
                   : "Outbox 正常";
         const checkedAt = state.dashboardQueueRefreshNote || (health.inspectedAt ? `检查时间 ${formatAdminDateTime(health.inspectedAt)}` : "");
         const queueCountSummary = `共 ${queues.length.toLocaleString()} 个队列`;
-        return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康 <span style="color:var(--muted);font-weight:400;font-size:13px;">(${queueCountSummary})</span></h3><p>刷新时重新请求 Redis、BullMQ 和数据库 outbox 的当前状态</p></div><div class="dashboard-panel-actions"><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button></div></div><div class="dashboard-queue-summary"><span class="dashboard-queue-badge ${overallTone}">${overallLabel}</span><span class="dashboard-queue-badge ${redisTone}">Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"}</span><span class="dashboard-queue-badge ${dispatcherHealthy ? "success" : "danger"}">Dispatcher ${dispatcherHealthy ? "运行中" : "无心跳"}</span><span class="dashboard-queue-badge ${health.workersEnabled && workerCount > 0 ? "success" : "danger"}">消费者 ${workerCount.toLocaleString()}</span><span class="dashboard-queue-badge ${outboxTone}">${outboxLabel}</span></div><div class="dashboard-queue-grid">${queueItems || `<div class="dashboard-empty">暂无 BullMQ 队列数据</div>`}</div><div class="dashboard-queue-foot"><span>Redis 命名空间 <strong>${escapeHtml(health.queuePrefix || "-")}</strong> · 数据库 outbox 待投递 <strong>${outboxReady.toLocaleString()}</strong>${outboxReady > 0 ? ` · 最旧等待 <strong>${formatQueueAge(outboxOldestAgeMs)}</strong>` : ""} · 活跃生成任务 <strong>${Number(platform.tasks?.activeCount || 0).toLocaleString()}</strong></span><span>${escapeHtml(checkedAt)}</span></div></section>`;
+         return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康 <span style="color:var(--muted);font-weight:400;font-size:13px;">(${queueCountSummary})</span></h3><p>刷新时重新请求 Redis、BullMQ 和数据库 outbox 的当前状态</p></div><div class="dashboard-panel-actions"><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button><button class="btn danger" onclick="restartDashboardQueues()">重启队列消费者</button></div></div><div class="dashboard-queue-summary"><span class="dashboard-queue-badge ${overallTone}">${overallLabel}</span><span class="dashboard-queue-badge ${redisTone}">Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"}</span><span class="dashboard-queue-badge ${dispatcherHealthy ? "success" : "danger"}">Dispatcher ${dispatcherHealthy ? "运行中" : "无心跳"}</span><span class="dashboard-queue-badge ${health.workersEnabled && workerCount > 0 ? "success" : "danger"}">消费者 ${workerCount.toLocaleString()}</span><span class="dashboard-queue-badge ${outboxTone}">${outboxLabel}</span></div><div class="dashboard-queue-grid">${queueItems || `<div class="dashboard-empty">暂无 BullMQ 队列数据</div>`}</div><div class="dashboard-queue-foot"><span>Redis 命名空间 <strong>${escapeHtml(health.queuePrefix || "-")}</strong> · 数据库 outbox 待投递 <strong>${outboxReady.toLocaleString()}</strong>${outboxReady > 0 ? ` · 最旧等待 <strong>${formatQueueAge(outboxOldestAgeMs)}</strong>` : ""} · 活跃生成任务 <strong>${Number(platform.tasks?.activeCount || 0).toLocaleString()}</strong></span><span>${escapeHtml(checkedAt)}</span></div></section>`;
       }
 
       function dashboardQueueRuntimeIssue(health) {
@@ -5939,7 +5962,7 @@
       function riskQueuesView() {
         const health = state.generationQueueHealth;
         if (!health) return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生成队列</h3><p>查看 Redis、Worker 和 BullMQ 队列状态</p></div></div>${riskEmptyState("无法读取生成队列", state.generationQueueLoadError || "当前账号没有队列运维权限")}</section>`;
-        const queues = health.queues || [];
+         const queues = health.queues || [];
         const queueRows = queues
           .filter((queue) => riskSearchMatches(queue.name, queue.role, queue.error))
           .map((queue) => `<tr><td><div class="risk-title">${escapeHtml(queueRoleLabel(queue.role))}</div><div class="risk-code">${escapeHtml(queue.name)}</div></td><td><span class="tag ${queue.status === "healthy" ? "green" : "warn"}">${queue.status === "healthy" ? "可用" : "需关注"}</span></td><td>${Number(queue.counts?.waiting || 0).toLocaleString()}</td><td>${Number(queue.counts?.active || 0).toLocaleString()}</td><td>${Number(queue.counts?.delayed || 0).toLocaleString()}</td><td>${Number(queue.counts?.failed || 0).toLocaleString()}</td><td class="risk-context">${escapeHtml(queue.role === "dead_letter" ? "隔离仓库，无需消费者" : queue.error || "-")}</td></tr>`)

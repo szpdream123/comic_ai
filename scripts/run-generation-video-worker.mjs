@@ -449,6 +449,7 @@ const finalizeArtifactWorker = new Worker(
   },
 );
 
+const dynamicWorkerReadyCallbacks = new Map();
 const dynamicShardRunner = config.sharding.enabled
   ? createGenerationShardWorkerRunner({
       maxQueuesPerProcess: config.sharding.workerQueuesPerProcess,
@@ -498,10 +499,14 @@ const dynamicShardRunner = config.sharding.enabled
               leaseMs: generationWorkerLeaseMs,
             })
           : prioritizedQueueNames.slice(0, config.sharding.workerQueuesPerProcess);
+        await Promise.all(
+          leasedQueueNames.map((queueName) => dynamicWorkerReadyCallbacks.get(queueName)?.()),
+        );
         const leased = new Set(leasedQueueNames);
         return shardSpecs.filter((shard) => leased.has(shard.queueName));
       },
       createWorker: (spec) => {
+        let workerIsReady = false;
         const worker = new Worker(
           spec.queueName,
            async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => {
@@ -542,6 +547,7 @@ const dynamicShardRunner = config.sharding.enabled
           },
         );
         const markWorkerReady = () => {
+          workerIsReady = true;
           void markGenerationQueueWorkerReady(db, {
             ownerId: generationWorkerLeaseOwnerId,
             queueName: spec.queueName,
@@ -553,13 +559,25 @@ const dynamicShardRunner = config.sharding.enabled
           ownerId: generationWorkerLeaseOwnerId,
           queueName: spec.queueName,
         });
+        dynamicWorkerReadyCallbacks.set(spec.queueName, () => {
+          if (!workerIsReady) return undefined;
+          return markGenerationQueueWorkerReady(db, {
+            ownerId: generationWorkerLeaseOwnerId,
+            queueName: spec.queueName,
+          });
+        });
         worker.on("ready", markWorkerReady);
         worker.on("completed", (job) => { trackGenerationAssignmentRelease(job, "completed"); });
         worker.on("error", (error) => {
+          workerIsReady = false;
           void markWorkerNotReady().catch(() => undefined);
           redisErrorReporter(error);
         });
-        worker.on("closed", () => { void markWorkerNotReady().catch(() => undefined); });
+        worker.on("closed", () => {
+          workerIsReady = false;
+          dynamicWorkerReadyCallbacks.delete(spec.queueName);
+          void markWorkerNotReady().catch(() => undefined);
+        });
         worker.on("ready", redisErrorReporter.reset);
         worker.on("failed", (job, error) => {
           const attempts = Math.max(1, Number(job?.opts?.attempts ?? 1));
@@ -582,6 +600,8 @@ const dynamicShardRunner = config.sharding.enabled
             worker.on("closed", handler);
           },
           async close() {
+            workerIsReady = false;
+            dynamicWorkerReadyCallbacks.delete(spec.queueName);
             await markWorkerNotReady().catch(() => undefined);
             await worker.close();
           },

@@ -11,6 +11,7 @@ const envFilePath = runtimeEnvFilePath(process.cwd(), { production: false });
 const logDir = join(process.cwd(), ".local", "logs");
 const runDir = join(process.cwd(), ".local", "run");
 const stopRequestFile = join(runDir, "creator-dev-stack.stop");
+const restartRequestFile = join(runDir, "creator-dev-stack.restart.json");
 const foundationSchemaEntrypoint = join(
   process.cwd(),
   "apps",
@@ -27,6 +28,7 @@ runDevFoundationSchema({ runtime, cwd: process.cwd(), env: process.env });
 mkdirSync(logDir, { recursive: true });
 mkdirSync(runDir, { recursive: true });
 rmSync(stopRequestFile, { force: true });
+rmSync(restartRequestFile, { force: true });
 
 process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED ??= "true";
 process.env.BULLMQ_WORKERS_ENABLED ??= "true";
@@ -137,6 +139,21 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 stopRequestPoll = setInterval(() => {
+  if (existsSync(restartRequestFile)) {
+    try {
+      const request = JSON.parse(readFileSync(restartRequestFile, "utf8"));
+      rmSync(restartRequestFile, { force: true });
+      const services = Array.isArray(request?.services) ? request.services : [];
+      for (const name of services) {
+        if (typeof name === "string" && supervisor.restart(name)) {
+          console.info(`[creator-dev] Manual restart requested for ${name}.`);
+        }
+      }
+    } catch (error) {
+      rmSync(restartRequestFile, { force: true });
+      console.error(`[creator-dev] Invalid restart request: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   if (!existsSync(stopRequestFile)) return;
   rmSync(stopRequestFile, { force: true });
   requestStackStop("background-stop-request", "SIGTERM");
