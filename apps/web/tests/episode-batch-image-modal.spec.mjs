@@ -36,6 +36,77 @@ function readOpeningTagByAttribute(html, attribute) {
   return html.slice(openingStart, openingEnd + 1);
 }
 
+function createDuplicateBatchLayerRoot(initialHtml) {
+  const layers = [];
+  const styleLayers = [];
+  const createLayer = (html) => {
+    const layer = {
+      html,
+      remove() {
+        const index = layers.indexOf(layer);
+        if (index >= 0) layers.splice(index, 1);
+      },
+      replaceWith(replacement) {
+        const index = layers.indexOf(layer);
+        if (index >= 0) layers.splice(index, 1, replacement);
+      },
+    };
+    return layer;
+  };
+  layers.push(createLayer(initialHtml), createLayer(initialHtml));
+  styleLayers.push({
+    remove() {
+      styleLayers.splice(0, 1);
+    },
+  });
+  return {
+    layers,
+    styleLayers,
+    createLayer,
+    root: {
+      querySelector(selector) {
+        if (selector === "[data-episode-batch-modal-layer]") return layers[0] ?? null;
+        if (selector === '[data-selection-picker-id="episode-batch-style-picker"]') return styleLayers[0] ?? null;
+        return null;
+      },
+      querySelectorAll(selector) {
+        if (selector === "[data-episode-batch-modal-layer]") return [...layers];
+        if (selector === '[data-selection-picker-id="episode-batch-style-picker"]') return [...styleLayers];
+        return [];
+      },
+    },
+  };
+}
+
+function createEpisodeLayerMountRoot() {
+  const mainChildren = [];
+  const shellChildren = [];
+  const main = {
+    appendChild(child) {
+      mainChildren.push(child);
+    },
+  };
+  const shell = {
+    appendChild(child) {
+      shellChildren.push(child);
+    },
+  };
+  return {
+    mainChildren,
+    shellChildren,
+    root: {
+      querySelector(selector) {
+        if (selector === ".workbench-main") return main;
+        if (selector === ".production-workbench") return shell;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+  };
+}
+
 it("renders the batch image modal as a visible production queue", () => {
   const html = renderEpisodeBatchModal({
     show: true,
@@ -378,4 +449,117 @@ it("keeps style and model controls interactive through home workflow rerenders",
   } finally {
     globalThis.document = previousDocument;
   }
+});
+
+it("mounts incremental episode layers inside the replaceable workbench main", async () => {
+  const previousDocument = globalThis.document;
+  const mountRoot = createEpisodeLayerMountRoot();
+  globalThis.document = {
+    createElement() {
+      return {
+        firstElementChild: null,
+        set innerHTML(value) {
+          this.firstElementChild = { html: value };
+        },
+      };
+    },
+  };
+  const workbench = {
+    ui: {
+      projectPanelMode: "episode-workbench",
+      episodeBatchModal: {
+        show: true,
+        scope: "asset",
+        mode: "image",
+        imageModelOptions: [],
+        publicStyles: [],
+        customStyles: [],
+        items: [],
+      },
+    },
+    root: mountRoot.root,
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-episode-batch-menu", field: "imageModelId" },
+    });
+
+    assert.equal(mountRoot.mainChildren.length, 1);
+    assert.equal(mountRoot.shellChildren.length, 0);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+it("replaces duplicate batch layers with one freshly styled layer", async () => {
+  const previousDocument = globalThis.document;
+  const duplicateRoot = createDuplicateBatchLayerRoot("电影写真");
+  globalThis.document = {
+    createElement() {
+      return {
+        firstElementChild: null,
+        set innerHTML(value) {
+          this.firstElementChild = duplicateRoot.createLayer(value);
+        },
+      };
+    },
+  };
+  const workbench = {
+    state: { project: { id: "project-1" } },
+    ui: {
+      projectPanelMode: "episode-workbench",
+      selectedEpisodePromptSkillIds: {},
+      episodeBatchModal: {
+        show: true,
+        scope: "asset",
+        mode: "image",
+        selectedStyleId: "cinematic",
+        publicStyles: [
+          { id: "cinematic", label: "电影写真" },
+          { id: "wasteland", label: "废土科幻" },
+        ],
+        customStyles: [],
+        imageModelOptions: [],
+        items: [],
+      },
+    },
+    root: duplicateRoot.root,
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-episode-batch-style-draft", pickerItemId: "wasteland" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-episode-batch-style" },
+    });
+
+    assert.equal(duplicateRoot.layers.length, 1);
+    assert.equal(duplicateRoot.styleLayers.length, 0);
+    assert.match(duplicateRoot.layers[0].html, /当前风格[\s\S]*废土科幻/);
+    assert.ok(duplicateRoot.root.innerHTML.length > 0);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+it("removes every duplicate batch layer on the first close action", async () => {
+  const duplicateRoot = createDuplicateBatchLayerRoot("批量生图");
+  const workbench = {
+    ui: {
+      projectPanelMode: "episode-workbench",
+      episodeBatchModal: {
+        show: true,
+        mode: "image",
+      },
+    },
+    root: duplicateRoot.root,
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "close-episode-batch-modal" },
+  });
+
+  assert.equal(duplicateRoot.layers.length, 0);
 });

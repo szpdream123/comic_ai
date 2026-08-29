@@ -11687,9 +11687,14 @@ function syncEpisodeWorkbenchLayerOnly(workbench, selector, html) {
   if (!root?.querySelector || workbench.ui.projectPanelMode !== "episode-workbench") {
     return false;
   }
-  const current = root.querySelector(selector);
+  const matchingLayers = [...(root.querySelectorAll?.(selector) ?? [])];
+  const current = matchingLayers[0] ?? root.querySelector(selector);
   if (!html) {
-    current?.remove?.();
+    if (matchingLayers.length > 0) {
+      matchingLayers.forEach((layer) => layer.remove?.());
+    } else {
+      current?.remove?.();
+    }
     return true;
   }
   const replacement = globalThis.document?.createElement?.("div");
@@ -11703,12 +11708,14 @@ function syncEpisodeWorkbenchLayerOnly(workbench, selector, html) {
   }
   if (current?.replaceWith) {
     current.replaceWith(next);
+    matchingLayers.slice(1).forEach((layer) => layer.remove?.());
     return true;
   }
-  const host = root.querySelector(".production-workbench") ?? root;
+  const host = root.querySelector(".workbench-main") ?? root.querySelector(".production-workbench") ?? root;
   if (typeof host?.appendChild !== "function") {
     return false;
   }
+  matchingLayers.forEach((layer) => layer.remove?.());
   host.appendChild(next);
   return true;
 }
@@ -22925,6 +22932,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleModalOpen = false;
       workbench.ui.episodeBatchModal.styleDraftId = "";
       workbench.ui.episodeBatchModal = syncEpisodeBatchModal(workbench.ui.episodeBatchModal);
+      syncEpisodeBatchModalOnly(workbench);
+      syncEpisodeWorkbenchLayerOnly(
+        workbench,
+        '[data-selection-picker-id="episode-batch-style-picker"]',
+        "",
+      );
       render(workbench);
       restoreEpisodeBatchStylePickerTriggerFocus(workbench);
     }
