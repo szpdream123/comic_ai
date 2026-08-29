@@ -6,6 +6,7 @@ import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 import { renderSelectionPickerModal, syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
+import { EPISODE_PROMPT_PLACEHOLDER } from "./episode-prompt-placeholder.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
@@ -489,8 +490,8 @@ export function renderEpisodeWorkbench({
 
       ${renderEpisodeExportPreview(exportPreviewResult)}
       ${renderEpisodeExportOptionModal(exportOptionModal)}
-      ${isWorkflowLayout ? "" : renderEpisodeBatchModal(episodeBatchModal)}
-      ${isWorkflowLayout ? "" : renderEpisodeBatchStyleModal(episodeBatchModal ?? {})}
+      ${renderEpisodeBatchModal(episodeBatchModal)}
+      ${renderEpisodeBatchStyleModal(episodeBatchModal ?? {})}
       ${renderStoryboardDescriptionModal({
         show: isStoryboardDescriptionModalOpen,
         value: storyboardDescriptionDraft,
@@ -3275,8 +3276,8 @@ export function renderPromptDock({
       }
       <div class="episode-replica-textarea ${hasPromptAttachmentTray ? "has-inline-attachments" : ""}">
         ${hasPromptAttachmentTray ? promptAttachmentTray : ""}
-        <div class="episode-prompt-editor-host" data-prompt-editor>
-          <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
+        <div class="episode-prompt-editor-host" data-prompt-editor data-animated-placeholder>
+          <textarea id="video-prompt-input" placeholder="${EPISODE_PROMPT_PLACEHOLDER}">${escapeHtml(promptValue)}</textarea>
         </div>
         <em data-prompt-character-count>${[...promptValue].length} / 5000</em>
       </div>
@@ -4949,7 +4950,14 @@ export function renderEpisodeBatchModal(modal) {
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal" ${modal.isSubmitting === true ? "disabled" : ""}></button>
       <div class="episode-batch-modal" style="--episode-batch-anchor-top:${escapeAttr(String(modal.anchorTop ?? 80))}px;">
         <div class="single-episode-modal-head storyboard-description-head">
-          <h2>${escapeHtml(title)}</h2>
+          <div class="single-episode-modal-heading episode-batch-modal-heading">
+            <span class="episode-batch-head-kicker">生成队列 · ${selectedCount} 项</span>
+            <div class="episode-batch-title-row">
+              <h2>${escapeHtml(title)}</h2>
+              <span>${mode === "image" ? `${selectedCount} 张` : `${selectedCount} 项`}</span>
+            </div>
+            <p>${mode === "image" ? `统一设置后，为 ${selectedCount} 项素材分别创建生图任务` : "统一设置生成参数，提交后可在任务中心查看进度"}</p>
+          </div>
           <button class="modal-close" type="button" data-action="close-episode-batch-modal" ${modal.isSubmitting === true ? "disabled" : ""}>×</button>
         </div>
         ${
@@ -4997,24 +5005,60 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const selectedStyleLabel = selectedStyle?.label ?? "选择生图风格";
   // preview 字段已经在 normalizeEpisodeBatchImageStyleSkills 中处理好了
   const selectedStylePreview = selectedStyle?.preview ? resolveApiUrl(String(selectedStyle.preview)) : "";
+  const selectedItems = Array.isArray(modal.items) ? modal.items : [];
 
   return `
     <div class="episode-batch-image-panel">
-      <section class="episode-batch-style-panel">
-        <button
-          class="episode-batch-style-picker-trigger"
-          type="button"
-          data-action="open-episode-batch-style-modal"
-          title="点击选择生图风格"
-        >
-          <span class="episode-batch-style-picker-label">
-            ${selectedStylePreview ? `<img src="${escapeAttr(selectedStylePreview)}" alt="" />` : `<span class="episode-batch-style-picker-icon">✦</span>`}
-            <strong>${escapeHtml(selectedStyleLabel)}</strong>
-            <small>${formatEpisodeBatchSkillCredits(selectedStyle?.priceCredits ?? 0)}</small>
-          </span>
-          <span class="episode-batch-style-picker-arrow">▼</span>
-        </button>
-      </section>
+      <div class="episode-batch-image-overview">
+        <section class="episode-batch-queue" aria-labelledby="episode-batch-queue-title">
+          <header class="episode-batch-section-head">
+            <div>
+              <span>待生成队列</span>
+              <strong id="episode-batch-queue-title">已选素材</strong>
+            </div>
+            <span class="episode-batch-queue-count">已选 <b>${selectedCount}</b> 项</span>
+          </header>
+          <div class="episode-batch-contact-sheet" role="list" aria-label="已选批量生图素材">
+            ${selectedItems.map((item, index) => `
+              <article class="episode-batch-contact-card" role="listitem" title="${escapeAttr(item.name ?? `素材 ${index + 1}`)}">
+                <span class="episode-batch-contact-thumb">
+                  ${renderAssetPreviewVisual(item, item.kind || "character")}
+                  <i>${String(index + 1).padStart(2, "0")}</i>
+                </span>
+                <span class="episode-batch-contact-meta">
+                  <strong>${escapeHtml(item.name ?? `素材 ${index + 1}`)}</strong>
+                  <small>${escapeHtml(resolveAssetLabel(item.kind || "character"))}</small>
+                </span>
+              </article>
+            `).join("")}
+          </div>
+          <p class="episode-batch-queue-note"><span aria-hidden="true"></span>每项素材独立创建任务，生成进度与结果将在任务中心同步。</p>
+        </section>
+        <section class="episode-batch-style-panel" aria-labelledby="episode-batch-style-title">
+          <header class="episode-batch-section-head compact">
+            <div>
+              <span>统一应用</span>
+              <strong id="episode-batch-style-title">生图风格</strong>
+            </div>
+          </header>
+          <button
+            class="episode-batch-style-picker-trigger ${selectedStylePreview ? "has-preview" : "no-preview"}"
+            type="button"
+            data-action="open-episode-batch-style-modal"
+            aria-label="更换生图风格，当前为 ${escapeAttr(selectedStyleLabel)}"
+          >
+            <span class="episode-batch-style-picker-media">
+              ${selectedStylePreview ? `<img src="${escapeAttr(selectedStylePreview)}" alt="" />` : `<span class="episode-batch-style-picker-icon">✦</span>`}
+            </span>
+            <span class="episode-batch-style-picker-copy">
+              <small>当前风格</small>
+              <strong>${escapeHtml(selectedStyleLabel)}</strong>
+              <span>${formatEpisodeBatchSkillCredits(selectedStyle?.priceCredits ?? 0)} · 点击更换</span>
+            </span>
+            <span class="episode-batch-style-picker-arrow" aria-hidden="true">→</span>
+          </button>
+        </section>
+      </div>
       <footer class="episode-batch-footer image-composer">
         <div class="episode-batch-footer-controls">
           ${renderEpisodeBatchSelectField("imageModelId", "", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions), { compact: true, menuDirection: "up", modelControl: true })}
@@ -5026,7 +5070,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
             ratioOptions: hasAspectRatioParameter ? ratioOptions : [],
             sections: batchImageSettings.sections,
           })}
-          <span class="episode-batch-footer-summary">已选 ${selectedCount} 项素材</span>
+          <span class="episode-batch-footer-summary"><b>${selectedCount}</b> 项素材 · 独立任务</span>
         </div>
         <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal" ${modal.isSubmitting === true ? 'disabled aria-busy="true"' : 'aria-busy="false"'}>${escapeHtml(primaryLabel)}</button>
       </footer>
@@ -5122,14 +5166,14 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
   `;
 }
 
-function renderEpisodeBatchStyleModal(modal) {
+export function renderEpisodeBatchStyleModal(modal) {
   if (!modal?.styleModalOpen) {
     return "";
   }
   const publicStyles = Array.isArray(modal.publicStyles) ? modal.publicStyles : [];
   const customStyles = Array.isArray(modal.customStyles) ? modal.customStyles : [];
   const styleTab = modal.styleTab === "custom" ? "custom" : "public";
-  const selectedStyleId = modal.selectedStyleId ?? "";
+  const selectedStyleId = modal.styleDraftId ?? modal.selectedStyleId ?? "";
 
   const toPickerItem = (style, group) => {
     // preview 字段已经在 normalizeEpisodeBatchImageStyleSkills 中处理好了

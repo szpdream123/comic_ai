@@ -201,6 +201,47 @@ export async function reserveGenerationQueueStageForPublish(
   return mapAssignment(row);
 }
 
+export async function reserveGenerationQueueRepairPollForPublish(
+  db: SqlDatabase,
+  input: {
+    assignmentKey: string;
+    taskId: string;
+    mediaType: GenerationQueueMediaType;
+    stage: "poll";
+    routeKey: string;
+    redisJobId: string;
+    now: Date;
+    maxActiveShardsPerStage?: number;
+    reopenThreshold?: number;
+  },
+): Promise<GenerationQueueStageAssignment | undefined> {
+  const assignmentKey = requiredTrimmed(input.assignmentKey, "generation_queue_assignment_key_required");
+  const routeKey = requiredTrimmed(input.routeKey, "generation_queue_route_key_required");
+  const redisJobId = requiredTrimmed(input.redisJobId, "generation_queue_redis_job_id_required");
+  const row = await queryOne<AssignmentRow>(
+    db,
+    `
+      SELECT *
+      FROM reserve_generation_queue_repair_poll_for_publish(
+        $1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10
+      )
+    `,
+    [
+      assignmentKey,
+      input.taskId,
+      input.mediaType,
+      input.stage,
+      routeKey,
+      createGenerationQueueRouteCode(routeKey),
+      redisJobId,
+      input.now,
+      normalizeLimit(input.maxActiveShardsPerStage, 256),
+      normalizeThreshold(input.reopenThreshold, 300),
+    ],
+  );
+  return row ? mapAssignment(row) : undefined;
+}
+
 export async function hasReleasedGenerationQueueStageAssignment(
   db: SqlDatabase,
   input: { assignmentKey: string; taskId: string; redisJobId: string },

@@ -5968,6 +5968,9 @@ function createSeedancePollAdapterFromModelConfig(
     if (modelConfig.providerProtocol === "san_bao" && isVideoPollProviderAdapter(adapter)) {
       return adapter;
     }
+    if (modelConfig.providerProtocol === "chiyuan_video" && isVideoPollProviderAdapter(adapter)) {
+      return adapter;
+    }
     if (isLingdongModelConfig(modelConfig)) {
       throw new Error("lingdong_video_poll_adapter_unsupported");
     }
@@ -9772,6 +9775,7 @@ export function shouldSyncSeedanceVideoTaskOnRead(
   env: NodeJS.ProcessEnv,
 ) {
   return providerProtocol === "san_bao"
+    || providerProtocol === "chiyuan_video"
     || providerProtocol === "globalaiopc_video"
     || providerProtocol === "global_ai_opc_video"
     || isEnabled(env.SEEDANCE_PROVIDER_ENABLED);

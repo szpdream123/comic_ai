@@ -161,7 +161,10 @@ describe("runtime schema migration launchers", () => {
       new URL("../apps/backend/src/entrypoints/phone-auth-dev-server.ts", import.meta.url),
       "utf8",
     );
-    const directExecutionBlock = source.slice(source.lastIndexOf("if (\n  process.env.CREATOR_DEV_STACK_MANAGED"));
+    const normalizedSource = source.replaceAll("\r\n", "\n");
+    const directExecutionBlock = normalizedSource.slice(
+      normalizedSource.lastIndexOf("if (\n  process.env.CREATOR_DEV_STACK_MANAGED"),
+    );
 
     assert.match(directExecutionBlock, /CREATOR_DEV_STACK_MANAGED !== "true"/);
     assert.match(directExecutionBlock, /import\.meta\.url === `file:\/\/\$\{process\.argv\[1\]\}`/);
@@ -231,5 +234,34 @@ describe("runtime schema migration launchers", () => {
     assert.match(runnerSource, /indisready/);
     assert.match(runnerSource, /pg_get_indexdef/);
     assert.match(runnerSource, /pg_get_constraintdef/);
+  });
+
+  it("validates the ChiYuan provider constraint before the brief constraint swap", async () => {
+    const migrationSource = await readFile(
+      new URL("../packages/db/migrations/20261023-add-chiyuan-video-models.sql", import.meta.url),
+      "utf8",
+    );
+    const validateOffset = migrationSource.indexOf(
+      "VALIDATE CONSTRAINT ai_model_configs_provider_protocol_check_chiyuan",
+    );
+    const dropOffset = migrationSource.indexOf(
+      "DROP CONSTRAINT IF EXISTS ai_model_configs_provider_protocol_check;",
+    );
+
+    assert.match(
+      migrationSource,
+      /ADD CONSTRAINT ai_model_configs_provider_protocol_check_chiyuan[\s\S]*NOT VALID/,
+    );
+    assert.ok(validateOffset >= 0);
+    assert.ok(dropOffset > validateOffset);
+  });
+
+  it("accepts the equivalent pre-validation ChiYuan migration checksum", async () => {
+    const runnerSource = await readFile(new URL("migrate-user-scope.mjs", import.meta.url), "utf8");
+
+    assert.match(
+      runnerSource,
+      /\["20261023-add-chiyuan-video-models\.sql",\s*\{[\s\S]*recorded:\s*"6f58b77cbfa22976548252c91e3ad74e5bb732ae5a643d27d8c2f97e8c4dac5c"[\s\S]*current:\s*"50c9250ec6ab6dc72b2e023240f31a08fb86a809b8556d0074bc1c1299c4cad2"/,
+    );
   });
 });

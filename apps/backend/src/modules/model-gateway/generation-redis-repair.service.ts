@@ -1059,7 +1059,7 @@ export async function repairRunningSeedancePollJobs(
     config: GenerationQueueConfig;
     publisher: GenerationBullMQPublisher;
     shardStore?: {
-      reserve(
+      reserveRepairPoll(
         db: SqlDatabase,
         assignment: {
           assignmentKey: string;
@@ -1072,7 +1072,7 @@ export async function repairRunningSeedancePollJobs(
           maxActiveShardsPerStage?: number;
           reopenThreshold?: number;
         },
-      ): Promise<{ assignmentKey: string; queueName: string }>;
+      ): Promise<{ assignmentKey: string; queueName: string } | undefined>;
       markPublished(
         db: SqlDatabase,
         input: { assignmentKey: string; redisJobId: string; now: Date },
@@ -1139,14 +1139,47 @@ export async function repairRunningSeedancePollJobs(
             AND pr.status IN ('submitted', 'accepted', 'running', 'result_unknown')
           LIMIT 1
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM provider_requests scheduled_request
+          WHERE scheduled_request.task_id = t.id
+            AND (
+              scheduled_request.attempt_id = t.current_attempt_id
+              OR (scheduled_request.attempt_id IS NULL AND t.attempt_count = 1)
+            )
+            AND scheduled_request.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+            AND scheduled_request.next_poll_at IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM outbox_events poll_outbox
+          WHERE poll_outbox.event_type = 'generation.task.poll_requested'
+            AND poll_outbox.payload_json->>'taskId' = t.id::text
+            AND (
+              poll_outbox.payload_json->>'attemptId' = t.current_attempt_id::text
+              OR (NOT (poll_outbox.payload_json ? 'attemptId') AND t.attempt_count = 1)
+            )
+            AND poll_outbox.status IN ('pending', 'processing', 'failed')
+        )
         AND (
           t.last_dispatched_at IS NULL
           OR t.last_dispatched_at < $2
         )
+        AND (
+          t.locked_until IS NULL
+          OR t.locked_until < $3
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM generation_queue_stage_assignments active_assignment
+          WHERE active_assignment.task_id = t.id
+            AND active_assignment.stage IN ('submit', 'poll')
+            AND active_assignment.status IN ('publishing', 'admitted')
+        )
       ORDER BY t.updated_at ASC, t.id ASC
       LIMIT $1
     `,
-    [input.limit, staleCutoff],
+    [input.limit, staleCutoff, input.now],
   );
 
   const repairedTaskIds: string[] = [];
@@ -1159,6 +1192,22 @@ export async function repairRunningSeedancePollJobs(
       staleCutoff,
     });
     if (!claimed) {
+      continue;
+    }
+
+    const activeAssignment = await queryOne<{ assignment_key: string }>(
+      db,
+      `
+        SELECT assignment_key
+        FROM generation_queue_stage_assignments
+        WHERE task_id = $1
+          AND stage = 'poll'
+          AND status IN ('publishing', 'admitted')
+        LIMIT 1
+      `,
+      [candidate.task_id],
+    );
+    if (activeAssignment) {
       continue;
     }
 
@@ -1206,7 +1255,7 @@ export async function repairRunningSeedancePollJobs(
         ],
       );
       redisJobId = existing?.redis_job_id ?? redisJobId;
-      const assignment = existing ? null : await input.shardStore.reserve(db, {
+      const assignment = existing ? null : await input.shardStore.reserveRepairPoll(db, {
           assignmentKey: `generation.repair.poll:${candidate.task_id}:${candidate.current_attempt_id}:${repairToken}`,
           taskId: candidate.task_id,
           mediaType,
@@ -1221,6 +1270,9 @@ export async function repairRunningSeedancePollJobs(
           maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
           reopenThreshold: input.config.sharding.reopenThreshold,
         });
+      if (!existing && !assignment) {
+        continue;
+      }
       queueName = existing?.queue_name ?? assignment!.queueName;
       queueAssignmentKey = existing?.assignment_key ?? assignment!.assignmentKey;
     }
@@ -1560,6 +1612,39 @@ async function markRunningPollRepairClaimed(
         AND (
           last_dispatched_at IS NULL
           OR last_dispatched_at < $3
+        )
+        AND (
+          locked_until IS NULL
+          OR locked_until < $2
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM provider_requests scheduled_request
+          WHERE scheduled_request.task_id = tasks.id
+            AND (
+              scheduled_request.attempt_id = tasks.current_attempt_id
+              OR (scheduled_request.attempt_id IS NULL AND tasks.attempt_count = 1)
+            )
+            AND scheduled_request.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+            AND scheduled_request.next_poll_at IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM outbox_events poll_outbox
+          WHERE poll_outbox.event_type = 'generation.task.poll_requested'
+            AND poll_outbox.payload_json->>'taskId' = tasks.id::text
+            AND (
+              poll_outbox.payload_json->>'attemptId' = tasks.current_attempt_id::text
+              OR (NOT (poll_outbox.payload_json ? 'attemptId') AND tasks.attempt_count = 1)
+            )
+            AND poll_outbox.status IN ('pending', 'processing', 'failed')
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM generation_queue_stage_assignments active_assignment
+          WHERE active_assignment.task_id = tasks.id
+            AND active_assignment.stage IN ('submit', 'poll')
+            AND active_assignment.status IN ('publishing', 'admitted')
         )
         RETURNING id, current_attempt_id
       ), resumed_attempt AS (

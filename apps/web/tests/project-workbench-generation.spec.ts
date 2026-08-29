@@ -71,6 +71,7 @@ import {
   renderProductionWorkbench,
   scheduleGenerationPollingForTest,
   scheduleTaskCenterPollingForTest,
+  runTaskCenterPollingForTest,
   syncTeamMemberCreateDraftFromDomForTest,
   syncCanvasProjectIdInLocationForTest,
   syncCanvasProjectsFromApiForTest,
@@ -5555,6 +5556,149 @@ describe("workbench generation payloads and inspectors", () => {
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("uses the synchronization-capable batch endpoint for tracked task polling", async () => {
+    const taskId = "storyboard-video-task-provider-completed";
+    const batchCalls = [];
+    const batchSignals = [];
+    const taskCenterListCalls = [];
+    const workbench = {
+      api: {
+        async getGenerationTasks(taskIds, options = {}) {
+          batchCalls.push(taskIds);
+          batchSignals.push(options.signal);
+          return { items: [] };
+        },
+        async listTaskCenterTasks(params) {
+          taskCenterListCalls.push(params);
+          return { items: [] };
+        },
+      },
+      ui: {
+        taskCenterTasksById: {
+          [taskId]: {
+            taskId,
+            status: "running",
+            kind: "video",
+          },
+        },
+        generationPollingActive: true,
+      },
+    };
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.deepEqual(batchCalls, [[taskId]]);
+    assert.equal(batchSignals[0] instanceof AbortSignal, true);
+    assert.deepEqual(taskCenterListCalls, []);
+  });
+
+  it("schedules tracked task polling when only the batch endpoint is available", () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimeout() {},
+    };
+    try {
+      const taskId = "storyboard-video-task-batch-only";
+      const workbench = {
+        api: {
+          async getGenerationTasks() {
+            return { items: [] };
+          },
+        },
+        ui: {
+          taskCenterTasksById: {
+            [taskId]: { taskId, status: "running", kind: "video" },
+          },
+          generationPollingActive: true,
+        },
+      };
+
+      scheduleTaskCenterPollingForTest(workbench, { immediate: true });
+
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0]?.delayMs, 0);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("chunks synchronization-capable polling beyond the backend batch limit", async () => {
+    const taskIds = Array.from({ length: 201 }, (_, index) => `tracked-video-task-${index + 1}`);
+    const batchCalls = [];
+    const workbench = {
+      api: {
+        async getGenerationTasks(ids) {
+          batchCalls.push(ids);
+          return { items: [] };
+        },
+      },
+      ui: {
+        taskCenterTasksById: Object.fromEntries(
+          taskIds.map((taskId) => [taskId, { taskId, status: "running", kind: "video" }]),
+        ),
+        generationPollingActive: true,
+      },
+    };
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.deepEqual(batchCalls.map((ids) => ids.length), [200, 1]);
+    assert.deepEqual(batchCalls.flat(), taskIds);
+  });
+
+  it("applies successful polling batches when a later batch fails", async () => {
+    const taskIds = Array.from({ length: 201 }, (_, index) => `tracked-video-task-partial-${index + 1}`);
+    const firstTaskId = taskIds[0];
+    const workbench = {
+      api: {
+        async getGenerationTasks(ids) {
+          if (ids.includes(taskIds[200])) {
+            throw new Error("tail_batch_unavailable");
+          }
+          return {
+            items: [{
+              taskId: firstTaskId,
+              status: "succeeded",
+              workflowStatus: "succeeded",
+              kind: "video",
+              updatedAt: "2026-08-26T11:00:00.000Z",
+              result: { videoUrl: "/generated/provider-completed.mp4" },
+            }],
+          };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        taskCenterTasksById: Object.fromEntries(
+          taskIds.map((taskId) => [taskId, {
+            taskId,
+            status: "running",
+            kind: "video",
+            ...(taskId === taskIds[200] ? { timeoutAt: "2020-01-01T00:00:00.000Z" } : {}),
+          }]),
+        ),
+        generationPollingActive: true,
+      },
+      root: {
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.equal(workbench.ui.taskCenterTasksById[firstTaskId].status, "completed");
+    assert.equal(workbench.ui.taskCenterTasksById[taskIds[200]].deadlineFinalPollCompletedAt, undefined);
+    assert.match(workbench.ui.taskCenterError, /tail_batch_unavailable/);
   });
 
   it("immediately updates Seedance storyboard video tasks when provider submission fails", async () => {
@@ -11937,7 +12081,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     });
 
     assert.doesNotMatch(html, /配音内容/);
-    assert.match(html, /请输入您的生图要求/);
+    assert.match(html, /先上传参考图，输入你的想法，再用@引用素材/);
     assert.match(html, /<strong class="episode-replica-generate-label">生成<\/strong>/);
     assert.doesNotMatch(html, /设为分镜视频/);
   });
@@ -12707,7 +12851,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     });
 
     assert.equal(workbench.ui.prompt, "");
-    assert.match(html, /<textarea id="video-prompt-input" placeholder="请输入您的生图要求"><\/textarea>/);
+    assert.match(html, /<textarea id="video-prompt-input" placeholder="先上传参考图，输入你的想法，再用@引用素材"><\/textarea>/);
     assert.doesNotMatch(html, /旧动态视频草稿不应自动进入生成框<\/textarea>/);
   });
 
@@ -30372,7 +30516,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /aria-label="当前剧集还没有分镜"/);
     assert.doesNotMatch(html, /分镜列表|共 0 条|10条\/页/);
     assert.match(html, /分镜：/);
-    assert.match(html, /请输入您的生图要求/);
+    assert.match(html, /先上传参考图，输入你的想法，再用@引用素材/);
     assert.match(html, /0 \/ 5000/);
     assert.match(html, /data-action="toggle-storyboard-select-all"[^>]*disabled/);
     assert.match(html, /data-action="open-episode-batch-actions"/);
@@ -48574,9 +48718,9 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /class="episode-replica-task-id"/);
     assert.doesNotMatch(html, /class="episode-replica-stage-actions asset-scope"/);
     assert.doesNotMatch(html, /class="episode-replica-task-refs asset-inline"/);
-    assert.match(html, /<textarea id="video-prompt-input" placeholder="请输入您的生图要求"><\/textarea>/);
+    assert.match(html, /<textarea id="video-prompt-input" placeholder="先上传参考图，输入你的想法，再用@引用素材"><\/textarea>/);
     assert.match(html, /0 \/ 5000/);
-    assert.match(html, /placeholder="请输入您的生图要求"/);
+    assert.match(html, /placeholder="先上传参考图，输入你的想法，再用@引用素材"/);
   });
 
   it("does not render a completion time before the generation result returns", () => {

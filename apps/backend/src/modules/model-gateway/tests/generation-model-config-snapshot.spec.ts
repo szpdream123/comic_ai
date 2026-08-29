@@ -6,6 +6,7 @@ import {
   createGenerationModelConfigSnapshot,
   createGenerationModelConfigSnapshotForTask,
   createGenerationProviderRouteIdentity,
+  resolveGenerationModelConfigForTask,
 } from "../generation-model-config-snapshot.ts";
 
 describe("generation model config snapshot", () => {
@@ -153,6 +154,96 @@ describe("generation model config snapshot", () => {
     assert.notEqual(firstIdentity, rotatedIdentity);
     assert.doesNotMatch(JSON.stringify(first), /direct-secret-must-not-leak|secret-version-1/);
     assert.doesNotMatch(firstIdentity ?? "", /PROVIDER_EAST_API_KEY|provider\.example/);
+  });
+
+  it("upgrades captured ChiYuan v1 endpoints before an existing task is resumed", async () => {
+    const captured = createGenerationModelConfigSnapshot({
+      ...modelConfig({
+        baseURL: "https://cy.apistudio.cc/",
+        apiKeyEnv: "ChiYuan_API_KEY",
+        requestFormat: "chiyuan_seedance_super_resolution",
+        requestPath: "/v1/video/generations",
+        createTaskEndpoint: "/v1/video/generations",
+        queryTaskEndpoint: "/v1/video/generations/{taskId}",
+      }, "video"),
+      modelCode: "chiyuan-seedance-2.5-super-resolution",
+      providerName: "ChiYuan",
+      providerModel: "doubao-seedance-2-5-260628",
+      providerProtocol: "chiyuan_video",
+      invocationMode: "async_polling",
+    });
+    const db = {
+      async query() {
+        return { rows: [] };
+      },
+    };
+
+    const resolved = await resolveGenerationModelConfigForTask(
+      db as never,
+      {
+        model: "chiyuan-seedance-2.5-super-resolution",
+        modelConfigSnapshot: captured,
+      },
+      "chiyuan-seedance-2.5-super-resolution",
+    );
+
+    assert.deepEqual(
+      {
+        requestPath: resolved?.providerConfig.requestPath,
+        createTaskEndpoint: resolved?.providerConfig.createTaskEndpoint,
+        queryTaskEndpoint: resolved?.providerConfig.queryTaskEndpoint,
+      },
+      {
+        requestPath: "/api/v3/contents/generations/tasks",
+        createTaskEndpoint: "/api/v3/contents/generations/tasks",
+        queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+      },
+    );
+  });
+
+  it("upgrades the original captured ChiYuan /v1/videos endpoints before resume", async () => {
+    const captured = createGenerationModelConfigSnapshot({
+      ...modelConfig({
+        baseURL: "https://cy.apistudio.cc/",
+        apiKeyEnv: "ChiYuan_API_KEY",
+        requestFormat: "chiyuan_seedance_super_resolution",
+        requestPath: "/v1/videos",
+        createTaskEndpoint: "/v1/videos",
+        queryTaskEndpoint: "/v1/videos/{taskId}",
+      }, "video"),
+      modelCode: "chiyuan-seedance-2.5-super-resolution",
+      providerName: "ChiYuan",
+      providerModel: "doubao-seedance-2-5-260628",
+      providerProtocol: "chiyuan_video",
+      invocationMode: "async_polling",
+    });
+    const db = {
+      async query() {
+        return { rows: [] };
+      },
+    };
+
+    const resolved = await resolveGenerationModelConfigForTask(
+      db as never,
+      {
+        model: "chiyuan-seedance-2.5-super-resolution",
+        modelConfigSnapshot: captured,
+      },
+      "chiyuan-seedance-2.5-super-resolution",
+    );
+
+    assert.deepEqual(
+      {
+        requestPath: resolved?.providerConfig.requestPath,
+        createTaskEndpoint: resolved?.providerConfig.createTaskEndpoint,
+        queryTaskEndpoint: resolved?.providerConfig.queryTaskEndpoint,
+      },
+      {
+        requestPath: "/api/v3/contents/generations/tasks",
+        createTaskEndpoint: "/api/v3/contents/generations/tasks",
+        queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+      },
+    );
   });
 });
 

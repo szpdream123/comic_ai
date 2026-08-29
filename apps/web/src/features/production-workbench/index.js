@@ -51,6 +51,10 @@ import {
   mergeGenerationTaskCenterState,
 } from "./episode-workbench-rebuilt.js?video-category=2&storyboard-style-picker=1";
 import {
+  EPISODE_PROMPT_PLACEHOLDER,
+  installEpisodePromptPlaceholderAnimation,
+} from "./episode-prompt-placeholder.js";
+import {
   isStoryboardPromptClearedForSelection,
   resolveEpisodeWorkbenchPrompt,
   resolveStoryboardPromptForMode,
@@ -4254,6 +4258,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   document.addEventListener("keydown", (event) => {
+    if (
+      event.key === "Tab" &&
+      workbench.ui.episodeBatchModal?.styleModalOpen === true &&
+      trapEpisodeBatchStylePickerFocus(workbench, event)
+    ) {
+      return;
+    }
     if (event.key !== "Escape") {
       return;
     }
@@ -4274,6 +4285,28 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
           ));
         previewTarget?.focus?.();
       });
+      return;
+    }
+    if (workbench.ui.episodeBatchModal?.styleModalOpen === true) {
+      event.preventDefault();
+      workbench.ui.episodeBatchModal.styleModalOpen = false;
+      workbench.ui.episodeBatchModal.styleDraftId = "";
+      render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
+      return;
+    }
+    if (workbench.ui.episodeBatchModal?.show === true) {
+      event.preventDefault();
+      if (workbench.ui.episodeBatchModal.isSubmitting === true) {
+        return;
+      }
+      if (workbench.ui.episodeBatchModal.openField) {
+        workbench.ui.episodeBatchModal.openField = null;
+        render(workbench);
+        return;
+      }
+      workbench.ui.episodeBatchModal = null;
+      render(workbench);
       return;
     }
     if (workbench.ui.homeProjectWorkflowProjectId) {
@@ -11688,6 +11721,43 @@ function syncEpisodeBatchModalOnly(workbench) {
   );
 }
 
+function focusEpisodeBatchStylePicker(workbench) {
+  queueMicrotask(() => {
+    const picker = workbench.root?.querySelector?.('[data-selection-picker-id="episode-batch-style-picker"]');
+    (picker?.querySelector?.(".selection-picker-item.active") ?? picker?.querySelector?.(".selection-picker-close"))?.focus?.();
+  });
+}
+
+function restoreEpisodeBatchStylePickerTriggerFocus(workbench) {
+  queueMicrotask(() => {
+    workbench.root?.querySelector?.('[data-action="open-episode-batch-style-modal"]')?.focus?.();
+  });
+}
+
+function trapEpisodeBatchStylePickerFocus(workbench, event) {
+  const dialog = workbench.root?.querySelector?.(
+    '[data-selection-picker-id="episode-batch-style-picker"] .selection-picker-modal',
+  );
+  const focusable = [...(dialog?.querySelectorAll?.(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  ) ?? [])];
+  if (!dialog || focusable.length === 0) {
+    return false;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = globalThis.document?.activeElement;
+  const target = event.shiftKey
+    ? (!dialog.contains?.(active) || active === first ? last : null)
+    : (!dialog.contains?.(active) || active === last ? first : null);
+  if (!target) {
+    return false;
+  }
+  event.preventDefault();
+  target.focus?.();
+  return true;
+}
+
 function syncGenerationResultDeleteModalOnly(workbench) {
   const target = workbench.ui.generationResultDeleteTarget;
   return syncEpisodeWorkbenchLayerOnly(
@@ -12321,11 +12391,20 @@ async function syncEpisodePromptEditor(workbench, options = {}) {
           });
         }
       },
-      placeholder: "请输入您的生图要求，输入 @ 引用素材",
+      placeholder: EPISODE_PROMPT_PLACEHOLDER,
       prompt,
       restoreState: options.restoreState ?? null,
       getSuggestions: () => buildPromptEditorSuggestions(workbench),
     });
+    const stopPlaceholderAnimation = installEpisodePromptPlaceholderAnimation(
+      editorHost,
+      EPISODE_PROMPT_PLACEHOLDER,
+    );
+    const destroyPromptEditor = handle.destroy.bind(handle);
+    handle.destroy = () => {
+      stopPlaceholderAnimation();
+      destroyPromptEditor();
+    };
     editorHost.dataset.promptEditorStatus = "ready";
     workbench.promptEditorMount = { element: editorHost, handle };
   } catch (error) {
@@ -22770,6 +22849,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleModalOpen = true;
       workbench.ui.episodeBatchModal.styleDraftId = workbench.ui.episodeBatchModal.selectedStyleId;
       render(workbench);
+      focusEpisodeBatchStylePicker(workbench);
     }
     return;
   }
@@ -22779,6 +22859,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleModalOpen = false;
       workbench.ui.episodeBatchModal.styleDraftId = "";
       render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
     }
     return;
   }
@@ -22845,6 +22926,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.episodeBatchModal.styleDraftId = "";
       workbench.ui.episodeBatchModal = syncEpisodeBatchModal(workbench.ui.episodeBatchModal);
       render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
     }
     return;
   }
@@ -52210,6 +52292,41 @@ async function loadTaskCenterTasksForPolling(workbench, options = {}) {
   if (!trackedTaskIds.length) {
     return { items: [], page: 1, pageSize: 0, total: 0, totalPages: 1, hasNext: false };
   }
+  if (typeof workbench.api?.getGenerationTasks === "function") {
+    const items = [];
+    const polledTaskIds = [];
+    const pollingErrors = [];
+    let successfulBatchCount = 0;
+    const batchSize = 200;
+    for (let offset = 0; offset < trackedTaskIds.length; offset += batchSize) {
+      try {
+        const response = await workbench.api.getGenerationTasks(
+          trackedTaskIds.slice(offset, offset + batchSize),
+          { signal: options.signal },
+        );
+        successfulBatchCount += 1;
+        const batchItems = Array.isArray(response?.items) ? response.items : [];
+        items.push(...batchItems);
+        polledTaskIds.push(...batchItems.map((task) => resolveGenerationTaskIdForConversation(task)).filter(Boolean));
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        pollingErrors.push(error);
+      }
+    }
+    if (!successfulBatchCount && pollingErrors.length) {
+      throw pollingErrors[0];
+    }
+    return {
+      items,
+      page: 1,
+      pageSize: items.length,
+      total: items.length,
+      totalPages: 1,
+      hasNext: false,
+      polledTaskIds,
+      pollingError: pollingErrors[0] ?? null,
+    };
+  }
   if (typeof workbench.api?.listTaskCenterTasks === "function") {
     const items = [];
     const updatedAfter = taskCenterOverlappingWatermark(workbench.taskCenterUpdatedAfter);
@@ -52550,7 +52667,11 @@ async function runTaskCenterPolling(workbench, options = {}) {
       workbench.taskCenterUpdatedAfter,
       response?.items,
     );
+    const polledTaskIds = Array.isArray(response?.polledTaskIds)
+      ? new Set(response.polledTaskIds)
+      : null;
     for (const taskId of deadlineTaskIds) {
+      if (polledTaskIds && !polledTaskIds.has(taskId)) continue;
       const task = workbench.ui.taskCenterTasksById?.[taskId];
       if (task && isTaskCenterActiveStatus(task.status ?? task.workflowStatus)) {
         changed = upsertTaskCenterTask(workbench, {
@@ -52561,8 +52682,8 @@ async function runTaskCenterPolling(workbench, options = {}) {
     }
     const activeTaskIds = collectTaskCenterTrackedTaskIds(workbench);
     workbench.ui.generationPollingActive = activeTaskIds.length > 0;
-    workbench.ui.taskCenterError = "";
-    if (changed || projected) {
+    workbench.ui.taskCenterError = response?.pollingError ? friendlyError(response.pollingError) : "";
+    if (changed || projected || (response?.pollingError && workbench.ui.taskCenterOpen)) {
       if (
         !workbench.ui.taskCenterOpen &&
         workbench.ui.activeNavTab === "project" &&
@@ -52616,7 +52737,8 @@ function scheduleTaskCenterPolling(workbench, options = {}) {
     typeof window.setTimeout !== "function" ||
     (
       typeof workbench.api?.listTaskCenterTasks !== "function" &&
-      typeof workbench.api?.getGenerationTask !== "function"
+      typeof workbench.api?.getGenerationTask !== "function" &&
+      typeof workbench.api?.getGenerationTasks !== "function"
     )
   ) {
     return;

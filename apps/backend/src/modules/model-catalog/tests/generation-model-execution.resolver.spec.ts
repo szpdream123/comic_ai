@@ -89,6 +89,25 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
+  it("routes ChiYuan video models through the shared video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "chiyuan-seedance-2.5-super-resolution",
+      modelConfig: videoModelConfig({
+        modelCode: "chiyuan-seedance-2.5-super-resolution",
+        providerName: "ChiYuan",
+        providerModel: "doubao-seedance-2-5-260628",
+        providerProtocol: "chiyuan_video",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {},
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
   it("routes GlobalAiOpc Model Center video models through the isolated GlobalAiOpc executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

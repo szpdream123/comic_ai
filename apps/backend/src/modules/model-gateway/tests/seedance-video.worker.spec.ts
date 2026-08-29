@@ -668,6 +668,314 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
+  it("does not retry a local ChiYuan configuration error before provider submission", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET status = 'active',
+              provider_config_json = jsonb_set(
+                provider_config_json,
+                '{baseURL}',
+                '"https://invalid.example"'::jsonb
+              )
+          WHERE model_code = 'chiyuan-seedance-2.0-mini'
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO admin_secret_values (
+            id, secret_ref, secret_key, secret_value, provider_name, status
+          )
+          VALUES (
+            '81000000-0000-4000-8000-000000000319',
+            'ChiYuan test secret',
+            'ChiYuan_API_KEY',
+            'test-secret',
+            'ChiYuan',
+            'configured'
+          )
+        `,
+      );
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "319",
+        userId: "70000000-0000-4000-8000-000000000319",
+        status: "queued",
+      });
+      await db.query(
+        `
+          UPDATE tasks
+          SET input_snapshot_json = jsonb_set(
+            input_snapshot_json,
+            '{model}',
+            '"chiyuan-seedance-2.0-mini"'::jsonb
+          )
+          WHERE id = $1
+        `,
+        [seeded.taskId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, NULL, 'ChiYuan', 'episode.video.generate',
+            $5, $6, $7, $8, 'created', $9
+          )
+        `,
+        [
+          seeded.providerRequestId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          `${seeded.workflowId}:${seeded.taskId}`,
+          createHash("sha256").update(
+            `${seeded.taskId}:chiyuan-seedance-2.0-mini:user-scoped limiter test`,
+          ).digest("hex"),
+          `creator://generation/episode/${seeded.taskId}/video/${seeded.taskId}`,
+          createHash("sha256").update("payload-hash-319").digest("hex"),
+          seeded.userId,
+        ],
+      );
+
+      const result = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { WORKER_ENVIRONMENT: "staging" },
+        now: new Date("2026-08-26T09:00:00.000Z"),
+      });
+      const task = await db.query<{
+        status: string;
+        failure_code: string | null;
+        attempt_count: number;
+      }>(
+        "SELECT status, failure_code, attempt_count FROM tasks WHERE id = $1",
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, { status: "failed", failureCode: "chiyuan_provider_config_invalid" });
+      assert.deepEqual(task.rows[0], {
+        status: "failed",
+        failure_code: "chiyuan_provider_config_invalid",
+        attempt_count: 1,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("submits ChiYuan video with the API key resolved from the admin secret store", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await db.query(
+        "UPDATE ai_model_configs SET status = 'active' WHERE model_code = 'chiyuan-seedance-2.0-mini'",
+      );
+      await db.query(
+        `
+          INSERT INTO admin_secret_values (
+            id, secret_ref, secret_key, secret_value, provider_name, status
+          )
+          VALUES (
+            '81000000-0000-4000-8000-000000000320',
+            'ChiYuan submit test secret',
+            'ChiYuan_API_KEY',
+            'resolved-chiyuan-secret',
+            'ChiYuan',
+            'configured'
+          )
+        `,
+      );
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "320",
+        userId: "70000000-0000-4000-8000-000000000320",
+        status: "queued",
+      });
+      await db.query(
+        `
+          UPDATE tasks
+          SET input_snapshot_json = jsonb_set(
+            input_snapshot_json,
+            '{model}',
+            '"chiyuan-seedance-2.0-mini"'::jsonb
+          )
+          WHERE id = $1
+        `,
+        [seeded.taskId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, NULL, 'ChiYuan', 'episode.video.generate',
+            $5, $6, $7, $8, 'created', $9
+          )
+        `,
+        [
+          seeded.providerRequestId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          `${seeded.workflowId}:${seeded.taskId}`,
+          createHash("sha256").update(
+            `${seeded.taskId}:chiyuan-seedance-2.0-mini:user-scoped limiter test`,
+          ).digest("hex"),
+          `creator://generation/episode/${seeded.taskId}/video/${seeded.taskId}`,
+          createHash("sha256").update("payload-hash-320").digest("hex"),
+          seeded.userId,
+        ],
+      );
+      const requests: Array<{
+        url: string;
+        authorization: string | null;
+        body: Record<string, unknown>;
+      }> = [];
+
+      const result = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { WORKER_ENVIRONMENT: "staging" },
+        fetchImpl: (async (url, init) => {
+          const headers = new Headers(init?.headers);
+          requests.push({
+            url: String(url),
+            authorization: headers.get("authorization"),
+            body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+          });
+          return Response.json({ data: { task_id: "chiyuan-secret-store-task", status: "queued" } });
+        }) as typeof fetch,
+        now: new Date("2026-08-26T09:10:00.000Z"),
+      });
+      const provider = await db.query<{
+        status: string;
+        external_request_id: string | null;
+        payload_redacted_json: Record<string, unknown>;
+        response_redacted_json: Record<string, unknown> | null;
+      }>(
+        `
+          SELECT status, external_request_id, payload_redacted_json, response_redacted_json
+          FROM provider_requests
+          WHERE task_id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.equal(result.status, "submitted", JSON.stringify(result));
+      assert.equal(result.externalRequestId, "chiyuan-secret-store-task");
+      assert.equal(requests[0]?.url, "https://cy.apistudio.cc/api/v3/contents/generations/tasks");
+      assert.equal(requests[0]?.authorization, "Bearer resolved-chiyuan-secret");
+      assert.equal(requests[0]?.body.model, "doubao-seedance-2-0-mini-260615");
+      assert.equal(provider.rows[0]?.status, "accepted");
+      assert.equal(provider.rows[0]?.external_request_id, "chiyuan-secret-store-task");
+      assert.doesNotMatch(JSON.stringify(provider.rows[0]), /resolved-chiyuan-secret/);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("still retries a transient failure before provider submission starts", async () => {
+    const db = await createMigratedTestDb();
+    let payloadRefreshFailed = false;
+    const transientDb = {
+      query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (
+          !payloadRefreshFailed
+          && /UPDATE provider_requests\s+SET payload_redacted_json=\$2::jsonb/i.test(sql.replace(/\s+/g, " "))
+        ) {
+          payloadRefreshFailed = true;
+          throw new Error("transient database timeout");
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "321",
+        userId: "70000000-0000-4000-8000-000000000321",
+        status: "queued",
+      });
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, NULL, 'volcengine', 'episode.video.generate',
+            $5, $6, $7, $8, 'created', $9
+          )
+        `,
+        [
+          seeded.providerRequestId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          `${seeded.workflowId}:${seeded.taskId}`,
+          createHash("sha256").update(
+            `${seeded.taskId}:seedance-i2v-pro:user-scoped limiter test`,
+          ).digest("hex"),
+          `creator://generation/episode/${seeded.taskId}/video/${seeded.taskId}`,
+          createHash("sha256").update("payload-hash-321").digest("hex"),
+          seeded.userId,
+        ],
+      );
+
+      const result = await processSeedanceVideoSubmitJob(transientDb, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key", WORKER_ENVIRONMENT: "staging" },
+        fetchImpl: (async () => {
+          throw new Error("provider HTTP request must not start");
+        }) as typeof fetch,
+        now: new Date("2026-08-26T09:20:00.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        attempt_status: string;
+        attempt_failure_code: string | null;
+        provider_status: string;
+        external_request_id: string | null;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 task.failure_code AS task_failure_code,
+                 attempt.status AS attempt_status,
+                 attempt.failure_code AS attempt_failure_code,
+                 provider.status AS provider_status,
+                 provider.external_request_id
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.task_id = task.id
+          JOIN provider_requests provider ON provider.task_id = task.id
+          WHERE task.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, {
+        status: "retryable",
+        retryAfterMs: 1000,
+        reason: "provider_submission_prepare_retry",
+      });
+      assert.equal(payloadRefreshFailed, true);
+      assert.deepEqual(state.rows[0], {
+        task_status: "queued",
+        task_failure_code: null,
+        attempt_status: "canceled",
+        attempt_failure_code: "provider_submission_not_started",
+        provider_status: "created",
+        external_request_id: null,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("fails immediately when video submission has no external id", async () => {
     const db = await createMigratedTestDb();
 
@@ -1118,6 +1426,102 @@ describe("Seedance video worker user ownership", () => {
         { status: "available", created_by_user_id: seeded.userId },
       ]);
       assert.equal(versions.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps signed result URLs out of audit records and refreshes them before artifact transfer", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const signedVideoUrl = "https://cdn.example.test/signed-seedance.mov?token=provider-download-secret";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "330",
+        userId: "70000000-0000-4000-8000-000000000330",
+        status: "running",
+      });
+      const now = new Date("2026-07-13T02:15:00.000Z");
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            attempt_id, provider_request_id, model_code, media_type, task_mode,
+            status, progress_stage, request_summary_json, submitted_at, started_at,
+            created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000330', $1, $2, 'episode', $3, $4, $3,
+            $5, $6, 'seedance-i2v-pro', 'video', 'video.image_to_video',
+            'running', 'provider_accepted', '{}'::jsonb, $7, $7, $7, $7
+          )
+        `,
+        [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, seeded.attemptId, seeded.providerRequestId, now],
+      );
+      let providerPolls = 0;
+      let downloads = 0;
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "seedance-signed-url-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            for await (const _chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) { /* drain */ }
+            return { eTag: "signed-url-etag" };
+          },
+        },
+      };
+      const fetchImpl = (async (url) => {
+        if (String(url).includes("/tasks/external-330")) {
+          providerPolls += 1;
+          return Response.json({
+            id: "external-330",
+            status: "succeeded",
+            content: { video_url: signedVideoUrl },
+          });
+        }
+        assert.equal(String(url), signedVideoUrl);
+        downloads += 1;
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+          status: 200,
+          headers: { "content-type": "video/quicktime", "content-length": "8" },
+        });
+      }) as typeof fetch;
+
+      const polled = await processSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        expectedAttemptId: seeded.attemptId,
+        runtime,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl,
+        now,
+      });
+      const provider = await db.query<{ response_redacted_json: Record<string, unknown> }>(
+        "SELECT response_redacted_json FROM provider_requests WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+
+      assert.deepEqual(polled, { status: "succeeded" });
+      assert.equal(provider.rows[0]?.response_redacted_json.videoUrl, "https://cdn.example.test/signed-seedance.mov");
+      assert.equal(provider.rows[0]?.response_redacted_json.artifactUrlRequiresRefresh, true);
+      assert.doesNotMatch(JSON.stringify(provider.rows[0]?.response_redacted_json), /provider-download-secret/);
+
+      const fetched = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        expectedAttemptId: seeded.attemptId,
+        runtime,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl,
+        now: new Date("2026-07-13T02:15:01.000Z"),
+      });
+
+      assert.deepEqual(fetched, { status: "succeeded" });
+      assert.equal(providerPolls, 2);
+      assert.equal(downloads, 1);
     } finally {
       await db.close();
     }
@@ -2540,6 +2944,127 @@ describe("Seedance video worker user ownership", () => {
         credit_summary_json: { released: 120, consumed: 0, recoveryCharge: 0, recoveryReason: "provider_completed_after_timeout", settledAt: "2026-07-13T05:00:00.000Z" },
         amount_reserved: 0, amount_consumed: 0, amount_released: 120, assets: 1, charges: 0,
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recovers a provider success that was falsely failed for a missing result URL", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const artifactUrl = "https://cdn.example.test/recovered-missing-url.mov?token=signed-result-secret";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "308",
+        userId: "70000000-0000-4000-8000-000000000308",
+        estimatedCredits: 120,
+        status: "running",
+      });
+      const failedAt = new Date("2026-07-13T04:00:00.000Z");
+      await db.query("UPDATE tasks SET status='failed', failure_code='provider_failed' WHERE id=$1", [seeded.taskId]);
+      await db.query("UPDATE task_attempts SET status='failed', failure_code='provider_failed', finished_at=$2 WHERE id=$1", [seeded.attemptId, failedAt]);
+      await db.query("UPDATE workflows SET status='failed', finished_at=$2 WHERE id=$1", [seeded.workflowId, failedAt]);
+      await db.query(
+        "UPDATE provider_requests SET status='failed', failure_code='provider_failed', response_redacted_json=$2::jsonb WHERE id=$1",
+        [seeded.providerRequestId, JSON.stringify({
+          providerStatus: "completed",
+          providerMessage: "provider_succeeded_without_video_url",
+        })],
+      );
+      await db.query(
+        `INSERT INTO credit_reservations
+          (id,user_id,project_id,workflow_id,task_id,amount_total,amount_reserved,amount_consumed,amount_released,status,source_type,source_id,reason,created_by_user_id)
+         VALUES ('91000000-0000-4000-8000-000000000308',$1,$2,$3,$4,120,0,0,120,'released','generation_task',$4,'video generation',$1)`,
+        [seeded.userId, seeded.projectId, seeded.workflowId, seeded.taskId],
+      );
+      await db.query(
+        `INSERT INTO ai_generation_task_snapshots
+          (id,user_id,project_id,target_type,target_id,workflow_id,task_id,attempt_id,provider_request_id,credit_reservation_id,model_code,media_type,task_mode,status,progress_stage,estimated_credits,credit_status,credit_summary_json,submitted_at,failed_at,created_at,updated_at)
+         VALUES ('92000000-0000-4000-8000-000000000308',$1,$2,'episode',$3,$4,$3,$5,$6,'91000000-0000-4000-8000-000000000308','seedance-i2v-pro','video','video.image_to_video','failed','failed',120,'released','{"released":120}'::jsonb,$7,$7,$7,$7)`,
+        [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, seeded.attemptId, seeded.providerRequestId, failedAt],
+      );
+      let downloads = 0;
+      let uploadedObjectKey = "";
+      const runtime: UploadSessionRuntime = {
+        mode: "cos", provider: "tencent_cos", bucket: "seedance-missing-url-recovery-test",
+        region: "ap-guangzhou", publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) { return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt }; },
+          async putObject(input) {
+            uploadedObjectKey = input.objectKey;
+            for await (const _chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) { /* drain */ }
+            return { eTag: "missing-url-recovery-etag" };
+          },
+        },
+      };
+      const fetchImpl = (async (url) => {
+        if (String(url).includes("/tasks/external-308")) {
+          return Response.json({ id: "external-308", status: "succeeded", content: { video_url: artifactUrl } });
+        }
+        assert.equal(String(url), artifactUrl);
+        downloads += 1;
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), { status: 200, headers: { "content-type": "video/quicktime" } });
+      }) as typeof fetch;
+
+      const result = await recoverSeedanceVideoAfterPollTimeout(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl,
+        now: new Date("2026-07-13T05:00:00.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string; provider_status: string; provider_response: string;
+        recovery_reason: string | null; charges: number;
+      }>(`SELECT t.status task_status,p.status provider_status,
+          p.response_redacted_json::text provider_response,
+          s.credit_summary_json->>'recoveryReason' recovery_reason,
+          (SELECT count(*)::int FROM credit_ledger_entries WHERE reservation_id=r.id AND entry_type IN ('reservation','consume')) charges
+        FROM tasks t JOIN provider_requests p ON p.task_id=t.id
+        JOIN ai_generation_task_snapshots s ON s.task_id=t.id
+        JOIN credit_reservations r ON r.task_id=t.id WHERE t.id=$1`, [seeded.taskId]);
+
+      assert.deepEqual(result, { status: "succeeded" });
+      assert.equal(downloads, 1);
+      assert.match(uploadedObjectKey, /\.mov$/);
+      assert.equal(state.rows[0]?.task_status, "succeeded");
+      assert.equal(state.rows[0]?.provider_status, "succeeded");
+      assert.equal(state.rows[0]?.recovery_reason, "provider_result_url_recovered");
+      assert.equal(state.rows[0]?.charges, 0);
+      assert.match(state.rows[0]?.provider_response ?? "", /recovered-missing-url\.mov/);
+      assert.doesNotMatch(state.rows[0]?.provider_response ?? "", /signed-result-secret|\?token=/);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("skips a provider failure without recovery status fields", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "309",
+        userId: "70000000-0000-4000-8000-000000000309",
+        estimatedCredits: 120,
+        status: "running",
+      });
+      const failedAt = new Date("2026-07-13T04:00:00.000Z");
+      await db.query("UPDATE tasks SET status='failed', failure_code='provider_failed' WHERE id=$1", [seeded.taskId]);
+      await db.query("UPDATE task_attempts SET status='failed', failure_code='provider_failed', finished_at=$2 WHERE id=$1", [seeded.attemptId, failedAt]);
+      await db.query(
+        "UPDATE provider_requests SET status='failed', failure_code='provider_failed', response_redacted_json='{}'::jsonb WHERE id=$1",
+        [seeded.providerRequestId],
+      );
+
+      const result = await recoverSeedanceVideoAfterPollTimeout(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: async () => {
+          throw new Error("provider_must_not_be_called");
+        },
+        now: new Date("2026-07-13T05:00:00.000Z"),
+      });
+
+      assert.deepEqual(result, { status: "skipped", reason: "task_not_recoverable" });
     } finally {
       await db.close();
     }

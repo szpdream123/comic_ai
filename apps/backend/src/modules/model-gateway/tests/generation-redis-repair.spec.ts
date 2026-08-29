@@ -15,6 +15,7 @@ import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 import { handleGptImageArtifactQueueExhaustion } from "../gpt-image-artifact-recovery.service.ts";
 import {
   markGenerationQueueStagePublished,
+  reserveGenerationQueueRepairPollForPublish,
   reserveGenerationQueueStageForPublish,
 } from "../generation-queue-shard.store.ts";
 import {
@@ -1064,7 +1065,7 @@ describe("generation Redis dispatch repair", () => {
           GENERATION_QUEUE_SHARDING_ENABLED: "true",
         }),
         shardStore: {
-          async reserve(_database, assignment) {
+          async reserveRepairPoll(_database, assignment) {
             assignments.push(assignment);
             return {
               assignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:51000000-0000-4000-8000-000000000104:1780466400000",
@@ -1125,7 +1126,7 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
-  it("preserves a publishing poll repair assignment when Redis enqueue is uncertain", async () => {
+  it("preserves an uncertain poll assignment without publishing a duplicate repair", async () => {
     const db = await createMigratedTestDb();
     try {
       await seedGenerationRepairTasks(db);
@@ -1140,7 +1141,7 @@ describe("generation Redis dispatch repair", () => {
             GENERATION_QUEUE_SHARDING_ENABLED: "true",
           }),
           shardStore: {
-            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+            reserveRepairPoll: (database, assignment) => reserveGenerationQueueRepairPollForPublish(database, assignment),
             markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
           },
           publisher: {
@@ -1151,26 +1152,23 @@ describe("generation Redis dispatch repair", () => {
         }),
         /redis unavailable/,
       );
-      await assert.rejects(
-        repairRunningSeedancePollJobs(db, {
-          now: new Date("2026-06-03T06:01:00.000Z"),
-          limit: 10,
-          staleDispatchMs: 1,
-          config: loadGenerationQueueConfig({
-            GENERATION_QUEUE_SHARDING_ENABLED: "true",
-          }),
-          shardStore: {
-            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
-            markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
-          },
-          publisher: {
-            async add() {
-              throw new Error("redis unavailable");
-            },
-          },
+      const duplicateRepair = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:01:00.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({
+          GENERATION_QUEUE_SHARDING_ENABLED: "true",
         }),
-        /redis unavailable/,
-      );
+        shardStore: {
+          reserveRepairPoll: (database, assignment) => reserveGenerationQueueRepairPollForPublish(database, assignment),
+          markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
+        },
+        publisher: {
+          async add() {
+            throw new Error("redis unavailable");
+          },
+        },
+      });
 
       const assignment = await db.query<{
         status: string;
@@ -1205,6 +1203,7 @@ describe("generation Redis dispatch repair", () => {
           AND status IN ('publishing', 'admitted')
       `);
       assert.equal(activeAssignments.rows[0]?.count, 1);
+      assert.deepEqual(duplicateRepair.repairedTaskIds, []);
     } finally {
       await db.close();
     }
@@ -1515,6 +1514,216 @@ describe("generation Redis dispatch repair", () => {
       });
 
       assert.deepEqual(repaired.repairedTaskIds, []);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not duplicate a running task with an active poll assignment", async () => {
+    const db = await createMigratedTestDb();
+    let publishedRepairs = 0;
+    let activeAssignmentInsertedDuringClaim = false;
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(`
+        INSERT INTO generation_queue_routes (route_key, route_code)
+        VALUES ('repair-active-poll-route', 'rap');
+        INSERT INTO generation_queue_shards (
+          id, media_type, stage, route_key, route_code, shard_no, queue_name, admitted_count
+        ) VALUES (
+          '71000000-0000-4000-8000-000000000105', 'video', 'poll', 'repair-active-poll-route', 'rap', 0,
+          'generation-video-poll-rap-000', 1
+        );
+      `);
+      const racingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+          if (!activeAssignmentInsertedDuringClaim && sql.includes("WITH manual_recovery AS")) {
+            activeAssignmentInsertedDuringClaim = true;
+            await db.query(`
+              INSERT INTO generation_queue_stage_assignments (
+                assignment_key, task_id, media_type, stage, route_key, shard_id, status, admitted_at,
+                redis_job_id, published_at
+              ) VALUES (
+                'repair:active-poll', '50000000-0000-4000-8000-000000000104', 'video', 'poll',
+                'repair-active-poll-route', '71000000-0000-4000-8000-000000000105', 'admitted',
+                '2026-06-03T05:59:00.000Z', 'generation.video.poll__active', '2026-06-03T05:59:00.000Z'
+              )
+            `);
+          }
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const repaired = await repairRunningSeedancePollJobs(racingDb, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({}),
+        publisher: {
+          async add() {
+            publishedRepairs += 1;
+          },
+        },
+      });
+
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(publishedRepairs, 0);
+      assert.equal(activeAssignmentInsertedDuringClaim, true);
+
+      await db.query(`
+        UPDATE generation_queue_stage_assignments
+        SET status = 'released',
+            released_at = '2026-06-03T06:00:01.000Z',
+            release_reason = 'auto_repair_redis_missing',
+            updated_at = '2026-06-03T06:00:01.000Z'
+        WHERE assignment_key = 'repair:active-poll'
+      `);
+      const repairedAfterRelease = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:02.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({}),
+        publisher: {
+          async add() {
+            publishedRepairs += 1;
+          },
+        },
+      });
+
+      assert.deepEqual(repairedAfterRelease.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.equal(publishedRepairs, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not publish a repair when a submit assignment reserves after the repair scan", async () => {
+    const db = await createMigratedTestDb();
+    let publishedRepairs = 0;
+    let regularReservationInserted = false;
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({
+          GENERATION_QUEUE_SHARDING_ENABLED: "true",
+        }),
+        shardStore: {
+          async reserveRepairPoll(database, assignment) {
+            regularReservationInserted = true;
+            await reserveGenerationQueueStageForPublish(database, {
+              ...assignment,
+              assignmentKey: `generation.task.created:${assignment.taskId}:submit-race`,
+              stage: "submit",
+              redisJobId: `generation.video.submit__${assignment.taskId}__submit-race`,
+            });
+            return reserveGenerationQueueRepairPollForPublish(database, assignment);
+          },
+          markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
+        },
+        publisher: {
+          async add() {
+            publishedRepairs += 1;
+          },
+        },
+      });
+
+      assert.equal(regularReservationInserted, true);
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(publishedRepairs, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("defers repair while the durable poll scheduler or outbox owns the next poll", async () => {
+    const db = await createMigratedTestDb();
+    let publishedRepairs = 0;
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(`
+        UPDATE tasks
+        SET locked_until = '2026-06-03T06:05:00.000Z'
+        WHERE id = '50000000-0000-4000-8000-000000000104';
+        UPDATE provider_requests
+        SET next_poll_at = '2026-06-03T06:00:30.000Z'
+        WHERE id = '52000000-0000-4000-8000-000000000104'
+      `);
+      const repair = () => repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({}),
+        publisher: {
+          async add() {
+            publishedRepairs += 1;
+          },
+        },
+      });
+
+      assert.deepEqual((await repair()).repairedTaskIds, []);
+
+      await db.query(`
+        UPDATE tasks
+        SET locked_until = '2026-06-03T05:58:00.000Z'
+        WHERE id = '50000000-0000-4000-8000-000000000104'
+      `);
+      assert.deepEqual((await repair()).repairedTaskIds, []);
+
+      await db.query(`
+        UPDATE provider_requests
+        SET next_poll_at = NULL
+        WHERE id = '52000000-0000-4000-8000-000000000104';
+        INSERT INTO outbox_events (
+          id, event_type, payload_json, generation_stage, status,
+          available_at, dedupe_key, created_at, updated_at, user_id
+        ) VALUES (
+          '90000000-0000-4000-8000-000000000104',
+          'generation.task.poll_requested',
+          '{"taskId":"50000000-0000-4000-8000-000000000104","attemptId":"51000000-0000-4000-8000-000000000104"}'::jsonb,
+          'poll', 'processing', '2026-06-03T05:59:00.000Z',
+          'generation.task.poll_requested:50000000-0000-4000-8000-000000000104:1',
+          '2026-06-03T05:59:00.000Z', '2026-06-03T05:59:00.000Z',
+          '00000000-0000-4000-8000-000000000101'
+        )
+      `);
+
+      assert.deepEqual((await repair()).repairedTaskIds, []);
+      assert.equal(publishedRepairs, 0);
+
+      await db.query(`
+        UPDATE outbox_events
+        SET status = 'processed',
+            processed_at = '2026-06-03T06:00:01.000Z',
+            updated_at = '2026-06-03T06:00:01.000Z'
+        WHERE id = '90000000-0000-4000-8000-000000000104'
+      `);
+      const repairedAfterOwnershipReleased = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:02.000Z"),
+        limit: 10,
+        staleDispatchMs: 1,
+        config: loadGenerationQueueConfig({}),
+        publisher: {
+          async add() {
+            publishedRepairs += 1;
+          },
+        },
+      });
+
+      assert.deepEqual(repairedAfterOwnershipReleased.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.equal(publishedRepairs, 1);
     } finally {
       await db.close();
     }
@@ -2267,6 +2476,18 @@ async function seedGenerationRepairTasks(
           '{}'::jsonb,
           '00000000-0000-4000-8000-000000000101'
         )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO assets (id, project_id, asset_type, asset_key, created_by_user_id)
+      VALUES (
+        '60000000-0000-4000-8000-000000000105',
+        '30000000-0000-4000-8000-000000000101',
+        'shot_image',
+        'generation-repair-target',
+        '00000000-0000-4000-8000-000000000101'
+      )
     `,
   );
   await db.query(

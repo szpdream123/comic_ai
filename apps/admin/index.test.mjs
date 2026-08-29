@@ -28,6 +28,52 @@ test("admin shell omits the retired marketing console and skill manager", () => 
   ]) assert.doesNotMatch(script, new RegExp(escapeRegExp(contract)));
 });
 
+test("admin model editor preserves the ChiYuan video adapter", () => {
+  const sourceStart = script.indexOf("const MODEL_ADAPTER_OPTIONS = [");
+  const sourceEnd = script.indexOf("function fixedModelTemplate", sourceStart);
+  assert.notEqual(sourceStart, -1, "model adapter options exist");
+  assert.notEqual(sourceEnd, -1, "model adapter helper boundary exists");
+
+  const context = {
+    escapeAttribute: (value) => String(value),
+    escapeHtml: (value) => String(value),
+    isBananaRouterProviderName: () => false,
+    isCumobProviderName: () => false,
+    isGlobalAiOpcProviderName: () => false,
+    isLingdongProviderName: () => false,
+  };
+  vm.runInNewContext(script.slice(sourceStart, sourceEnd), context);
+
+  assert.equal(context.inferModelAdapter({
+    mediaType: "video",
+    providerProtocol: "chiyuan_video",
+    providerName: "ChiYuan",
+  }), "chiyuan_video");
+  assert.match(
+    context.modelAdapterOptionsMarkup("video", "chiyuan_video", "ChiYuan"),
+    /value="chiyuan_video" selected/,
+  );
+});
+
+test("new ChiYuan video models start from the locked official-compatible transport", () => {
+  const start = script.indexOf("function fixedModelTemplate");
+  const end = script.indexOf("function schemaFromSelectedParameterTemplates", start);
+  const context = {
+    defaultModelAdapter: () => "custom_http",
+    result: null,
+  };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = fixedModelTemplate("video", "ChiYuan", "chiyuan_video");
+  `, context);
+
+  assert.equal(context.result.providerConfig.baseURL, "https://cy.apistudio.cc");
+  assert.equal(context.result.providerConfig.apiKeyEnv, "ChiYuan_API_KEY");
+  assert.equal(context.result.providerConfig.requestFormat, "chiyuan_seedance_official");
+  assert.equal(context.result.providerConfig.createTaskEndpoint, "/api/v3/contents/generations/tasks");
+  assert.equal(context.result.providerConfig.queryTaskEndpoint, "/api/v3/contents/generations/tasks/{taskId}");
+});
+
 test("admin keeps the GEO entry in the immediately visible primary navigation", () => {
   const installStart = script.indexOf("(function installGeoOperationsPage()");
   const installEnd = script.indexOf("      })();", installStart) + "      })();".length;
