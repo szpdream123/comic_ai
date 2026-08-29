@@ -19,6 +19,7 @@ export function installEpisodePromptPlaceholderAnimation(editorHost, placeholder
     return () => {};
   }
   const reducedMotion = view.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
+  const compactViewport = view.matchMedia?.("(max-width: 720px)") ?? null;
   editorContent.setAttribute("aria-placeholder", String(placeholder ?? ""));
   const placeholderElement = editorHost.ownerDocument.createElement("span");
   placeholderElement.className = "episode-prompt-animated-placeholder";
@@ -32,7 +33,6 @@ export function installEpisodePromptPlaceholderAnimation(editorHost, placeholder
   editorHost.append(placeholderElement);
   let frameIndex = 0;
   let timeoutId = null;
-  let pausedByInteraction = false;
   let stopped = false;
 
   const clearScheduledFrame = () => {
@@ -74,15 +74,11 @@ export function installEpisodePromptPlaceholderAnimation(editorHost, placeholder
     if (stopped || !isEmpty || editorHost.ownerDocument.visibilityState === "hidden") {
       return;
     }
-    if (reducedMotion?.matches || pausedByInteraction) {
+    if (reducedMotion?.matches || compactViewport?.matches) {
       characterElements.forEach((element) => element.classList.add("is-visible"));
       return;
     }
     schedule(showNextFrame, INITIAL_FRAME_DELAY_MS);
-  };
-  const pauseForInteraction = () => {
-    pausedByInteraction = true;
-    restart();
   };
   const observer = new view.MutationObserver(restart);
   observer.observe(editorContent, {
@@ -92,8 +88,8 @@ export function installEpisodePromptPlaceholderAnimation(editorHost, placeholder
     subtree: true,
   });
   reducedMotion?.addEventListener?.("change", restart);
+  compactViewport?.addEventListener?.("change", restart);
   editorHost.ownerDocument.addEventListener?.("visibilitychange", restart);
-  editorHost.addEventListener?.("focusin", pauseForInteraction);
   restart();
 
   return () => {
@@ -105,7 +101,7 @@ export function installEpisodePromptPlaceholderAnimation(editorHost, placeholder
     observer.disconnect();
     placeholderElement.remove();
     reducedMotion?.removeEventListener?.("change", restart);
+    compactViewport?.removeEventListener?.("change", restart);
     editorHost.ownerDocument.removeEventListener?.("visibilitychange", restart);
-    editorHost.removeEventListener?.("focusin", pauseForInteraction);
   };
 }

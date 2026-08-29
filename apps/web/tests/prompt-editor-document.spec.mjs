@@ -414,14 +414,32 @@ test("prompt dock types the full empty-editor guidance one character at a time i
   assert.equal(harness.pending()[0].delay, 450);
 
   harness.focusEditor();
+  assert.equal(visibleCharacters().length, 0);
+  assert.equal(harness.pending()[0].delay, 450);
+  harness.setEmpty(false);
+  assert.equal(placeholder.classList.contains("is-active"), false);
+  assert.equal(harness.pending().length, 0);
+  harness.setEmpty(true);
+  assert.equal(placeholder.classList.contains("is-active"), true);
+  assert.equal(visibleCharacters().length, 0);
+  assert.equal(harness.pending()[0].delay, 450);
+
+  const compactViewport = harness.mediaQuery("(max-width: 720px)");
+  compactViewport.matches = true;
+  compactViewport.emit();
   assert.equal(visibleCharacters().length, frames.length);
   assert.equal(harness.pending().length, 0);
+  compactViewport.matches = false;
+  compactViewport.emit();
+  assert.equal(visibleCharacters().length, 0);
+  assert.equal(harness.pending()[0].delay, 450);
 
   stop();
   stop();
   assert.equal(placeholder.removed, true);
   assert.equal(harness.observer().disconnected, true);
   assert.equal(reducedMotion.listeners.size, 0);
+  assert.equal(compactViewport.listeners.size, 0);
   assert.equal(harness.hostListeners.size, 0);
   assert.equal(harness.visibilityListeners.size, 0);
   assert.equal(harness.pending().length, 0);
