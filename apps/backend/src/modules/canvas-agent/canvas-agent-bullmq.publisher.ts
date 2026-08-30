@@ -87,5 +87,6 @@ export function canvasAgentRedisConnectionFromUrl(redisUrl: string) {
     password: url.password ? decodeURIComponent(url.password) : undefined,
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: url.protocol === "rediss:" ? {} : undefined,
+    keepAlive: 30_000,
   };
 }

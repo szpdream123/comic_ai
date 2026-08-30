@@ -15,7 +15,6 @@ const [
   { createDevDb, runWithDatabaseContext },
   { createBullMQGenerationPublisher },
   { dispatchGenerationOutboxBatch },
-  { markGenerationQueueStagePublished, reserveGenerationQueueStageForPublish },
   { loadGenerationQueueConfig },
   { createGenerationOutboxWakeSignal, generationOutboxWakeChannel },
   { generationOutboxDispatcherHeartbeatKey, generationOutboxDispatcherHeartbeatTtlMs },
@@ -24,7 +23,6 @@ const [
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-outbox.dispatcher.ts"),
-    import("../apps/backend/src/modules/model-gateway/generation-queue-shard.store.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-outbox-wakeup.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-outbox-heartbeat.ts"),
@@ -99,10 +97,6 @@ try {
         retryDelayMs: config.outbox.retryDelayMs,
         config,
         publisher,
-        shardStore: {
-          reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
-          markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
-        },
       });
     });
     await writeDispatcherHeartbeatWithRetry();
@@ -158,6 +152,7 @@ function redisConnectionFromUrl(redisUrl) {
     password: url.password ? decodeURIComponent(url.password) : undefined,
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: url.protocol === "rediss:" ? {} : undefined,
+    keepAlive: 30_000,
     connectTimeout: 2_000,
     commandTimeout: 5_000,
     maxRetriesPerRequest: 1,

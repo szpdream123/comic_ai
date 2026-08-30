@@ -37,7 +37,7 @@ test("generation pipeline audit is read-only and aggregates findings", async () 
   assert.equal(statements.some(({ sql }) => /\b(?:INSERT|UPDATE|DELETE|ALTER|DROP)\b/i.test(sql)), false);
   assert.match(statements[0].sql, /active_occurrences > 0/);
   assert.match(statements[1].sql, /active_occurrences = 0/);
-  assert.match(statements[3].sql, /generation_queue_stage_assignments/);
+  assert.doesNotMatch(statements[3].sql, /generation_queue_stage_assignments/);
   assert.match(statements[6].sql, /ambiguous_provider_submission_terminal/);
   assert.match(statements[6].sql, /IN \('408', '429'\)/);
   assert.match(statements[7].sql, /external_submission_terminal_timeout/);

@@ -581,60 +581,6 @@ describe("generation artifact recovery", () => {
     );
   });
 
-  it("uses distinct shard assignments for repeated retry-finalize outbox events", async () => {
-    const taskId = "50000000-0000-4000-8000-000000000035";
-    const eventIds = [
-      "90000000-0000-4000-8000-000000000035",
-      "90000000-0000-4000-8000-000000000036",
-    ];
-    const reservedInputs: Array<Record<string, unknown>> = [];
-
-    for (const eventId of eventIds) {
-      const event = generationFinalizeOutboxEvent(eventId, taskId);
-      await dispatchClaimedGenerationOutboxEvents({
-        async query() {
-          return { rows: [{ input_snapshot_json: {} }] };
-        },
-      } as never, {
-        now: new Date("2026-07-24T12:00:00.000Z"),
-        events: [event],
-        config: loadGenerationQueueConfig({ GENERATION_QUEUE_SHARDING_ENABLED: "true" }),
-        publisher: { async add() {} },
-        shardStore: {
-          async reserve(_db, input) {
-            reservedInputs.push(input as unknown as Record<string, unknown>);
-            return {
-              ...input,
-              routeCode: "rfinalize",
-              shardId: "70000000-0000-4000-8000-000000000005",
-              shardNo: 0,
-              queueName: "generation-image-fetch-rfinalize-000",
-              capacity: 600,
-              rateLimitMax: 5,
-              rateLimitDurationMs: 1000,
-              admittedCount: 1,
-              shardState: "accepting" as const,
-              assignmentStatus: "publishing" as const,
-            };
-          },
-          async markPublished() {
-            return null;
-          },
-        },
-      }, {
-        async publish() {},
-        async markProcessed() {
-          return event;
-        },
-      });
-    }
-
-    assert.deepEqual(
-      reservedInputs.map((input) => input.assignmentKey),
-      eventIds.map((eventId) => `generation.task.finalize_requested:${taskId}:fetch:${eventId}`),
-    );
-  });
-
   it("uses distinct persist jobs for repeated retry-finalize recovery", async () => {
     const jobIds: string[] = [];
     const config = loadGenerationQueueConfig({});

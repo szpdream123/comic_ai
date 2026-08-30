@@ -11,13 +11,19 @@ export interface GenerationQueueConfig {
   workersEnabled: boolean;
   outboxDispatcherEnabled: boolean;
   queues: {
-    submitImage: string;
-    submitVideo: string;
-    pollImage: string;
-    pollVideo: string;
-    pollAudio: string;
-    finalizeArtifact: string;
-    deadLetter: string;
+    submit: string;
+    poll: string;
+    result: string;
+  };
+  queueNames: {
+    submit: string[];
+    poll: string[];
+    result: string[];
+  };
+  queueLimits: {
+    maxPendingJobs: number;
+    dequeueRateLimitMax: number;
+    dequeueRateLimitDurationMs: number;
   };
   finalize: {
     artifact: GenerationFinalizeQueueConfig;
@@ -35,16 +41,6 @@ export interface GenerationQueueConfig {
     dispatchIntervalMs: number;
     retryDelayMs: number;
     membershipQuantum: number;
-  };
-  sharding: {
-    enabled: boolean;
-    capacity: number;
-    rateLimitMax: number;
-    rateLimitDurationMs: number;
-    reopenThreshold: number;
-    maxActiveShardsPerStage: number;
-    workerQueuesPerProcess: number;
-    publishConcurrency: number;
   };
   repair: {
     staleDispatchMs: number;
@@ -137,18 +133,16 @@ export function loadGenerationQueueConfig(
     artifactFinalizeConcurrency,
     1_000,
   );
-  const shardCapacity = parsePositiveInteger(
-    env.GENERATION_QUEUE_SHARD_CAPACITY,
+  const submitQueue = readString(env.GENERATION_SUBMIT_QUEUE) || "generation-submit";
+  const pollQueue = readString(env.GENERATION_POLL_QUEUE) || "generation-poll";
+  const resultQueue = readString(env.GENERATION_RESULT_QUEUE) || "generation-result";
+  const submitQueueCount = parsePositiveInteger(env.GENERATION_SUBMIT_QUEUE_COUNT, 1, 32);
+  const pollQueueCount = parsePositiveInteger(env.GENERATION_POLL_QUEUE_COUNT, 1, 32);
+  const resultQueueCount = parsePositiveInteger(env.GENERATION_RESULT_QUEUE_COUNT, 1, 32);
+  const maxPendingJobs = parsePositiveInteger(
+    env.GENERATION_QUEUE_MAX_PENDING_JOBS,
     600,
     100_000,
-  );
-  const shardReopenThreshold = Math.min(
-    parsePositiveInteger(
-      env.GENERATION_QUEUE_SHARD_REOPEN_THRESHOLD,
-      300,
-      99_999,
-    ),
-    Math.max(0, shardCapacity - 1),
   );
   return {
     redisUrl: readString(env.REDIS_URL) || "redis://127.0.0.1:6379/0",
@@ -157,14 +151,27 @@ export function loadGenerationQueueConfig(
     workersEnabled: isEnabled(env.BULLMQ_WORKERS_ENABLED),
     outboxDispatcherEnabled: isEnabled(env.BULLMQ_OUTBOX_DISPATCHER_ENABLED),
     queues: {
-      submitImage: readString(env.GENERATION_SUBMIT_IMAGE_QUEUE) || "generation-submit-image",
-      submitVideo: readString(env.GENERATION_SUBMIT_VIDEO_QUEUE) || "generation-submit-video",
-      pollImage: readString(env.GENERATION_POLL_IMAGE_QUEUE) || "generation-poll-image",
-      pollVideo: readString(env.GENERATION_POLL_VIDEO_QUEUE) || "generation-poll-video",
-      pollAudio: readString(env.GENERATION_POLL_AUDIO_QUEUE) || "generation-poll-audio",
-      finalizeArtifact:
-        readString(env.GENERATION_FINALIZE_ARTIFACT_QUEUE) || "generation-finalize-artifact",
-      deadLetter: readString(env.GENERATION_DEAD_LETTER_QUEUE) || "generation-dead-letter",
+      submit: submitQueue,
+      poll: pollQueue,
+      result: resultQueue,
+    },
+    queueNames: {
+      submit: fixedQueueNames(submitQueue, submitQueueCount),
+      poll: fixedQueueNames(pollQueue, pollQueueCount),
+      result: fixedQueueNames(resultQueue, resultQueueCount),
+    },
+    queueLimits: {
+      maxPendingJobs,
+      dequeueRateLimitMax: parsePositiveInteger(
+        env.GENERATION_QUEUE_DEQUEUE_RATE_LIMIT_MAX,
+        10,
+        10_000,
+      ),
+      dequeueRateLimitDurationMs: parsePositiveInteger(
+        env.GENERATION_QUEUE_DEQUEUE_RATE_LIMIT_DURATION_MS,
+        1_000,
+        3_600_000,
+      ),
     },
     finalize: {
       artifact: {
@@ -252,36 +259,6 @@ export function loadGenerationQueueConfig(
         env.GENERATION_OUTBOX_MEMBERSHIP_QUANTUM,
         2,
         10,
-      ),
-    },
-    sharding: {
-      enabled: isEnabled(env.GENERATION_QUEUE_SHARDING_ENABLED),
-      capacity: shardCapacity,
-      rateLimitMax: parsePositiveInteger(
-        env.GENERATION_QUEUE_SHARD_RATE_LIMIT_MAX,
-        5,
-        10_000,
-      ),
-      rateLimitDurationMs: parsePositiveInteger(
-        env.GENERATION_QUEUE_SHARD_RATE_LIMIT_DURATION_MS,
-        1_000,
-        3_600_000,
-      ),
-      reopenThreshold: shardReopenThreshold,
-      maxActiveShardsPerStage: parsePositiveInteger(
-        env.GENERATION_MAX_ACTIVE_SHARDS_PER_STAGE,
-        256,
-        10_000,
-      ),
-      workerQueuesPerProcess: parsePositiveInteger(
-        env.GENERATION_WORKER_QUEUES_PER_PROCESS,
-        16,
-        1_000,
-      ),
-      publishConcurrency: parsePositiveInteger(
-        env.GENERATION_DISPATCH_PUBLISH_CONCURRENCY,
-        32,
-        1_000,
       ),
     },
     repair: {
@@ -376,6 +353,33 @@ export function loadGenerationQueueConfig(
       },
     },
   };
+}
+
+export type GenerationQueueStage = "submit" | "poll" | "result";
+
+export function selectGenerationQueue(
+  config: GenerationQueueConfig,
+  stage: GenerationQueueStage,
+  routingKey: string,
+) {
+  const queues = config.queueNames[stage];
+  return queues[stableQueueIndex(routingKey, queues.length)];
+}
+
+function fixedQueueNames(baseName: string, count: number) {
+  if (count === 1) return [baseName];
+  return Array.from(
+    { length: count },
+    (_, index) => `${baseName}-${String(index + 1).padStart(3, "0")}`,
+  );
+}
+
+function stableQueueIndex(value: string, count: number) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash * 31) + value.charCodeAt(index)) >>> 0;
+  }
+  return hash % count;
 }
 
 function resolveWorkerEnvironment(env: NodeJS.ProcessEnv): "production" | "local" | "staging" | undefined {

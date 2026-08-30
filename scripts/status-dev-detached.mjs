@@ -29,21 +29,13 @@ const supervisorProcess = readWindowsProcess(pid);
 const alive = isProjectProcess(supervisorProcess, process.cwd(), "run-creator-dev-stack.mjs");
 const listenerPid = findListenerPid(port);
 const listenerProcess = listenerPid ? readWindowsProcess(listenerPid) : null;
-const listening = isProjectProcess(listenerProcess, process.cwd(), "phone-auth-dev-server");
+const listening = isProjectProcess(listenerProcess, process.cwd(), "run-comic-ai-shared-runtime");
 const children = alive ? listWindowsChildProcesses(pid) : [];
 const expectedServices = [
-  "run-phone-auth-dev-server.mjs",
+  "run-comic-ai-shared-runtime.mjs",
 ];
 if (isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true")) {
   expectedServices.push("run-media-crawler-api.mjs");
-}
-if (generationQueueEnabled()) {
-  expectedServices.push(
-    "run-generation-outbox-dispatcher.mjs",
-    "run-generation-queue-maintenance.mjs",
-    "run-generation-video-worker.mjs",
-    "run-canvas-agent-worker.mjs",
-  );
 }
 const missingServices = expectedServices.filter(
   (marker) => !children.some((child) => commandIncludes(child, marker)),

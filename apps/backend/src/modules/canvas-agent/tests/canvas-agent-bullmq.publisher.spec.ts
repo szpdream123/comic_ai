@@ -36,6 +36,7 @@ test("Canvas Agent BullMQ configuration validates queue names and REDIS_URL", ()
       password: "secret",
       db: 2,
       tls: {},
+      keepAlive: 30_000,
     },
   );
 });

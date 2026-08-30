@@ -483,14 +483,8 @@ import { recordGenerationProviderWebhook } from "../modules/model-gateway/genera
 import { inspectGenerationPlatformMetrics } from "../modules/model-gateway/generation-platform-metrics.service.ts";
 import { recordTaskCenterQuery } from "../modules/model-gateway/task-center-observability.ts";
 import { taskCenterProviderDiagnosticsSql } from "../modules/model-gateway/task-center-provider-diagnostics.ts";
-import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
+import { loadGenerationQueueConfig, selectGenerationQueue } from "../modules/model-gateway/generation-queue.config.ts";
 import { scheduleGenerationProviderPoll } from "../modules/model-gateway/generation-due-poll.service.ts";
-import {
-  listGenerationQueueShards,
-  markGenerationQueueStagePublished,
-  releaseGenerationQueueStage,
-  reserveGenerationQueueStageForPublish,
-} from "../modules/model-gateway/generation-queue-shard.store.ts";
 import { generationTimeoutMsFor } from "../modules/model-gateway/generation-timeout.policy.ts";
 import {
   createBullMQGenerationQueueHealthService,
@@ -4856,8 +4850,8 @@ async function estimateCanvasGenerationBatchItemCredits(
       dispatchPolicy,
       parameters: rawParameters,
       fallbackQueueName: node.mediaKind === "video"
-        ? queueConfig.queues.submitVideo
-        : queueConfig.queues.submitImage,
+        ? queueConfig.queues.submit
+        : queueConfig.queues.submit,
     });
     itemCredits[node.nodeKey] = generationCostFromModelConfig(config.cost, modelConfig, modelConfig?.mediaType === "image"
       ? { ...rawParameters, ...execution.parameters }
@@ -5610,38 +5604,14 @@ async function rerouteAdminGenerationQueueJob(
   config: ReturnType<typeof loadGenerationQueueConfig>,
   input: GenerationQueueJobRerouteInput,
 ) {
-  const taskId = readString(input.sourceJobData.taskId);
-  if (!isUuid(taskId)) return null;
-  const sourceShard = await queryOne<{
-    media_type: "image" | "video" | "audio";
-    stage: "submit" | "poll" | "fetch" | "persist";
-    route_key: string;
-  }>(
-    db,
-    `
-      SELECT media_type, stage, route_key
-      FROM generation_queue_shards
-      WHERE queue_name = $1
-      LIMIT 1
-    `,
-    [input.sourceQueueName],
-  );
-  if (!sourceShard) return null;
-
-  const assignment = await reserveGenerationQueueStageForPublish(db, {
-    assignmentKey: `generation.admin:${input.action}:${input.targetJobId}`,
-    taskId,
-    mediaType: sourceShard.media_type,
-    stage: sourceShard.stage,
-    routeKey: sourceShard.route_key,
-    redisJobId: input.targetJobId,
-    now: new Date(),
-    maxActiveShardsPerStage: config.sharding.maxActiveShardsPerStage,
-    reopenThreshold: config.sharding.reopenThreshold,
-  });
+  void db;
+  const source = input.sourceJobName;
+  const taskId = readString(input.sourceJobData.taskId) || input.sourceJobId;
   return {
-    queueName: assignment.queueName,
-    queueAssignmentKey: assignment.assignmentKey,
+    queueName: source.includes(".poll") ? selectGenerationQueue(config, "poll", taskId)
+      : source.includes(".finalize") || source.includes(".fetch") || source.includes(".persist")
+        ? selectGenerationQueue(config, "result", taskId)
+        : selectGenerationQueue(config, "submit", taskId),
   };
 }
 
@@ -7711,12 +7681,6 @@ async function enqueueVideoFinalizeIfProviderResultReady(
             WHERE event.event_type = 'generation.task.finalize_requested'
               AND event.payload_json->>'taskId' = tasks.id::text
               AND event.status IN ('pending', 'processing', 'failed')
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM generation_queue_stage_assignments assignment
-            WHERE assignment.task_id = tasks.id
-              AND assignment.stage IN ('fetch', 'persist')
-              AND assignment.status IN ('publishing', 'admitted')
           )
         RETURNING id
       `,
@@ -10625,8 +10589,8 @@ async function createGenerationTask(
     : undefined;
   const generationQueueConfig = loadGenerationQueueConfig(input.env);
   const fallbackSubmitQueueName = input.kind === "video"
-    ? generationQueueConfig.queues.submitVideo
-    : generationQueueConfig.queues.submitImage;
+    ? generationQueueConfig.queues.submit
+    : generationQueueConfig.queues.submit;
   const rawParameters = input.body.parameters && typeof input.body.parameters === "object"
     ? input.body.parameters as Record<string, unknown>
     : {};
@@ -21132,15 +21096,7 @@ export function createPhoneAuthDevServer(
         }
         const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
         const queueHealth = options.generationQueueHealthService ??
-          createBullMQGenerationQueueHealthService(
-            generationQueueConfig,
-            async () => (await listGenerationQueueShards(db)).map((shard) => ({
-              role: `${shard.mediaType}_${shard.stage}`,
-              name: shard.queueName,
-              state: shard.state,
-              admittedCount: shard.admittedCount,
-            })),
-          );
+          createBullMQGenerationQueueHealthService(generationQueueConfig);
         try {
           const healthSnapshot = await queueHealth.inspect();
           if (healthSnapshot.status === "unavailable") {
@@ -35742,15 +35698,7 @@ export function createPhoneAuthDevServer(
         ) {
           const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
           const queueHealth = options.generationQueueHealthService ??
-            createBullMQGenerationQueueHealthService(
-              generationQueueConfig,
-              async () => (await listGenerationQueueShards(db)).map((shard) => ({
-                role: `${shard.mediaType}_${shard.stage}`,
-                name: shard.queueName,
-                state: shard.state,
-                admittedCount: shard.admittedCount,
-              })),
-            );
+            createBullMQGenerationQueueHealthService(generationQueueConfig);
           let healthSnapshot: Awaited<ReturnType<typeof queueHealth.inspect>>;
           try {
             const failedSampleSize = Math.min(
@@ -35888,33 +35836,17 @@ export function createPhoneAuthDevServer(
               createBullMQGenerationQueueJobOpsService(
                 generationQueueConfig,
                 (input) => validateGenerationQueueReplay(db, input),
-                async () => {
-                  const result = await db.query<{ queue_name: string }>(
-                    "SELECT queue_name FROM generation_queue_shards",
-                  );
-                  return result.rows.map((row) => row.queue_name);
-                },
+                async () => [
+                  ...generationQueueConfig.queueNames.submit,
+                  ...generationQueueConfig.queueNames.poll,
+                  ...generationQueueConfig.queueNames.result,
+                ],
                 {
                   reroute: (input) => rerouteAdminGenerationQueueJob(
                     db,
                     generationQueueConfig,
                     input,
                   ),
-                  async markPublished(assignmentKey, redisJobId) {
-                    await markGenerationQueueStagePublished(db, {
-                      assignmentKey,
-                      redisJobId,
-                      now: new Date(),
-                    });
-                  },
-                  async release(assignmentKey, reason) {
-                    await releaseGenerationQueueStage(db, {
-                      assignmentKey,
-                      reason,
-                      now: new Date(),
-                      reopenThreshold: generationQueueConfig.sharding.reopenThreshold,
-                    });
-                  },
                 },
               );
             const queueResult = await queueJobOps.operate({

@@ -5,10 +5,10 @@ import { describe, it } from "node:test";
 import type { OutboxEventRecord } from "../../shared/outbox/outbox-dispatch-repair.service.ts";
 import {
   assertGenerationQueueName,
+  assertGenerationQueueCapacity,
   buildGenerationBullMQJob,
   confirmGenerationBullMQJob,
   publishGenerationBullMQJobWithConfirmation,
-  publishGenerationDeadLetter,
   publishGenerationTaskCreatedToBullMQ,
 } from "../generation-bullmq.publisher.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
@@ -16,7 +16,7 @@ import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 describe("generation BullMQ publisher", () => {
   it("confirms the exact published job is still present", async () => {
     const confirmed = await confirmGenerationBullMQJob(
-      "generation-submit-video",
+      "generation-submit",
       "job-1",
       async (jobId) => ({ id: jobId }),
     );
@@ -25,11 +25,11 @@ describe("generation BullMQ publisher", () => {
 
   it("keeps publication retryable when Redis cannot confirm the job", async () => {
     await assert.rejects(
-      () => confirmGenerationBullMQJob("generation-submit-video", "job-2", async () => undefined),
-      /generation_queue_publish_unconfirmed:generation-submit-video:job-2/,
+      () => confirmGenerationBullMQJob("generation-submit", "job-2", async () => undefined),
+      /generation_queue_publish_unconfirmed:generation-submit:job-2/,
     );
     await assert.rejects(
-      () => confirmGenerationBullMQJob("generation-submit-video", "job-3", async () => {
+      () => confirmGenerationBullMQJob("generation-submit", "job-3", async () => {
         throw new Error("ECONNRESET");
       }),
       /ECONNRESET/,
@@ -40,7 +40,7 @@ describe("generation BullMQ publisher", () => {
     let addCalls = 0;
     let getJobCalls = 0;
     const job = await publishGenerationBullMQJobWithConfirmation({
-      queueName: "generation-submit-video",
+      queueName: "generation-submit",
       retryDelayMs: 0,
       add: async () => {
         addCalls += 1;
@@ -58,8 +58,9 @@ describe("generation BullMQ publisher", () => {
 
   it("bounds connected Redis commands within the publish cancellation fence", async () => {
     const source = await readFile(new URL("../generation-bullmq.publisher.ts", import.meta.url), "utf8");
-    assert.match(source, /connectTimeout:\s*2_000/);
-    assert.match(source, /commandTimeout:\s*5_000/);
+    assert.match(source, /connectTimeout:\s*3_000/);
+    assert.match(source, /commandTimeout:\s*10_000/);
+    assert.match(source, /keepAlive:\s*30_000/);
     assert.match(source, /maxRetriesPerRequest:\s*1/);
   });
 
@@ -78,21 +79,35 @@ describe("generation BullMQ publisher", () => {
     );
   });
 
+  it("rejects a new job when its physical queue has reached its pending-job capacity", () => {
+    assert.throws(
+      () => assertGenerationQueueCapacity("generation-submit-001", {
+        waiting: 400,
+        delayed: 100,
+        active: 100,
+      }, 600),
+      /generation_queue_capacity_reached:generation-submit-001/,
+    );
+    assert.doesNotThrow(() => assertGenerationQueueCapacity("generation-submit-001", {
+      waiting: 599,
+    }, 600));
+  });
+
   it("builds a stable submit job from generation task outbox payload", () => {
     const config = loadGenerationQueueConfig({
       BULLMQ_QUEUE_PREFIX: "comic-ai-test",
-      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit",
     });
     const event = generationTaskCreatedEvent({
       taskId: "task-1",
       mediaType: "video",
-      queueName: "generation-submit-video",
+      queueName: "generation-submit",
     });
 
     const job = buildGenerationBullMQJob(event, config);
 
     assert.deepEqual(job, {
-      queueName: "generation-submit-video",
+      queueName: "generation-submit",
       jobName: "generation.task.created",
       jobId: "generation.task.created__task-1__submit__outbox-1",
       data: {
@@ -125,7 +140,7 @@ describe("generation BullMQ publisher", () => {
 
   it("publishes the built job to the selected BullMQ queue", async () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit",
     });
     const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
     const publisher = {
@@ -138,7 +153,7 @@ describe("generation BullMQ publisher", () => {
       generationTaskCreatedEvent({
         taskId: "task-2",
         mediaType: "video",
-        queueName: "generation-submit-video",
+        queueName: "generation-submit",
       }),
       {
         config,
@@ -147,7 +162,7 @@ describe("generation BullMQ publisher", () => {
     );
 
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-submit-video");
+    assert.equal(added[0]?.queueName, "generation-submit");
     assert.equal(added[0]?.name, "generation.task.created");
     assert.deepEqual(added[0]?.data, {
       outboxEventId: "outbox-1",
@@ -162,12 +177,12 @@ describe("generation BullMQ publisher", () => {
 
   it("applies membership queue priority from the generation outbox payload", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit",
     });
     const event = generationTaskCreatedEvent({
       taskId: "task-priority-1",
       mediaType: "video",
-      queueName: "generation-submit-video",
+      queueName: "generation-submit",
       membershipPriority: true,
       queuePriority: 1,
       priorityReason: "professional_membership_model_family_priority",
@@ -192,7 +207,7 @@ describe("generation BullMQ publisher", () => {
 
   it("builds a persist-only finalize job isolated by its outbox recovery wave", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
     });
 
     const job = buildGenerationBullMQJob(
@@ -206,7 +221,7 @@ describe("generation BullMQ publisher", () => {
       config,
     );
 
-    assert.equal(job.queueName, "generation-finalize-artifact");
+    assert.equal(job.queueName, "generation-result");
     assert.equal(job.jobName, "generation.task.finalize_requested");
     assert.equal(job.jobId, "generation.task.finalize_requested__task-3__retry_persist_asset__outbox-1");
     assert.deepEqual(job.data, {
@@ -224,7 +239,7 @@ describe("generation BullMQ publisher", () => {
 
   it("builds retry finalize jobs with the outbox id so failed stale jobs do not block compensation", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
     });
 
     const job = buildGenerationBullMQJob(
@@ -237,34 +252,34 @@ describe("generation BullMQ publisher", () => {
       config,
     );
 
-    assert.equal(job.queueName, "generation-finalize-artifact");
+    assert.equal(job.queueName, "generation-result");
     assert.equal(job.jobName, "generation.task.finalize_requested");
     assert.equal(job.jobId, "generation.task.finalize_requested__task-4__retry_finalize__outbox-1");
   });
 
   it("preserves explicit persist stage and dynamic shard queue for finalize jobs", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
     });
     const job = buildGenerationBullMQJob(
       generationTaskCreatedEvent({
         taskId: "task-persist-stage-1",
         artifactKind: "video",
         artifactStage: "persist",
-        queueName: "generation-video-persist-rabc123-001",
+        queueName: "generation-result",
         finalizeMode: "retry_finalize",
       }, "generation.task.finalize_requested"),
       config,
     );
 
-    assert.equal(job.queueName, "generation-video-persist-rabc123-001");
+    assert.equal(job.queueName, "generation-result");
     assert.equal(job.data.artifactStage, "persist");
     assert.equal(job.data.finalizeMode, "retry_finalize");
   });
 
   it("builds provider poll recovery jobs on the poll queue without a new submission", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+      GENERATION_POLL_VIDEO_QUEUE: "generation-poll",
     });
 
     const job = buildGenerationBullMQJob(
@@ -272,7 +287,7 @@ describe("generation BullMQ publisher", () => {
       config,
     );
 
-    assert.equal(job.queueName, "generation-poll-video");
+    assert.equal(job.queueName, "generation-poll");
     assert.equal(job.jobName, "generation.video.poll.repair");
     assert.equal(job.jobId, "generation.video.poll__task-poll-1__1__outbox-1");
     assert.deepEqual(job.data, {
@@ -288,7 +303,7 @@ describe("generation BullMQ publisher", () => {
 
   it("routes image poll recovery jobs to the dedicated image queue", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_POLL_IMAGE_QUEUE: "generation-poll-image",
+      GENERATION_POLL_IMAGE_QUEUE: "generation-poll",
     });
 
     const job = buildGenerationBullMQJob(
@@ -296,14 +311,14 @@ describe("generation BullMQ publisher", () => {
         taskId: "task-image-poll-1",
         mediaType: "image",
         modelCode: "gpt-image-2-cn",
-        queueName: "generation-submit-image",
+        queueName: "generation-submit",
         providerExecutor: "gpt-image-2",
         pollAttempt: 2,
       }, "generation.task.poll_requested"),
       config,
     );
 
-    assert.equal(job.queueName, "generation-poll-image");
+    assert.equal(job.queueName, "generation-poll");
     assert.equal(job.jobName, "generation.image.poll.repair");
     assert.equal(job.jobId, "generation.image.poll__task-image-poll-1__2__outbox-1");
     assert.equal(job.data.mediaType, "image");
@@ -312,7 +327,7 @@ describe("generation BullMQ publisher", () => {
 
   it("routes audio poll recovery jobs to the dedicated audio queue", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_POLL_AUDIO_QUEUE: "generation-poll-audio",
+      GENERATION_POLL_AUDIO_QUEUE: "generation-poll",
     });
 
     const job = buildGenerationBullMQJob(
@@ -320,14 +335,14 @@ describe("generation BullMQ publisher", () => {
         taskId: "task-audio-poll-1",
         mediaType: "audio",
         modelCode: "qwen3-tts",
-        queueName: "generation-submit-audio",
+        queueName: "generation-submit",
         providerExecutor: "aliyun-bailian-audio",
         pollAttempt: 2,
       }, "generation.task.poll_requested"),
       config,
     );
 
-    assert.equal(job.queueName, "generation-poll-audio");
+    assert.equal(job.queueName, "generation-poll");
     assert.equal(job.jobName, "generation.audio.poll.repair");
     assert.equal(job.jobId, "generation.audio.poll__task-audio-poll-1__2__outbox-1");
     assert.equal(job.data.mediaType, "audio");
@@ -354,7 +369,7 @@ describe("generation BullMQ publisher", () => {
 
   it("uses an admin redispatch token to avoid stale BullMQ job deduplication", () => {
     const config = loadGenerationQueueConfig({
-      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit",
     });
 
     const job = buildGenerationBullMQJob(
@@ -366,55 +381,6 @@ describe("generation BullMQ publisher", () => {
     assert.equal(job.data.dispatchToken, "ops-requeue-1");
   });
 
-  it("writes an exhausted job snapshot to the dead-letter queue", async () => {
-    const config = loadGenerationQueueConfig({});
-    const added: Array<{ queueName: string; name: string; data: Record<string, unknown>; options: unknown }> = [];
-
-    const result = await publishGenerationDeadLetter({
-      sourceQueueName: config.queues.pollVideo,
-      sourceJobId: "poll-job-1",
-      sourceJobName: "generation.video.poll",
-      sourceJobData: { taskId: "task-dlq-1", pollAttempt: 4 },
-      sourceJobOptions: {
-        attempts: 3,
-        backoff: { type: "exponential", delay: 5000 },
-        removeOnFail: { age: 604800, count: 50000 },
-      },
-      failedReason: "provider timeout",
-      attemptsMade: 3,
-      failedAt: new Date("2026-07-21T00:00:00.000Z"),
-    }, {
-      config,
-      publisher: {
-        async add(queueName, name, data, options) {
-          added.push({ queueName, name, data, options });
-        },
-      },
-    });
-
-    assert.deepEqual(result, {
-      queueName: "generation-dead-letter",
-      jobId: "generation.dead_letter__generation-poll-video__poll-job-1",
-    });
-    assert.equal(added[0]?.queueName, "generation-dead-letter");
-    assert.equal(added[0]?.name, "generation.dead_letter");
-    assert.deepEqual(added[0]?.data, {
-      sourceQueueName: "generation-poll-video",
-      sourceJobId: "poll-job-1",
-      sourceJobName: "generation.video.poll",
-      sourceJobData: { taskId: "task-dlq-1", pollAttempt: 4 },
-      sourceJobOptions: {
-        attempts: 3,
-        backoff: { type: "exponential", delay: 5000 },
-        removeOnComplete: undefined,
-        removeOnFail: { age: 604800, count: 50000 },
-        priority: undefined,
-      },
-      failedReason: "provider timeout",
-      attemptsMade: 3,
-      failedAt: "2026-07-21T00:00:00.000Z",
-    });
-  });
 });
 
 function generationTaskCreatedEvent(
@@ -430,7 +396,7 @@ function generationTaskCreatedEvent(
       taskId: "task-1",
       mediaType: "video",
       modelCode: "seedance-i2v-pro",
-      queueName: "generation-submit-video",
+      queueName: "generation-submit",
       providerExecutor: "seedance",
       ...payload,
     },

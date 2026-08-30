@@ -93,8 +93,6 @@ interface GenerationQueueHealthServiceDeps {
   config: GenerationQueueConfig;
   redis: RedisHealthClient;
   queueFactory(queueName: string): QueueHealthClient;
-  /** Optional shard-directory reader. When present, its queue names are inspected in addition to the DLQ. */
-  queueDiscovery?: () => Promise<Array<{ role: string; name: string; state?: string; admittedCount?: number }>>;
 }
 
 const queueHealthRetryDelayMs = 75;
@@ -129,7 +127,7 @@ export function createGenerationQueueHealthService(
       const now = new Date(inspectedAt);
       const [outboxDispatcher, queues] = await Promise.all([
         inspectOutboxDispatcher(deps.redis, deps.config, now),
-        Promise.all((await resolveQueueTargets(deps)).map((target) =>
+        Promise.all(configuredQueueTargets(deps.config).map((target) =>
           inspectQueueWithRetry({
             target,
             queueFactory: deps.queueFactory,
@@ -221,7 +219,6 @@ async function inspectOutboxDispatcher(
 
 export function createBullMQGenerationQueueHealthService(
   config: GenerationQueueConfig,
-  queueDiscovery?: () => Promise<Array<{ role: string; name: string }>>,
 ) {
   const redis = new Redis(redisHealthConnectionFromUrl(config.redisUrl));
   redis.on("error", () => undefined);
@@ -230,7 +227,6 @@ export function createBullMQGenerationQueueHealthService(
     ...createGenerationQueueHealthService({
       config,
       redis,
-      queueDiscovery,
       queueFactory: (queueName) =>
         new Queue(queueName, {
           connection: redisHealthConnectionFromUrl(config.redisUrl),
@@ -355,38 +351,16 @@ async function inspectQueueWithRetry(input: Omit<Parameters<typeof inspectQueue>
   throw new Error("queue_health_retry_exhausted");
 }
 
-async function resolveQueueTargets(deps: GenerationQueueHealthServiceDeps) {
-  if (deps.queueDiscovery) {
-    try {
-      const discovered = await deps.queueDiscovery();
-      const targets = discovered
-        .filter((target) => target && typeof target.name === "string" && target.name.trim())
-        .filter((target) => target.state !== "draining" || Number(target.admittedCount) > 0)
-        .map((target) => ({ role: target.role?.trim() || "generation_shard", name: target.name.trim() }));
-      if (targets.length === 0) {
-        return configuredQueueTargets(deps.config);
-      }
-      const deadLetter = { role: "dead_letter", name: deps.config.queues.deadLetter };
-      const unique = new Map<string, { role: string; name: string }>();
-      for (const target of [...targets, deadLetter]) unique.set(target.name, target);
-      return [...unique.values()];
-    } catch {
-      // A transient directory read must not make the health endpoint fail; retain
-      // visibility of the configured queues until the next refresh succeeds.
-    }
-  }
-  return configuredQueueTargets(deps.config);
-}
-
 function configuredQueueTargets(config: GenerationQueueConfig) {
+  const queueNames = config.queueNames ?? {
+    submit: [config.queues.submit],
+    poll: [config.queues.poll],
+    result: [config.queues.result],
+  };
   return [
-    { role: "submit_image", name: config.queues.submitImage },
-    { role: "submit_video", name: config.queues.submitVideo },
-    { role: "poll_image", name: config.queues.pollImage },
-    { role: "poll_video", name: config.queues.pollVideo },
-    { role: "poll_audio", name: config.queues.pollAudio },
-    { role: "finalize_artifact", name: config.queues.finalizeArtifact },
-    { role: "dead_letter", name: config.queues.deadLetter },
+    ...queueNames.submit.map((name) => ({ role: "submit", name })),
+    ...queueNames.poll.map((name) => ({ role: "poll", name })),
+    ...queueNames.result.map((name) => ({ role: "result", name })),
   ];
 }
 

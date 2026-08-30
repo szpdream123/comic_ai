@@ -37,7 +37,7 @@ export interface GenerationTaskFinalizeRequestedOutboxInput {
   credentialVersionRef?: string | null;
   storageBucket?: string | null;
   finalizeMode?: "retry_finalize" | "retry_persist_asset";
-  /** Optional explicit fetch/persist routing boundary for elastic shards. */
+  /** Optional explicit fetch/persist processing boundary. */
   artifactStage?: "fetch" | "persist";
   availableAt: Date;
 }
@@ -116,13 +116,6 @@ export async function appendGenerationTaskCreatedOutboxEvent(
           FROM outbox_lock
           WHERE status IN ('pending', 'processing', 'failed')
         )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM generation_queue_stage_assignments assignment
-            WHERE assignment.task_id = task_lock.id
-              AND assignment.stage = 'submit'
-              AND assignment.status IN ('publishing', 'admitted')
-          )
         UNION ALL
         SELECT NULL::uuid
         WHERE NOT EXISTS (SELECT 1 FROM task_lock)

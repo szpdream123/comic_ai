@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import { loadGenerationQueueConfig, selectGenerationQueue } from "../generation-queue.config.ts";
 import {
   generationPollMaxAttempts,
   generationTimeoutMsFor,
@@ -14,17 +14,20 @@ describe("generation queue config", () => {
 
     assert.equal(config.poll.video.intervalMs, 20_000);
     assert.equal(config.poll.video.maxAttempts, 540);
-    assert.equal(config.queues.pollImage, "generation-poll-image");
-    assert.equal(config.queues.pollAudio, "generation-poll-audio");
-    assert.deepEqual(config.sharding, {
-      enabled: false,
-      capacity: 600,
-      rateLimitMax: 5,
-      rateLimitDurationMs: 1000,
-      reopenThreshold: 300,
-      maxActiveShardsPerStage: 256,
-      workerQueuesPerProcess: 16,
-      publishConcurrency: 32,
+    assert.deepEqual(config.queues, {
+      submit: "generation-submit",
+      poll: "generation-poll",
+      result: "generation-result",
+    });
+    assert.deepEqual(config.queueNames, {
+      submit: ["generation-submit"],
+      poll: ["generation-poll"],
+      result: ["generation-result"],
+    });
+    assert.deepEqual(config.queueLimits, {
+      maxPendingJobs: 600,
+      dequeueRateLimitMax: 10,
+      dequeueRateLimitDurationMs: 1000,
     });
     assert.equal(config.poll.image.intervalMs, 20_000);
     assert.equal(config.poll.image.maxAttempts, 180);
@@ -100,11 +103,18 @@ describe("generation queue config", () => {
       GENERATION_POLL_VIDEO_CONCURRENCY: "40",
       GENERATION_POLL_VIDEO_RATE_LIMIT_MAX: "40",
       GENERATION_POLL_VIDEO_RATE_LIMIT_DURATION_MS: "1000",
-      GENERATION_POLL_IMAGE_QUEUE: "generation-poll-image-custom",
+      GENERATION_SUBMIT_QUEUE: "generation-submit-custom",
+      GENERATION_POLL_QUEUE: "generation-poll-custom",
+      GENERATION_RESULT_QUEUE: "generation-result-custom",
+      GENERATION_SUBMIT_QUEUE_COUNT: "2",
+      GENERATION_POLL_QUEUE_COUNT: "4",
+      GENERATION_RESULT_QUEUE_COUNT: "5",
+      GENERATION_QUEUE_MAX_PENDING_JOBS: "600",
+      GENERATION_QUEUE_DEQUEUE_RATE_LIMIT_MAX: "10",
+      GENERATION_QUEUE_DEQUEUE_RATE_LIMIT_DURATION_MS: "1000",
       GENERATION_POLL_IMAGE_CONCURRENCY: "30",
       GENERATION_POLL_IMAGE_RATE_LIMIT_MAX: "25",
       GENERATION_POLL_IMAGE_RATE_LIMIT_DURATION_MS: "1500",
-      GENERATION_POLL_AUDIO_QUEUE: "generation-poll-audio-custom",
       GENERATION_POLL_AUDIO_CONCURRENCY: "22",
       GENERATION_POLL_AUDIO_RATE_LIMIT_MAX: "18",
       GENERATION_POLL_AUDIO_RATE_LIMIT_DURATION_MS: "1700",
@@ -113,14 +123,6 @@ describe("generation queue config", () => {
       GENERATION_QUEUE_HEALTH_OLDEST_JOB_AGE_MS: "240000",
       GENERATION_POLL_RETRY_ATTEMPTS: "25",
       GENERATION_POLL_RETRY_BACKOFF_MS: "45000",
-      GENERATION_QUEUE_SHARDING_ENABLED: "true",
-      GENERATION_QUEUE_SHARD_CAPACITY: "600",
-      GENERATION_QUEUE_SHARD_RATE_LIMIT_MAX: "5",
-      GENERATION_QUEUE_SHARD_RATE_LIMIT_DURATION_MS: "1000",
-      GENERATION_QUEUE_SHARD_REOPEN_THRESHOLD: "300",
-      GENERATION_MAX_ACTIVE_SHARDS_PER_STAGE: "256",
-      GENERATION_WORKER_QUEUES_PER_PROCESS: "16",
-      GENERATION_DISPATCH_PUBLISH_CONCURRENCY: "32",
     });
 
     assert.equal(config.redisUrl, "redis://127.0.0.1:6379/0");
@@ -139,15 +141,15 @@ describe("generation queue config", () => {
       retryDelayMs: 45000,
       membershipQuantum: 3,
     });
-    assert.deepEqual(config.sharding, {
-      enabled: true,
-      capacity: 600,
-      rateLimitMax: 5,
-      rateLimitDurationMs: 1000,
-      reopenThreshold: 300,
-      maxActiveShardsPerStage: 256,
-      workerQueuesPerProcess: 16,
-      publishConcurrency: 32,
+    assert.deepEqual(config.queueNames, {
+      submit: ["generation-submit-custom-001", "generation-submit-custom-002"],
+      poll: ["generation-poll-custom-001", "generation-poll-custom-002", "generation-poll-custom-003", "generation-poll-custom-004"],
+      result: ["generation-result-custom-001", "generation-result-custom-002", "generation-result-custom-003", "generation-result-custom-004", "generation-result-custom-005"],
+    });
+    assert.deepEqual(config.queueLimits, {
+      maxPendingJobs: 600,
+      dequeueRateLimitMax: 10,
+      dequeueRateLimitDurationMs: 1000,
     });
     assert.deepEqual(config.repair, {
       staleDispatchMs: 180000,
@@ -174,14 +176,14 @@ describe("generation queue config", () => {
       concurrency: 40,
       limiter: { max: 40, durationMs: 1000 },
     });
-    assert.equal(config.queues.pollImage, "generation-poll-image-custom");
+    assert.equal(config.queues.poll, "generation-poll-custom");
     assert.deepEqual(config.poll.image, {
       intervalMs: 20_000,
       maxAttempts: 180,
       concurrency: 30,
       limiter: { max: 25, durationMs: 1500 },
     });
-    assert.equal(config.queues.pollAudio, "generation-poll-audio-custom");
+    assert.equal(config.queues.result, "generation-result-custom");
     assert.deepEqual(config.poll.audio, {
       intervalMs: 20_000,
       maxAttempts: 180,
@@ -204,5 +206,23 @@ describe("generation queue config", () => {
       userConcurrencyLimit: 20,
     });
     assert.equal(config.outbox.dispatchBatchSize, 20_000);
+  });
+
+  it("uses a fixed configured number of queues per generation stage", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_SUBMIT_QUEUE_COUNT: "3",
+      GENERATION_POLL_QUEUE_COUNT: "3",
+      GENERATION_RESULT_QUEUE_COUNT: "3",
+    });
+
+    assert.deepEqual(config.queueNames, {
+      submit: ["generation-submit-001", "generation-submit-002", "generation-submit-003"],
+      poll: ["generation-poll-001", "generation-poll-002", "generation-poll-003"],
+      result: ["generation-result-001", "generation-result-002", "generation-result-003"],
+    });
+    assert.equal(
+      selectGenerationQueue(config, "submit", "task-stable-route"),
+      selectGenerationQueue(config, "submit", "task-stable-route"),
+    );
   });
 });

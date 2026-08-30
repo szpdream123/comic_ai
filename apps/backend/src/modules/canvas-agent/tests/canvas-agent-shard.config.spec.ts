@@ -6,9 +6,9 @@ import {
   loadCanvasAgentShardConfig,
 } from "../canvas-agent-shard.config.ts";
 
-test("Canvas Agent shard configuration keeps a 16-shard ceiling", () => {
+test("Canvas Agent does not enable queue sharding by default", () => {
   assert.deepEqual(loadCanvasAgentShardConfig({}), {
-    enabled: true,
+    enabled: false,
     baseQueueName: "canvas-agent",
     shardCapacity: 100,
     maxActiveShards: 16,

@@ -15,14 +15,8 @@ import type { GenerationQueueConfig } from "./generation-queue.config.ts";
 import {
   createBullMQGenerationQueueJobOpsService,
   type GenerationQueueJobOpsService,
-  type GenerationQueueJobRerouteInput,
   type GenerationQueueReplayValidationInput,
 } from "./generation-queue-job-ops.service.ts";
-import {
-  markGenerationQueueStagePublished,
-  releaseGenerationQueueStage,
-  reserveGenerationQueueStageForPublish,
-} from "./generation-queue-shard.store.ts";
 
 export async function recoverGenerationQueueAdminCommands(
   db: SqlDatabase,
@@ -128,30 +122,6 @@ export function createGenerationQueueAdminRecoveryJobOps(
   return createBullMQGenerationQueueJobOpsService(
     config,
     (input) => validateGenerationQueueReplay(db, input),
-    async () => {
-      const result = await db.query<{ queue_name: string }>(
-        "SELECT queue_name FROM generation_queue_shards",
-      );
-      return result.rows.map((row) => row.queue_name);
-    },
-    {
-      reroute: (input) => rerouteAdminGenerationQueueJob(db, config, input),
-      async markPublished(assignmentKey, redisJobId) {
-        await markGenerationQueueStagePublished(db, {
-          assignmentKey,
-          redisJobId,
-          now: new Date(),
-        });
-      },
-      async release(assignmentKey, reason) {
-        await releaseGenerationQueueStage(db, {
-          assignmentKey,
-          reason,
-          now: new Date(),
-          reopenThreshold: config.sharding.reopenThreshold,
-        });
-      },
-    },
   );
 }
 
@@ -200,46 +170,6 @@ async function validateGenerationQueueReplay(
   return false;
 }
 
-async function rerouteAdminGenerationQueueJob(
-  db: SqlDatabase,
-  config: GenerationQueueConfig,
-  input: GenerationQueueJobRerouteInput,
-) {
-  const taskId = readString(input.sourceJobData.taskId);
-  if (!isUuid(taskId)) return null;
-  const sourceShard = await queryOne<{
-    media_type: "image" | "video" | "audio";
-    stage: "submit" | "poll" | "fetch" | "persist";
-    route_key: string;
-  }>(
-    db,
-    `
-      SELECT media_type, stage, route_key
-      FROM generation_queue_shards
-      WHERE queue_name = $1
-      LIMIT 1
-    `,
-    [input.sourceQueueName],
-  );
-  if (!sourceShard) return null;
-  const assignment = await reserveGenerationQueueStageForPublish(db, {
-    assignmentKey: `generation.admin:${input.action}:${input.targetJobId}`,
-    taskId,
-    mediaType: sourceShard.media_type,
-    stage: sourceShard.stage,
-    routeKey: sourceShard.route_key,
-    redisJobId: input.targetJobId,
-    now: new Date(),
-    maxActiveShardsPerStage: config.sharding.maxActiveShardsPerStage,
-    reopenThreshold: config.sharding.reopenThreshold,
-  });
-  return { queueName: assignment.queueName, queueAssignmentKey: assignment.assignmentKey };
-}
-
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

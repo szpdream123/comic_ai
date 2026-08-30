@@ -30,10 +30,7 @@ describe("creator dev detached scripts", () => {
   it("checks every expected child service and project-owned listener", () => {
     const source = readFileSync(join(process.cwd(), "scripts/status-dev-detached.mjs"), "utf8");
     assert.match(source, /loadDotEnvFile/);
-    assert.match(source, /run-generation-outbox-dispatcher\.mjs/);
-    assert.match(source, /run-generation-queue-maintenance\.mjs/);
-    assert.match(source, /run-generation-video-worker\.mjs/);
-    assert.match(source, /run-canvas-agent-worker\.mjs/);
+    assert.match(source, /run-comic-ai-shared-runtime\.mjs/);
     assert.match(source, /run-media-crawler-api\.mjs/);
     assert.match(source, /isProjectProcess/);
     assert.match(source, /DATABASE_URL\(PostgreSQL\)/);

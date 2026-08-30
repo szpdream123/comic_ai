@@ -18,7 +18,7 @@ export function loadCanvasAgentShardConfig(env: NodeJS.ProcessEnv): CanvasAgentS
     16,
   );
   return {
-    enabled: readBoolean(env, "CANVAS_AGENT_SHARDING_ENABLED", true),
+    enabled: readBoolean(env, "CANVAS_AGENT_SHARDING_ENABLED", false),
     baseQueueName: readQueueName(env.CANVAS_AGENT_QUEUE_NAME?.trim() || "canvas-agent"),
     shardCapacity: readInteger(env, "CANVAS_AGENT_SHARD_CAPACITY", 100, 1, 100_000),
     maxActiveShards: Math.min(maxShardCount, configuredMaxActiveShards),

@@ -9,23 +9,10 @@ import { acquireProcessInstanceLock } from "./process-instance-lock.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
 const runtime = findNodeRuntime(18);
-const serverEntrypoint = join(
-  process.cwd(),
-  "apps",
-  "backend",
-  "src",
-  "entrypoints",
-  "phone-auth-dev-server.ts",
-);
 const envFilePath = join(process.cwd(), ".env");
 const productionLockPath = join(process.cwd(), ".local", "run", "comic-ai-production.pid");
 const restartRequestFile = join(process.cwd(), ".local", "run", "creator-dev-stack.restart.json");
 const productionFoundationSchemaTimeoutMs = 20 * 60_000;
-
-if (!existsSync(serverEntrypoint)) {
-  console.error(`Unable to find production server entrypoint at ${serverEntrypoint}`);
-  process.exit(1);
-}
 
 loadDotEnvFile(envFilePath);
 acquireProcessInstanceLock(productionLockPath, { label: "production_stack" });
@@ -41,8 +28,6 @@ runProductionFoundationSchema({
   entrypoint: productionRuntime.foundationSchema,
 });
 
-const listenHost = (process.env.HOST ?? "0.0.0.0").trim() || "0.0.0.0";
-const publicHost = (process.env.PUBLIC_HOST ?? listenHost).trim() || listenHost;
 for (const key of ["BULLMQ_OUTBOX_DISPATCHER_ENABLED", "BULLMQ_WORKERS_ENABLED"]) {
   if (!isEnabled(process.env[key])) {
     console.error(`[production] ${key}=true is required so the generation chain cannot start partially.`);
@@ -114,7 +99,7 @@ function runProductionFoundationSchema({ runtime, cwd, env, entrypoint }) {
   console.info("[schema] Foundation schema is ready.");
 }
 
-supervisor.start("phone-auth", productionApiArgs(productionRuntime.phoneAuth), { restartOnFailure: true });
+supervisor.start("comic-ai", [productionRuntime.sharedRuntime], { restartOnFailure: true });
 const mediaCrawlerManaged = isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true");
 if (mediaCrawlerManaged) {
   supervisor.start("media-crawler", [
@@ -123,20 +108,8 @@ if (mediaCrawlerManaged) {
 } else {
   console.info("[production] MEDIA_CRAWLER_MANAGED=false; MediaCrawler must run outside this server.");
 }
-supervisor.start("generation-outbox", [
-  productionRuntime.generationOutbox,
-], { restartOnFailure: true });
-supervisor.start("generation-repair", [
-  productionRuntime.generationRepair,
-], { restartOnFailure: true });
-supervisor.start("generation-worker", [
-  productionRuntime.generationWorker,
-], { restartOnFailure: true });
-supervisor.start("canvas-agent", [
-  productionRuntime.canvasAgent,
-], { restartOnFailure: true });
 console.info(
-  `[production] API, ${mediaCrawlerManaged ? "media-crawler, " : ""}generation-outbox, generation-repair, generation-worker, and canvas-agent are supervised.`,
+  `[production] Shared API, generation, and Canvas Agent runtime${mediaCrawlerManaged ? ", plus media-crawler," : ","} is supervised.`,
 );
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
@@ -176,36 +149,6 @@ function requestStop(signal) {
   forceStopTimer.unref?.();
 }
 
-function productionApiArgs(serverEntrypoint) {
-  return [
-    "--input-type=module",
-    "--eval",
-    `import(${JSON.stringify(pathToFileUrl(serverEntrypoint))}).then(async ({ createPhoneAuthDevServer }) => {
-      const server = createPhoneAuthDevServer({
-        allowProduction: true,
-        allowLocalDatabaseUrl: true,
-        listenHost: ${JSON.stringify(listenHost)},
-        seedTeamEntitlements: false,
-      });
-      const port = Number(process.env.PORT ?? "4310");
-      await server.listen(port);
-      console.log("Phone auth production server listening on http://${publicHost}:" + port);
-      let closing = false;
-      for (const signal of ["SIGINT", "SIGTERM"]) {
-        process.once(signal, async () => {
-          if (closing) return;
-          closing = true;
-          await server.close().catch((error) => console.error(error));
-          process.exit(0);
-        });
-      }
-    }).catch((error) => {
-      console.error(error);
-      process.exit(1);
-    });`,
-  ];
-}
-
 function pipeWithPrefix(stream, name) {
   let buffer = "";
   stream.setEncoding("utf8");
@@ -217,10 +160,6 @@ function pipeWithPrefix(stream, name) {
       if (line.trim()) console.log(`[${name}] ${line}`);
     }
   });
-}
-
-function pathToFileUrl(filePath) {
-  return `file:///${filePath.replace(/\\/g, "/")}`;
 }
 
 function findNodeRuntime(minMajor) {

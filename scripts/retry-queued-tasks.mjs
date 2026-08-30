@@ -8,7 +8,6 @@
 import { createDevDb } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 import { loadGenerationQueueConfig } from "../apps/backend/src/modules/model-gateway/generation-queue.config.ts";
 import { createBullMQGenerationQueueJobOpsService } from "../apps/backend/src/modules/model-gateway/generation-queue-job-ops.service.ts";
-import { createBullMQGenerationQueueAssignmentInspector } from "../apps/backend/src/modules/model-gateway/generation-queue-assignment-inspector.ts";
 
 // 从命令行参数或使用默认的任务ID
 const taskIds = process.argv.slice(2);
@@ -98,16 +97,7 @@ try {
 
     // 尝试重试队列中的任务
     try {
-      const jobOps = createBullMQGenerationQueueJobOpsService(
-        config,
-        null, // validateReplay
-        async () => {
-          const result = await db.query(
-            "SELECT queue_name FROM generation_queue_shards"
-          );
-          return result.rows.map((row) => row.queue_name);
-        }
-      );
+      const jobOps = createBullMQGenerationQueueJobOpsService(config);
 
       console.log(`  尝试重试队列任务: ${task.queue_name} / ${task.redis_job_id}`);
 
