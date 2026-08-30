@@ -247,6 +247,10 @@ const runtimeRequiredPostconditionMigrationNames = new Set([
 const taskCenterProviderDiagnosticsMigrationName = "20260824-task-center-provider-diagnostics.sql";
 const projectCoverStorageObjectBackfillMigrationName = "20260909-backfill-project-cover-storage-objects.sql";
 const compatibleChecksumTransitions = new Map([
+  ["20261028-add-globalaiopc-video-30-10-10.sql", {
+    recorded: "a16ce46ab9ab709bfb664432f92c8b5df75cf18b702a4fe03ebb14aec47e573a",
+    current: "950fc2c90e424f0d90a9698d76a356d6abd381fb512d4ba3cd5331e780f147c8",
+  }],
   ["20261023-add-chiyuan-video-models.sql", {
     recorded: "6f58b77cbfa22976548252c91e3ad74e5bb732ae5a643d27d8c2f97e8c4dac5c",
     current: "50c9250ec6ab6dc72b2e023240f31a08fb86a809b8556d0074bc1c1299c4cad2",

@@ -22,6 +22,10 @@ describe("GlobalAiOpc video_30_10_10 model configuration", { concurrency: false 
       productionMigrationScript,
       /runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20261028-add-globalaiopc-video-30-10-10\.sql"[\s\S]*\]\);/,
     );
+    assert.match(
+      productionMigrationScript,
+      /\["20261028-add-globalaiopc-video-30-10-10\.sql", \{\s*recorded: "a16ce46ab9ab709bfb664432f92c8b5df75cf18b702a4fe03ebb14aec47e573a",\s*current: "950fc2c90e424f0d90a9698d76a356d6abd381fb512d4ba3cd5331e780f147c8",\s*\}\]/,
+    );
   });
 
   it("uses the documented contract and the existing Seedance 2.5 execution chain", async () => {
