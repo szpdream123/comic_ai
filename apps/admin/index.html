@@ -3551,12 +3551,10 @@
         const staleProcessingCount = Number(platform.outbox?.staleProcessingCount || 0);
         const outboxStale = platform.outbox?.status === "degraded";
         const dispatcherHealthy = health.outboxDispatcher?.status === "healthy";
-        const disconnectedQueues = queues.filter((queue) => queue.role !== "dead_letter" && Number(queue.workerCount) === 0).length;
         const degraded = queues.filter((queue) => queue.status !== "healthy").length;
-        const runtimeDegraded = health.status !== "healthy" || !dispatcherHealthy || outboxStale || disconnectedQueues > 0;
+        const runtimeDegraded = health.status !== "healthy" || !dispatcherHealthy || outboxStale;
         const redisTone = health.redis?.status === "healthy" ? "success" : "danger";
         const overallTone = !runtimeDegraded ? "success" : health.status === "unavailable" || outboxStale ? "danger" : "warning";
-        const workerCount = queues.reduce((sum, queue) => sum + (Number.isFinite(Number(queue.workerCount)) ? Number(queue.workerCount) : 0), 0);
 
         // 按状态排序：先显示有问题的队列，再显示正常的队列，最后是死信队列
         const sortedQueues = [...queues].sort((a, b) => {
@@ -3590,9 +3588,7 @@
             statusText = "运行中";
           }
 
-          const workers = isDeadLetter
-            ? "隔离存储"
-            : queue.workerCount == null ? "消费者未知" : `${Number(queue.workerCount).toLocaleString()} 个消费者`;
+          const workers = isDeadLetter ? "隔离存储" : "通道检查";
           const manageAction = isDeadLetter && pendingDeadLetters > 0
             ? `<div class="dashboard-queue-item-actions"><button class="dashboard-queue-manage" type="button" onclick="openDeadLetterWorkbench()">处理 ${pendingDeadLetters.toLocaleString()} 条死信</button></div>`
             : "";
@@ -3606,7 +3602,7 @@
                ? "Dispatcher 离线"
              : outboxStale
                ? "Outbox 投递异常"
-               : `${Math.max(degraded, disconnectedQueues).toLocaleString()} 个队列需关注`;
+               : `${degraded.toLocaleString()} 个队列需关注`;
         const outboxTone = !dispatcherHealthy || outboxStale ? "danger" : outboxReady > 0 ? "warning" : "success";
         const outboxLabel = !health.outboxDispatcherEnabled
           ? "Outbox 调度未启用"
@@ -3621,7 +3617,7 @@
                   : "Outbox 正常";
         const checkedAt = state.dashboardQueueRefreshNote || (health.inspectedAt ? `检查时间 ${formatAdminDateTime(health.inspectedAt)}` : "");
         const queueCountSummary = `共 ${queues.length.toLocaleString()} 个队列`;
-         return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康 <span style="color:var(--muted);font-weight:400;font-size:13px;">(${queueCountSummary})</span></h3><p>刷新时重新请求 Redis、BullMQ 和数据库 outbox 的当前状态</p></div><div class="dashboard-panel-actions"><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button><button class="btn danger" onclick="restartDashboardQueues()">重启队列消费者</button></div></div><div class="dashboard-queue-summary"><span class="dashboard-queue-badge ${overallTone}">${overallLabel}</span><span class="dashboard-queue-badge ${redisTone}">Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"}</span><span class="dashboard-queue-badge ${dispatcherHealthy ? "success" : "danger"}">Dispatcher ${dispatcherHealthy ? "运行中" : "无心跳"}</span><span class="dashboard-queue-badge ${health.workersEnabled && workerCount > 0 ? "success" : "danger"}">消费者 ${workerCount.toLocaleString()}</span><span class="dashboard-queue-badge ${outboxTone}">${outboxLabel}</span></div><div class="dashboard-queue-grid">${queueItems || `<div class="dashboard-empty">暂无 BullMQ 队列数据</div>`}</div><div class="dashboard-queue-foot"><span>Redis 命名空间 <strong>${escapeHtml(health.queuePrefix || "-")}</strong> · 数据库 outbox 待投递 <strong>${outboxReady.toLocaleString()}</strong>${outboxReady > 0 ? ` · 最旧等待 <strong>${formatQueueAge(outboxOldestAgeMs)}</strong>` : ""} · 活跃生成任务 <strong>${Number(platform.tasks?.activeCount || 0).toLocaleString()}</strong></span><span>${escapeHtml(checkedAt)}</span></div></section>`;
+         return `<section class="dashboard-panel dashboard-queue-panel"><div class="dashboard-panel-head"><div class="dashboard-panel-title"><h3>队列实时健康 <span style="color:var(--muted);font-weight:400;font-size:13px;">(${queueCountSummary})</span></h3><p>刷新时重新请求 Redis、BullMQ 和数据库 outbox 的当前状态</p></div><div class="dashboard-panel-actions"><button class="btn ghost" onclick="loadDashboardQueueHealth().then(renderShell)">刷新健康度</button><button class="btn danger" onclick="restartDashboardQueues()">重启队列消费者</button></div></div><div class="dashboard-queue-summary"><span class="dashboard-queue-badge ${overallTone}">${overallLabel}</span><span class="dashboard-queue-badge ${redisTone}">Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"}</span><span class="dashboard-queue-badge ${dispatcherHealthy ? "success" : "danger"}">Dispatcher ${dispatcherHealthy ? "运行中" : "无心跳"}</span><span class="dashboard-queue-badge success">队列通道 ${degraded === 0 ? "正常" : `${degraded.toLocaleString()} 个需关注`}</span><span class="dashboard-queue-badge ${outboxTone}">${outboxLabel}</span></div><div class="dashboard-queue-grid">${queueItems || `<div class="dashboard-empty">暂无 BullMQ 队列数据</div>`}</div><div class="dashboard-queue-foot"><span>Redis 命名空间 <strong>${escapeHtml(health.queuePrefix || "-")}</strong> · 数据库 outbox 待投递 <strong>${outboxReady.toLocaleString()}</strong>${outboxReady > 0 ? ` · 最旧等待 <strong>${formatQueueAge(outboxOldestAgeMs)}</strong>` : ""} · 活跃生成任务 <strong>${Number(platform.tasks?.activeCount || 0).toLocaleString()}</strong></span><span>${escapeHtml(checkedAt)}</span></div></section>`;
       }
 
       function dashboardQueueRuntimeIssue(health) {
@@ -3633,8 +3629,8 @@
         if (Number(outbox.staleProcessingCount || 0) > 0) return `Outbox 有 ${Number(outbox.staleProcessingCount).toLocaleString()} 条投递卡住。`;
         if (outbox.status === "degraded") return `Outbox 有 ${Number(outbox.readyCount || 0).toLocaleString()} 条任务超时未投递。`;
         const queues = Array.isArray(health.queues) ? health.queues : [];
-        const disconnected = queues.filter((queue) => queue.role !== "dead_letter" && Number(queue.workerCount) === 0).length;
-        return disconnected > 0 ? `${disconnected.toLocaleString()} 个生成队列没有消费者。` : "";
+        const unavailable = queues.filter((queue) => queue.status === "unavailable").length;
+        return unavailable > 0 ? `${unavailable.toLocaleString()} 个队列不可用。` : "";
       }
 
       function formatQueueAge(milliseconds) {

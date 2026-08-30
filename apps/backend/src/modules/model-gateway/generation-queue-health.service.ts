@@ -94,8 +94,10 @@ interface GenerationQueueHealthServiceDeps {
   redis: RedisHealthClient;
   queueFactory(queueName: string): QueueHealthClient;
   /** Optional shard-directory reader. When present, its queue names are inspected in addition to the DLQ. */
-  queueDiscovery?: () => Promise<Array<{ role: string; name: string }>>;
+  queueDiscovery?: () => Promise<Array<{ role: string; name: string; state?: string; admittedCount?: number }>>;
 }
+
+const queueHealthRetryDelayMs = 75;
 
 export function createGenerationQueueHealthService(
   deps: GenerationQueueHealthServiceDeps,
@@ -128,9 +130,9 @@ export function createGenerationQueueHealthService(
       const [outboxDispatcher, queues] = await Promise.all([
         inspectOutboxDispatcher(deps.redis, deps.config, now),
         Promise.all((await resolveQueueTargets(deps)).map((target) =>
-          inspectQueue({
+          inspectQueueWithRetry({
             target,
-            queue: deps.queueFactory(target.name),
+            queueFactory: deps.queueFactory,
             failedSampleSize,
             now,
             health: deps.config.health,
@@ -276,9 +278,7 @@ async function inspectQueue(input: {
         "failed",
         "paused",
       ),
-      typeof input.queue.getWorkersCount === "function"
-        ? input.queue.getWorkersCount()
-        : Promise.resolve(null),
+      Promise.resolve(null),
     ]);
     const counts = normalizeCounts(rawCounts);
     const sampleTypes = input.target.role === "dead_letter"
@@ -318,11 +318,6 @@ async function inspectQueue(input: {
       input.target.role === "dead_letter" && sampleCount > 0
         ? `dead_letter_count:${sampleCount}`
         : null,
-      input.target.role !== "dead_letter" &&
-        input.requireWorkers &&
-        workerCount === 0
-        ? "worker_count:0"
-        : null,
     ].filter((reason): reason is string => Boolean(reason));
 
     return {
@@ -349,12 +344,24 @@ async function inspectQueue(input: {
   }
 }
 
+async function inspectQueueWithRetry(input: Omit<Parameters<typeof inspectQueue>[0], "queue"> & {
+  queueFactory: GenerationQueueHealthServiceDeps["queueFactory"];
+}) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await inspectQueue({ ...input, queue: input.queueFactory(input.target.name) });
+    if (result.status !== "unavailable" || attempt === 1) return result;
+    await new Promise((resolve) => setTimeout(resolve, queueHealthRetryDelayMs));
+  }
+  throw new Error("queue_health_retry_exhausted");
+}
+
 async function resolveQueueTargets(deps: GenerationQueueHealthServiceDeps) {
   if (deps.queueDiscovery) {
     try {
       const discovered = await deps.queueDiscovery();
       const targets = discovered
         .filter((target) => target && typeof target.name === "string" && target.name.trim())
+        .filter((target) => target.state !== "draining" || Number(target.admittedCount) > 0)
         .map((target) => ({ role: target.role?.trim() || "generation_shard", name: target.name.trim() }));
       if (targets.length === 0) {
         return configuredQueueTargets(deps.config);

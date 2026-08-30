@@ -19987,6 +19987,8 @@ export function createPhoneAuthDevServer(
       );
       const isMoneyPrinterIntegrationRoute =
         pathname === "/api/integrations/moneyprinter/models" ||
+        pathname === "/api/integrations/moneyprinter/text-models" ||
+        pathname === "/api/integrations/moneyprinter/text-completions" ||
         pathname === "/api/integrations/moneyprinter/video-generations" ||
         Boolean(moneyPrinterTaskMatch);
       if (isMoneyPrinterIntegrationRoute) {
@@ -20020,6 +20022,47 @@ export function createPhoneAuthDevServer(
                 workerId: verified.workerId,
               },
             });
+          }
+
+          if (request.method === "GET" && pathname === "/api/integrations/moneyprinter/text-models") {
+            const activeTextModels = await listActiveAiModelConfigs(db, { mediaType: "text" });
+            return writeJson(response, {
+              status: 200,
+              body: {
+                models: activeTextModels.map((modelConfig) => ({
+                  modelCode: modelConfig.modelCode,
+                  displayName: modelConfig.displayName,
+                  provider: modelConfig.providerName,
+                })),
+                workerId: verified.workerId,
+              },
+            });
+          }
+
+          if (request.method === "POST" && pathname === "/api/integrations/moneyprinter/text-completions") {
+            let body: Record<string, unknown>;
+            try {
+              const parsed = rawBody.length ? JSON.parse(rawBody.toString("utf8")) : {};
+              body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+            } catch {
+              return writeJson(response, { status: 400, body: { error: "invalid_json", message: "Request body must be valid JSON" } });
+            }
+            const model = typeof body.model === "string" ? body.model.trim() : "";
+            const prompt = typeof body.prompt === "string" ? body.prompt : "";
+            if (!model || !prompt.trim()) {
+              return writeJson(response, { status: 400, body: { error: "model_and_prompt_required", message: "model and prompt are required" } });
+            }
+            const authenticated = await resolveComicAiIntegrationAuthenticated(db, new Date());
+            if (!authenticated) return writeJson(response, { status: 503, body: { error: "service_unavailable", message: "Comic AI integration service account is unavailable" } });
+            const content = await aiStoryboardTextChatGateway.completeJson({
+              model,
+              prompt,
+              maxTokens: typeof body.max_tokens === "number" ? body.max_tokens : undefined,
+              requestKeyPrefix: "moneyprinter-text",
+              payloadSummary: "moneyprinter text generation",
+              projectId: null,
+            });
+            return writeJson(response, { status: 200, body: { model, content, workerId: verified.workerId } });
           }
 
           if (request.method === "POST" && pathname === "/api/integrations/moneyprinter/video-generations") {
@@ -21094,6 +21137,8 @@ export function createPhoneAuthDevServer(
             async () => (await listGenerationQueueShards(db)).map((shard) => ({
               role: `${shard.mediaType}_${shard.stage}`,
               name: shard.queueName,
+              state: shard.state,
+              admittedCount: shard.admittedCount,
             })),
           );
         try {
@@ -35702,6 +35747,8 @@ export function createPhoneAuthDevServer(
               async () => (await listGenerationQueueShards(db)).map((shard) => ({
                 role: `${shard.mediaType}_${shard.stage}`,
                 name: shard.queueName,
+                state: shard.state,
+                admittedCount: shard.admittedCount,
               })),
             );
           let healthSnapshot: Awaited<ReturnType<typeof queueHealth.inspect>>;

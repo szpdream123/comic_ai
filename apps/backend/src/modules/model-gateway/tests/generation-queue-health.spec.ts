@@ -98,7 +98,7 @@ describe("generation queue health service", () => {
       ],
     );
     assert.equal(health.queues[1].counts.waiting, 8);
-    assert.equal(health.queues[1].workerCount, 1);
+    assert.equal(health.queues[1].workerCount, null);
     assert.equal(health.queues[3].counts.delayed, 12);
     assert.equal(health.queues[5].counts.active, 3);
     assert.equal(health.queues[6].failedJobs[0].failureReason, "provider_timeout");
@@ -194,7 +194,7 @@ describe("generation queue health service", () => {
     assert.match(imageQueue?.error ?? "", /oldest_pending_age_ms:/);
   });
 
-  it("marks a work queue degraded when BullMQ has no registered consumer", async () => {
+  it("does not mark a queue unavailable when consumer inspection is omitted", async () => {
     const service = createGenerationQueueHealthService({
       config: testConfig(),
       redis: {
@@ -217,10 +217,9 @@ describe("generation queue health service", () => {
     const health = await service.inspect();
     const imageQueue = health.queues.find((queue) => queue.role === "submit_image");
 
-    assert.equal(health.status, "degraded");
-    assert.equal(imageQueue?.workerCount, 0);
-    assert.equal(imageQueue?.status, "degraded");
-    assert.match(imageQueue?.error ?? "", /worker_count:0/);
+    assert.equal(health.status, "healthy");
+    assert.equal(imageQueue?.workerCount, null);
+    assert.equal(imageQueue?.status, "healthy");
   });
 
   it("marks the snapshot degraded when the outbox dispatcher heartbeat is missing", async () => {
@@ -319,6 +318,7 @@ describe("generation queue health service", () => {
       queueDiscovery: async () => [
         { role: "submit_image", name: "generation-image-submit-r1-000" },
         { role: "submit_image", name: "generation-image-submit-r1-001" },
+        { role: "poll_image", name: "generation-image-poll-r1-002", state: "draining", admittedCount: 0 },
       ],
       queueFactory: (queueName) => ({
         name: queueName,
