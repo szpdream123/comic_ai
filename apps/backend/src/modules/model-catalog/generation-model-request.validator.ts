@@ -185,7 +185,6 @@ function shouldSkipGenerationParameterValidation(key: string) {
   return [
     "prompt",
     "negativePrompt",
-    "referenceImages",
     "editInstruction",
   ].includes(key);
 }
@@ -310,8 +309,21 @@ function validateGenerationNumericParameter(schema: unknown, value: unknown) {
   if (minimum == null && maximum == null) {
     return;
   }
-  const parsed = Number(value);
   const schemaType = readString(readObject(schema).type);
+  if (schemaType === "file[]") {
+    if (
+      !Array.isArray(value) ||
+      (minimum != null && value.length < minimum) ||
+      (maximum != null && value.length > maximum)
+    ) {
+      throw new GenerationModelRequestValidationError(
+        "model_parameter_unsupported",
+        "Generation parameter is not supported by the selected model",
+      );
+    }
+    return;
+  }
+  const parsed = Number(value);
   if (
     !Number.isFinite(parsed) ||
     (schemaType === "integer" && !Number.isInteger(parsed)) ||

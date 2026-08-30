@@ -164,6 +164,7 @@ const migrations = [
   ["20261025-use-chiyuan-seedance25-native-contents-contract.sql", "packages/db/migrations/20261025-use-chiyuan-seedance25-native-contents-contract.sql"],
   ["20261026-fence-generation-repair-poll-reservations.sql", "packages/db/migrations/20261026-fence-generation-repair-poll-reservations.sql"],
   ["20261027-expand-chiyuan-seedance25-duration-options.sql", "packages/db/migrations/20261027-expand-chiyuan-seedance25-duration-options.sql"],
+  ["20261028-add-globalaiopc-video-30-10-10.sql", "packages/db/migrations/20261028-add-globalaiopc-video-30-10-10.sql"],
   ["20261031-generation-queue-fallback-shards.sql", "packages/db/migrations/20261031-generation-queue-fallback-shards.sql"],
   ["20261101-retire-drained-generation-queue-shards.sql", "packages/db/migrations/20261101-retire-drained-generation-queue-shards.sql"],
 ];
@@ -235,6 +236,7 @@ const runtimeSafeMigrationNames = new Set([
   "20261025-use-chiyuan-seedance25-native-contents-contract.sql",
   "20261026-fence-generation-repair-poll-reservations.sql",
   "20261027-expand-chiyuan-seedance25-duration-options.sql",
+  "20261028-add-globalaiopc-video-30-10-10.sql",
   "20261031-generation-queue-fallback-shards.sql",
   "20261101-retire-drained-generation-queue-shards.sql",
   "20261008-enable-globalaiopc-seedream5.sql",

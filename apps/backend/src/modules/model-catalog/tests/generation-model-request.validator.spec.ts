@@ -333,6 +333,53 @@ describe("generation model request validator", () => {
     );
   });
 
+  it("validates media array limits for the GlobalAiOpc 30/10/10 model", () => {
+    const modelConfig = videoModelConfig({
+      modelCode: "video_30_10_10",
+      parameterSchema: {
+        referenceImages: { type: "file[]", maximum: 30 },
+        referenceVideos: { type: "file[]", maximum: 10 },
+        referenceAudio: { type: "file[]", maximum: 10 },
+      },
+    });
+    const validParameters = {
+      referenceImages: [{ url: "https://cdn.example.com/reference.png" }],
+      referenceVideos: [{ url: "https://cdn.example.com/reference.mp4" }],
+      referenceAudio: [{ url: "https://cdn.example.com/reference.mp3" }],
+    };
+
+    assert.doesNotThrow(() => validateGenerationModelRequest({
+      kind: "video",
+      modelCode: "video_30_10_10",
+      modelConfig,
+      parameters: validParameters,
+      prompt: "animate this panel",
+    }));
+
+    for (const [key, maximum, extension] of [
+      ["referenceImages", 30, "png"],
+      ["referenceVideos", 10, "mp4"],
+      ["referenceAudio", 10, "mp3"],
+    ] as const) {
+      assertValidationError(
+        () => validateGenerationModelRequest({
+          kind: "video",
+          modelCode: "video_30_10_10",
+          modelConfig,
+          parameters: {
+            ...validParameters,
+            [key]: Array.from(
+              { length: maximum + 1 },
+              (_, index) => ({ url: `https://cdn.example.com/reference-${index}.${extension}` }),
+            ),
+          },
+          prompt: "animate this panel",
+        }),
+        "model_parameter_unsupported",
+      );
+    }
+  });
+
   it("accepts first-last-frame mode when the configured task mode uses provider to-video naming", () => {
     assert.doesNotThrow(() => {
       validateGenerationModelRequest({
