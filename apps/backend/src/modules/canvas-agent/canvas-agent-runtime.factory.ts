@@ -346,7 +346,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     const model = await findActiveAiModelConfigByCode(this.deps.db, modelCode);
     const policy = await findActiveAiModelDispatchPolicyByModelCode(this.deps.db, modelCode);
     const queueConfig = loadGenerationQueueConfig(this.deps.env);
-    const fallbackQueue = input.kind === "video" ? queueConfig.queues.submitVideo : queueConfig.queues.submitImage;
+    const fallbackQueue = input.kind === "video" ? queueConfig.queues.submit : queueConfig.queues.submit;
     const generationRequest = model?.providerProtocol === "san_bao"
       ? normalizeSanBaoGenerationRequest(input.request)
       : input.request;

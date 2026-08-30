@@ -175,7 +175,7 @@ describe("runtime schema migration launchers", () => {
     const buildSource = await readFile(new URL("build-production-runtime.mjs", import.meta.url), "utf8");
 
     assert.match(productionSource, /buildProductionRuntime/);
-    assert.match(productionSource, /productionRuntime\.generationWorker/);
+    assert.match(productionSource, /productionRuntime\.sharedRuntime/);
     assert.doesNotMatch(productionSource, /resolveTsxRuntimeArgs\(runtime\)/);
     assert.match(buildSource, /bundle:\s*true/);
     assert.match(buildSource, /packages:\s*"external"/);
@@ -190,12 +190,24 @@ describe("runtime schema migration launchers", () => {
     assert.match(buildSource, /run-canvas-agent-worker\.mjs/);
     assert.match(buildSource, /run-media-crawler-api\.mjs/);
     assert.match(buildSource, /production-foundation-schema\.ts/);
+    assert.match(buildSource, /run-comic-ai-shared-runtime\.mjs/);
+    assert.match(productionSource, /productionRuntime\.sharedRuntime/);
+  });
+
+  it("uses generated worker entrypoints from the production shared runtime bundle", async () => {
+    const source = await readFile(new URL("run-comic-ai-shared-runtime.mjs", import.meta.url), "utf8");
+
+    assert.match(source, /process\.env\.NODE_ENV === "production"/);
+    assert.match(source, /"\.\/generationOutbox\.mjs"/);
+    assert.match(source, /"\.\/generationRepair\.mjs"/);
+    assert.match(source, /"\.\/generationWorker\.mjs"/);
+    assert.match(source, /"\.\/canvasAgent\.mjs"/);
   });
 
   it("builds the production web bundle before supervised services start", async () => {
     const productionSource = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
     const webBuildOffset = productionSource.indexOf("await buildProductionWeb");
-    const firstServiceStartOffset = productionSource.indexOf('supervisor.start("phone-auth"');
+    const firstServiceStartOffset = productionSource.indexOf('supervisor.start("comic-ai"');
 
     assert.match(productionSource, /import \{ buildProductionWeb \} from "\.\/build-production-web\.mjs"/);
     assert.ok(webBuildOffset >= 0);

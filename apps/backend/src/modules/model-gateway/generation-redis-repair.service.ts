@@ -12,12 +12,11 @@ import {
   buildGenerationBullMQJobId,
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
-import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import { selectGenerationQueue, type GenerationQueueConfig } from "./generation-queue.config.ts";
 import {
   markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotResultUnknown,
-  markGenerationTaskSnapshotQueued,
 } from "./generation-task-snapshot.service.ts";
 import {
   appendGenerationTaskCreatedOutboxEvent,
@@ -28,12 +27,6 @@ import {
   createGenerationProviderRouteIdentity,
   readGenerationProviderRouteReferences,
 } from "./generation-model-config-snapshot.ts";
-import {
-  hasRecoverableGenerationQueueSuccessor,
-  markGenerationQueueStagePublished,
-  drainGenerationQueueShard,
-  releaseGenerationQueueStage,
-} from "./generation-queue-shard.store.ts";
 import { resolveGptImageArtifactRecoveryDispatch } from "./gpt-image-artifact-recovery.policy.ts";
 import { handleGptImageArtifactQueueExhaustion } from "./gpt-image-artifact-recovery.service.ts";
 
@@ -77,242 +70,10 @@ interface ExpiredGenerationSubmitLeaseRow {
   provider_status: string | null;
   external_submission_started_at: Date | string | null;
   external_request_id: string | null;
-  submit_assignment_status: "publishing" | "admitted" | "released" | null;
-  submit_assignment_published_at: Date | string | null;
 }
 
 const defaultStaleDispatchMs = 2 * 60 * 1000;
 const defaultPreSubmissionTimeoutMs = 5 * 60 * 1000;
-const defaultStaleAssignmentMs = 15 * 60 * 1000;
-
-export interface GenerationQueueAssignmentLiveInspector {
-  listLiveAssignmentKeys(queueName: string): Promise<ReadonlySet<string>>;
-  inspectJobState?(
-    queueName: string,
-    jobId: string,
-  ): Promise<GenerationQueueAssignmentJobState>;
-}
-
-export type GenerationQueueAssignmentJobState =
-  | "waiting"
-  | "active"
-  | "delayed"
-  | "prioritized"
-  | "waiting-children"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "unknown"
-  | "missing";
-
-interface StaleGenerationQueueAssignmentRow {
-  assignment_key: string;
-  shard_id: string;
-  queue_name: string;
-  admitted_at: Date | string;
-  assignment_status: "publishing" | "admitted";
-  redis_job_id: string | null;
-  has_active_outbox: boolean;
-}
-
-interface StaleGenerationQueueAssignmentCursor {
-  admittedAt: Date | string;
-  assignmentKey: string;
-}
-
-const staleAssignmentCursorByDatabase = new WeakMap<
-  SqlDatabase,
-  StaleGenerationQueueAssignmentCursor
->();
-
-export async function repairStaleGenerationQueueStageAssignments(
-  db: SqlDatabase,
-  input: {
-    now: Date;
-    limit: number;
-    inspector: GenerationQueueAssignmentLiveInspector;
-    staleAssignmentMs?: number;
-    reopenThreshold?: number;
-  },
-): Promise<{
-  releasedAssignmentKeys: string[];
-  liveAssignmentKeys: string[];
-  inspectionFailedQueueNames: string[];
-}> {
-  const staleBefore = new Date(
-    input.now.getTime() - (input.staleAssignmentMs ?? defaultStaleAssignmentMs),
-  );
-  const cursor = staleAssignmentCursorByDatabase.get(db);
-  let candidates = await listStaleGenerationQueueAssignmentCandidates(db, {
-    staleBefore,
-    now: input.now,
-    limit: input.limit,
-    cursor,
-  });
-  if (candidates.rows.length === 0 && cursor) {
-    staleAssignmentCursorByDatabase.delete(db);
-    candidates = await listStaleGenerationQueueAssignmentCandidates(db, {
-      staleBefore,
-      now: input.now,
-      limit: input.limit,
-    });
-  }
-  const lastCandidate = candidates.rows.at(-1);
-  if (lastCandidate) {
-    staleAssignmentCursorByDatabase.set(db, {
-      admittedAt: lastCandidate.admitted_at,
-      assignmentKey: lastCandidate.assignment_key,
-    });
-  }
-
-  const liveByQueue = new Map<string, ReadonlySet<string>>();
-  const failedQueues = new Set<string>();
-  const legacyQueueNames = new Set(candidates.rows
-    .filter((candidate) => !candidate.redis_job_id || !input.inspector.inspectJobState)
-    .map((candidate) => candidate.queue_name));
-  for (const queueName of legacyQueueNames) {
-    try {
-      liveByQueue.set(queueName, await input.inspector.listLiveAssignmentKeys(queueName));
-    } catch {
-      failedQueues.add(queueName);
-    }
-  }
-
-  const releasedAssignmentKeys: string[] = [];
-  const liveAssignmentKeys: string[] = [];
-  for (const candidate of candidates.rows) {
-    if (failedQueues.has(candidate.queue_name)) continue;
-    if (candidate.redis_job_id && input.inspector.inspectJobState) {
-      let jobState: GenerationQueueAssignmentJobState;
-      try {
-        jobState = await input.inspector.inspectJobState(candidate.queue_name, candidate.redis_job_id);
-      } catch {
-        failedQueues.add(candidate.queue_name);
-        continue;
-      }
-      if (isLiveGenerationAssignmentJobState(jobState)) {
-        if (candidate.assignment_status === "publishing") {
-          try {
-            await markGenerationQueueStagePublished(db, {
-              assignmentKey: candidate.assignment_key,
-              redisJobId: candidate.redis_job_id,
-              now: input.now,
-            });
-          } catch {
-            failedQueues.add(candidate.queue_name);
-            continue;
-          }
-        }
-        liveAssignmentKeys.push(candidate.assignment_key);
-        continue;
-      }
-      if (jobState === "unknown") {
-        failedQueues.add(candidate.queue_name);
-        continue;
-      }
-      const requireNoActiveOutbox = jobState === "missing";
-      if (requireNoActiveOutbox && candidate.has_active_outbox) continue;
-      if (jobState === "missing") {
-        await drainGenerationQueueShard(db, {
-          shardId: candidate.shard_id,
-          now: input.now,
-        });
-      }
-      if (await releaseStaleGenerationQueueAssignmentIfStageExited(db, {
-        assignmentKey: candidate.assignment_key,
-        now: input.now,
-        reopenThreshold: input.reopenThreshold,
-        allowNonTerminalTask: true,
-        requireNoActiveOutbox,
-        reason: `auto_repair_redis_${jobState}`,
-      })) {
-        releasedAssignmentKeys.push(candidate.assignment_key);
-      }
-      continue;
-    }
-    if (liveByQueue.get(candidate.queue_name)?.has(candidate.assignment_key)) {
-      liveAssignmentKeys.push(candidate.assignment_key);
-      continue;
-    }
-    if (await releaseStaleGenerationQueueAssignmentIfStageExited(db, {
-      assignmentKey: candidate.assignment_key,
-      now: input.now,
-      reopenThreshold: input.reopenThreshold,
-      allowNonTerminalTask: false,
-      requireNoActiveOutbox: true,
-      reason: "auto_repair_stage_exited",
-    })) {
-      releasedAssignmentKeys.push(candidate.assignment_key);
-    }
-  }
-
-  return {
-    releasedAssignmentKeys,
-    liveAssignmentKeys,
-    inspectionFailedQueueNames: [...failedQueues],
-  };
-}
-
-async function listStaleGenerationQueueAssignmentCandidates(
-  db: SqlDatabase,
-  input: {
-    staleBefore: Date;
-    now: Date;
-    limit: number;
-    cursor?: StaleGenerationQueueAssignmentCursor;
-  },
-) {
-  return db.query<StaleGenerationQueueAssignmentRow>(
-    `
-      SELECT assignment.assignment_key,
-             assignment.shard_id,
-             shard.queue_name,
-             assignment.admitted_at,
-             assignment.status AS assignment_status,
-             assignment.redis_job_id,
-             EXISTS (
-               SELECT 1
-               FROM outbox_events event
-               WHERE event.payload_json->>'taskId' = task.id::text
-                AND event.status IN ('pending', 'processing')
-                 AND (
-                   (assignment.stage = 'submit' AND event.event_type = 'generation.task.created')
-                   OR (assignment.stage = 'poll' AND event.event_type = 'generation.task.poll_requested')
-                   OR (
-                     assignment.stage = 'fetch'
-                     AND event.event_type = 'generation.task.finalize_requested'
-                     AND event.payload_json->>'artifactStage' = 'fetch'
-                   )
-                   OR (
-                     assignment.stage = 'persist'
-                     AND event.event_type = 'generation.task.finalize_requested'
-                     AND COALESCE(event.payload_json->>'artifactStage', 'persist') <> 'fetch'
-                   )
-                 )
-             ) AS has_active_outbox
-      FROM generation_queue_stage_assignments assignment
-      JOIN generation_queue_shards shard ON shard.id = assignment.shard_id
-      JOIN tasks task ON task.id = assignment.task_id
-      WHERE assignment.status IN ('publishing', 'admitted')
-        AND assignment.admitted_at <= $1
-        AND (
-          $4::timestamptz IS NULL
-          OR (assignment.admitted_at, assignment.assignment_key) > ($4::timestamptz, $5::text)
-        )
-        AND (task.locked_until IS NULL OR task.locked_until <= $3)
-      ORDER BY assignment.admitted_at ASC, assignment.assignment_key ASC
-      LIMIT $2
-    `,
-    [
-      input.staleBefore,
-      Math.max(1, Math.floor(input.limit)),
-      input.now,
-      input.cursor?.admittedAt ?? null,
-      input.cursor?.assignmentKey ?? "",
-    ],
-  );
-}
-
 export async function failStaleGenerationTasksBeforeProviderSubmission(
   db: SqlDatabase,
   input: { now: Date; limit: number; timeoutMs?: number },
@@ -411,13 +172,6 @@ export async function repairQueuedGenerationTaskOutbox(
             AND oe.status IN ('pending', 'processing', 'failed')
           LIMIT 1
         )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM generation_queue_stage_assignments active_assignment
-          WHERE active_assignment.task_id = t.id
-            AND active_assignment.stage = 'submit'
-            AND active_assignment.status IN ('publishing', 'admitted')
-        )
       ORDER BY t.scheduled_at ASC, t.id ASC
       LIMIT $3
     `,
@@ -454,22 +208,6 @@ export async function repairQueuedGenerationTaskOutbox(
     if (activeOutbox) {
       continue;
     }
-    const activeAssignment = await queryOne<{ assignment_key: string }>(
-      db,
-      `
-        SELECT assignment_key
-        FROM generation_queue_stage_assignments
-        WHERE task_id = $1
-          AND stage = 'submit'
-          AND status IN ('publishing', 'admitted')
-        LIMIT 1
-      `,
-      [candidate.task_id],
-    );
-    if (activeAssignment) {
-      continue;
-    }
-
     const snapshot = parseSnapshot(candidate.input_snapshot_json);
     const mediaType = candidate.task_type === "episode_generate_image"
       ? "image"
@@ -519,8 +257,6 @@ export async function repairExpiredGenerationSubmitLeases(
         provider.status AS provider_status,
         provider.external_submission_started_at,
         provider.external_request_id,
-        assignment.status AS submit_assignment_status,
-        assignment.published_at AS submit_assignment_published_at
       FROM tasks task
       LEFT JOIN LATERAL (
         SELECT
@@ -541,14 +277,6 @@ export async function repairExpiredGenerationSubmitLeases(
         ORDER BY request.updated_at DESC, request.id DESC
         LIMIT 1
       ) provider ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT status, published_at
-        FROM generation_queue_stage_assignments
-        WHERE task_id = task.id
-          AND stage = 'submit'
-        ORDER BY created_at DESC, assignment_key DESC
-        LIMIT 1
-      ) assignment ON TRUE
       WHERE task.status = 'running'
         AND task.current_attempt_id IS NOT NULL
         AND task.locked_until IS NOT NULL
@@ -594,19 +322,6 @@ export async function repairExpiredGenerationSubmitLeases(
       continue;
     }
 
-    if (
-      candidate.submit_assignment_status === "released"
-      && !candidate.submit_assignment_published_at
-      && await requeueGenerationTaskAfterUnpublishedSubmit(db, {
-        taskId: candidate.id,
-        attemptId: candidate.current_attempt_id,
-        now: input.now,
-      })
-    ) {
-      requeuedTaskIds.push(candidate.id);
-      continue;
-    }
-
     if (await failGenerationTaskAfterQueueError(db, {
       taskId: candidate.id,
       expectedAttemptId: candidate.current_attempt_id,
@@ -624,77 +339,6 @@ export async function repairExpiredGenerationSubmitLeases(
     resultUnknownTaskIds,
     repairedTaskIds: failedTaskIds,
   };
-}
-
-async function requeueGenerationTaskAfterUnpublishedSubmit(
-  db: SqlDatabase,
-  input: { taskId: string; attemptId: string | null; now: Date },
-) {
-  if (!input.attemptId) return false;
-  await db.query("BEGIN");
-  try {
-    const attempt = await queryOne<{ id: string }>(
-      db,
-      `
-        UPDATE task_attempts
-        SET status = 'canceled',
-            failure_code = 'generation_queue_publish_not_completed',
-            locked_by = NULL,
-            locked_until = NULL,
-            heartbeat_at = NULL,
-            finished_at = $3,
-            updated_at = $3
-        WHERE id = $2
-          AND task_id = $1
-          AND status IN ('created', 'running', 'result_unknown')
-        RETURNING id
-      `,
-      [input.taskId, input.attemptId, input.now],
-    );
-    const task = await queryOne<{ id: string }>(
-      db,
-      `
-        UPDATE tasks
-        SET status = 'queued',
-            failure_code = NULL,
-            locked_by = NULL,
-            locked_until = NULL,
-            heartbeat_at = NULL,
-            current_attempt_id = NULL,
-            max_attempts = GREATEST(max_attempts, attempt_count + 1),
-            updated_at = $3
-        WHERE id = $1
-          AND current_attempt_id = $2
-          AND status = 'running'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM provider_requests request
-            WHERE request.task_id = $1
-              AND (
-                request.external_submission_started_at IS NOT NULL
-                OR request.external_request_id IS NOT NULL
-              )
-          )
-        RETURNING id
-      `,
-      [input.taskId, input.attemptId, input.now],
-    );
-    if (!attempt || !task) {
-      await db.query("ROLLBACK");
-      return false;
-    }
-    await markGenerationTaskSnapshotQueued(db, {
-      taskId: input.taskId,
-      progressStage: "queue_publish_retry",
-      progressPercent: 5,
-      now: input.now,
-    });
-    await db.query("COMMIT");
-    return true;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
 }
 
 async function clearExpiredGenerationSubmitLease(
@@ -858,7 +502,6 @@ export async function failGenerationTaskAfterQueueError(
     failureCode: string;
     displayMessage: string;
     creditOutcome?: "released" | "manual_review_required";
-    sourceAssignmentKey?: string;
     requireProviderSubmissionNotStarted?: boolean;
     expectedAttemptId?: string | null;
     now: Date;
@@ -895,14 +538,6 @@ export async function failGenerationTaskAfterQueueError(
       [input.taskId, enforceExpectedAttempt, input.expectedAttemptId ?? null],
     );
     if (!row) {
-      await db.query("COMMIT");
-      return false;
-    }
-
-    if (input.sourceAssignmentKey && await hasRecoverableGenerationQueueSuccessor(db, {
-      taskId: row.task_id,
-      sourceAssignmentKey: input.sourceAssignmentKey,
-    })) {
       await db.query("COMMIT");
       return false;
     }
@@ -1058,26 +693,6 @@ export async function repairRunningSeedancePollJobs(
     staleDispatchMs?: number;
     config: GenerationQueueConfig;
     publisher: GenerationBullMQPublisher;
-    shardStore?: {
-      reserveRepairPoll(
-        db: SqlDatabase,
-        assignment: {
-          assignmentKey: string;
-          taskId: string;
-          mediaType: "image" | "video" | "audio";
-          stage: "poll";
-          routeKey: string;
-          redisJobId: string;
-          now: Date;
-          maxActiveShardsPerStage?: number;
-          reopenThreshold?: number;
-        },
-      ): Promise<{ assignmentKey: string; queueName: string } | undefined>;
-      markPublished(
-        db: SqlDatabase,
-        input: { assignmentKey: string; redisJobId: string; now: Date },
-      ): Promise<unknown>;
-    };
   },
 ): Promise<{ repairedTaskIds: string[] }> {
   const staleCutoff = new Date(
@@ -1169,13 +784,6 @@ export async function repairRunningSeedancePollJobs(
           t.locked_until IS NULL
           OR t.locked_until < $3
         )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM generation_queue_stage_assignments active_assignment
-          WHERE active_assignment.task_id = t.id
-            AND active_assignment.stage IN ('submit', 'poll')
-            AND active_assignment.status IN ('publishing', 'admitted')
-        )
       ORDER BY t.updated_at ASC, t.id ASC
       LIMIT $1
     `,
@@ -1192,22 +800,6 @@ export async function repairRunningSeedancePollJobs(
       staleCutoff,
     });
     if (!claimed) {
-      continue;
-    }
-
-    const activeAssignment = await queryOne<{ assignment_key: string }>(
-      db,
-      `
-        SELECT assignment_key
-        FROM generation_queue_stage_assignments
-        WHERE task_id = $1
-          AND stage = 'poll'
-          AND status IN ('publishing', 'admitted')
-        LIMIT 1
-      `,
-      [candidate.task_id],
-    );
-    if (activeAssignment) {
       continue;
     }
 
@@ -1230,52 +822,7 @@ export async function repairRunningSeedancePollJobs(
       "repair",
       repairToken,
     );
-    let queueName = mediaType === "image"
-      ? input.config.queues.pollImage
-      : mediaType === "audio" ? input.config.queues.pollAudio : input.config.queues.pollVideo;
-    let queueAssignmentKey: string | undefined;
-    if (input.config.sharding.enabled && input.shardStore) {
-      const existing = await queryOne<{ assignment_key: string; queue_name: string; redis_job_id: string }>(
-        db,
-        `
-          SELECT assignment.assignment_key, shard.queue_name, assignment.redis_job_id
-          FROM generation_queue_stage_assignments assignment
-          JOIN generation_queue_shards shard ON shard.id = assignment.shard_id
-          WHERE assignment.task_id = $1
-            AND assignment.stage = 'poll'
-            AND assignment.assignment_key LIKE $2
-            AND assignment.redis_job_id IS NOT NULL
-            AND assignment.status = 'publishing'
-          ORDER BY assignment.created_at ASC
-          LIMIT 1
-        `,
-        [
-          candidate.task_id,
-          `generation.repair.poll:${candidate.task_id}:${candidate.current_attempt_id}:%`,
-        ],
-      );
-      redisJobId = existing?.redis_job_id ?? redisJobId;
-      const assignment = existing ? null : await input.shardStore.reserveRepairPoll(db, {
-          assignmentKey: `generation.repair.poll:${candidate.task_id}:${candidate.current_attempt_id}:${repairToken}`,
-          taskId: candidate.task_id,
-          mediaType,
-          stage: "poll",
-          routeKey: [
-            providerExecutor,
-            modelCode,
-            createGenerationProviderRouteIdentity(snapshot),
-          ].filter(Boolean).join(":"),
-          redisJobId,
-          now: input.now,
-          maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
-          reopenThreshold: input.config.sharding.reopenThreshold,
-        });
-      if (!existing && !assignment) {
-        continue;
-      }
-      queueName = existing?.queue_name ?? assignment!.queueName;
-      queueAssignmentKey = existing?.assignment_key ?? assignment!.assignmentKey;
-    }
+    const queueName = selectGenerationQueue(input.config, "poll", candidate.task_id);
     await input.publisher.add(
       queueName,
       `generation.${mediaType}.poll.repair`,
@@ -1287,7 +834,6 @@ export async function repairRunningSeedancePollJobs(
         modelCode,
         providerExecutor,
         pollAttempt,
-        ...(queueAssignmentKey ? { queueAssignmentKey } : {}),
       },
       {
         jobId: redisJobId,
@@ -1307,13 +853,6 @@ export async function repairRunningSeedancePollJobs(
         },
       },
     );
-    if (queueAssignmentKey && input.shardStore) {
-      await input.shardStore.markPublished(db, {
-        assignmentKey: queueAssignmentKey,
-        redisJobId,
-        now: input.now,
-      });
-    }
     repairedTaskIds.push(candidate.task_id);
   }
 
@@ -1639,13 +1178,6 @@ async function markRunningPollRepairClaimed(
             )
             AND poll_outbox.status IN ('pending', 'processing', 'failed')
         )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM generation_queue_stage_assignments active_assignment
-          WHERE active_assignment.task_id = tasks.id
-            AND active_assignment.stage IN ('submit', 'poll')
-            AND active_assignment.status IN ('publishing', 'admitted')
-        )
         RETURNING id, current_attempt_id
       ), resumed_attempt AS (
         UPDATE task_attempts attempt
@@ -1806,81 +1338,6 @@ async function markRunningFinalizeRepairClaimed(
     recoveredQueueFailure: row?.recovered_queue_failure === true,
     recoveredImageFailure: row?.recovered_image_failure === true,
   };
-}
-
-async function releaseStaleGenerationQueueAssignmentIfStageExited(
-  db: SqlDatabase,
-  input: {
-    assignmentKey: string;
-    now: Date;
-    reopenThreshold?: number;
-    allowNonTerminalTask: boolean;
-    requireNoActiveOutbox: boolean;
-    reason: string;
-  },
-) {
-  await db.query("BEGIN");
-  try {
-    const releasable = await queryOne<{ assignment_key: string }>(
-      db,
-      `
-        SELECT assignment.assignment_key
-        FROM generation_queue_stage_assignments assignment
-        JOIN tasks task ON task.id = assignment.task_id
-        WHERE assignment.assignment_key = $1
-          AND assignment.status IN ('publishing', 'admitted')
-          AND (task.locked_until IS NULL OR task.locked_until <= $2)
-          AND ($3::boolean OR task.status IN ('succeeded', 'failed', 'canceled'))
-          AND (NOT $4::boolean OR NOT EXISTS (
-            SELECT 1
-            FROM outbox_events event
-            WHERE event.payload_json->>'taskId' = task.id::text
-              AND event.status IN ('pending', 'processing', 'failed')
-              AND (
-                (assignment.stage = 'submit' AND event.event_type = 'generation.task.created')
-                OR (assignment.stage = 'poll' AND event.event_type = 'generation.task.poll_requested')
-                OR (
-                  assignment.stage = 'fetch'
-                  AND event.event_type = 'generation.task.finalize_requested'
-                  AND event.payload_json->>'artifactStage' = 'fetch'
-                )
-                OR (
-                  assignment.stage = 'persist'
-                  AND event.event_type = 'generation.task.finalize_requested'
-                  AND COALESCE(event.payload_json->>'artifactStage', 'persist') <> 'fetch'
-                )
-              )
-          ))
-        FOR UPDATE OF assignment
-      `,
-      [input.assignmentKey, input.now, input.allowNonTerminalTask, input.requireNoActiveOutbox],
-    );
-    if (!releasable) {
-      await db.query("COMMIT");
-      return false;
-    }
-
-    const released = await releaseGenerationQueueStage(db, {
-      assignmentKey: input.assignmentKey,
-      reason: input.reason,
-      now: input.now,
-      reopenThreshold: input.reopenThreshold,
-    });
-    await db.query("COMMIT");
-    return released?.released === true;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
-function isLiveGenerationAssignmentJobState(state: GenerationQueueAssignmentJobState) {
-  return state === "waiting"
-    || state === "active"
-    || state === "delayed"
-    || state === "prioritized"
-    || state === "waiting-children"
-    || state === "paused";
 }
 
 function parseSnapshot(value: Record<string, unknown> | string) {

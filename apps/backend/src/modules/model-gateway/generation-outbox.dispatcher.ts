@@ -1,6 +1,4 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
-import { randomUUID } from "node:crypto";
-import { queryOne } from "../shared/db/sql.ts";
 import {
   claimOutboxEventsForDispatch,
   markOutboxEventFailed,
@@ -12,12 +10,7 @@ import {
   publishGenerationTaskCreatedToBullMQ,
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
-import { createGenerationProviderRouteIdentity } from "./generation-model-config-snapshot.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
-import {
-  markGenerationQueueStagePublished,
-  reserveGenerationQueueStageForPublish,
-} from "./generation-queue-shard.store.ts";
 
 const generationTaskCreatedEventType = "generation.task.created";
 const generationTaskFinalizeRequestedEventType = "generation.task.finalize_requested";
@@ -31,18 +24,6 @@ export interface DispatchGenerationOutboxBatchInput {
   retryDelayMs?: number;
   config: GenerationQueueConfig;
   publisher: GenerationBullMQPublisher;
-  shardStore?: GenerationQueueShardStore;
-}
-
-export interface GenerationQueueShardStore {
-  reserve(
-    db: SqlDatabase,
-    input: Parameters<typeof reserveGenerationQueueStageForPublish>[1],
-  ): ReturnType<typeof reserveGenerationQueueStageForPublish>;
-  markPublished(
-    db: SqlDatabase,
-    input: Parameters<typeof markGenerationQueueStagePublished>[1],
-  ): ReturnType<typeof markGenerationQueueStagePublished>;
 }
 
 export interface DispatchGenerationOutboxBatchResult {
@@ -56,7 +37,6 @@ interface DispatchClaimedGenerationOutboxEventsInput {
   retryDelayMs?: number;
   config: GenerationQueueConfig;
   publisher: GenerationBullMQPublisher;
-  shardStore?: GenerationQueueShardStore;
 }
 
 interface DispatchClaimedGenerationOutboxEventsDeps {
@@ -87,7 +67,6 @@ export async function dispatchGenerationOutboxBatch(
     retryDelayMs: input.retryDelayMs,
     config: input.config,
     publisher: input.publisher,
-    shardStore: input.shardStore,
   });
 }
 
@@ -101,45 +80,16 @@ export async function dispatchClaimedGenerationOutboxEvents(
   const markFailed = deps.markFailed ?? markOutboxEventFailed;
   const outcomes = await mapWithConcurrency(
     input.events,
-    input.config.sharding.publishConcurrency,
+    32,
     async (event) => {
     try {
       const taskId = readString(event.payload.taskId);
       console.log(`[generation-outbox] Processing event ${event.id} for task ${taskId}`);
 
-      const routedEvent = await routeGenerationOutboxEvent(db, event, input);
-      console.log(`[generation-outbox] Routed event, queueAssignmentKey: ${readString(routedEvent.payload.queueAssignmentKey) || 'none'}`);
-
-      // In production a shard queue is only consumable while a worker lease
-      // is held for it. Do not mark the outbox event processed when a stale
-      // shard assignment points at a queue with no live worker; leave it
-      // retryable so a later scan can route it to an owned shard.
-      if (input.config.workerEnvironment === "production") {
-        const queueName = readString(routedEvent.payload.queueName);
-        if (queueName && !(await hasLiveGenerationQueueWorkerLease(db, queueName))) {
-          throw new Error(`generation_queue_worker_unavailable:${queueName}`);
-        }
-      }
-
-      await publish(routedEvent, {
+      await publish(event, {
         config: input.config,
         publisher: input.publisher,
       });
-
-      const assignmentKey = readString(routedEvent.payload.queueAssignmentKey);
-      if (assignmentKey && input.shardStore) {
-        console.log(`[generation-outbox] Marking shard published for task ${taskId}, key: ${assignmentKey}`);
-        try {
-          await input.shardStore.markPublished(db, {
-            assignmentKey,
-            redisJobId: buildGenerationBullMQJob(routedEvent, input.config).jobId,
-            now: input.now,
-          });
-        } catch (err) {
-          console.log(`[generation-outbox] Failed to mark shard published: ${err instanceof Error ? err.message : String(err)}`);
-          // Redis accepted the job; assignment reconciliation owns DB repair.
-        }
-      }
     } catch (error) {
       const errorMessage = errorMessageFromUnknown(error);
       console.log(`[generation-outbox] Event ${event.id} failed: ${errorMessage}`);
@@ -168,164 +118,6 @@ export async function dispatchClaimedGenerationOutboxEvents(
       .filter((outcome) => outcome.status === "failed")
       .map((outcome) => outcome.eventId),
   };
-}
-
-async function hasLiveGenerationQueueWorkerLease(db: SqlDatabase, queueName: string) {
-  const row = await queryOne<{ matched: boolean }>(
-    db,
-    `SELECT EXISTS (
-       SELECT 1
-       FROM generation_queue_worker_leases
-       WHERE queue_name = $1
-         AND worker_ready_at IS NOT NULL
-         AND lease_until > clock_timestamp()
-     ) AS matched`,
-    [queueName],
-  );
-  return row?.matched === true;
-}
-
-async function routeGenerationOutboxEvent(
-  db: SqlDatabase,
-  event: OutboxEventRecord,
-  input: DispatchClaimedGenerationOutboxEventsInput,
-) {
-  if (!input.config.sharding.enabled || !input.shardStore) return event;
-  const mediaType = readMediaType(event.payload.mediaType);
-  const artifactStage = readString(event.payload.artifactStage);
-  const stage = event.eventType === generationTaskCreatedEventType
-    ? "submit"
-    : event.eventType === generationTaskPollRequestedEventType
-      ? "poll"
-      : artifactStage === "fetch" ? "fetch" : "persist";
-  const taskId = readRequiredString(event.payload.taskId);
-  const attemptId = readString(event.payload.attemptId);
-  const providerRouteIdentity = readString(event.payload.providerRouteIdentity)
-    || await readTaskProviderRouteIdentity(db, taskId);
-  const routeKey = [
-    readString(event.payload.providerExecutor) || "model-gateway",
-    readString(event.payload.modelCode),
-    providerRouteIdentity,
-    stage === "persist" ? readString(event.payload.storageBucket) : "",
-  ].filter(Boolean).join(":");
-  const assignmentDiscriminator = event.eventType === generationTaskCreatedEventType
-    ? readString(event.payload.dispatchToken) || event.id
-    : event.eventType === generationTaskPollRequestedEventType
-      ? readString(event.payload.dispatchToken) || event.id
-    : event.eventType === generationTaskFinalizeRequestedEventType
-      ? event.id
-      : readPositiveInteger(event.payload.pollAttempt) ?? 0;
-  const assignmentKey = `${event.eventType}:${taskId}${attemptId ? `:${attemptId}` : ""}:${stage}:${assignmentDiscriminator}`;
-  const redisJobId = buildGenerationBullMQJob(event, input.config).jobId;
-  let assignment: {
-    assignmentKey: string;
-    queueName: string;
-    shardId: string;
-    shardNo: number;
-    routeCode: string;
-  };
-  try {
-    assignment = await input.shardStore.reserve(db, {
-      assignmentKey,
-      taskId,
-      mediaType,
-      stage,
-      routeKey,
-      redisJobId,
-      now: input.now,
-      maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
-      reopenThreshold: input.config.sharding.reopenThreshold,
-    });
-  } catch (error) {
-    if (errorMessageFromUnknown(error) !== "generation_queue_assignment_already_released") throw error;
-    const released = await queryOneReleasedAssignment(db, { assignmentKey, taskId, redisJobId });
-    if (released) {
-      assignment = released;
-    } else {
-      // A Redis-missing repair drains the old shard. Re-route this retry with
-      // a fresh assignment key so the database allocator can choose a healthy
-      // shard or create a new one instead of reusing the broken queue.
-      const rerouteAssignmentKey = `${assignmentKey}:reroute:${randomUUID()}`;
-      assignment = await input.shardStore.reserve(db, {
-        assignmentKey: rerouteAssignmentKey,
-        taskId,
-        mediaType,
-        stage,
-        routeKey,
-        redisJobId,
-        now: input.now,
-        maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
-        reopenThreshold: input.config.sharding.reopenThreshold,
-      });
-    }
-  }
-  return {
-    ...event,
-    payload: {
-      ...event.payload,
-      queueName: assignment.queueName,
-      shardId: assignment.shardId,
-      shardNo: assignment.shardNo,
-      routeCode: assignment.routeCode,
-      queueAssignmentKey: assignment.assignmentKey,
-    },
-  };
-}
-
-async function queryOneReleasedAssignment(
-  db: SqlDatabase,
-  input: { assignmentKey: string; taskId: string; redisJobId: string },
-) {
-  const result = await db.query<{
-    assignment_key: string;
-    queue_name: string;
-    shard_id: string;
-    shard_no: number;
-    route_code: string;
-  }>(
-    `
-      SELECT assignment.assignment_key,
-             shard.queue_name,
-             shard.id AS shard_id,
-             shard.shard_no,
-             shard.route_code
-      FROM generation_queue_stage_assignments assignment
-      JOIN generation_queue_shards shard ON shard.id = assignment.shard_id
-      WHERE assignment.assignment_key = $1
-        AND assignment.task_id = $2::uuid
-        AND assignment.redis_job_id = $3
-        AND assignment.status = 'released'
-        AND assignment.release_reason IN ('completed', 'failed')
-      LIMIT 1
-    `,
-    [input.assignmentKey, input.taskId, input.redisJobId],
-  );
-  const row = result.rows[0];
-  return row ? {
-    assignmentKey: row.assignment_key,
-    queueName: row.queue_name,
-    shardId: row.shard_id,
-    shardNo: row.shard_no,
-    routeCode: row.route_code,
-  } : null;
-}
-
-async function readTaskProviderRouteIdentity(db: SqlDatabase, taskId: string) {
-  // Tasks are UUID-backed. Keep compatibility for legacy/manual outbox rows
-  // whose task identifier cannot be looked up safely.
-  if (!isUuid(taskId)) return "";
-  const result = await db.query<{ input_snapshot_json: Record<string, unknown> | string }>(
-    "SELECT input_snapshot_json FROM tasks WHERE id = $1 LIMIT 1",
-    [taskId],
-  );
-  const value = result.rows[0]?.input_snapshot_json;
-  if (!value) return "";
-  const snapshot = typeof value === "string" ? parseJsonRecord(value) : value;
-  return createGenerationProviderRouteIdentity(snapshot) ?? "";
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function readString(value: unknown) {

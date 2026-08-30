@@ -1,8 +1,9 @@
 import { Queue, type JobsOptions } from "bullmq";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { OutboxEventRecord } from "../shared/outbox/outbox-dispatch-repair.service.ts";
-import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import { selectGenerationQueue, type GenerationQueueConfig } from "./generation-queue.config.ts";
 
 export interface GenerationBullMQPublisher {
   add(
@@ -43,22 +44,10 @@ export interface GenerationBullMQJob {
     membershipPriority?: boolean;
     queuePriority?: number;
     priorityReason?: string;
-    queueAssignmentKey?: string;
     retrySequence?: number;
     dispatchToken?: string;
   };
   options: JobsOptions;
-}
-
-export interface GenerationDeadLetterInput {
-  sourceQueueName: string;
-  sourceJobId: string;
-  sourceJobName: string;
-  sourceJobData: Record<string, unknown>;
-  sourceJobOptions: JobsOptions;
-  failedReason: string;
-  attemptsMade: number;
-  failedAt: Date;
 }
 
 export function buildGenerationBullMQJob(
@@ -78,9 +67,7 @@ export function buildGenerationBullMQJob(
   const taskId = readRequiredString(event.payload.taskId, "taskId");
   const workflowId = readRequiredString(event.payload.workflowId, "workflowId");
   const mediaType = readMediaType(event.payload.mediaType);
-  const queueName =
-    readString(event.payload.queueName) ||
-    (mediaType === "video" ? config.queues.submitVideo : config.queues.submitImage);
+  const queueName = selectGenerationQueue(config, "submit", taskId);
   const dispatchToken = readString(event.payload.dispatchToken) || event.id;
   const jobId = buildGenerationBullMQJobId("generation.task.created", taskId, "submit", dispatchToken);
   const queuePriority = readQueuePriority(event.payload.queuePriority);
@@ -94,8 +81,6 @@ export function buildGenerationBullMQJob(
     providerExecutor: readString(event.payload.providerExecutor) || "model-gateway",
     ...(attemptId ? { attemptId } : {}),
   };
-  const queueAssignmentKey = readString(event.payload.queueAssignmentKey);
-  if (queueAssignmentKey) data.queueAssignmentKey = queueAssignmentKey;
   data.dispatchToken = dispatchToken;
   const retrySequence = readPositiveInteger(event.payload.retrySequence);
   if (retrySequence !== undefined) data.retrySequence = retrySequence;
@@ -153,11 +138,7 @@ function buildGenerationPollBullMQJob(
   );
 
   return {
-    queueName: mediaType === "image"
-      ? config.queues.pollImage
-      : mediaType === "audio"
-        ? config.queues.pollAudio
-        : config.queues.pollVideo,
+    queueName: selectGenerationQueue(config, "poll", taskId),
     jobName: mediaType === "image"
       ? "generation.image.poll.repair"
       : mediaType === "audio"
@@ -174,9 +155,6 @@ function buildGenerationPollBullMQJob(
       providerExecutor: readString(event.payload.providerExecutor)
         || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance"),
       pollAttempt,
-      ...(readString(event.payload.queueAssignmentKey)
-        ? { queueAssignmentKey: readString(event.payload.queueAssignmentKey) }
-        : {}),
     },
     options: {
       jobId,
@@ -206,10 +184,7 @@ function buildGenerationFinalizeBullMQJob(
   });
 
   return {
-    // The dispatcher may route finalize work to a dynamic fetch/persist shard.
-    // Legacy finalize events carry the original submit queueName, so only
-    // accept an explicit artifact queue or a generated artifact shard name.
-    queueName: resolveFinalizeQueueName(event.payload, config.queues.finalizeArtifact),
+    queueName: selectGenerationQueue(config, "result", taskId),
     jobName: "generation.task.finalize_requested",
     jobId,
     data: {
@@ -224,9 +199,6 @@ function buildGenerationFinalizeBullMQJob(
       storageBucket: readString(event.payload.storageBucket) || null,
       finalizeMode,
       ...(artifactStage ? { artifactStage } : {}),
-      ...(readString(event.payload.queueAssignmentKey)
-        ? { queueAssignmentKey: readString(event.payload.queueAssignmentKey) }
-        : {}),
     },
     options: {
       jobId,
@@ -270,41 +242,6 @@ export async function publishGenerationTaskCreatedToBullMQ(
   await input.publisher.add(job.queueName, job.jobName, job.data, job.options);
   console.log(`[generation-outbox] Successfully published task ${job.data.taskId} to queue ${job.queueName}`);
   return job;
-}
-
-export async function publishGenerationDeadLetter(
-  input: GenerationDeadLetterInput,
-  deps: {
-    config: GenerationQueueConfig;
-    publisher: GenerationBullMQPublisher;
-  },
-) {
-  const jobId = buildGenerationBullMQJobId(
-    "generation.dead_letter",
-    input.sourceQueueName,
-    input.sourceJobId,
-  );
-  await deps.publisher.add(
-    deps.config.queues.deadLetter,
-    "generation.dead_letter",
-    {
-      sourceQueueName: input.sourceQueueName,
-      sourceJobId: input.sourceJobId,
-      sourceJobName: input.sourceJobName,
-      sourceJobData: input.sourceJobData,
-      sourceJobOptions: replayableJobOptions(input.sourceJobOptions),
-      failedReason: input.failedReason,
-      attemptsMade: input.attemptsMade,
-      failedAt: input.failedAt.toISOString(),
-    },
-    {
-      jobId,
-      attempts: 1,
-      removeOnComplete: false,
-      removeOnFail: false,
-    },
-  );
-  return { queueName: deps.config.queues.deadLetter, jobId };
 }
 
 export function buildGenerationBullMQJobId(...parts: Array<string | number>) {
@@ -355,6 +292,22 @@ export async function publishGenerationBullMQJobWithConfirmation(input: {
   throw lastError;
 }
 
+export function assertGenerationQueueCapacity(
+  queueName: string,
+  counts: Record<string, number>,
+  maxPendingJobs: number,
+) {
+  const pendingJobs = generationQueuePendingJobs(counts);
+  if (pendingJobs >= maxPendingJobs) {
+    throw new Error(`generation_queue_capacity_reached:${queueName}`);
+  }
+}
+
+function generationQueuePendingJobs(counts: Record<string, number>) {
+  return ["waiting", "paused", "delayed", "prioritized", "active", "waiting-children"]
+    .reduce((total, status) => total + Math.max(0, Number(counts[status] ?? 0)), 0);
+}
+
 export function createBullMQGenerationPublisher(
   config: GenerationQueueConfig,
 ): CloseableGenerationBullMQPublisher {
@@ -390,11 +343,15 @@ export function createBullMQGenerationPublisher(
 
   return {
     async add(queueName, name, data, options) {
-      const queue = getQueue(queueName);
-      await publishGenerationBullMQJobWithConfirmation({
-        queueName,
-        add: () => queue.add(name, data, options),
-        getJob: (jobId) => queue.getJob(jobId),
+      const candidateQueueNames = generationQueueCandidates(config, queueName);
+      await publishToLeastLoadedGenerationQueue({
+        candidateQueueNames,
+        preferredQueueName: queueName,
+        name,
+        data,
+        options,
+        maxPendingJobs: config.queueLimits.maxPendingJobs,
+        getQueue,
       });
       await evictIdleQueues(queueName);
     },
@@ -403,6 +360,132 @@ export function createBullMQGenerationPublisher(
       queues.clear();
     },
   };
+}
+
+function generationQueueCandidates(config: GenerationQueueConfig, queueName: string) {
+  return Object.values(config.queueNames).find((queueNames) => queueNames.includes(queueName))
+    ?? [queueName];
+}
+
+async function publishToLeastLoadedGenerationQueue(input: {
+  candidateQueueNames: string[];
+  preferredQueueName: string;
+  name: string;
+  data: Record<string, unknown>;
+  options: JobsOptions;
+  maxPendingJobs: number;
+  getQueue(queueName: string): Queue;
+}) {
+  const jobId = typeof input.options.jobId === "string" ? input.options.jobId : undefined;
+  const lockQueue = input.getQueue(input.candidateQueueNames[0]);
+  const client = await lockQueue.client;
+  const lockKey = jobId
+    ? lockQueue.toKey(`generation-publish-${createHash("sha256").update(jobId).digest("hex")}`)
+    : lockQueue.toKey(`generation-publish-${randomUUID()}`);
+  const lockToken = randomUUID();
+  if (!await acquireGenerationQueueCapacityLock(client, lockKey, lockToken)) {
+    throw new Error(`generation_queue_publish_lock_unavailable:${input.preferredQueueName}`);
+  }
+  try {
+    const candidates = input.candidateQueueNames.map((queueName, index) => ({
+      queueName,
+      queue: input.getQueue(queueName),
+      preferred: queueName === input.preferredQueueName ? 0 : index + 1,
+    }));
+    if (jobId && (await Promise.all(candidates.map(({ queue }) => queue.getJob(jobId)))).some(Boolean)) {
+      return;
+    }
+    const ranked = await Promise.all(candidates.map(async (candidate) => ({
+      ...candidate,
+      pendingJobs: generationQueuePendingJobs(await candidate.queue.getJobCounts(
+        "waiting", "paused", "delayed", "prioritized", "active", "waiting-children",
+      )),
+    })));
+    ranked.sort((left, right) => left.pendingJobs - right.pendingJobs || left.preferred - right.preferred);
+    let capacityError: unknown;
+    for (const candidate of ranked) {
+      try {
+        await publishWithinGenerationQueueCapacity(
+          candidate.queue,
+          candidate.queueName,
+          input.options,
+          input.maxPendingJobs,
+          async () => {
+            await publishGenerationBullMQJobWithConfirmation({
+              queueName: candidate.queueName,
+              add: () => candidate.queue.add(input.name, input.data, input.options),
+              getJob: (id) => candidate.queue.getJob(id),
+            });
+          },
+        );
+        return;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith("generation_queue_capacity_reached:")) {
+          throw error;
+        }
+        capacityError = error;
+      }
+    }
+    throw capacityError ?? new Error(`generation_queue_capacity_reached:${input.preferredQueueName}`);
+  } finally {
+    await releaseGenerationQueueCapacityLock(client, lockKey, lockToken);
+  }
+}
+
+async function publishWithinGenerationQueueCapacity(
+  queue: Queue,
+  queueName: string,
+  options: JobsOptions,
+  maxPendingJobs: number,
+  publish: () => Promise<void>,
+) {
+  const jobId = typeof options.jobId === "string" ? options.jobId : undefined;
+  const client = await queue.client;
+  const lockKey = queue.toKey("generation-capacity-lock");
+  const lockToken = randomUUID();
+  const acquired = await acquireGenerationQueueCapacityLock(client, lockKey, lockToken);
+  if (!acquired) {
+    throw new Error(`generation_queue_capacity_lock_unavailable:${queueName}`);
+  }
+  try {
+    if (jobId && await queue.getJob(jobId)) {
+      return;
+    }
+    assertGenerationQueueCapacity(
+      queueName,
+      await queue.getJobCounts("waiting", "paused", "delayed", "prioritized", "active", "waiting-children"),
+      maxPendingJobs,
+    );
+    await publish();
+  } finally {
+    await releaseGenerationQueueCapacityLock(client, lockKey, lockToken);
+  }
+}
+
+async function acquireGenerationQueueCapacityLock(
+  client: Awaited<Queue["client"]>,
+  lockKey: string,
+  lockToken: string,
+) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const acquired = await client.set(lockKey, lockToken, "PX", 60_000, "NX");
+    if (acquired === "OK") return true;
+    await sleep(25 * (attempt + 1));
+  }
+  return false;
+}
+
+async function releaseGenerationQueueCapacityLock(
+  client: Awaited<Queue["client"]>,
+  lockKey: string,
+  lockToken: string,
+) {
+  await client.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0",
+    1,
+    lockKey,
+    lockToken,
+  );
 }
 
 function redisConnectionFromUrl(redisUrl: string) {
@@ -415,8 +498,9 @@ function redisConnectionFromUrl(redisUrl: string) {
     password: url.password ? decodeURIComponent(url.password) : undefined,
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: tlsEnabled ? {} : undefined,
-    connectTimeout: 2_000,
-    commandTimeout: 5_000,
+    keepAlive: 30_000,
+    connectTimeout: 3_000,
+    commandTimeout: 10_000,
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
     retryStrategy: (attempt: number) => Math.min(attempt * 100, 1_000),
@@ -493,15 +577,6 @@ function readArtifactStage(value: unknown): "fetch" | "persist" | undefined {
   return text === "fetch" || text === "persist" ? text : undefined;
 }
 
-function resolveFinalizeQueueName(payload: Record<string, unknown>, fallback: string) {
-  const explicit = readString(payload.artifactQueueName);
-  if (explicit) return explicit;
-  const queueName = readString(payload.queueName);
-  return /(^|-)generation-(image|video|audio)-(fetch|persist)-[a-z0-9]+-\d{3}$/.test(queueName)
-    ? queueName
-    : fallback;
-}
-
 function readPositiveInteger(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -514,15 +589,5 @@ function retryOptions(config: { attempts: number; backoffMs: number }): JobsOpti
       type: "exponential",
       delay: config.backoffMs,
     },
-  };
-}
-
-function replayableJobOptions(options: JobsOptions): Record<string, unknown> {
-  return {
-    attempts: options.attempts,
-    backoff: options.backoff,
-    removeOnComplete: options.removeOnComplete,
-    removeOnFail: options.removeOnFail,
-    priority: options.priority,
   };
 }

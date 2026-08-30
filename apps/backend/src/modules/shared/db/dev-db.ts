@@ -10,6 +10,13 @@ export interface DevDatabase extends SqlDatabase {
   close(): Promise<void>;
 }
 
+interface SharedDevDatabaseState {
+  database: DevDatabase;
+  closeUnderlyingPool(): Promise<void>;
+}
+
+let sharedDevDatabasePromise: Promise<SharedDevDatabaseState> | null = null;
+
 export function loadDatabasePoolConfig(env: NodeJS.ProcessEnv) {
   return {
     max: readConfiguredInteger(env, "DATABASE_POOL_MAX", 20, 1, 200),
@@ -19,6 +26,36 @@ export function loadDatabasePoolConfig(env: NodeJS.ProcessEnv) {
 }
 
 export async function createDevDb(): Promise<DevDatabase> {
+  if (process.env.COMIC_AI_SHARED_DATABASE_POOL === "true") {
+    return (await getSharedDevDatabase()).database;
+  }
+  return createStandaloneDevDb();
+}
+
+/** Closes the process-wide pool owned by the consolidated application runtime. */
+export async function closeSharedDevDb(): Promise<void> {
+  const pending = sharedDevDatabasePromise;
+  sharedDevDatabasePromise = null;
+  if (!pending) return;
+  const state = await pending;
+  await state.closeUnderlyingPool();
+}
+
+async function getSharedDevDatabase(): Promise<SharedDevDatabaseState> {
+  if (!sharedDevDatabasePromise) {
+    sharedDevDatabasePromise = createStandaloneDevDb().then((underlyingDatabase) => ({
+      database: {
+        query: underlyingDatabase.query.bind(underlyingDatabase),
+        // Individual services must not tear down the pool while other services use it.
+        async close() {},
+      },
+      closeUnderlyingPool: underlyingDatabase.close.bind(underlyingDatabase),
+    }));
+  }
+  return sharedDevDatabasePromise;
+}
+
+async function createStandaloneDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
     throw new Error("DATABASE_URL is required; configure PostgreSQL before starting the backend");

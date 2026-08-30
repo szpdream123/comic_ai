@@ -26,6 +26,7 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /writeDispatcherHeartbeatWithRetry/);
     assert.match(launcherScript, /connectTimeout:\s*2_000/);
     assert.match(launcherScript, /commandTimeout:\s*5_000/);
+    assert.match(launcherScript, /keepAlive:\s*30_000/);
     assert.match(launcherScript, /maxRetriesPerRequest:\s*1/);
     assert.match(launcherScript, /enableOfflineQueue:\s*false/);
     assert.match(launcherScript, /Dispatcher stalled/);
@@ -36,16 +37,15 @@ describe("generation queue launchers", () => {
     assert.doesNotMatch(launcherScript, /enqueueDueGenerationPolls/);
   });
 
-  it("exposes repair, due-poll, and shard lifecycle as an independent worker", () => {
+  it("exposes repair and due-poll handling as an independent worker", () => {
     const packageJson = readFileSync(join(process.cwd(), "package.json"), "utf8");
     const launcherPath = join(process.cwd(), "scripts", "run-generation-queue-maintenance.mjs");
     const devStack = readFileSync(join(process.cwd(), "scripts", "run-creator-dev-stack.mjs"), "utf8");
 
     assert.match(packageJson, /"worker:generation-repair"/);
     assert.equal(existsSync(launcherPath), true);
-    assert.match(devStack, /supervisor\.start\("generation-repair"/);
+    assert.match(devStack, /run-comic-ai-shared-runtime\.mjs/);
     assert.match(devStack, /restartOnFailure: true/);
-    assert.match(devStack, /run-generation-queue-maintenance\.mjs/);
 
     const launcherScript = readFileSync(launcherPath, "utf8");
     assert.match(launcherScript, /failStaleGenerationTasksBeforeProviderSubmission/);
@@ -56,17 +56,12 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /repairExpiredGenerationSubmitLeases/);
     assert.match(launcherScript, /repairQueuedGenerationTaskOutbox/);
     assert.match(launcherScript, /repairRunningSeedancePollJobs/);
-    assert.match(
-      launcherScript,
-      /repairStaleGenerationQueueStageAssignments[\s\S]*staleAssignmentMs:\s*config\.repair\.staleDispatchMs/,
-    );
     assert.match(launcherScript, /enqueueDueGenerationPolls/);
     assert.match(launcherScript, /reconcileActiveCanvasGenerationBatches/);
     assert.match(launcherScript, /createCanvasGenerationBatchDispatch/);
     assert.match(launcherScript, /restoreCanvasActorScope/);
     assert.match(launcherScript, /reconcileCanvasMediaDerivations/);
     assert.match(launcherScript, /findGenerationArtifactHandoff/);
-    assert.match(launcherScript, /retireIdleGenerationQueueShards/);
     assert.match(launcherScript, /runMaintenanceStep/);
     assert.match(launcherScript, /stepFailed=/);
     assert.match(launcherScript, /GenerationMaintenanceStepTimeoutError/);

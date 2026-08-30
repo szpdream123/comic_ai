@@ -13,10 +13,9 @@ if (process.env.CREATOR_DEV_STACK_MANAGED !== "true") {
 const [
   { createDevDb, runWithDatabaseContext },
   { createBullMQGenerationPublisher },
-  { createBullMQGenerationQueueAssignmentInspector },
+  { createBullMQGenerationQueueJobRemover },
   { createGenerationQueueAdminRecoveryJobOps, recoverGenerationQueueAdminCommands },
-  { markGenerationQueueStagePublished, reserveGenerationQueueRepairPollForPublish, retireIdleGenerationQueueShards },
-  { failStaleGenerationTasksBeforeProviderSubmission, repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs, repairStaleGenerationQueueStageAssignments },
+  { failStaleGenerationTasksBeforeProviderSubmission, repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs },
   { loadGenerationQueueConfig },
   { enqueueDueGenerationPolls },
   { GenerationMaintenanceStepTimeoutError, runIsolatedGenerationMaintenanceStep },
@@ -34,9 +33,8 @@ const [
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
-    import("../apps/backend/src/modules/model-gateway/generation-queue-assignment-inspector.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-queue-job-remover.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue-admin-command.recovery.ts"),
-    import("../apps/backend/src/modules/model-gateway/generation-queue-shard.store.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-redis-repair.service.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-due-poll.service.ts"),
@@ -58,7 +56,7 @@ const config = loadGenerationQueueConfig(process.env);
 const failedImageSubmissionRepairBatchLimit = 100;
 const db = await createGenerationMaintenanceDb();
 const publisher = createBullMQGenerationPublisher(config);
-const assignmentInspector = createBullMQGenerationQueueAssignmentInspector(config);
+const queueJobRemover = createBullMQGenerationQueueJobRemover(config);
 const adminRecoveryJobOps = createGenerationQueueAdminRecoveryJobOps(db, config);
 const maintenanceWorkerId = `generation-maintenance:${process.pid}`;
 const canvasStorageRuntime = createCanvasStorageRuntime(process.env);
@@ -67,7 +65,6 @@ const maintenanceStepTimeoutMs = positiveInteger(
   120_000,
 );
 let stopping = false;
-let lastShardLifecycleAt = 0;
 let forcedExitTimer = null;
 const reportMaintenanceError = createDedupedErrorReporter("generation-maintenance");
 
@@ -157,20 +154,6 @@ try {
           staleDispatchMs: config.repair.staleDispatchMs,
           config,
           publisher,
-          shardStore: {
-            reserveRepairPoll: (database, assignment) => reserveGenerationQueueRepairPollForPublish(database, assignment),
-            markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
-          },
-        }),
-    );
-    const assignmentRepair = await runMaintenanceStep(
-      "stale_assignment_repair",
-      () => repairStaleGenerationQueueStageAssignments(db, {
-          now,
-          limit: config.outbox.dispatchBatchSize,
-          inspector: assignmentInspector,
-          staleAssignmentMs: config.repair.staleDispatchMs,
-          reopenThreshold: config.sharding.reopenThreshold,
         }),
     );
     const jobCancellations = await runMaintenanceStep(
@@ -178,7 +161,7 @@ try {
       () => processGenerationQueueJobCancellations(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
-          remover: assignmentInspector,
+          remover: queueJobRemover,
       }),
     );
     const canvasBatchReconciliation = await runMaintenanceStep(
@@ -245,10 +228,6 @@ try {
         jobOps: adminRecoveryJobOps,
       }),
     );
-    const retiredShardCount = await runMaintenanceStep(
-      "idle_shard_retirement",
-      () => retireIdleShardsIfDue(now),
-    );
 
     if (preSubmissionFailure?.failedTaskIds.length) {
       console.info(`[generation-maintenance] failedPreSubmissionTasks=${preSubmissionFailure.failedTaskIds.length}`);
@@ -280,12 +259,6 @@ try {
     }
     if (duePoll?.enqueuedTaskIds.length) {
       console.info(`[generation-maintenance] enqueuedDuePollTasks=${duePoll.enqueuedTaskIds.length}`);
-    }
-    if (assignmentRepair?.releasedAssignmentKeys.length) {
-      console.info(`[generation-maintenance] repairedStaleAssignments=${assignmentRepair.releasedAssignmentKeys.length}`);
-    }
-    if (assignmentRepair?.inspectionFailedQueueNames.length) {
-      console.warn(`[generation-maintenance] skippedAssignmentRepairQueues=${assignmentRepair.inspectionFailedQueueNames.length}`);
     }
     if (jobCancellations && (
       jobCancellations.completedAssignmentKeys.length
@@ -334,9 +307,6 @@ try {
         `[generation-maintenance] recoveredAdminCommands=${adminCommandRecovery.recoveredCommandIds.length} terminalAdminCommands=${adminCommandRecovery.terminalCommandIds.length} retryableAdminCommands=${adminCommandRecovery.retryableCommandIds.length}`,
       );
     }
-    if (retiredShardCount && retiredShardCount > 0) {
-      console.info(`[generation-maintenance] retiredIdleShards=${retiredShardCount}`);
-    }
 
     const elapsedMs = Date.now() - startedAt;
     await sleep(Math.max(0, config.outbox.dispatchIntervalMs - elapsedMs));
@@ -380,12 +350,6 @@ function createDedupedErrorReporter(scope) {
     reported.add(key);
     console.error(`[${scope}] ${context} ${code}: ${message} (duplicate errors suppressed)`);
   };
-}
-
-async function retireIdleShardsIfDue(now) {
-  if (!config.sharding.enabled || now.getTime() - lastShardLifecycleAt < 10_000) return 0;
-  lastShardLifecycleAt = now.getTime();
-  return retireIdleGenerationQueueShards(db, new Date(now.getTime() - 15 * 60_000));
 }
 
 function loadDotEnvFile(envFilePath) {

@@ -105,29 +105,17 @@ function runDevFoundationSchema({ runtime, cwd, env }) {
   console.info("[schema] Foundation schema is ready.");
 }
 
-supervisor.start("phone-auth", ["scripts/run-phone-auth-dev-server.mjs"]);
+supervisor.start("comic-ai", [
+  ...resolveTsxRuntimeArgs(runtime),
+  join(process.cwd(), "scripts", "run-comic-ai-shared-runtime.mjs"),
+], { restartOnFailure: true });
 if (mediaCrawlerManaged) {
   supervisor.start("media-crawler", ["scripts/run-media-crawler-api.mjs"], { restartOnFailure: true });
 } else {
   console.info("[creator-dev] MEDIA_CRAWLER_MANAGED=false; MediaCrawler must run outside this server.");
 }
 if (generationQueueEnabled) {
-  supervisor.start("generation-outbox", [
-    ...resolveTsxRuntimeArgs(runtime),
-    "scripts/run-generation-outbox-dispatcher.mjs",
-  ], { restartOnFailure: true });
-  supervisor.start("generation-repair", [
-    ...resolveTsxRuntimeArgs(runtime),
-    "scripts/run-generation-queue-maintenance.mjs",
-  ], { restartOnFailure: true });
-  supervisor.start("generation-worker", [
-    ...resolveTsxRuntimeArgs(runtime),
-    "scripts/run-generation-video-worker.mjs",
-  ], { restartOnFailure: true });
-  supervisor.start("canvas-agent", [
-    ...resolveTsxRuntimeArgs(runtime),
-    "scripts/run-canvas-agent-worker.mjs",
-  ], { restartOnFailure: true });
+  console.info("[creator-dev] Generation and Canvas Agent workers run inside the shared application runtime.");
 } else {
   console.warn("[creator-dev] Generation queues are disabled. Model tasks will run only through synchronous fallback paths.");
 }

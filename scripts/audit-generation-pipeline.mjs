@@ -103,12 +103,6 @@ export async function auditGenerationPipeline(db, now = new Date()) {
           WHERE request.task_id = task.id
             AND request.next_poll_at IS NOT NULL
         )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM generation_queue_stage_assignments assignment
-          WHERE assignment.task_id = task.id
-            AND assignment.status = 'admitted'
-        )
       ORDER BY task.updated_at ASC
     `, [generationTaskTypes, now], { severity: "actionable" }),
     runCheck(db, "stale_processing_idempotency", `

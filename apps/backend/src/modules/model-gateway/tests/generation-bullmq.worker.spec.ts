@@ -61,7 +61,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "submitted", queuedPoll: true });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-poll-image");
+    assert.equal(added[0]?.queueName, "generation-poll");
     assert.equal(added[0]?.name, "generation.image.poll");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-image-1",
@@ -117,7 +117,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "succeeded", queuedPoll: false, queuedFinalize: true });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-finalize-artifact");
+    assert.equal(added[0]?.queueName, "generation-result");
     assert.equal(added[0]?.name, "generation.image.finalize");
   });
 
@@ -146,7 +146,7 @@ describe("generation BullMQ worker handlers", () => {
     });
 
     assert.deepEqual(result, { status: "skipped", queuedPoll: true });
-    assert.equal(added[0]?.queueName, "generation-poll-image");
+    assert.equal(added[0]?.queueName, "generation-poll");
     assert.equal(added[0]?.name, "generation.image.poll");
     assert.equal(
       (added[0]?.options as { jobId?: string }).jobId,
@@ -241,7 +241,7 @@ describe("generation BullMQ worker handlers", () => {
     });
 
     assert.deepEqual(result, { status: "skipped", queuedPoll: false, queuedSubmit: true });
-    assert.equal(added[0]?.queueName, "generation-submit-image");
+    assert.equal(added[0]?.queueName, "generation-submit");
     assert.equal(added[0]?.name, "generation.image.submit.retry");
     assert.equal((added[0]?.options as { delay?: number }).delay, 20_000);
   });
@@ -283,7 +283,7 @@ describe("generation BullMQ worker handlers", () => {
     });
 
     assert.deepEqual(result, { status: "submitted", queuedFinalize: true });
-    assert.equal(added[0]?.queueName, "generation-finalize-artifact");
+    assert.equal(added[0]?.queueName, "generation-result");
     assert.equal(added[0]?.name, "generation.image.finalize");
     assert.equal((added[0]?.data as { attemptId?: string }).attemptId, "attempt-image-sync-2");
     assert.equal(
@@ -309,7 +309,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+        GENERATION_POLL_VIDEO_QUEUE: "generation-poll",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -330,7 +330,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "submitted", queuedPoll: true });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-poll-video");
+    assert.equal(added[0]?.queueName, "generation-poll");
     assert.equal(added[0]?.name, "generation.video.poll");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-1",
@@ -532,7 +532,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+        GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -552,7 +552,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "rate_limited", queuedPoll: false });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-submit-video");
+    assert.equal(added[0]?.queueName, "generation-submit");
     assert.equal(added[0]?.name, "generation.video.submit.retry");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-1",
@@ -626,7 +626,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+        GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -646,7 +646,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "retryable", queuedPoll: false });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-submit-video");
+    assert.equal(added[0]?.queueName, "generation-submit");
     assert.equal(added[0]?.name, "generation.video.submit.retry");
     assert.equal((added[0]?.data as Record<string, unknown>).retrySequence, 5);
     assert.deepEqual(added[0]?.options, {
@@ -675,7 +675,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_SUBMIT_IMAGE_QUEUE: "generation-submit-image",
+        GENERATION_SUBMIT_IMAGE_QUEUE: "generation-submit",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -699,7 +699,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "rate_limited" });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-submit-image");
+    assert.equal(added[0]?.queueName, "generation-submit");
     assert.equal(added[0]?.name, "generation.image.submit.retry");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-image-1",
@@ -736,7 +736,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: generationQueueConfigWithMaxPollAttempts(3, {
-        GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+        GENERATION_POLL_VIDEO_QUEUE: "generation-poll",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -790,7 +790,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+        GENERATION_POLL_VIDEO_QUEUE: "generation-poll",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -813,7 +813,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "rate_limited", queuedPoll: true });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-poll-video");
+    assert.equal(added[0]?.queueName, "generation-poll");
     assert.equal(added[0]?.name, "generation.video.poll.rate-limit-retry");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-1",
@@ -891,7 +891,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -914,7 +914,7 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.deepEqual(result, { status: "succeeded", queuedPoll: false, queuedFinalize: true });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-finalize-artifact");
+    assert.equal(added[0]?.queueName, "generation-result");
     assert.equal(added[0]?.name, "generation.video.finalize");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-1",
@@ -948,7 +948,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -1192,7 +1192,7 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       config: loadGenerationQueueConfig({
-        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
       }),
       publisher: {
         async add(queueName, name, data, options) {
@@ -1229,7 +1229,7 @@ describe("generation BullMQ worker handlers", () => {
       failureCode: "concurrency:storage:creator-test:finalize",
     });
     assert.equal(added.length, 1);
-    assert.equal(added[0]?.queueName, "generation-finalize-artifact");
+    assert.equal(added[0]?.queueName, "generation-result");
     assert.equal(added[0]?.name, "generation.artifact.finalize.rate-limit-retry");
     assert.deepEqual(added[0]?.data, {
       taskId: "task-1",
@@ -1378,7 +1378,7 @@ describe("generation BullMQ worker handlers", () => {
       },
     };
     const config = loadGenerationQueueConfig({
-      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-result",
     });
     const processors = {
       async submitSeedanceVideo() { return { status: "settled" as const }; },

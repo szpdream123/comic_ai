@@ -8,7 +8,7 @@ export async function inspectGenerationPlatformMetrics(
 ) {
   const outboxStaleMs = input.outboxStaleMs ?? 120_000;
   const outboxStaleBefore = new Date(input.now.getTime() - outboxStaleMs);
-  const [outbox, polls, webhooks, tasks, shards, latency, stageLatency, missingSuccessors] = await Promise.all([
+  const [outbox, polls, webhooks, tasks, latency, stageLatency, missingSuccessors] = await Promise.all([
     db.query<{
       pending_count: number | string;
       ready_count: number | string;
@@ -53,19 +53,6 @@ export async function inspectGenerationPlatformMetrics(
         count(*) FILTER (WHERE status = 'result_unknown') AS result_unknown_count
       FROM tasks
       WHERE task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
-    `),
-    db.query<{
-      media_type: string;
-      stage: string;
-      state: string;
-      shard_count: number | string;
-      admitted_count: number | string;
-    }>(`
-      SELECT media_type, stage, state, count(*) AS shard_count,
-        COALESCE(sum(admitted_count), 0) AS admitted_count
-      FROM generation_queue_shards
-      GROUP BY media_type, stage, state
-      ORDER BY media_type, stage, state
     `),
     db.query<{ p95_ms: number | string | null; p99_ms: number | string | null; sample_count: number | string }>(`
       SELECT
@@ -179,13 +166,6 @@ export async function inspectGenerationPlatformMetrics(
       resultUnknownCount: Number(taskRow?.result_unknown_count ?? 0),
       missingSuccessorCount: missingSuccessors,
     },
-    shards: shards.rows.map((row) => ({
-      mediaType: row.media_type,
-      stage: row.stage,
-      state: row.state,
-      shardCount: Number(row.shard_count),
-      admittedCount: Number(row.admitted_count),
-    })),
     commitToProviderStart: {
       p95Ms: nullableNumber(latencyRow?.p95_ms),
       p99Ms: nullableNumber(latencyRow?.p99_ms),

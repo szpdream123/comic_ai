@@ -4,7 +4,7 @@ import {
   buildGenerationBullMQJobId,
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
-import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import { selectGenerationQueue, type GenerationQueueConfig } from "./generation-queue.config.ts";
 import { isGenerationArtifactStageNotReadyFailure } from "./generation-skipped-coordinator.ts";
 import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
 
@@ -654,7 +654,7 @@ async function enqueueVideoPollRateLimitRetryJob(
 ) {
   const retrySequence = nextRetrySequence(input.job.data);
   await input.publisher.add(
-    input.config.queues.pollVideo,
+    selectGenerationQueue(input.config, "poll", input.job.data.taskId),
     "generation.video.poll.rate-limit-retry",
     {
       taskId: input.job.data.taskId,
@@ -710,7 +710,7 @@ async function enqueueImagePollRateLimitRetryJob(
 ) {
   const retrySequence = nextRetrySequence(input.job.data);
   await input.publisher.add(
-    input.config.queues.pollImage,
+    selectGenerationQueue(input.config, "poll", input.job.data.taskId),
     "generation.image.poll.rate-limit-retry",
     {
       taskId: input.job.data.taskId,
@@ -770,7 +770,7 @@ async function enqueueFinalizeRateLimitRetryJob(
   };
 
   await input.publisher.add(
-    input.config.queues.finalizeArtifact,
+    selectGenerationQueue(input.config, "result", input.job.data.taskId),
     "generation.artifact.finalize.rate-limit-retry",
     jobData,
     {
@@ -812,7 +812,7 @@ async function enqueuePersistArtifactJob(
     ? outboxEventId
     : undefined;
   await input.publisher.add(
-    input.config.queues.finalizeArtifact,
+    selectGenerationQueue(input.config, "result", input.job.data.taskId),
     `generation.${mediaType}.persist`,
     {
       taskId: input.job.data.taskId,
@@ -950,7 +950,7 @@ async function enqueueVideoPollJob(
   pollAttempt: number,
 ) {
   await input.publisher.add(
-    input.config.queues.pollVideo,
+    selectGenerationQueue(input.config, "poll", input.job.data.taskId),
     "generation.video.poll",
     {
       taskId: input.job.data.taskId,
@@ -981,7 +981,7 @@ async function enqueueImagePollJob(
   pollAttempt: number,
 ) {
   await input.publisher.add(
-    input.config.queues.pollImage,
+    selectGenerationQueue(input.config, "poll", input.job.data.taskId),
     "generation.image.poll",
     {
       taskId: input.job.data.taskId,
@@ -1017,7 +1017,7 @@ async function enqueueVideoSubmitRetryJob(
   const retrySequence = nextRetrySequence(input.job.data);
   const submitWave = generationSubmitWaveJobData(input.job.data);
   await input.publisher.add(
-    input.config.queues.submitVideo,
+    selectGenerationQueue(input.config, "submit", input.job.data.taskId),
     "generation.video.submit.retry",
     {
       taskId: input.job.data.taskId,
@@ -1073,7 +1073,7 @@ async function enqueueImageSubmitRetryJob(
   const retrySequence = nextRetrySequence(input.job.data);
   const dispatchToken = input.job.data.dispatchToken?.trim();
   await input.publisher.add(
-    input.config.queues.submitImage,
+    selectGenerationQueue(input.config, "submit", input.job.data.taskId),
     "generation.image.submit.retry",
     {
       taskId: input.job.data.taskId,
@@ -1129,7 +1129,7 @@ async function enqueueAudioSubmitRetryJob(
   const retrySequence = nextRetrySequence(input.job.data);
   const submitWave = generationSubmitWaveJobData(input.job.data);
   await input.publisher.add(
-    input.config.queues.submitImage,
+    selectGenerationQueue(input.config, "submit", input.job.data.taskId),
     "generation.audio.submit.retry",
     {
       taskId: input.job.data.taskId,
@@ -1186,7 +1186,7 @@ async function enqueueVideoFinalizeJob(
   };
 
   await input.publisher.add(
-    input.config.queues.finalizeArtifact,
+    selectGenerationQueue(input.config, "result", input.job.data.taskId),
     "generation.video.finalize",
     jobData,
     {
@@ -1232,7 +1232,7 @@ async function enqueueImageFinalizeJob(
   };
 
   await input.publisher.add(
-    input.config.queues.finalizeArtifact,
+    selectGenerationQueue(input.config, "result", input.job.data.taskId),
     "generation.image.finalize",
     jobData,
     {
@@ -1266,7 +1266,7 @@ async function enqueueAudioPollJob(
   pollAttempt: number,
 ) {
   await input.publisher.add(
-    input.config.queues.pollAudio,
+    selectGenerationQueue(input.config, "poll", input.job.data.taskId),
     "generation.audio.poll",
     {
       taskId: input.job.data.taskId,
@@ -1296,7 +1296,7 @@ async function enqueueAudioFinalizeJob(
   }>,
 ) {
   await input.publisher.add(
-    input.config.queues.finalizeArtifact,
+    selectGenerationQueue(input.config, "result", input.job.data.taskId),
     "generation.audio.finalize",
     {
       taskId: input.job.data.taskId,

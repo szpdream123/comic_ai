@@ -52,7 +52,7 @@ if (existingPid) {
 const listenerPid = findListenerPid(port);
 if (listenerPid) {
   const listenerProcess = readWindowsProcess(listenerPid);
-  if (!isProjectProcess(listenerProcess, projectRoot, "phone-auth-dev-server")) {
+  if (!isProjectProcess(listenerProcess, projectRoot, "run-comic-ai-shared-runtime")) {
     console.error(`Port ${port} is occupied by a process outside this project (pid=${listenerPid}).`);
     process.exit(1);
   }
@@ -175,7 +175,7 @@ async function waitForStackReady(input) {
   const startedAt = Date.now();
   let lastStatus = "status unavailable";
   const requiredLogMarkers = [
-    "Phone auth dev server listening on",
+    "Comic AI shared runtime listening on",
   ];
   if (isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true")) {
     requiredLogMarkers.push("[media-crawler] API started on http://127.0.0.1:4312");

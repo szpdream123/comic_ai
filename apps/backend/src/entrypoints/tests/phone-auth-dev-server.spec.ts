@@ -160,9 +160,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       source,
       /async function enqueueVideoFinalizeIfProviderResultReady[\s\S]*t\.status IN \('running', 'result_unknown'\)[\s\S]*last_dispatched_at < \$4/,
     );
-    assert.match(
-      source,
-      /async function enqueueVideoFinalizeIfProviderResultReady[\s\S]*generation_queue_stage_assignments[\s\S]*assignment\.stage IN \('fetch', 'persist'\)[\s\S]*assignment\.status IN \('publishing', 'admitted'\)/,
+    assert.doesNotMatch(
+      source.match(/async function enqueueVideoFinalizeIfProviderResultReady[\s\S]*?async function /)?.[0] ?? "",
+      /generation_queue_stage_assignments/,
     );
   });
 
