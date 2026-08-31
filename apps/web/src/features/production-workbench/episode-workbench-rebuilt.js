@@ -3717,7 +3717,9 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
   const mediaType = resolveComposerReferenceMediaType(item);
   const previewUrl = resolveReferencePreview(item);
   const mediaSourceUrl = mediaType === "video" ? resolveReferenceMediaSource(item) : previewUrl;
-  const imagePreviewUrl = resolvePromptEditorMentionPreview(item, mediaType);
+  const imageLightboxUrl = mediaType === "image"
+    ? resolveStorageObjectContentUrl(item) || resolveReferenceMediaSource(item) || previewUrl
+    : "";
   const tooltipName = resolveReferenceTooltipName(item, mediaType === "audio" ? item.summary : "");
   const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
   const annotationSelected = options.annotationSelected === true;
@@ -3733,7 +3735,7 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
   return `
     <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""} ${annotationSelected ? "annotation-selected" : ""}" data-reference-media-type="${escapeAttr(mediaType)}" data-annotation-selection-key="${escapeAttr(annotationSelectionKey)}"${cardActionMarkup} title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button"${removeActionMarkup} data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(mediaType)}"${mediaType === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? title)}" data-image-preview-key="attachment:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? title)}" title="双击查看大图"` : ""}>${preview}</span>
+      <span class="episode-replica-ref-art ${escapeAttr(mediaType)}"${mediaType === "image" && imageLightboxUrl ? ` data-image-preview-url="${escapeAttr(imageLightboxUrl)}" data-image-preview-name="${escapeAttr(item.name ?? title)}" data-image-preview-key="attachment:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? title)}" title="双击查看大图"` : ""}>${preview}</span>
       ${mediaType === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
       ${mediaType === "audio" || mediaType === "video" ? `<strong>${escapeHtml(title)}</strong>` : ""}
     </article>
@@ -3815,6 +3817,9 @@ function renderQuickReferenceItem(item, index = 0, selected = false, annotationS
   const kind = resolveComposerReferenceMediaType(item);
   const mediaSourceUrl = kind === "video" ? resolveReferenceMediaSource(item) : previewUrl;
   const imagePreviewUrl = resolvePromptEditorMentionPreview(item, kind);
+  const imageLightboxUrl = kind === "image"
+    ? resolveStorageObjectContentUrl(item) || resolveReferenceMediaSource(item) || previewUrl
+    : "";
   const storyboardReferences = Array.isArray(item?.references) ? item.references.filter(Boolean) : [];
   const voiceName = String(item?.voiceName ?? "").trim();
   const tooltipName = resolveReferenceTooltipName(item, voiceName);
@@ -3822,7 +3827,7 @@ function renderQuickReferenceItem(item, index = 0, selected = false, annotationS
   return `
     <article class="episode-replica-ref-card quick-reference ${selected ? "selected " : ""}${annotationSelected ? "annotation-selected " : ""}${voiceName ? "voice configured " : ""}${escapeAttr(kind)}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}" data-annotation-selection-key="${escapeAttr(annotationSelectionKey)}" data-reference-media-type="${escapeAttr(kind)}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(kind)}"${kind === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? "参考图片")}" data-image-preview-key="quick-reference:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? "参考图片")}" title="双击查看大图"` : ""}>
+      <span class="episode-replica-ref-art ${escapeAttr(kind)}"${kind === "image" && imageLightboxUrl ? ` data-image-preview-url="${escapeAttr(imageLightboxUrl)}" data-image-preview-name="${escapeAttr(item.name ?? "参考图片")}" data-image-preview-key="quick-reference:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? "参考图片")}" title="双击查看大图"` : ""}>
         ${storyboardReferences.length
           ? renderStoryboardPreviewThumb(storyboardReferences)
           : kind === "audio"
@@ -5930,8 +5935,7 @@ function resolveSelectedImagePreview(storyboard) {
   );
   const previewUrl = selected?.preview ?? selected?.previewUrl ?? selected?.previewImageUrl ?? selected?.src ?? storyboard?.previewImageUrl;
   return resolveMediaPreviewUrl({
-    ...(selected ?? {}),
-    ...storyboard,
+    ...(selected ?? storyboard ?? {}),
     thumbnailSrc: previewUrl,
     thumbnailUrl: previewUrl,
     previewThumbnailUrl: previewUrl,
@@ -5950,9 +5954,14 @@ function resolveSelectedVideoPreview(storyboard) {
 
 function resolveSelectedImageSource(storyboard) {
   const selected = (storyboard?.uploadedImages ?? []).find(
-    (item) => item.id === storyboard?.currentImageAssetVersionId && item?.src,
+    (item) => item.id === storyboard?.currentImageAssetVersionId,
   );
-  return selected?.src ?? storyboard?.previewImageUrl ?? null;
+  const source = selected ?? storyboard;
+  return resolveStorageObjectContentUrl(source)
+    || resolveReferenceMediaSource(source)
+    || source?.src
+    || storyboard?.previewImageUrl
+    || null;
 }
 
 function resolveSelectedVideoSource(storyboard) {
