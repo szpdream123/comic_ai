@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createNodeHttpServer, request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import JSZip from "jszip";
@@ -11371,6 +11373,256 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("retries a transient source video download while exporting MP4 files", async () => {
+    const bucket = "episode-export-download-retry";
+    const sourceBytes = directUploadMp4Bytes;
+    let sourceRequestCount = 0;
+    let sourceUnavailable = false;
+    const signedUrlExpiryTimes: number[] = [];
+    const sourceServer = createNodeHttpServer((_request, response) => {
+      sourceRequestCount += 1;
+      if (sourceRequestCount === 1 || sourceUnavailable) {
+        response.statusCode = 503;
+        response.end("temporarily unavailable");
+        return;
+      }
+      response.setHeader("content-type", "video/mp4");
+      response.setHeader("content-length", String(sourceBytes.byteLength));
+      response.end(sourceBytes);
+    });
+    await new Promise<void>((resolve) => sourceServer.listen(0, "127.0.0.1", resolve));
+    const sourceAddress = sourceServer.address();
+    assert.ok(sourceAddress && typeof sourceAddress === "object");
+    const sourceUrl = `http://127.0.0.1:${sourceAddress.port}/source.mp4`;
+    const tempRoot = await mkdtemp(join(tmpdir(), "comic-ai-export-download-retry-"));
+    const destinationPath = join(tempRoot, "source.mp4");
+
+    try {
+      await __phoneAuthDevServerTestUtils.copyEpisodeExportSourceObjectToFile({
+        runtime: {
+          adapter: {
+            async createSignedReadUrl(input: { expiresAt: Date }) {
+              signedUrlExpiryTimes.push(input.expiresAt.getTime());
+              return { url: sourceUrl, expiresAt: input.expiresAt };
+            },
+          },
+        } as never,
+        bucket,
+        objectKey: `episode-export-retry/${randomUUID()}.mp4`,
+        destinationPath,
+        signedUrlExpiresInSeconds: 60,
+        now: new Date("2000-01-01T00:00:00.000Z"),
+      });
+
+      assert.deepEqual(await readFile(destinationPath), sourceBytes);
+      assert.equal(sourceRequestCount, 2);
+      assert.equal(signedUrlExpiryTimes.every((expiresAt) => expiresAt > Date.now()), true);
+
+      sourceUnavailable = true;
+      sourceRequestCount = 0;
+      await assert.rejects(
+        __phoneAuthDevServerTestUtils.copyEpisodeExportSourceObjectToFile({
+          runtime: {
+            adapter: {
+              async createSignedReadUrl(input: { expiresAt: Date }) {
+                signedUrlExpiryTimes.push(input.expiresAt.getTime());
+                return { url: sourceUrl, expiresAt: input.expiresAt };
+              },
+            },
+          } as never,
+          bucket,
+          objectKey: `episode-export-retry/${randomUUID()}.mp4`,
+          destinationPath: join(tempRoot, "unavailable-source.mp4"),
+          signedUrlExpiresInSeconds: 60,
+          now: new Date(),
+        }),
+        /jianying_source_download_503/,
+      );
+      assert.equal(sourceRequestCount, 3);
+    } finally {
+      sourceServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) => sourceServer.close((error) => error ? reject(error) : resolve()));
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a transient COS archive upload while exporting MP4 files", async () => {
+    const now = new Date("2026-08-31T00:00:00.000Z");
+    const userId = randomUUID();
+    const projectId = randomUUID();
+    const episodeId = randomUUID();
+    const bucket = "episode-export-upload-retry";
+    const tempRoot = await mkdtemp(join(tmpdir(), "comic-ai-export-upload-retry-"));
+    const archivePath = join(tempRoot, "storyboard-videos.zip");
+    const archiveBytes = Buffer.concat([directUploadMp4Bytes, Buffer.from("archive")]);
+    await writeFile(archivePath, archiveBytes);
+    let uploadCount = 0;
+    const uploadedBodies: Buffer[] = [];
+    const statusTransitions: string[] = [];
+    let storageRow: Record<string, unknown> | null = null;
+    const db = {
+      async query(sql: string, params: unknown[] = []) {
+        if (/SELECT owner_user_id FROM projects/.test(sql)) {
+          return { rows: [{ owner_user_id: userId }] };
+        }
+        if (/INSERT INTO storage_objects/.test(sql)) {
+          storageRow = {
+            id: params[0],
+            project_id: params[1],
+            canvas_project_id: params[2],
+            bucket: params[3],
+            object_key: `AIManhuaDrama/20260831/${params[0]}-episode-${episodeId}-storyboard-videos.zip`,
+            content_type: params[5],
+            size_bytes: params[6],
+            checksum: params[7],
+            provider: params[8],
+            status: params[9],
+            etag: params[10],
+            version_id: params[11],
+            last_verified_at: null,
+            deleted_at: null,
+            metadata_json: JSON.parse(String(params[14])),
+            created_by_user_id: params[15],
+            created_at: params[16],
+          };
+          statusTransitions.push(String(params[9]));
+          return { rows: [storageRow] };
+        }
+        if (/status = 'available'/.test(sql)) {
+          storageRow = {
+            ...storageRow,
+            content_type: params[1],
+            size_bytes: params[2],
+            etag: params[4],
+            version_id: params[5],
+            metadata_json: JSON.parse(String(params[6])),
+            status: "available",
+            last_verified_at: params[7],
+          };
+          statusTransitions.push("available");
+          return { rows: [storageRow] };
+        }
+        if (/SET status = \$2/.test(sql)) {
+          storageRow = { ...storageRow, status: params[1], last_verified_at: params[2] };
+          statusTransitions.push(String(params[1]));
+          return { rows: [storageRow] };
+        }
+        throw new Error(`unexpected_episode_export_test_query:${sql.trim().slice(0, 80)}`);
+      },
+    };
+
+    try {
+      const result = await __phoneAuthDevServerTestUtils.uploadEpisodeExportArchive(db as never, {
+        archivePath,
+        sizeBytes: archiveBytes.byteLength,
+        projectId,
+        episodeId,
+        runtime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket,
+          adapter: {
+            async putObject(input: { body: NodeJS.ReadableStream }) {
+              uploadCount += 1;
+              uploadedBodies.push(await drainEpisodeExportUploadBody(input.body));
+              if (uploadCount === 1) {
+                throw new Error("transient_cos_upload_failure");
+              }
+              return { eTag: "episode-export-upload-retry-etag", versionId: null };
+            },
+          },
+        } as never,
+        createdByUserId: userId,
+        clipCount: 1,
+        exportType: "mp4",
+        now,
+      });
+
+      assert.equal(result.status, "available");
+      assert.equal(uploadCount, 2);
+      assert.deepEqual(uploadedBodies[1], uploadedBodies[0]);
+      assert.deepEqual(statusTransitions, ["pending_upload", "available"]);
+
+      uploadCount = 0;
+      statusTransitions.length = 0;
+      storageRow = null;
+      const reconciled = await __phoneAuthDevServerTestUtils.uploadEpisodeExportArchive(db as never, {
+        archivePath,
+        sizeBytes: archiveBytes.byteLength,
+        projectId,
+        episodeId,
+        runtime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket,
+          adapter: {
+            async putObject(input: { body: NodeJS.ReadableStream }) {
+              uploadCount += 1;
+              await drainEpisodeExportUploadBody(input.body);
+              throw new Error("ambiguous_cos_upload_result");
+            },
+            async headObject() {
+              return {
+                exists: true,
+                contentLength: archiveBytes.byteLength,
+                eTag: "reconciled-etag",
+                versionId: null,
+              };
+            },
+          },
+        } as never,
+        createdByUserId: userId,
+        clipCount: 1,
+        exportType: "mp4",
+        now,
+      });
+      assert.equal(reconciled.status, "available");
+      assert.equal(uploadCount, 1);
+      assert.deepEqual(statusTransitions, ["pending_upload", "available"]);
+
+      uploadCount = 0;
+      statusTransitions.length = 0;
+      storageRow = null;
+      const rejectedUploadBodies: NodeJS.ReadableStream[] = [];
+      await assert.rejects(
+        __phoneAuthDevServerTestUtils.uploadEpisodeExportArchive(db as never, {
+          archivePath,
+          sizeBytes: archiveBytes.byteLength,
+          projectId,
+          episodeId,
+          runtime: {
+            mode: "cos",
+            provider: "tencent_cos",
+            bucket,
+            adapter: {
+              async putObject(input: { body: NodeJS.ReadableStream }) {
+                uploadCount += 1;
+                rejectedUploadBodies.push(input.body);
+                throw new Error("persistent_cos_upload_failure");
+              },
+              async headObject() {
+                return { exists: false };
+              },
+            },
+          } as never,
+          createdByUserId: userId,
+          clipCount: 1,
+          exportType: "mp4",
+          now,
+        }),
+        /persistent_cos_upload_failure/,
+      );
+      assert.equal(uploadCount, 3);
+      assert.equal(
+        rejectedUploadBodies.every((body) => (body as NodeJS.ReadableStream & { destroyed: boolean }).destroyed),
+        true,
+      );
+      assert.deepEqual(statusTransitions, ["pending_upload", "failed"]);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes local storyboard generation target ids before persisting snapshots", async () => {
     const db = await createMigratedTestDb();
     await db.query(
@@ -17527,6 +17779,14 @@ async function loginAsAccount(origin: string, account: string, password: string)
   } finally {
     await fallbackDb?.close();
   }
+}
+
+async function drainEpisodeExportUploadBody(body: NodeJS.ReadableStream) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 async function loginOpsAdmin(

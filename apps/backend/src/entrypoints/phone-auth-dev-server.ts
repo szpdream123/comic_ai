@@ -16377,17 +16377,36 @@ async function copyEpisodeExportSourceObjectToFile(input: {
     await copyFile(resolveLocalStorageObjectPath(input.bucket, input.objectKey), input.destinationPath);
     return;
   } catch {
-    const signed = await input.runtime.adapter.createSignedReadUrl({
-      bucket: input.bucket,
-      objectKey: input.objectKey,
-      expiresAt: new Date(input.now.getTime() + input.signedUrlExpiresInSeconds * 1000),
+    await retryEpisodeExportStorageOperation(async () => {
+      const signed = await input.runtime.adapter.createSignedReadUrl({
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        expiresAt: new Date(Date.now() + input.signedUrlExpiresInSeconds * 1000),
+      });
+      const response = await fetch(signed.url);
+      if (!response.ok || !response.body) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`jianying_source_download_${response.status}`);
+      }
+      await pipeline(Readable.fromWeb(response.body as never), createWriteStream(input.destinationPath));
     });
-    const response = await fetch(signed.url);
-    if (!response.ok || !response.body) {
-      throw new Error(`jianying_source_download_${response.status}`);
-    }
-    await pipeline(Readable.fromWeb(response.body as never), createWriteStream(input.destinationPath));
   }
+}
+
+async function retryEpisodeExportStorageOperation<T>(operation: () => Promise<T>) {
+  const retryAttempts = 3;
+  const retryDelayMs = 1_000;
+  for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt >= retryAttempts) {
+        throw error;
+      }
+      await delay(retryDelayMs);
+    }
+  }
+  throw new Error("episode_export_storage_retry_exhausted");
 }
 
 async function uploadEpisodeExportArchive(
@@ -16426,25 +16445,44 @@ async function uploadEpisodeExportArchive(
     now: input.now,
   });
   try {
-    let uploadResult: { eTag?: string | null; versionId?: string | null } | undefined;
-    if (
-      (input.runtime.mode === "cos" || input.runtime.mode === "s3_compatible") &&
-      typeof input.runtime.adapter.putObject === "function"
-    ) {
-      uploadResult = await input.runtime.adapter.putObject({
-        bucket: storageObject.bucket,
-        objectKey: storageObject.objectKey,
-        body: createReadStream(input.archivePath),
-        contentType: "application/zip",
-        contentLength: input.sizeBytes,
-      });
-    } else {
+    const uploadResult = await retryEpisodeExportStorageOperation(async () => {
+      if (
+        (input.runtime.mode === "cos" || input.runtime.mode === "s3_compatible") &&
+        typeof input.runtime.adapter.putObject === "function"
+      ) {
+        const archiveStream = createReadStream(input.archivePath);
+        try {
+          return await input.runtime.adapter.putObject({
+            bucket: storageObject.bucket,
+            objectKey: storageObject.objectKey,
+            body: archiveStream,
+            contentType: "application/zip",
+            contentLength: input.sizeBytes,
+          });
+        } catch (error) {
+          archiveStream.destroy();
+          const remote = typeof input.runtime.adapter.headObject === "function"
+            ? await input.runtime.adapter.headObject({
+              bucket: storageObject.bucket,
+              objectKey: storageObject.objectKey,
+            }).catch(() => null)
+            : null;
+          if (remote?.exists && remote.contentLength === input.sizeBytes) {
+            return {
+              eTag: remote.eTag ?? null,
+              versionId: remote.versionId ?? null,
+            };
+          }
+          throw error;
+        }
+      }
       await writeLocalStorageObjectFromStream({
         bucket: storageObject.bucket,
         objectKey: storageObject.objectKey,
         body: createReadStream(input.archivePath),
       });
-    }
+      return undefined;
+    });
     const available = await markStorageObjectAvailable(db, {
       storageObjectId: storageObject.id,
       contentType: "application/zip",
@@ -36347,6 +36385,8 @@ export type { Server };
 export const __phoneAuthDevServerTestUtils = {
   appendCanvasGenerationSkillReference,
   appendImageStylePromptForGeneration,
+  copyEpisodeExportSourceObjectToFile,
+  uploadEpisodeExportArchive,
   resolveVideoGenerationStyleBody,
   imageGenerationSkillReference,
   appendCanvasAnimationSpritePrompt,
