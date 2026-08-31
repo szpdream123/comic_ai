@@ -443,6 +443,7 @@ import { buildGenerationProviderPayloadRef } from "../modules/model-gateway/gene
 import {
   createGenerationModelConfigSnapshotForTask,
   createGenerationProviderRouteIdentity,
+  resolveGenerationModelConfigForTask,
 } from "../modules/model-gateway/generation-model-config-snapshot.ts";
 import { ModelError, translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
@@ -452,6 +453,7 @@ import { ModelflareResponsesAdapter } from "../modules/model-gateway/modelflare-
 import type { TextGatewayChatCompletionRequest } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
 import {
+  appendProviderRequestDiagnostics,
   createOrReuseProviderRequest,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
@@ -5912,54 +5914,59 @@ function readEnumValues(value: unknown): string[] {
   return readStringArray(schema.options);
 }
 
-function createSeedancePollAdapterFromModelConfig(
+function createVideoPollAdapterFromModelConfig(
   modelConfig: AiModelConfigRecord | undefined,
   env: NodeJS.ProcessEnv,
   fetchImpl?: typeof fetch,
 ) {
-  if (modelConfig) {
-    const adapter = createProviderAdapterFromModelConfig(
-      {
-        providerProtocol: modelConfig.providerProtocol,
-        providerModel: modelConfig.providerModel,
-        providerConfig: modelConfig.providerConfig,
-        mediaType: modelConfig.mediaType,
-        invocationMode: modelConfig.invocationMode,
-      },
-      env,
-      resolveGenerationProviderFetch(fetchImpl, "video", env),
-    );
-    if (adapter instanceof SeedanceVideoProviderAdapter && isVideoPollProviderAdapter(adapter)) {
-      return adapter;
-    }
-    if (isLingdongModelConfig(modelConfig) && isVideoPollProviderAdapter(adapter)) {
-      return adapter;
-    }
-    if (modelConfig.providerProtocol === "san_bao" && isVideoPollProviderAdapter(adapter)) {
-      return adapter;
-    }
-    if (modelConfig.providerProtocol === "chiyuan_video" && isVideoPollProviderAdapter(adapter)) {
-      return adapter;
-    }
-    if (isLingdongModelConfig(modelConfig)) {
-      throw new Error("lingdong_video_poll_adapter_unsupported");
-    }
-    if (modelConfig.providerProtocol === "san_bao") {
-      throw new Error("san_bao_video_poll_adapter_unsupported");
-    }
+  if (!modelConfig) {
+    throw new Error("video_poll_model_config_missing");
   }
+  const adapter = createProviderAdapterFromModelConfig(
+    {
+      providerProtocol: modelConfig.providerProtocol,
+      providerModel: modelConfig.providerModel,
+      providerConfig: modelConfig.providerConfig,
+      mediaType: modelConfig.mediaType,
+      invocationMode: modelConfig.invocationMode,
+    },
+    env,
+    resolveGenerationProviderFetch(fetchImpl, "video", env),
+  );
+  if (isVideoPollProviderAdapter(adapter)) {
+    return adapter;
+  }
+  throw new Error(`video_poll_adapter_unsupported:${modelConfig.providerProtocol}`);
+}
 
-  return new SeedanceVideoProviderAdapter({
-    apiKey: env[env.SEEDANCE_API_KEY_ENV?.trim() || "VOLCENGINE_ARK_API_KEY"]?.trim() ?? "",
-    model: env.SEEDANCE_PROVIDER_MODEL?.trim() || "seedance-1-0-pro",
-    createTaskEndpoint: "unused://create",
-    queryTaskEndpoint: joinProviderUrl(
-      env.SEEDANCE_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com",
-      env.SEEDANCE_QUERY_TASK_ENDPOINT?.trim() ||
-        "/api/v3/contents/generations/tasks/{taskId}",
-    ),
-    fetchImpl: resolveGenerationProviderFetch(fetchImpl, "video", env),
-  });
+function deferReadTimeVideoPollFailure(error: unknown) {
+  return {
+    ...ModelError.fromUnknown(error, {
+      mediaType: "video",
+      phase: "poll",
+    }).toRedactedProviderRecord(),
+    failureCode: "provider_poll_read_sync_deferred",
+    diagnosticNote: "读取任务状态时供应商查询失败，已交由后台轮询继续确认，不在读请求中终止任务。",
+  };
+}
+
+function buildReadTimeVideoPollPayload(
+  snapshot: Record<string, unknown>,
+  providerResponse: Record<string, unknown> | string | null | undefined,
+) {
+  let providerResponseRedacted: Record<string, unknown> = {};
+  if (typeof providerResponse === "string") {
+    try {
+      providerResponseRedacted = readJsonRecord(JSON.parse(providerResponse));
+    } catch {
+      providerResponseRedacted = {};
+    }
+  } else {
+    providerResponseRedacted = readJsonRecord(providerResponse);
+  }
+  return Object.keys(providerResponseRedacted).length > 0
+    ? { ...snapshot, providerResponseRedacted }
+    : snapshot;
 }
 
 function isVideoPollProviderAdapter(adapter: unknown): adapter is {
@@ -7534,7 +7541,7 @@ async function readGenerationTaskResponseForSession(
     });
     const generationQueueConfig = loadGenerationQueueConfig(input.runtimeEnv);
     if (!generationQueueConfig.outboxDispatcherEnabled && !generationQueueConfig.workersEnabled) {
-      await syncSeedanceVideoTaskOnRead(db, {
+      await syncVideoTaskOnRead(db, {
         taskId: input.taskId,
         sessionToken: input.sessionToken,
         runtime: input.runtime,
@@ -9376,7 +9383,7 @@ export async function repairTimedOutEpisodeGenerationTasks(
   return { timedOutTaskIds };
 }
 
-async function syncSeedanceVideoTaskOnRead(
+async function syncVideoTaskOnRead(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     taskId: string;
@@ -9387,6 +9394,9 @@ async function syncSeedanceVideoTaskOnRead(
     now: Date;
   },
 ) {
+  const pollEligibleBefore = new Date(
+    input.now.getTime() - loadGenerationQueueConfig(input.env).poll.video.intervalMs,
+  );
   const row = await queryOne<{
     task_id: string;
     workflow_id: string;
@@ -9396,9 +9406,9 @@ async function syncSeedanceVideoTaskOnRead(
     input_snapshot_json: Record<string, unknown> | string;
     provider_request_id: string | null;
     external_request_id: string | null;
+    provider_response_redacted_json: Record<string, unknown> | string | null;
     reservation_id: string | null;
     amount_reserved: number | string | null;
-    provider_protocol: string | null;
   }>(
     db,
     `
@@ -9411,24 +9421,22 @@ async function syncSeedanceVideoTaskOnRead(
         t.input_snapshot_json,
         pr.id AS provider_request_id,
         pr.external_request_id,
+        pr.response_redacted_json AS provider_response_redacted_json,
         r.id AS reservation_id,
-        r.amount_reserved,
-        task_model_config.provider_protocol
+        r.amount_reserved
       FROM tasks t
       JOIN projects project ON project.id = t.project_id
-      LEFT JOIN ai_model_configs task_model_config
-        ON task_model_config.model_code = COALESCE(t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model')
       LEFT JOIN LATERAL (
-        SELECT request.id, request.external_request_id
+        SELECT request.id, request.external_request_id, request.response_redacted_json
         FROM provider_requests request
         WHERE request.task_id = t.id
           AND (
             request.attempt_id = t.current_attempt_id
             OR (request.attempt_id IS NULL AND t.attempt_count = 1)
           )
+          AND request.updated_at <= $2
         ORDER BY
           (request.external_submission_started_at IS NOT NULL) DESC,
-          (request.provider_name = COALESCE(NULLIF(task_model_config.provider_name, ''), 'volcengine')) DESC,
           request.updated_at DESC,
           request.id DESC
         LIMIT 1
@@ -9439,39 +9447,71 @@ async function syncSeedanceVideoTaskOnRead(
         AND t.task_type = 'episode_generate_video'
         AND t.status = 'running'
         AND t.current_attempt_id IS NOT NULL
-        AND t.input_snapshot_json->>'providerExecutor' IN ('seedance', 'globalaiopc-video')
       LIMIT 1
     `,
-    [input.taskId],
+    [
+      input.taskId,
+      pollEligibleBefore,
+    ],
   );
   if (!row?.provider_request_id || !row.external_request_id) {
     return false;
   }
-  if (!shouldSyncSeedanceVideoTaskOnRead(row.provider_protocol, input.env)) {
+  const pollClaim = await queryOne<{ id: string }>(
+    db,
+    `UPDATE provider_requests
+     SET updated_at = $2
+     WHERE id = $1
+       AND updated_at <= $3
+     RETURNING id`,
+    [row.provider_request_id, input.now, pollEligibleBefore],
+  );
+  if (!pollClaim) {
     return false;
   }
-
   const snapshot =
     typeof row.input_snapshot_json === "string"
       ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
       : row.input_snapshot_json;
   const snapshotModelCode = readString(snapshot.modelCode) || readString(snapshot.model);
-  const modelConfig = await findActiveAiModelConfigByCode(db, snapshotModelCode || "seedance-i2v-pro");
-  const adapter = createSeedancePollAdapterFromModelConfig(modelConfig, input.env, input.fetchImpl);
-  let poll: Awaited<ReturnType<typeof adapter.poll>>;
+  const modelConfig = await resolveGenerationModelConfigForTask(
+    db,
+    snapshot,
+    snapshotModelCode || "seedance-i2v-pro",
+  );
+  if (
+    modelConfig
+    && (modelConfig.mediaType !== "video" || modelConfig.invocationMode !== "async_polling")
+  ) {
+    return false;
+  }
+  const providerName = modelConfig?.providerName || "video-provider";
+  const providerSlug = providerName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "provider";
+  let poll;
   try {
-    poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+    const adapter = createVideoPollAdapterFromModelConfig(modelConfig, input.env, input.fetchImpl);
+    poll = await adapter.poll({
+      externalRequestId: row.external_request_id,
+      redactedPayload: buildReadTimeVideoPollPayload(snapshot, row.provider_response_redacted_json),
+    });
   } catch (error) {
-    poll = {
-      status: "failed",
-      redactedResponse: ModelError.fromUnknown(error, {
-        mediaType: "video",
-        phase: "poll",
-      }).toRedactedProviderRecord(),
-    };
+    await appendProviderRequestDiagnostics(db, {
+      providerRequestId: row.provider_request_id,
+      diagnostics: deferReadTimeVideoPollFailure(error),
+      now: input.now,
+    });
+    return false;
   }
 
   if (poll.status === "running" || poll.status === "accepted") {
+    await appendProviderRequestDiagnostics(db, {
+      providerRequestId: row.provider_request_id,
+      diagnostics: poll.redactedResponse,
+      now: input.now,
+    });
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -9503,7 +9543,7 @@ async function syncSeedanceVideoTaskOnRead(
     if (row.reservation_id && amount > 0) {
       await settleReservationAllocation(db, {
         reservationId: row.reservation_id,
-        allocationKey: "seedance-provider-failed",
+        allocationKey: "video-provider-failed",
         amount,
         outcome: "released",
         taskId: row.task_id,
@@ -9553,13 +9593,13 @@ async function syncSeedanceVideoTaskOnRead(
   const artifactMetadata = {
     episodeId: snapshot.episodeId ?? null,
     taskId: row.task_id,
-    provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
+    provider: providerName,
     externalRequestId: row.external_request_id,
   };
   let pendingStorageObjectId: string | null = null;
   let resultAsset: Record<string, unknown> | null = null;
   try {
-    const objectName = `episodes/${String(snapshot.episodeId ?? row.task_id)}/seedance/seedance-video-${row.task_id}.mp4`;
+    const objectName = `episodes/${String(snapshot.episodeId ?? row.task_id)}/video/${providerSlug}-video-${row.task_id}.mp4`;
     const uploadedArtifact = await uploadProviderArtifactToStorage(db, {
       artifactUrl: poll.videoUrl,
       objectName,
@@ -9583,7 +9623,7 @@ async function syncSeedanceVideoTaskOnRead(
       now: input.now,
     });
     if (!availableStorageObject) {
-      throw Object.assign(new Error("seedance_storage_object_missing_after_upload"), {
+      throw Object.assign(new Error("video_storage_object_missing_after_upload"), {
         failureCode: "provider_output_persist_failed",
       });
     }
@@ -9611,7 +9651,7 @@ async function syncSeedanceVideoTaskOnRead(
       metadata: {
         ...(targetAsset?.metadata ?? {}),
         mimeType: uploadedArtifact.contentType,
-        label: "Seedance episode video",
+        label: `${providerName} episode video`,
         episodeId: snapshot.episodeId ?? null,
         taskId: row.task_id,
         targetType: snapshot.targetType ?? "episode",
@@ -9619,7 +9659,7 @@ async function syncSeedanceVideoTaskOnRead(
         previewUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content?proxy=1`,
         sourceUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content`,
         downloadUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content`,
-        provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
+        provider: providerName,
         externalRequestId: row.external_request_id,
       },
       sourceTaskId: row.task_id,
@@ -9667,7 +9707,7 @@ async function syncSeedanceVideoTaskOnRead(
         attemptId: row.attempt_id,
         providerRequestId: row.provider_request_id,
         metadata: {
-          provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
+          provider: providerName,
           externalRequestId: row.external_request_id,
           failureCode,
           errorMessage: translateProviderErrorMessage(error),
@@ -9706,14 +9746,14 @@ async function syncSeedanceVideoTaskOnRead(
   if (row.reservation_id && amount > 0) {
     await settleReservationAllocation(db, {
       reservationId: row.reservation_id,
-      allocationKey: "seedance-result",
+      allocationKey: "video-provider-result",
       amount,
       outcome: "consumed",
       taskId: row.task_id,
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id,
       metadata: {
-        provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
+        provider: providerName,
         externalRequestId: row.external_request_id,
       },
       now: input.now,
@@ -36394,6 +36434,9 @@ export const __phoneAuthDevServerTestUtils = {
   resolveCanvasGenerationPromptBody,
   validateGenerationQueueReplay,
   settleTimedOutEpisodeGenerationTask,
+  createVideoPollAdapterFromModelConfig,
+  deferReadTimeVideoPollFailure,
+  buildReadTimeVideoPollPayload,
 };
 
 if (

@@ -508,6 +508,87 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
+  it("persists the GlobalAiOpc transient auth poll budget across worker retries", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "205",
+        userId: "70000000-0000-4000-8000-000000000205",
+        status: "running",
+      });
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET provider_name = 'GlobalAiOpc',
+              provider_protocol = 'globalaiopc_video',
+              invocation_mode = 'async_polling',
+              media_type = 'video',
+              provider_config_json = '{
+                "createTaskEndpoint":"https://provider.example.test/tasks",
+                "queryTaskEndpoint":"https://provider.example.test/tasks/{taskId}",
+                "apiKeyEnv":"GLOBAL_AI_OPC_API_KEY"
+              }'::jsonb,
+              status = 'active'
+          WHERE model_code = 'seedance-i2v-pro'
+        `,
+      );
+      await db.query(
+        `UPDATE tasks
+         SET input_snapshot_json = jsonb_set(input_snapshot_json, '{providerExecutor}', '"globalaiopc-video"'::jsonb)
+         WHERE id = $1`,
+        [seeded.taskId],
+      );
+      await db.query(
+        "UPDATE provider_requests SET provider_name = 'GlobalAiOpc', status = 'accepted' WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+      const fetchImpl = (async () => Response.json(
+        { error: { message: "Unauthorized" } },
+        { status: 401 },
+      )) as typeof fetch;
+
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        const result = await processSeedanceVideoPollJob(db, {
+          taskId: seeded.taskId,
+          runtime: seedanceStorageRuntime,
+          env: { GLOBAL_AI_OPC_API_KEY: "global-video-test-key" },
+          fetchImpl,
+          now: new Date(Date.UTC(2026, 7, 31, 10, attempt, 0)),
+        });
+        const state = await db.query<{
+          task_status: string;
+          provider_status: string;
+          transient_auth_poll_count: number | null;
+        }>(
+          `SELECT task.status AS task_status,
+                  request.status AS provider_status,
+                  (request.response_redacted_json->>'transientAuthPollCount')::int AS transient_auth_poll_count
+           FROM tasks task
+           JOIN provider_requests request ON request.task_id = task.id
+           WHERE task.id = $1`,
+          [seeded.taskId],
+        );
+
+        assert.equal(state.rows[0]?.transient_auth_poll_count, attempt);
+        if (attempt < 4) {
+          assert.deepEqual(result, { status: "waiting" });
+          assert.equal(state.rows[0]?.task_status, "running");
+          assert.equal(state.rows[0]?.provider_status, "accepted");
+        } else {
+          assert.deepEqual(result, {
+            status: "failed",
+            failureCode: "global_ai_opc_video_poll_authentication_failed",
+          });
+          assert.equal(state.rows[0]?.task_status, "failed");
+          assert.equal(state.rows[0]?.provider_status, "failed");
+        }
+      }
+    } finally {
+      await db.close();
+    }
+  });
+
   it("advances the provider request when polling reports video generation running", async () => {
     const db = await createMigratedTestDb();
 

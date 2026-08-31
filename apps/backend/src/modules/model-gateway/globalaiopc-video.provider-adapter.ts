@@ -1,5 +1,6 @@
 import type {
   ProviderAdapter,
+  ProviderPollInput,
   ProviderPollResult,
   ProviderSubmissionInput,
   ProviderSubmissionResult,
@@ -12,8 +13,10 @@ import {
   providerResponseError,
   readProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
+import { ModelError } from "./model-error.ts";
 
 const defaultModel = "sd_2.0_special";
+const transientAuthPollLimit = 3;
 
 /** Adapter for 客易云 Model Center video models. */
 export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
@@ -68,12 +71,38 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
     };
   }
 
-  async poll(input: { externalRequestId: string }): Promise<ProviderPollResult> {
+  async poll(input: ProviderPollInput): Promise<ProviderPollResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
     const response = await fetchImpl(
       this.config.queryTaskEndpoint.replace("{taskId}", encodeURIComponent(input.externalRequestId)),
       { method: "GET", headers: { authorization: `Bearer ${this.config.apiKey}` } },
     );
+    if (response.status === 401) {
+      const { text, diagnostics } = await readProviderResponseDiagnostics(response);
+      let payload: Record<string, unknown> = {};
+      try { payload = JSON.parse(text) as Record<string, unknown>; } catch { /* retain diagnostics preview */ }
+      const redactedPayload = readObject(input.redactedPayload);
+      const previousProviderResponse = readObject(redactedPayload.providerResponseRedacted);
+      const transientAuthPollCount = Math.max(
+        0,
+        readInteger(previousProviderResponse.transientAuthPollCount) ?? 0,
+      ) + 1;
+      const retrying = transientAuthPollCount <= transientAuthPollLimit;
+      return {
+        status: retrying ? "accepted" : "failed",
+        redactedResponse: attachProviderRawResponse({
+          failureCode: retrying
+            ? "global_ai_opc_video_poll_transient_auth"
+            : "global_ai_opc_video_poll_authentication_failed",
+          providerStatus: retrying ? "accepted" : "failed",
+          taskId: input.externalRequestId,
+          providerErrorCode: findFirstScalarString(payload, [["code"], ["error", "code"], ["data", "code"]]) ?? null,
+          providerMessage: findFirstString(payload, [["msg"], ["message"], ["error", "message"], ["data", "message"]]) ?? null,
+          transientAuthPollCount,
+          diagnostics,
+        }, payload),
+      };
+    }
     const payload = await readJsonResponse(response, "global_ai_opc_video_poll");
     const rawProviderStatus = findProviderStatus(payload);
     const providerStatus = normalizeProviderStatus(rawProviderStatus);
@@ -102,6 +131,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
       redactedResponse: attachProviderRawResponse({
         providerStatus,
         taskId: input.externalRequestId,
+        transientAuthPollCount: 0,
         providerErrorCode: findFirstString(payload, [["error", "code"], ["data", "error", "code"], ["result", "error", "code"]]) ?? null,
         providerMessage: findFirstString(payload, [["error", "message"], ["msg"], ["message"], ["data", "message"], ["result", "message"]]) ?? null,
       }, payload),
@@ -130,12 +160,22 @@ export function buildGlobalAiOpcVideoPayload(
   const lastImage = firstUrl([
     readString(payload.lastFrameUrl), readMediaUrl(payload.lastFrame), readMediaUrl(parameters.lastFrame),
   ]);
-  const referenceImages = dedupeUrls([
+  const orderedReferenceImages = readMediaUrlArray(parameters.filePaths);
+  const orderedReferenceImageSet = new Set(orderedReferenceImages);
+  const compatibilityReferenceImages = dedupeUrls([
     ...readMediaUrlArray(payload.referenceImages),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
-    ...readMediaUrlArray(parameters.filePaths),
-  ]).filter((url) => url !== firstImage && url !== lastImage);
+  ]).filter((url) => !orderedReferenceImageSet.has(url));
+  if ([firstImage, lastImage, ...orderedReferenceImages, ...compatibilityReferenceImages]
+    .some((url) => /^blob:/i.test(url ?? ""))) {
+    throw ModelError.fromUnknown(new Error("global_ai_opc_video_blob_image_url_invalid"), {
+      failureCode: "model_parameter_invalid",
+      mediaType: "video",
+      phase: "prepare",
+    });
+  }
+  const referenceImages = [...orderedReferenceImages, ...compatibilityReferenceImages];
   const referenceVideos = dedupeUrls([
     ...readMediaUrlArray(payload.referenceVideos),
     readString(payload.referenceVideoUrl), readString(payload.sourceVideoUrl),
@@ -150,7 +190,9 @@ export function buildGlobalAiOpcVideoPayload(
   ]).filter((url) => !/^blob:/i.test(url));
   const requestedReferenceMode = readString(parameters.referenceMode)?.toLowerCase();
   const generationMode = readString(parameters.mode)?.toLowerCase();
-  const hasReferenceMedia = referenceImages.length > 0 || referenceVideos.length > 0 || referenceAudios.length > 0;
+  const hasReferenceMedia = referenceImages.some((url) => url !== firstImage && url !== lastImage)
+    || referenceVideos.length > 0
+    || referenceAudios.length > 0;
   const explicitFrameMode = requestedReferenceMode === "frame"
     || generationMode === "first-frame"
     || generationMode === "first-last-frame";

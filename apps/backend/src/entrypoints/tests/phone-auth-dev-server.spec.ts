@@ -28,6 +28,7 @@ import {
 } from "../phone-auth-dev-server.ts";
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
+import { GlobalAiOpcVideoProviderAdapter } from "../../modules/model-gateway/globalaiopc-video.provider-adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
 import {
   createDevDb,
@@ -132,11 +133,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
     assert.match(
       source,
-      /async function syncSeedanceVideoTaskOnRead[\s\S]*request\.attempt_id = t\.current_attempt_id[\s\S]*t\.current_attempt_id IS NOT NULL/,
+      /async function syncVideoTaskOnRead[\s\S]*request\.attempt_id = t\.current_attempt_id[\s\S]*t\.current_attempt_id IS NOT NULL/,
     );
     assert.match(
       source,
-      /async function syncSeedanceVideoTaskOnRead[\s\S]*markGenerationTaskSnapshotSucceeded\(db, \{[\s\S]*resultAssets: resultAsset \? \[resultAsset\] : \[\]/,
+      /async function syncVideoTaskOnRead[\s\S]*markGenerationTaskSnapshotSucceeded\(db, \{[\s\S]*resultAssets: resultAsset \? \[resultAsset\] : \[\]/,
     );
     assert.match(
       source,
@@ -11368,6 +11369,278 @@ describe("phone auth dev server", { concurrency: false }, () => {
           (name) => name.endsWith("/assets/video/001-Episode Task-Episode Task Shot.mp4"),
         ),
       );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses the configured poll-capable video adapter instead of a provider allowlist fallback", () => {
+    const adapter = __phoneAuthDevServerTestUtils.createVideoPollAdapterFromModelConfig({
+      id: "global-video-config",
+      modelCode: "video_30_10_10",
+      displayName: "GlobalAiOpc video",
+      providerName: "GlobalAiOpc",
+      providerModel: "video_30_10_10",
+      providerProtocol: "global_ai_opc_video",
+      invocationMode: "async_polling",
+      mediaType: "video",
+      taskModes: ["video.reference_guided_video"],
+      capabilities: {},
+      parameterSchema: {},
+      defaultParams: {},
+      providerConfig: {
+        apiKey: "test-key",
+        createTaskEndpoint: "https://provider.example.test/tasks",
+        queryTaskEndpoint: "https://provider.example.test/tasks/{taskId}",
+      },
+      pricing: {},
+      limits: {},
+      uiConfig: {},
+      status: "active",
+      sortOrder: 1,
+      remark: null,
+    }, {});
+
+    assert.ok(adapter instanceof GlobalAiOpcVideoProviderAdapter);
+  });
+
+  it("rejects configured video adapters without poll capability instead of falling back", () => {
+    assert.throws(
+      () => __phoneAuthDevServerTestUtils.createVideoPollAdapterFromModelConfig({
+        id: "sync-video-config",
+        modelCode: "sync-video",
+        displayName: "Synchronous custom video",
+        providerName: "Custom",
+        providerModel: "sync-video",
+        providerProtocol: "custom_http",
+        invocationMode: "sync",
+        mediaType: "video",
+        taskModes: ["video.text_to_video"],
+        capabilities: {},
+        parameterSchema: {},
+        defaultParams: {},
+        providerConfig: { endpoint: "https://provider.example.test/generate" },
+        pricing: {},
+        limits: {},
+        uiConfig: {},
+        status: "active",
+        sortOrder: 1,
+        remark: null,
+      }, {}),
+      /video_poll_adapter_unsupported:custom_http/,
+    );
+    assert.throws(
+      () => __phoneAuthDevServerTestUtils.createVideoPollAdapterFromModelConfig(undefined, {}),
+      /video_poll_model_config_missing/,
+    );
+  });
+
+  it("defers read-time video poll transport errors without inventing a provider status", () => {
+    const diagnostics = __phoneAuthDevServerTestUtils.deferReadTimeVideoPollFailure(
+      Object.assign(new Error("Unauthorized"), { status: 401 }),
+    );
+
+    assert.equal(diagnostics.failureCode, "provider_poll_read_sync_deferred");
+    assert.equal("status" in diagnostics, false);
+    assert.equal("providerStatus" in diagnostics, false);
+  });
+
+  it("carries persisted provider poll state into read-time polling", () => {
+    const payload = __phoneAuthDevServerTestUtils.buildReadTimeVideoPollPayload(
+      { model: "video_30_10_10" },
+      { transientAuthPollCount: 2 },
+    );
+
+    assert.equal(payload.model, "video_30_10_10");
+    assert.deepEqual(payload.providerResponseRedacted, { transientAuthPollCount: 2 });
+  });
+
+  it("keeps task state non-terminal when read-time video polling throws", async () => {
+    const db = await createMigratedTestDb();
+    let providerPollCount = 0;
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
+        GLOBAL_AI_OPC_API_KEY: "read-poll-test-key",
+      },
+      fetchImpl: async () => {
+        providerPollCount += 1;
+        throw Object.assign(new Error("temporary provider connection failure"), { status: 503 });
+      },
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      const suffix = randomUUID();
+      const projectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `read-poll-project-${suffix}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Read poll recovery",
+          scriptInput: "A provider poll must not fail the task on read.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const projectBody = await projectResponse.json();
+      const projectId = projectBody.project?.id ?? projectBody.data?.project?.id;
+      assert.ok(projectId, JSON.stringify(projectBody));
+      const episodeResponse = await fetch(`${server.origin}/api/projects/${projectId}/episodes`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ title: "Read poll recovery" }),
+      });
+      const episodeBody = await episodeResponse.json();
+      const episodeId = episodeBody.data?.episode?.id;
+      assert.ok(episodeId, JSON.stringify(episodeBody));
+
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET provider_name = 'GlobalAiOpc',
+              provider_model = 'video_30_10_10',
+              provider_protocol = 'globalaiopc_video',
+              invocation_mode = 'async_polling',
+              media_type = 'video',
+              provider_config_json = '{
+                "createTaskEndpoint":"https://provider.example.test/tasks",
+                "queryTaskEndpoint":"https://provider.example.test/tasks/{taskId}",
+                "apiKeyEnv":"GLOBAL_AI_OPC_API_KEY"
+              }'::jsonb,
+              status = 'active'
+          WHERE model_code = 'video_30_10_10'
+        `,
+      );
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      const attemptId = randomUUID();
+      const providerRequestId = randomUUID();
+      const snapshotId = randomUUID();
+      const now = new Date();
+      const pollEligibleAt = new Date(now.getTime() - 60_000);
+      const taskSnapshot = {
+        model: "video_30_10_10",
+        modelCode: "video_30_10_10",
+        providerExecutor: "globalaiopc-video",
+        modelConfigSnapshot: {
+          version: 1,
+          config: {
+            id: "captured-global-video-config",
+            modelCode: "video_30_10_10",
+            displayName: "Captured GlobalAiOpc video",
+            providerName: "GlobalAiOpc",
+            providerModel: "video_30_10_10",
+            providerProtocol: "globalaiopc_video",
+            invocationMode: "async_polling",
+            mediaType: "video",
+            providerConfig: {
+              createTaskEndpoint: "https://captured-provider.example.test/tasks",
+              queryTaskEndpoint: "https://captured-provider.example.test/tasks/{taskId}",
+              apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+            },
+          },
+        },
+        requestedAt: now.toISOString(),
+        timeoutAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      };
+      await db.query(
+        `INSERT INTO workflows (id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id, created_at, updated_at)
+         VALUES ($1, $2, 'episode_video_generation', 'running', '{}'::jsonb, $3, $4, $4)`,
+        [workflowId, projectId, userId, now],
+      );
+      await db.query(
+        `INSERT INTO tasks (
+           id, project_id, workflow_id, task_type, status, queue_name,
+           input_snapshot_json, target_entity_type, target_entity_id, attempt_count, created_at, updated_at
+         ) VALUES ($1, $2, $3, 'episode_generate_video', 'running', 'generation-submit-video',
+           $4::jsonb, 'episode', $5, 1, $6, $6)`,
+        [taskId, projectId, workflowId, JSON.stringify(taskSnapshot), episodeId, now],
+      );
+      await db.query(
+        `INSERT INTO task_attempts (
+           id, project_id, workflow_id, task_id, attempt_number, status, started_at, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, 1, 'running', $5, $5, $5)`,
+        [attemptId, projectId, workflowId, taskId, now],
+      );
+      await db.query(
+        `UPDATE tasks SET current_attempt_id = $2 WHERE id = $1`,
+        [taskId, attemptId],
+      );
+      await db.query(
+        `INSERT INTO provider_requests (
+           id, project_id, workflow_id, task_id, attempt_id, provider_name, provider_operation,
+           request_key, request_hash, payload_ref, payload_hash, payload_redacted_json,
+           status, external_submission_started_at, external_request_id, response_redacted_json,
+           created_by_user_id, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, 'GlobalAiOpc', 'episode.video.generate',
+           $6, $6, $6, $6, '{}'::jsonb, 'accepted', $7, 'provider-task-read-poll',
+           '{"providerStatus":"queued"}'::jsonb, $8, $7, $7)`,
+        [providerRequestId, projectId, workflowId, taskId, attemptId, `read-poll:${taskId}`, pollEligibleAt, userId],
+      );
+      await db.query(
+        `INSERT INTO ai_generation_task_snapshots (
+           id, user_id, project_id, episode_id, target_type, target_id, workflow_id, task_id,
+           attempt_id, provider_request_id, model_code, media_type, task_mode, status,
+           progress_stage, request_summary_json, provider_status_json, submitted_at, started_at,
+           created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, 'episode', $4, $5, $6, $7, $8,
+           'video_30_10_10', 'video', 'video.reference_guided_video', 'running',
+           'provider_accepted', '{}'::jsonb, '{"providerStatus":"queued"}'::jsonb,
+           $9, $9, $9, $9)`,
+        [snapshotId, userId, projectId, episodeId, workflowId, taskId, attemptId, providerRequestId, now],
+      );
+      await db.query(
+        `UPDATE ai_model_configs
+         SET provider_name = 'Current provider must not be used',
+             provider_protocol = 'custom_http',
+             invocation_mode = 'sync',
+             provider_config_json = '{"endpoint":"https://current-provider.example.test/generate"}'::jsonb
+         WHERE model_code = 'video_30_10_10'`,
+      );
+
+      const responses = await Promise.all([
+        fetch(`${server.origin}/api/generation-tasks/${taskId}`, { headers: { cookie } }),
+        fetch(`${server.origin}/api/generation-tasks/${taskId}`, { headers: { cookie } }),
+      ]);
+      for (const response of responses) {
+        assert.equal(response.status, 200, await response.text());
+      }
+      assert.equal(providerPollCount, 1);
+      const state = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        provider_status: string;
+        snapshot_status: string;
+        provider_failure_code: string | null;
+      }>(
+        `SELECT task.status AS task_status,
+                attempt.status AS attempt_status,
+                request.status AS provider_status,
+                snapshot.status AS snapshot_status,
+                request.response_redacted_json->>'failureCode' AS provider_failure_code
+         FROM tasks task
+         JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+         JOIN provider_requests request ON request.id = $2
+         JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+         WHERE task.id = $1`,
+        [taskId, providerRequestId],
+      );
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        attempt_status: "running",
+        provider_status: "accepted",
+        snapshot_status: "running",
+        provider_failure_code: "provider_poll_read_sync_deferred",
+      });
     } finally {
       await server.close();
     }
