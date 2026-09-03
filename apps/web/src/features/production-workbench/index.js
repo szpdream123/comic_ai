@@ -6053,7 +6053,7 @@ async function refreshCustomerSupportConfig(workbench) {
     const config = await workbench.api.getCustomerSupportConfig();
     if (config && typeof config === "object") {
       workbench.ui.customerSupportConfig = config;
-      render(workbench);
+      renderWorkbenchChrome(workbench);
     }
   } catch {
     // Keep the built-in support copy when the public config cannot be loaded.
@@ -6068,7 +6068,7 @@ function loadAuthenticatedWorkbenchShellData(workbench) {
   if (!workbench.ui.announcementsLoaded && !workbench.ui.announcementsLoading) {
     runLazyWorkbenchTask(workbench, "announcements", async () => {
       await syncAnnouncementsFromApi(workbench);
-      render(workbench);
+      renderWorkbenchChrome(workbench);
     });
   }
   if (!workbench.ui.customerSupportConfig) {
@@ -6341,7 +6341,7 @@ async function refresh(workbench, options = {}) {
           });
         }
       }
-      render(workbench, { preserveNavigationShell: true });
+      renderAfterCanvasLoad(workbench, { preserveNavigationShell: true });
     };
     if (deferProjectData) {
       runLazyWorkbenchTask(workbench, "route restore", restoreRoutes);
@@ -9705,6 +9705,7 @@ function renderAfterCanvasLoad(workbench, options = {}) {
     updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
   }
   renderWorkbenchChrome(workbench);
+  resumeCanvasGenerationPollingIfNeeded(workbench);
   return true;
 }
 
@@ -32002,7 +32003,7 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
     workbench.ui.canvasSaveStatus = "saved";
     workbench.ui.canvasSaveError = "";
     clearCanvasRefreshDraft(workbench, canvasProjectId, currentDocument);
-    if (options.render !== false) render(workbench);
+    if (options.render !== false) renderAfterCanvasLoad(workbench);
     return head;
   }
 
@@ -32024,7 +32025,7 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
   workbench.ui.canvasSaveStatus = "saved";
   workbench.ui.canvasSaveError = "";
   clearCanvasRefreshDraft(workbench, canvasProjectId, serverDocument);
-  if (options.render !== false) render(workbench);
+  if (options.render !== false) renderAfterCanvasLoad(workbench);
   return head;
 }
 
