@@ -8996,9 +8996,9 @@ function renderPromptPlazaPage(ui = {}) {
     const imageUrl = coverImages[item.category];
     const montageImages = coverMontages[item.category];
     if (montageImages) {
-      return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind} has-montage ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${montageImages.map((url) => `<img src="${escapeAttr(url)}" alt="" loading="lazy" />`).join("")}</div>`;
+      return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind} has-montage ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${montageImages.map((url) => `<img src="${escapeAttr(resolveApiUrl(url))}" alt="" loading="lazy" />`).join("")}</div>`;
     }
-    return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind}${imageUrl ? " has-image" : ""} ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${imageUrl ? `<img src="${escapeAttr(imageUrl)}" alt="" loading="lazy" />` : "<span></span><span></span><span></span>"}</div>`;
+    return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind}${imageUrl ? " has-image" : ""} ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${imageUrl ? `<img src="${escapeAttr(resolveApiUrl(imageUrl))}" alt="" loading="lazy" />` : "<span></span><span></span><span></span>"}</div>`;
   };
 
   const coverFallbackUrl = (item) => ({
@@ -9012,7 +9012,7 @@ function renderPromptPlazaPage(ui = {}) {
   const renderCoverImage = (item, coverImageUrl) => {
     const fallbackUrl = coverFallbackUrl(item);
     const onError = fallbackUrl
-      ? ` onerror="this.onerror=null;this.src='${escapeAttr(fallbackUrl)}'"`
+      ? ` onerror="this.onerror=null;this.src='${escapeAttr(resolveApiUrl(fallbackUrl))}'"`
       : "";
     return `<div class="prompt-marketplace-cover"><img src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="${escapeAttr(item.title || "提示词")}封面" loading="lazy"${onError} /></div>`;
   };

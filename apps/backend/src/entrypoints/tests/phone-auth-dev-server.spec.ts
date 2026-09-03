@@ -8306,6 +8306,89 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("serves published prompt cover previews to visitors without exposing private storage", async () => {
+    const db = await createMigratedTestDb();
+    const signedKeys: string[] = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: { STORAGE_BUCKET: "prompt-cover-test" },
+      storageRuntime: {
+        mode: "cos",
+        bucket: "prompt-cover-test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            signedKeys.push(input.objectKey);
+            return { url: `https://covers.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+        },
+      },
+      repairScheduler: { enabled: false },
+    });
+    try {
+      await server.listen(0);
+      const sellerCookie = await login(server.origin, "13800138000");
+      const viewerCookie = await login(server.origin, "13800138001");
+      const seller = await db.query<{ id: string }>("SELECT id FROM users WHERE phone_e164 = $1", ["13800138000"]);
+      const coverId = randomUUID();
+      const privateId = randomUUID();
+      const promptId = randomUUID();
+      for (const id of [coverId, privateId]) {
+        await db.query(
+          `INSERT INTO storage_objects (id, bucket, object_key, content_type, status, created_by_user_id)
+           VALUES ($1, 'prompt-cover-test', $2, 'image/png', 'available', $3)`,
+          [id, `${id}.png`, seller.rows[0].id],
+        );
+      }
+      await db.query(
+        `INSERT INTO prompts (id, prompt_category, name, summary, prompt_content, cover_storage_object_id, is_published, status)
+         VALUES ($1, 'script', 'Published private cover', 'Cover visibility regression', 'Private prompt body', $2, true, 'enabled')`,
+        [promptId, coverId],
+      );
+      const preview = (id: string, cookie = "", query = "proxy=1") => fetch(
+        `${server.origin}/api/storage/objects/${id}/content?${query}`,
+        { headers: { cookie }, redirect: "manual" },
+      );
+      const assertPrivate = async (id: string, query = "proxy=1") => {
+        const before = signedKeys.length;
+        assert.equal((await preview(id, "", query)).status, 401);
+        assert.equal((await preview(id, viewerCookie, query)).status, 404);
+        assert.equal(signedKeys.length, before);
+      };
+      const catalog = await (await fetch(`${server.origin}/api/creator/prompt-marketplace?query=Published%20private%20cover`)).json();
+      assert.equal(catalog.items[0].coverImageUrl, `/api/storage/objects/${coverId}/content?proxy=1`);
+      assert.equal(Object.hasOwn(catalog.items[0], "content"), false);
+      for (const cookie of ["", viewerCookie, sellerCookie]) {
+        const response = await preview(coverId, cookie);
+        assert.equal(response.status, 307);
+        assert.equal(response.headers.get("location"), `https://covers.example.test/${coverId}.png`);
+        assert.equal(response.headers.get("cache-control"), "private, no-store");
+      }
+      await assertPrivate(privateId);
+      await assertPrivate(coverId, "proxy=1&download=1");
+      await assertPrivate(coverId, "proxy=1&thumbnail=1");
+      for (const [published, status, deletedAt] of [
+        [false, "enabled", null], [true, "disabled", null], [true, "archived", null], [true, "enabled", new Date()],
+      ]) {
+        await db.query("UPDATE prompts SET is_published = $2, status = $3, deleted_at = $4 WHERE id = $1", [promptId, published, status, deletedAt]);
+        await assertPrivate(coverId);
+      }
+      await db.query("UPDATE prompts SET is_published = true, status = 'enabled', deleted_at = NULL WHERE id = $1", [promptId]);
+      for (const [status, deletedAt, contentType] of [
+        ["pending_upload", null, "image/png"], ["deleted", null, "image/png"],
+        ["available", new Date(), "image/png"], ["available", null, "video/mp4"],
+      ]) {
+        await db.query("UPDATE storage_objects SET status = $2, deleted_at = $3, content_type = $4 WHERE id = $1", [coverId, status, deletedAt, contentType]);
+        await assertPrivate(coverId);
+      }
+      await db.query("UPDATE storage_objects SET status = 'available', deleted_at = NULL, content_type = 'image/png' WHERE id = $1", [coverId]);
+      await db.query("UPDATE prompts SET is_published = false WHERE id = $1", [promptId]);
+      assert.equal((await preview(coverId, sellerCookie)).status, 307);
+      assert.equal((await preview(privateId, sellerCookie)).status, 307);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lets creators publish and freely add protected prompt marketplace items", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
