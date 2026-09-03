@@ -143,12 +143,24 @@ function appendStyles(shadowRoot, styleHrefs) {
     :host(.is-agent-only) .new-canvas-root { visibility: visible !important; background: transparent !important; }
     [data-new-canvas-style-gate] { display: block; min-height: calc(100dvh - 6rem); background: #08111b; }
     [data-new-canvas-style-gate] > * { visibility: hidden; }
+    :host(.is-agent-only) { position: relative; }
+    :host(.is-agent-only) .new-canvas-root[data-new-canvas-surface] { position: absolute; inset: 0; visibility: hidden !important; opacity: 0; pointer-events: none; }
+    :host(.is-agent-only) [data-new-canvas-style-gate] { display: flex; align-items: center; justify-content: center; min-height: 0; height: 100%; background: transparent; }
+    :host(.is-agent-only) [data-new-canvas-style-gate] > * { display: none; }
+    :host(.is-agent-only) [data-new-canvas-loading-label] { display: block; visibility: visible; }
   `;
   const loadingGate = document.createElement("div");
   loadingGate.dataset.newCanvasStyleGate = "true";
   loadingGate.setAttribute("role", "status");
   loadingGate.setAttribute("aria-label", "正在加载画布");
   loadingGate.innerHTML = "<span></span><span></span><span></span>";
+  if (shadowRoot.host?.classList?.contains("is-agent-only")) {
+    loadingGate.setAttribute("aria-label", "正在加载自由会话");
+    const loadingLabel = document.createElement("span");
+    loadingLabel.dataset.newCanvasLoadingLabel = "true";
+    loadingLabel.textContent = "正在加载自由会话…";
+    loadingGate.append(loadingLabel);
+  }
   fragment.append(criticalStyle);
   fragment.append(loadingGate);
   const links = [];
