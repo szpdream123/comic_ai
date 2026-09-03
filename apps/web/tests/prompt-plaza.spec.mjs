@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   buildPromptMarketplacePublishInputForTest,
@@ -553,6 +554,41 @@ test("marketplace uses category-specific covers when an item has no cover image"
   assert.match(html, /assets\/library\/official\/characters\/3d-city-heroine\.png/);
   assert.match(html, /assets\/library\/official\/props\/prop-ancient-sword\.png/);
   assert.doesNotMatch(html, /<img[^>]+剧本封面/);
+});
+
+test("prompt covers and error fallbacks stay on the serving origin in production and development", () => {
+  const previousWindow = globalThis.window;
+  try {
+    for (const origin of ["https://www.lingxiyunai.com", "http://127.0.0.1:4310"]) {
+      globalThis.window = { location: new URL(origin) };
+      const items = ["shot", "scene_extract", "character_extract", "prop_extract", "image_style"]
+        .map((category) => ({ id: category, title: category, category, official: true }));
+      items.push({ id: "custom", title: "custom", category: "prop_extract", coverImageUrl: "https://example.com/custom.png" });
+      for (const section of ["marketplace", "library"]) {
+        const html = renderProjectDetail({
+          state: {},
+          session: { user: { phone: "13800138000" } },
+          ui: { activeNavTab: "prompts", promptPlazaSection: section, promptMarketplaceItems: items, promptMarketplaceLibrary: items },
+        });
+        const covers = [...html.matchAll(/<div class="prompt-marketplace-cover[^]*?<\/div>/g)].map(([cover]) => cover).join("");
+        const sources = [...covers.matchAll(/<img src="([^"]+)"/g)].map(([, src]) => src);
+        assert.equal(sources.length, 10);
+        for (const src of sources.slice(0, -1)) {
+          assert.equal(new URL(src).origin, origin);
+          assert.ok(new URL(src).pathname.startsWith("/assets/library/official/"));
+        }
+        assert.equal(sources.at(-1), "https://example.com/custom.png");
+        const handler = covers.match(/onerror="([^"]+)"/)[1].replaceAll("&#39;", "'");
+        const image = { src: sources.at(-1), onerror: () => {} };
+        runInNewContext(`(function () { ${handler} }).call(image)`, { image });
+        assert.equal(image.src, `${origin}/assets/library/official/props/prop-ancient-sword.png`);
+        assert.equal(image.onerror, null);
+      }
+    }
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 });
 
 test("prompt marketplace reuses an in-flight catalog and library sync", async () => {

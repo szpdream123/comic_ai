@@ -26566,6 +26566,43 @@ export function createPhoneAuthDevServer(
           { includeCredit: false },
         );
         if (request.method === "GET" && storageObjectContentMatch) {
+          const previewStorageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
+          // Published marketplace covers are visible before a visitor adds the prompt.
+          const publishedPromptCover = isUuid(previewStorageObjectId)
+            && url.searchParams.get("proxy") === "1"
+            && url.searchParams.get("download") !== "1"
+            && url.searchParams.get("thumbnail") !== "1"
+            ? await queryOne<{ bucket: string; object_key: string }>(db, `
+                SELECT storage.bucket, storage.object_key
+                FROM storage_objects storage
+                WHERE storage.id = $1
+                  AND storage.bucket = $2
+                  AND storage.status = 'available'
+                  AND storage.deleted_at IS NULL
+                  AND storage.content_type LIKE 'image/%'
+                  AND EXISTS (
+                    SELECT 1 FROM prompts prompt
+                    WHERE prompt.cover_storage_object_id = storage.id
+                      AND prompt.is_published = true
+                      AND prompt.status = 'enabled'
+                      AND prompt.deleted_at IS NULL
+                  )
+              `, [previewStorageObjectId, storageBucket])
+            : undefined;
+          if (publishedPromptCover) {
+            const signed = await storageRuntime.adapter.createSignedReadUrl({
+              bucket: publishedPromptCover.bucket,
+              objectKey: publishedPromptCover.object_key,
+              expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+              responseContentDisposition: "inline",
+            });
+            response.statusCode = 307;
+            response.setHeader("location", signed.url);
+            response.setHeader("cache-control", "private, no-store");
+            response.setHeader("referrer-policy", "no-referrer");
+            response.end();
+            return;
+          }
           const adminRoute = await requireAdminRouteSession({
             db,
             cookieHeader: request.headers.cookie,
