@@ -38,6 +38,7 @@ import {
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createGeoContentService } from "../../modules/geo/geo-content.service.ts";
 import { createHomeRecommendationService } from "../../modules/home-recommendations/home-recommendation.service.ts";
+import { signComicAiIntegrationRequest } from "../../modules/integrations/comic-ai-integration-hmac.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 const directUploadPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -116,6 +117,72 @@ function fetchProjectShotImageBatch(origin: string, init: RequestInit = {}) {
 }
 
 describe("phone auth dev server", { concurrency: false }, () => {
+  it("exposes image models and standalone image tasks to the MoneyPrinter integration", async () => {
+    const db = await createMigratedTestDb();
+    const integrationPhone = "13800138000";
+    const workerId = "moneyprinter-test";
+    const keyId = "moneyprinter-image-key";
+    const secret = "moneyprinter-image-secret";
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        COMIC_AI_INTEGRATION_ACCOUNT: integrationPhone,
+        COMIC_AI_INTEGRATION_PASSWORD: defaultPasswordFromPhone(normalizeCnPhone(integrationPhone)),
+        COMIC_AI_INTEGRATION_HMAC_KEYS_JSON: JSON.stringify({
+          [keyId]: { workerId, secret },
+        }),
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+        BULLMQ_WORKERS_ENABLED: "false",
+      },
+    });
+
+    try {
+      await server.listen(0);
+      await login(server.origin, integrationPhone);
+      await seedGenerationAccessForPhone(db, integrationPhone);
+
+      const modelsPath = "/api/integrations/moneyprinter/image-models";
+      const modelsResponse = await fetch(`${server.origin}${modelsPath}`, {
+        headers: moneyPrinterIntegrationHeaders({ method: "GET", path: modelsPath, workerId, keyId, secret }),
+      });
+      const modelsBody = await modelsResponse.json();
+      assert.equal(modelsResponse.status, 200, JSON.stringify(modelsBody));
+      assert.ok(modelsBody.models.length > 0);
+      assert.ok(modelsBody.models.every((model: { mediaType: string }) => model.mediaType === "image"));
+
+      const model = modelsBody.models[0];
+      const generationPath = "/api/integrations/moneyprinter/image-generations";
+      const generationPayload = Buffer.from(JSON.stringify({
+        model: model.modelCode,
+        prompt: "A clean editorial cover about artificial intelligence",
+        parameters: {
+          aspectRatio: model.supportedRatios?.[0] ?? "1:1",
+          imageCount: 1,
+        },
+      }));
+      const generationResponse = await fetch(`${server.origin}${generationPath}`, {
+        method: "POST",
+        headers: moneyPrinterIntegrationHeaders({ method: "POST", path: generationPath, workerId, keyId, secret, body: generationPayload }),
+        body: generationPayload,
+      });
+      const generationBody = await generationResponse.json();
+      assert.ok([200, 202].includes(generationResponse.status), JSON.stringify(generationBody));
+      assert.ok(generationBody.taskId);
+      assert.equal(generationBody.modelCode, model.modelCode);
+
+      const taskPath = `/api/integrations/moneyprinter/image-generations/${generationBody.taskId}`;
+      const taskResponse = await fetch(`${server.origin}${taskPath}`, {
+        headers: moneyPrinterIntegrationHeaders({ method: "GET", path: taskPath, workerId, keyId, secret }),
+      });
+      const taskBody = await taskResponse.json();
+      assert.equal(taskResponse.status, 200, JSON.stringify(taskBody));
+      assert.equal(taskBody.taskId, generationBody.taskId);
+      assert.ok(["queued", "running", "succeeded"].includes(taskBody.status));
+    } finally {
+      await server.close();
+    }
+  });
+
   it("polls SanBao video tasks on read without the unrelated Seedance feature flag", () => {
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("san_bao", {}), true);
     assert.equal(shouldSyncSeedanceVideoTaskOnRead("chiyuan_video", {}), true);
@@ -18028,6 +18095,39 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
 async function login(origin: string, phone: string) {
   return loginAsAccount(origin, phone, defaultPasswordFromPhone(normalizeCnPhone(phone)));
+}
+
+function moneyPrinterIntegrationHeaders(input: {
+  method: string;
+  path: string;
+  workerId: string;
+  keyId: string;
+  secret: string;
+  body?: Buffer;
+}) {
+  const timestamp = String(Date.now());
+  const nonce = randomUUID();
+  const body = input.body ?? Buffer.alloc(0);
+  const signed = signComicAiIntegrationRequest({
+    secret: input.secret,
+    method: input.method,
+    pathWithQuery: input.path,
+    workerId: input.workerId,
+    keyId: input.keyId,
+    timestamp,
+    nonce,
+    body,
+  });
+  return {
+    "content-type": "application/json",
+    "x-marketing-version": "v1",
+    "x-marketing-worker-id": input.workerId,
+    "x-marketing-key-id": input.keyId,
+    "x-marketing-timestamp": timestamp,
+    "x-marketing-nonce": nonce,
+    "x-marketing-content-sha256": signed.bodySha256,
+    "x-marketing-signature": signed.signature,
+  };
 }
 
 async function loginAsAccount(origin: string, account: string, password: string) {
