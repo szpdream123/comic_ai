@@ -12,6 +12,8 @@ import {
 } from "../shared/outbox/outbox-dispatch-repair.service.ts";
 
 const defaultRetryDelayMs = 30_000;
+const deadlockRetryAttempts = 3;
+const deadlockRetryDelayMs = 100;
 
 export async function dispatchPaymentOutboxBatch(
   db: SqlDatabase,
@@ -27,29 +29,30 @@ export async function dispatchPaymentOutboxBatch(
 
   for (const event of events) {
     try {
-      if (await hasDuplicateTradeRisk(db, event.payload)) {
+      await runWithDatabaseRetry(async () => {
+        if (await hasDuplicateTradeRisk(db, event.payload)) {
+          await markOutboxEventProcessed(db, {
+            outboxEventId: event.id,
+            now: input.now,
+          });
+          return;
+        }
+        await consumePaymentSucceededMembershipActivation(db, {
+          event,
+          now: input.now,
+        });
+        await consumePaymentSucceededCreditGrant(db, {
+          event,
+          now: input.now,
+        });
+        await consumeInviteRebateForPaymentSucceeded(db, {
+          event,
+          now: input.now,
+        });
         await markOutboxEventProcessed(db, {
           outboxEventId: event.id,
           now: input.now,
         });
-        processedEventIds.push(event.id);
-        continue;
-      }
-      await consumePaymentSucceededMembershipActivation(db, {
-        event,
-        now: input.now,
-      });
-      await consumePaymentSucceededCreditGrant(db, {
-        event,
-        now: input.now,
-      });
-      await consumeInviteRebateForPaymentSucceeded(db, {
-        event,
-        now: input.now,
-      });
-      await markOutboxEventProcessed(db, {
-        outboxEventId: event.id,
-        now: input.now,
       });
       processedEventIds.push(event.id);
     } catch (error) {
@@ -100,13 +103,15 @@ async function dispatchMembershipPeriodCreditEvents(
 
   for (const event of events) {
     try {
-      await consumeMembershipPeriodCreditGrant(db, {
-        event,
-        now: input.now,
-      });
-      await markOutboxEventProcessed(db, {
-        outboxEventId: event.id,
-        now: input.now,
+      await runWithDatabaseRetry(async () => {
+        await consumeMembershipPeriodCreditGrant(db, {
+          event,
+          now: input.now,
+        });
+        await markOutboxEventProcessed(db, {
+          outboxEventId: event.id,
+          now: input.now,
+        });
       });
     } catch (error) {
       await markOutboxEventFailed(db, {
@@ -117,6 +122,26 @@ async function dispatchMembershipPeriodCreditEvents(
       });
     }
   }
+}
+
+export async function runWithDatabaseRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRetryableDatabaseConflict(error) || attempt >= deadlockRetryAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, deadlockRetryDelayMs * attempt));
+    }
+  }
+}
+
+function isRetryableDatabaseConflict(error: unknown) {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  return code === "40P01" || code === "40001";
 }
 
 function errorMessageFromUnknown(error: unknown) {

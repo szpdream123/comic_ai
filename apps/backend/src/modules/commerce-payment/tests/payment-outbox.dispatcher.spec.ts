@@ -2,13 +2,31 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
-import { dispatchPaymentOutboxBatch } from "../payment-outbox.dispatcher.ts";
+import { dispatchPaymentOutboxBatch, runWithDatabaseRetry } from "../payment-outbox.dispatcher.ts";
 
 const userId = "30000000-0000-4000-8000-000000040001";
 const creditPackageId = "90000000-0000-4000-8000-000000040001";
 const membershipPlanId = "95000000-0000-4000-8000-000000040001";
 
 describe("payment outbox dispatcher", { concurrency: false }, () => {
+  it("retries a transaction after a PostgreSQL deadlock or serialization conflict", async () => {
+    for (const code of ["40P01", "40001"]) {
+      let attempts = 0;
+      const result = await runWithDatabaseRetry(async () => {
+        attempts += 1;
+        if (attempts < 2) {
+          const error = new Error("database transaction conflict") as Error & { code: string };
+          error.code = code;
+          throw error;
+        }
+        return "ok";
+      });
+
+      assert.equal(result, "ok");
+      assert.equal(attempts, 2);
+    }
+  });
+
   it("dispatches payment success events to membership and credit consumers", async () => {
     const db = await createMigratedTestDb();
 

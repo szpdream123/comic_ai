@@ -319,6 +319,29 @@ export async function expireAvailableCreditLotsInTransaction(
 ) {
   const userWhere = input.userId ? "AND user_id = $3" : "";
   const params = input.userId ? [input.now, input.limit, input.userId] : [input.now, input.limit];
+  // All credit mutations lock the wallet before its lots. Keep expiry on the
+  // same order so it cannot deadlock with grants or reservation settlement.
+  await db.query(
+    `
+      WITH candidate_users AS (
+        SELECT user_id
+        FROM credit_lots
+        WHERE available_amount > 0
+          AND status = 'active'
+          AND expires_at IS NOT NULL
+          AND expires_at <= $1
+          ${userWhere}
+        ORDER BY expires_at ASC, created_at ASC
+        LIMIT $2
+      )
+      SELECT id
+      FROM users
+      WHERE id IN (SELECT user_id FROM candidate_users)
+      ORDER BY id
+      FOR UPDATE
+    `,
+    params,
+  );
   const lots = await db.query<CreditLotRow>(
     `
       SELECT *

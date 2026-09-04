@@ -6867,10 +6867,12 @@ async function mapMoneyPrinterGenerationResponse(
         : "queued";
   const result = readJsonRecord(task.result);
   const failure = readJsonRecord(task.failure);
+  const kind = readString(task.kind);
   let videoUrl = readString(result.videoUrl) ||
     readString(result.sourceUrl) ||
     readString(result.downloadUrl) ||
     readString(result.url);
+  let imageUrl = kind === "image" ? resolveGenerationTaskAssetPreviewUrl(task) : "";
   const storageObjectId = readString(result.storageObjectId);
   if (storageObjectId) {
     try {
@@ -6892,6 +6894,9 @@ async function mapMoneyPrinterGenerationResponse(
   if (videoUrl && !/^https?:\/\//i.test(videoUrl)) {
     videoUrl = new URL(videoUrl, resolveRequestOrigin(input.request)).toString();
   }
+  if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
+    imageUrl = new URL(imageUrl, resolveRequestOrigin(input.request)).toString();
+  }
   const failureCode = readString(task.failureCode) || readString(failure.failureCode) || null;
   const failureMessage = readString(failure.displayMessage) ||
     readString(failure.providerMessage) ||
@@ -6907,11 +6912,12 @@ async function mapMoneyPrinterGenerationResponse(
       }
     : failure;
   return {
-    taskId: readString(task.taskId),
+    taskId: readString(task.taskId) || readString(task.id),
     status,
-    model: readString(task.model),
+    model: readString(task.model) || readString(task.modelCode),
     progressPercent: Number.isFinite(Number(task.progressPercent)) ? Number(task.progressPercent) : null,
     ...(status === "succeeded" && videoUrl ? { videoUrl } : {}),
+    ...(status === "succeeded" && imageUrl ? { imageUrl, imageUrls: [imageUrl] } : {}),
     ...(status === "failed" ? {
       error: localizedFailureMessage || "生成失败，请修改素材或提示词后重新生成",
       failure: localizedFailure,
@@ -20027,12 +20033,18 @@ export function createPhoneAuthDevServer(
       const moneyPrinterTaskMatch = pathname.match(
         /^\/api\/integrations\/moneyprinter\/video-generations\/([^/]+)$/,
       );
+      const moneyPrinterImageTaskMatch = pathname.match(
+        /^\/api\/integrations\/moneyprinter\/image-generations\/([^/]+)$/,
+      );
       const isMoneyPrinterIntegrationRoute =
         pathname === "/api/integrations/moneyprinter/models" ||
+        pathname === "/api/integrations/moneyprinter/image-models" ||
         pathname === "/api/integrations/moneyprinter/text-models" ||
         pathname === "/api/integrations/moneyprinter/text-completions" ||
         pathname === "/api/integrations/moneyprinter/video-generations" ||
-        Boolean(moneyPrinterTaskMatch);
+        pathname === "/api/integrations/moneyprinter/image-generations" ||
+        Boolean(moneyPrinterTaskMatch) ||
+        Boolean(moneyPrinterImageTaskMatch);
       if (isMoneyPrinterIntegrationRoute) {
         try {
           const rawBody = request.method === "GET"
@@ -20051,6 +20063,25 @@ export function createPhoneAuthDevServer(
             const activeVideoModels = await listActiveAiModelConfigs(db, { mediaType: "video" });
             const models = activeVideoModels
               .filter((modelConfig) => modelConfigSupportsGenerationExecution("video", modelConfig))
+              .map((modelConfig) => ({
+                ...modelConfigToGenerationConfigModel(modelConfig),
+                displayName: modelConfig.displayName,
+                limits: modelConfig.limits,
+                uiConfig: modelConfig.uiConfig,
+              }));
+            return writeJson(response, {
+              status: 200,
+              body: {
+                models,
+                workerId: verified.workerId,
+              },
+            });
+          }
+
+          if (request.method === "GET" && pathname === "/api/integrations/moneyprinter/image-models") {
+            const activeImageModels = await listActiveAiModelConfigs(db, { mediaType: "image" });
+            const models = activeImageModels
+              .filter((modelConfig) => modelConfigSupportsGenerationExecution("image", modelConfig))
               .map((modelConfig) => ({
                 ...modelConfigToGenerationConfigModel(modelConfig),
                 displayName: modelConfig.displayName,
@@ -20096,6 +20127,59 @@ export function createPhoneAuthDevServer(
             }
             const authenticated = await resolveComicAiIntegrationAuthenticated(db, new Date());
             if (!authenticated) return writeJson(response, { status: 503, body: { error: "service_unavailable", message: "Comic AI integration service account is unavailable" } });
+            const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("stream") === "1";
+            if (wantsStream) {
+              response.statusCode = 200;
+              response.setHeader("content-type", "text/event-stream; charset=utf-8");
+              response.setHeader("cache-control", "no-cache, no-transform");
+              response.setHeader("connection", "keep-alive");
+              response.setHeader("x-accel-buffering", "no");
+              response.flushHeaders?.();
+              const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+              const abortController = createRequestAbortController(request, response);
+              let content = "";
+              try {
+                writeSseData(response, { type: "start", model });
+                if (aiStoryboardTextChatGateway.streamJson) {
+                  for await (const delta of aiStoryboardTextChatGateway.streamJson({
+                    model,
+                    prompt,
+                    maxTokens: typeof body.max_tokens === "number" ? body.max_tokens : undefined,
+                    requestKeyPrefix: "moneyprinter-text",
+                    payloadSummary: "moneyprinter text generation",
+                    projectId: null,
+                    signal: abortController.signal,
+                  })) {
+                    if (abortController.signal.aborted) throw Object.assign(new Error("AbortError"), { name: "AbortError" });
+                    content += delta;
+                    writeSseData(response, { type: "delta", delta, text: content });
+                  }
+                } else {
+                  content = await aiStoryboardTextChatGateway.completeJson({
+                    model,
+                    prompt,
+                    maxTokens: typeof body.max_tokens === "number" ? body.max_tokens : undefined,
+                    requestKeyPrefix: "moneyprinter-text",
+                    payloadSummary: "moneyprinter text generation",
+                    projectId: null,
+                    signal: abortController.signal,
+                  });
+                  if (content) writeSseData(response, { type: "delta", delta: content, text: content });
+                }
+                if (!abortController.signal.aborted && !response.destroyed && !response.writableEnded) {
+                  writeSseData(response, { type: "complete", model, content, text: content, workerId: verified.workerId });
+                }
+              } catch (error) {
+                if (!abortController.signal.aborted && !response.destroyed && !response.writableEnded) {
+                  writeSseData(response, { type: "error", error: error instanceof Error ? error.message : "AI text generation failed" });
+                }
+              } finally {
+                stopHeartbeat();
+                abortController.cleanup();
+                if (!response.destroyed && !response.writableEnded) response.end();
+              }
+              return;
+            }
             const content = await aiStoryboardTextChatGateway.completeJson({
               model,
               prompt,
@@ -20209,8 +20293,104 @@ export function createPhoneAuthDevServer(
             });
           }
 
-          if (request.method === "GET" && moneyPrinterTaskMatch) {
-            const taskId = decodeURIComponent(moneyPrinterTaskMatch[1] ?? "");
+          if (request.method === "POST" && pathname === "/api/integrations/moneyprinter/image-generations") {
+            let body: Record<string, unknown>;
+            try {
+              const parsed = rawBody.length ? JSON.parse(rawBody.toString("utf8")) : {};
+              body = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                ? parsed as Record<string, unknown>
+                : {};
+            } catch {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "invalid_json", message: "Request body must be valid JSON" },
+              });
+            }
+            const modelCode = typeof body.model === "string"
+              ? body.model.trim()
+              : typeof body.modelCode === "string" ? body.modelCode.trim() : "";
+            const prompt = typeof body.prompt === "string" ? body.prompt : "";
+            const parameters = body.parameters && typeof body.parameters === "object" && !Array.isArray(body.parameters)
+              ? body.parameters as Record<string, unknown>
+              : {};
+            if (!modelCode) {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "model_required", message: "model is required" },
+              });
+            }
+            if (!prompt.trim()) {
+              return writeJson(response, {
+                status: 400,
+                body: { error: "prompt_required", message: "prompt is required" },
+              });
+            }
+
+            const now = new Date();
+            const authenticated = await resolveComicAiIntegrationAuthenticated(db, now);
+            if (!authenticated) {
+              return writeJson(response, {
+                status: 503,
+                body: {
+                  error: "comic_ai_integration_service_account_unavailable",
+                  message: "Comic AI integration service account is unavailable",
+                },
+              });
+            }
+            const idempotencyKey = requiredIdempotencyKeyFromRequest(request) ?? verified.nonce;
+            const targetId = uuidFromIdempotencyKey(`comic-ai-moneyprinter-image:${idempotencyKey}`);
+            const result = await createGenerationTask(db, {
+              kind: "image",
+              episodeId: null,
+              body: {
+                ...body,
+                model: modelCode,
+                prompt,
+                parameters,
+                targetType: "standalone_image",
+                targetId,
+                sourceSurface: "moneyprinter",
+              },
+              idempotencyKey,
+              authenticated,
+              context: {
+                actor: actorContextFromAuthenticatedUser(authenticated.user),
+                project: null,
+                userId: authenticated.user.id,
+              },
+              runtime: storageRuntime,
+              env: runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              now,
+              request,
+            });
+            if (!result.body) {
+              return writeJson(response, {
+                status: 404,
+                body: { error: "resource_not_found", message: "Generation task was not created" },
+              });
+            }
+            const task = await mapMoneyPrinterGenerationResponse(db, {
+              task: result.body as Record<string, unknown>,
+              sessionToken: authenticated.sessionToken,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              request,
+              now,
+            });
+            return writeJson(response, {
+              status: result.status,
+              body: {
+                ...task,
+                modelCode,
+                status: task.status === "succeeded" || task.status === "failed" ? task.status : "queued",
+              },
+            });
+          }
+
+          if (request.method === "GET" && (moneyPrinterTaskMatch || moneyPrinterImageTaskMatch)) {
+            const taskId = decodeURIComponent((moneyPrinterTaskMatch || moneyPrinterImageTaskMatch)?.[1] ?? "");
             if (!isUuid(taskId)) {
               return writeJson(response, {
                 status: 400,

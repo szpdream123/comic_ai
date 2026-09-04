@@ -135,12 +135,13 @@ async function findMembershipPeriodForCreditGrant(
         bo.created_by_user_id,
         mplan.code AS plan_code
       FROM membership_periods mp
-      LEFT JOIN billing_orders bo
+      JOIN billing_orders bo
         ON bo.id = mp.order_id
       LEFT JOIN membership_plans mplan
         ON mplan.id = mp.plan_id
       WHERE mp.id = $1
       LIMIT 1
+      FOR UPDATE OF bo
     `,
     [membershipPeriodId],
   );
