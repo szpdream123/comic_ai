@@ -10297,6 +10297,8 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
     onDuplicateProject: (projectId) => duplicateAiCanvasRuntimeProject(workbench, projectId),
     onExportProject: (projectId) => exportAiCanvasRuntimeProject(workbench, projectId),
     onImportProject: () => importAiCanvasRuntimeProject(workbench),
+    onOpenHome: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "home" } }),
+    onOpenProjects: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "new-canvas" } }),
     onOpenTaskCenter: () => handleAction(workbench, { dataset: { action: "open-task-center" } }),
   };
 }

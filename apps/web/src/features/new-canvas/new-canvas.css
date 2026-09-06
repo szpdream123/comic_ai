@@ -10884,8 +10884,8 @@
 
 .new-canvas-root .canvas-libtv-import-panel > header > span svg,
 .new-canvas-root .canvas-libtv-import-mapping svg {
-  width: 1.2rem;
-  height: 1.2rem;
+  width: 1.375rem;
+  height: 1.375rem;
 }
 
 .new-canvas-root .canvas-zoom-tools,
@@ -10989,13 +10989,13 @@
   .canvas-libtv-import-panel > header > span svg,
   .canvas-libtv-import-mapping svg
 ) {
-  width: 1.2rem;
-  height: 1.2rem;
+  width: 1.375rem;
+  height: 1.375rem;
 }
 
 .new-canvas-root .canvas-agent-reopen svg {
-  width: 1.2rem;
-  height: 1.2rem;
+  width: 1.375rem;
+  height: 1.375rem;
 }
 
 .new-canvas-root :where(
@@ -11012,6 +11012,6 @@
   .canvas-resource-actions,
   .canvas-libtv-import-panel
 ) button svg {
-  width: 1.2rem;
-  height: 1.2rem;
+  width: 1.375rem;
+  height: 1.375rem;
 }

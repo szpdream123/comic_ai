@@ -33,7 +33,9 @@
   .workbench-main,
   .seo-home-scroll,
   .home-hero,
-  .episode-workbench-shell {
+  .episode-workbench-shell,
+  .ai-canvas-standalone-page,
+  .ai-canvas-standalone-mount {
     height: calc(100dvh / var(--app-ui-scale));
   }
 
@@ -43,7 +45,9 @@
   .workbench-fatal,
   .production-community-window,
   .library-team-page,
-  .episode-workbench-shell {
+  .episode-workbench-shell,
+  .ai-canvas-standalone-page,
+  .ai-canvas-standalone-mount {
     min-height: calc(100dvh / var(--app-ui-scale));
   }
 

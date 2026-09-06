@@ -116,13 +116,13 @@ const AGENT_HEADER_ICON_PATHS = {
 };
 
 function renderAgentHeaderIcon(name) {
-  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${AGENT_HEADER_ICON_PATHS[name] ?? AGENT_HEADER_ICON_PATHS.history}</svg>`;
+  return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${AGENT_HEADER_ICON_PATHS[name] ?? AGENT_HEADER_ICON_PATHS.history}</svg>`;
 }
 
 function renderAgentComposerActionIcon(running = false) {
   return running
-    ? '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" /></svg>'
-    : '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V4" /><path d="m5 11 7-7 7 7" /></svg>';
+    ? '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" /></svg>'
+    : '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V4" /><path d="m5 11 7-7 7 7" /></svg>';
 }
 
 export function ensureCanvasAgentState(ui = {}) {
@@ -3553,7 +3553,7 @@ function renderAgentAttachmentPreview(attachment = {}) {
 
 function renderAgentAttachmentIcon(name) {
   if (name === "add") {
-    return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
+    return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
   }
   return "";
 }

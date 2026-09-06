@@ -24,7 +24,7 @@ const CHROME_ICON_PATHS = {
 function renderChromeIcon(name, options = {}) {
   const path = CHROME_ICON_PATHS[name] ?? CHROME_ICON_PATHS.sparkle;
   const label = options.label ? ` aria-label="${escapeHtml(options.label)}"` : "";
-  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="${label ? "false" : "true"}"${label}>${path}</svg>`;
+  return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="${label ? "false" : "true"}"${label}>${path}</svg>`;
 }
 
 export function renderNewCanvasChromeRail(ui = {}) {

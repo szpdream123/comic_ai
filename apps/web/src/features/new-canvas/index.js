@@ -60,7 +60,7 @@ import { installCanvasSelectEnhancer } from "./canvas-ui-controls.js";
 
 const DEFAULT_STYLE_HREFS = [
   "/src/features/production-workbench/production-workbench.css",
-  "/src/features/new-canvas/new-canvas.css?v=20260906-2",
+  "/src/features/new-canvas/new-canvas.css?v=20260906-3",
 ];
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
 export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-storyboard-cell";

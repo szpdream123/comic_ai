@@ -547,6 +547,8 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       duplicateProject: context.onDuplicateProject,
       exportProject: context.onExportProject,
       importProject: context.onImportProject,
+      openHome: context.onOpenHome,
+      openProjects: context.onOpenProjects,
     };
     const applyCatalog = (next = {}) => {
       if (next.projectCatalog !== undefined) {
@@ -583,8 +585,8 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
     });
     const originalState = store.getState();
     for (const [name, handler] of Object.entries(actionHandlers)) {
-      if (typeof handler !== "function" || typeof originalState[name] !== "function") continue;
-      originalActions.set(name, originalState[name]);
+      if (typeof handler !== "function") continue;
+      if (typeof originalState[name] === "function") originalActions.set(name, originalState[name]);
       store.setState({
         [name]: async (...args) => handler(...args),
       });

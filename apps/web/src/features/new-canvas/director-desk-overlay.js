@@ -317,6 +317,7 @@ export function createDirectorDeskOverlay({ surface, workbench }) {
     try {
       await appendFile(file, { media: "reference-video", directorArtifactKind: "video" });
       notify("已回写导演台参考视频", "success");
+      close();
     } catch (error) {
       notify("导演台参考视频回写失败，请稍后重试");
       throw error;

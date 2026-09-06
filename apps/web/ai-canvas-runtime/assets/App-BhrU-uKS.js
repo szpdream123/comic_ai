@@ -354,7 +354,30 @@ function Gr() {
 	}))), a = K((e) => {
 		let t = e.projects.find((t) => t.id === e.currentProjectId);
 		return t?.parentId ? e.projects.find((e) => e.id === t.parentId)?.name ?? "" : "";
-	});
+	}), { projects: s, currentProjectId: c, switchProject: l, deleteProject: u, duplicateProject: d, exportProject: f, openHome: y, openProjects: C } = K(gn((e) => ({
+		projects: e.projects,
+		currentProjectId: e.currentProjectId,
+		switchProject: e.switchProject,
+		deleteProject: e.deleteProject,
+		duplicateProject: e.duplicateProject,
+		exportProject: e.exportProject,
+		openHome: e.openHome,
+		openProjects: e.openProjects
+	}))), [p, m] = (0, Q.useState)(!1), [h, g] = (0, Q.useState)(!1), [_, v] = (0, Q.useState)(!1);
+	let b = s.find((e) => e.id === c) ?? null;
+	let x = (e) => {
+		m(!1), g(!1), v(!1), l && void l(e);
+	};
+	let S = (e) => {
+		if (!e) return;
+		m(!1), g(!1), v(!1), window.confirm?.("确定删除当前项目吗？") && u && void u(e);
+	};
+	let w = (e) => {
+		m(!1), g(!1), v(!1), d && void d(e);
+	};
+	let T = (e) => {
+		m(!1), g(!1), v(!1), f && void f(e);
+	};
 	return /* @__PURE__ */ (0, Z.jsxs)("header", {
 		"data-tauri-drag-region": !0,
 		className: `app-header absolute top-2 z-40 flex items-center gap-1 px-2 py-2
@@ -362,7 +385,11 @@ function Gr() {
                   shadow-lg shadow-black/30 select-none ${Ur && Wr ? "right-2" : "left-2"}`,
 		children: [
 			/* @__PURE__ */ (0, Z.jsxs)("div", {
-				className: "app-brand flex items-center gap-2 pr-1",
+				className: "app-brand flex items-center gap-2 pr-1 cursor-pointer",
+				onClick: () => g((e) => !e),
+				role: "button",
+				tabIndex: 0,
+				"aria-expanded": h,
 				children: [/* @__PURE__ */ (0, Z.jsx)("div", {
 					className: "w-6 h-6 rounded-md bg-gradient-to-br to-purple-600 flex items-center justify-center shrink-0",
 					children: /* @__PURE__ */ (0, Z.jsxs)("svg", {
@@ -459,6 +486,42 @@ function Gr() {
 					children: "灵曦AI"
 				})]
 			}),
+			h ? /* @__PURE__ */ (0, Z.jsxs)("div", {
+				className: "absolute left-2 top-[calc(100%+6px)] z-[80] min-w-[150px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
+				role: "menu",
+				children: [
+					/* @__PURE__ */ (0, Z.jsx)("button", {
+						type: "button",
+						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+						onClick: () => {
+							g(!1), window.location.href = "/";
+						},
+						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:home", className: "h-3.5 w-3.5" }), "回到主页"]
+					}),
+					/* @__PURE__ */ (0, Z.jsx)("button", {
+						type: "button",
+						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+						onClick: () => {
+							g(!1), window.location.hash = "#new-canvas";
+						},
+						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:layout-grid", className: "h-3.5 w-3.5" }), "全部项目"]
+					}),
+					/* @__PURE__ */ (0, Z.jsx)("button", {
+						type: "button",
+						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+						onClick: () => {
+							g(!1), r && void r();
+						},
+						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:folder-plus", className: "h-3.5 w-3.5" }), "创建新项目"]
+					}),
+					b ? /* @__PURE__ */ (0, Z.jsx)("button", {
+						type: "button",
+						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-red-300 hover:bg-red-500/10",
+						onClick: () => S(b.id),
+						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:trash-2", className: "h-3.5 w-3.5" }), "删除项目"]
+					}) : null
+				]
+			}) : null,
 			/* @__PURE__ */ (0, Z.jsx)("div", { className: "w-px h-4 bg-[var(--separator-color)] mx-0.5" }),
 			a && /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)("span", {
 				className: "max-w-[110px] truncate pl-2 text-[11px] text-canvas-text-secondary/70",
@@ -482,6 +545,75 @@ function Gr() {
                    focus:text-canvas-text/90 transition-colors`,
 				children: t
 			}),
+			/* @__PURE__ */ (0, Z.jsx)(J.button, {
+				type: "button",
+				"aria-label": "切换项目",
+				"aria-expanded": p,
+				onClick: (e) => {
+					e.stopPropagation(), m((e) => !e), g(!1), v(!1);
+				},
+				className: "grid h-6 w-6 place-items-center rounded-md text-canvas-text-muted hover:bg-canvas-hover hover:text-canvas-text",
+				children: /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:chevron-down", className: "h-3.5 w-3.5" })
+			}),
+			p ? /* @__PURE__ */ (0, Z.jsx)("div", {
+				className: "absolute left-24 top-[calc(100%+6px)] z-[80] min-w-[190px] max-w-[260px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
+				role: "menu",
+				children: s.length === 0 ? /* @__PURE__ */ (0, Z.jsx)("div", {
+					className: "px-2.5 py-2 text-xs text-canvas-text-muted",
+					children: "暂无项目"
+				}) : s.map((e) => /* @__PURE__ */ (0, Z.jsx)("button", {
+					type: "button",
+					className: `flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs ${e.id === c ? "bg-indigo-500/15 text-canvas-text" : "text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text"}`,
+					onClick: () => x(e.id),
+					children: [/* @__PURE__ */ (0, Z.jsx)("span", { className: "min-w-0 truncate", children: e.name }), e.id === c ? /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:check", className: "h-3.5 w-3.5 shrink-0 text-indigo-400" }) : null]
+				}, e.id))
+			}) : null,
+			b ? /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, {
+				children: [/* @__PURE__ */ (0, Z.jsx)(J.button, {
+					type: "button",
+					"aria-label": "项目操作",
+					"aria-expanded": _,
+					onClick: (e) => {
+						e.stopPropagation(), v((e) => !e), m(!1), g(!1);
+					},
+					className: "grid h-6 w-6 place-items-center rounded-md text-canvas-text-muted hover:bg-canvas-hover hover:text-canvas-text",
+					children: /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:more-horizontal", className: "h-3.5 w-3.5" })
+				}),
+				_ ? /* @__PURE__ */ (0, Z.jsxs)("div", {
+					className: "absolute left-[180px] top-[calc(100%+6px)] z-[80] min-w-[150px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
+					role: "menu",
+					children: [
+						/* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+							onClick: () => {
+								v(!1);
+								let e = window.prompt?.("项目名称", t);
+								e?.trim() && n(e.trim());
+							},
+							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:pencil", className: "h-3.5 w-3.5" }), "重命名项目"]
+						}),
+						/* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+							onClick: () => w(b.id),
+							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:copy", className: "h-3.5 w-3.5" }), "复制项目"]
+						}),
+						/* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+							onClick: () => T(b.id),
+							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:download", className: "h-3.5 w-3.5" }), "导出项目"]
+						}),
+						/* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-red-300 hover:bg-red-500/10",
+							onClick: () => S(b.id),
+							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:trash-2", className: "h-3.5 w-3.5" }), "删除项目"]
+						})
+					]
+				}) : null]
+			}) : null,
 			/* @__PURE__ */ (0, Z.jsx)("div", { className: "w-px h-4 bg-[var(--separator-color)] mx-0.5" }),
 			/* @__PURE__ */ (0, Z.jsx)(J.button, {
 				type: "button",

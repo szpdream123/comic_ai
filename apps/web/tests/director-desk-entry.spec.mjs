@@ -506,8 +506,7 @@ test("director node export reuses the embedded reference video bridge", () => {
     overlaySource.indexOf("const appendVideoCapture"),
     overlaySource.indexOf("const open"),
   );
-  assert.match(videoWritebackSource, /await appendFile[\s\S]*?notify\("已回写导演台参考视频", "success"\);/);
-  assert.doesNotMatch(videoWritebackSource, /close\(\)/);
+  assert.match(videoWritebackSource, /await appendFile[\s\S]*?notify\("已回写导演台参考视频", "success"\);[\s\S]*?close\(\);/);
   assert.match(videoWritebackSource, /catch \(error\)[\s\S]*?导演台参考视频回写失败，请稍后重试/);
   assert.doesNotMatch(overlaySource, /event\.key === "Escape" && host\) close\(\)/);
   assert.match(hostSource, /onDirectorDeskExportVideo/);
