@@ -75,6 +75,7 @@ describe("Canvas API contract", () => {
         "runCanvasNode",
         "selectCanvasArtifact",
         "listCanvasNodeRuns",
+        "exportCanvasVideo",
         "createCanvasGenerationBatch",
         "getCanvasGenerationBatch",
         "reconcileCanvasGenerationBatch",

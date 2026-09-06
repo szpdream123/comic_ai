@@ -52,6 +52,35 @@ test("video composition plan rejects unsafe paths, unsupported media, and invali
     () => validateVideoCompositionPlan(valid, { maxClips: 0 }),
     (error: unknown) => isCompositionError(error, "video_composition_limits_invalid"),
   );
+  const trimmed = validateVideoCompositionPlan({
+    ...valid,
+    clips: [{
+      ...valid.clips[0]!,
+      durationSeconds: 9,
+      sourceIn: 1.25,
+      sourceOut: 3.75,
+      transitionIn: { kind: "dissolve", duration: 0.5 },
+    }],
+  });
+  assert.equal(trimmed.clips[0]!.durationSeconds, 2.5);
+  assert.equal(trimmed.clips[0]!.sourceIn, 1.25);
+  assert.deepEqual(trimmed.clips[0]!.transitionIn, { kind: "dissolve", duration: 0.5 });
+  assert.throws(
+    () => validateVideoCompositionPlan({ ...valid, clips: [{ ...valid.clips[0]!, sourceIn: 2, sourceOut: 1 }] }),
+    (error: unknown) => isCompositionError(error, "video_composition_source_out_invalid"),
+  );
+  assert.throws(
+    () => validateVideoCompositionPlan({ ...valid, clips: [{ ...valid.clips[0]!, transitionIn: { kind: "wipe" as never, duration: 0.2 } }] }),
+    (error: unknown) => isCompositionError(error, "video_composition_transition_invalid"),
+  );
+  assert.throws(
+    () => validateVideoCompositionPlan({ ...valid, audio: { sourcePath: join(absolute, "music.flac") } }),
+    (error: unknown) => isCompositionError(error, "video_composition_audio_source_type_invalid"),
+  );
+  assert.throws(
+    () => validateVideoCompositionPlan({ ...valid, audio: { sourcePath: join(absolute, "music.wav"), volume: 5 } }),
+    (error: unknown) => isCompositionError(error, "video_composition_audio_volume_invalid"),
+  );
 });
 
 test("real ffmpeg composition preserves image/video order and ffprobe verifies the MP4 artifact", async () => {
@@ -157,6 +186,59 @@ test("real ffmpeg composition preserves image/video order and ffprobe verifies t
   }
 });
 
+test("composition renders dissolve and fade transitions with overlap timing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "comic-ai-video-composition-transition-"));
+  const inputRoot = join(root, "input");
+  const outputRoot = join(root, "output");
+  const tempRoot = join(root, "work");
+  await Promise.all([mkdir(inputRoot), mkdir(outputRoot), mkdir(tempRoot)]);
+  const redPath = join(inputRoot, "red.png");
+  const bluePath = join(inputRoot, "blue.png");
+  const outputPath = join(outputRoot, "transition.mp4");
+  try {
+    await runBinary(ffmpegInstaller.path, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=160x90:d=0.1", "-frames:v", "1", "-y", redPath]);
+    await runBinary(ffmpegInstaller.path, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.1", "-frames:v", "1", "-y", bluePath]);
+    const artifact = await composeVideoToMp4({
+      clips: [
+        { kind: "image", sourcePath: redPath, durationSeconds: 1 },
+        { kind: "image", sourcePath: bluePath, durationSeconds: 1, transitionIn: { kind: "dissolve", duration: 0.4 } },
+      ],
+      outputPath,
+      width: 160,
+      height: 90,
+      fps: 24,
+    }, { allowedInputRoots: [inputRoot], allowedOutputRoot: outputRoot, tempRoot });
+    assert.ok(Math.abs(artifact.durationSeconds - 1.6) <= 0.1);
+    const blendFrame = (await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-ss", "0.8", "-i", outputPath,
+      "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ])).stdout;
+    const offset = (45 * 160 + 80) * 3;
+    const [red, green, blue] = blendFrame.subarray(offset, offset + 3);
+    assert.ok(red! > 40 && blue! > 40 && green! < Math.min(red!, blue!), `expected blended frame, received ${red},${green},${blue}`);
+
+    const fadeOutputPath = join(outputRoot, "fade.mp4");
+    await composeVideoToMp4({
+      clips: [
+        { kind: "image", sourcePath: redPath, durationSeconds: 1 },
+        { kind: "image", sourcePath: bluePath, durationSeconds: 1, transitionIn: { kind: "fade", duration: 0.4 } },
+      ],
+      outputPath: fadeOutputPath,
+      width: 160,
+      height: 90,
+      fps: 24,
+    }, { allowedInputRoots: [inputRoot], allowedOutputRoot: outputRoot, tempRoot });
+    const fadeFrame = (await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-ss", "0.7", "-i", fadeOutputPath,
+      "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ])).stdout;
+    const [fadeRed, fadeGreen, fadeBlue] = fadeFrame.subarray(offset, offset + 3);
+    assert.ok(fadeRed! < 100 && fadeGreen! < 100 && fadeBlue! < 100, `expected black fade frame, received ${fadeRed},${fadeGreen},${fadeBlue}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("composition rejects sources outside the allowlist and never creates an artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "comic-ai-video-composition-scope-"));
   const inputRoot = join(root, "allowed");
@@ -183,6 +265,96 @@ test("composition rejects sources outside the allowlist and never creates an art
     );
     await assert.rejects(stat(outputPath), { code: "ENOENT" });
     assert.deepEqual(await readdir(tempRoot), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("composition optionally mixes a validated audio source into the MP4", async () => {
+  const root = await mkdtemp(join(tmpdir(), "comic-ai-video-composition-audio-"));
+  const inputRoot = join(root, "input");
+  const outputRoot = join(root, "output");
+  const tempRoot = join(root, "work");
+  await Promise.all([mkdir(inputRoot), mkdir(outputRoot), mkdir(tempRoot)]);
+  const imagePath = join(inputRoot, "frame.png");
+  const audioPath = join(inputRoot, "tone.wav");
+  const outputPath = join(outputRoot, "with-audio.mp4");
+  try {
+    await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+      "-i", "color=c=black:s=160x90:d=0.1", "-frames:v", "1", "-y", imagePath,
+    ]);
+    await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+      "-i", "sine=frequency=880:duration=1", "-c:a", "pcm_s16le", "-y", audioPath,
+    ]);
+    const artifact = await composeVideoToMp4({
+      clips: [{ kind: "image", sourcePath: imagePath, durationSeconds: 0.8 }],
+      audio: { sourcePath: audioPath, volume: 0.5 },
+      outputPath,
+      width: 160,
+      height: 90,
+      fps: 24,
+    }, {
+      allowedInputRoots: [inputRoot],
+      allowedOutputRoot: outputRoot,
+      tempRoot,
+      limits: { timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 },
+    });
+    assert.equal(artifact.audioIncluded, true);
+    const probe = JSON.parse((await runBinary(ffprobeInstaller.path, [
+      "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "json", outputPath,
+    ])).stdout.toString("utf8"));
+    assert.deepEqual(
+      probe.streams.filter((stream: { codec_type: string }) => stream.codec_type === "audio").map((stream: { codec_name: string }) => stream.codec_name),
+      ["aac"],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("composition mixes multiple audio tracks with timeline offsets and fades", async () => {
+  const root = await mkdtemp(join(tmpdir(), "comic-ai-video-composition-multiaudio-"));
+  const inputRoot = join(root, "input");
+  const outputRoot = join(root, "output");
+  const tempRoot = join(root, "work");
+  await Promise.all([mkdir(inputRoot), mkdir(outputRoot), mkdir(tempRoot)]);
+  const imagePath = join(inputRoot, "frame.png");
+  const firstAudioPath = join(inputRoot, "tone-a.wav");
+  const secondAudioPath = join(inputRoot, "tone-b.wav");
+  const outputPath = join(outputRoot, "with-multiple-audio.mp4");
+  try {
+    await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+      "-i", "color=c=black:s=160x90:d=0.1", "-frames:v", "1", "-y", imagePath,
+    ]);
+    await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+      "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s16le", "-y", firstAudioPath,
+    ]);
+    await runBinary(ffmpegInstaller.path, [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+      "-i", "sine=frequency=880:duration=1", "-c:a", "pcm_s16le", "-y", secondAudioPath,
+    ]);
+    const artifact = await composeVideoToMp4({
+      clips: [{ kind: "image", sourcePath: imagePath, durationSeconds: 1.2 }],
+      audio: [
+        { sourcePath: firstAudioPath, volume: 0.5, fadeIn: 0.1, fadeOut: 0.1 },
+        { sourcePath: secondAudioPath, volume: 0.4, timelineIn: 0.2, fadeIn: 0.1 },
+      ],
+      outputPath,
+      width: 160,
+      height: 90,
+      fps: 24,
+    }, {
+      allowedInputRoots: [inputRoot],
+      allowedOutputRoot: outputRoot,
+      tempRoot,
+      limits: { timeoutMs: 30_000, maxOutputBytes: 16 * 1024 * 1024 },
+    });
+    assert.equal(artifact.audioIncluded, true);
+    assert.ok(Math.abs(artifact.durationSeconds - 1.2) <= 0.1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

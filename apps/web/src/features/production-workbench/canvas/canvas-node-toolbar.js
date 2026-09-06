@@ -31,6 +31,8 @@ const NODE_MEDIA_KINDS = Object.freeze({
   "ai-animation": "image",
   "ai-panorama": "image",
   "ai-storyboard": "image",
+  "ai-shotlist": "text",
+  "ai-shotlist": "text",
   "source-image": "image",
   video: "video",
   "ai-video": "video",

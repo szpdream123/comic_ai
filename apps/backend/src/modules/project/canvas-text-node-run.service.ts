@@ -376,7 +376,7 @@ export async function runCanvasTextNode(
 }
 
 function isCanvasAiTextNode(node: CanvasNode) {
-  return node.type === "ai-text" || node.type === "ai-markdown";
+  return node.type === "ai-text" || node.type === "ai-markdown" || node.type === "ai-shotlist";
 }
 
 function collectCanvasTextInput(

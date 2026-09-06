@@ -2,7 +2,7 @@
 
 > 状态：设计基线
 >
-> 对比来源：[Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri)，`origin/master` `8773129`（v0.6.7，2026-07-26）；上一轮基线为 `0f3ca1c`。
+> 对比来源：[Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri)，`origin/master` `236be2f`（v0.9.2，2026-09-06）；上一轮基线为 `8773129`。
 >
 > 目标：在现有项目内重构一个完整的 AI 多模态画布。画布是独立业务实体，一个主用户可以拥有多个画布；画布不关联漫画项目。子用户只能访问主用户分配给他的画布。
 
@@ -887,6 +887,7 @@ AdminBackedTextModelResolver
 ### P0-B：画布壳和基础节点
 
 - [已完成] 建立 `apps/web/src/features/new-canvas` 动态模块、`mountNewCanvas()/unmount()`、样式隔离和宿主依赖注入。
+- [已完成] 新画布入口通过 `ai-canvas-runtime-adapter` 接入版本化 runtime boundary；上游 runtime 可注入替换，未注入时包裹现有 X6 production adapter，旧 `/canvas` 继续直连原链路。Adapter 保留完整 `creatorApi`，统一 `canvasProjectId`、COS `canvas-assets` 上传、Canvas 节点/文本/批量生成调用，并负责文档序列化、同步和生命周期转发。
 - [已完成] 嵌入 Canvas route/mount，进入时只显示宿主内 loading skeleton，不移植独立开屏页。
 - [已完成] Canvas 节点目录、分组、复制粘贴、本地撤销/重做、服务器 revision、自动保存、普通 Canvas `/live` 订阅/重连/撤权处理，以及按 owner/member principal 隔离的最近会话视口与选择恢复；切换画布或返回列表前会等待草稿保存，revision 冲突保留本地草稿和双方恢复快照，并由用户明确选择服务端版本或以最新 revision 保存本地版本。
 - [已完成] 文本、图片、视频、音频、源文件、Markdown、评论节点。
@@ -899,7 +900,7 @@ AdminBackedTextModelResolver
 - [已完成] 实现批量 DAG、并发、取消、部分成功和输出历史。
 - [已完成] `text/image/video/audio` 统一进入 Canvas batch DAG；同步文本 run 保存 text Artifact 和 `runId`，生成后的文本快照在派发后继媒体任务前注入 prompt，上游失败、稳定 Artifact 未到达和重启 reconcile 保持现有等待/跳过语义。
 - [已完成] 接入上传、fingerprint 去重、资产搜索/点击插入/稳定 ID 拖入、缩略图刷新、签名 URL 刷新、回收站和删除保护；资产复制/下载具有流式进度、取消、完整性校验和失败重试。
-- [部分完成] Canvas 资产侧栏已补齐与上游一致的“画布产物 / 项目文件 / 全局资产 / 短剧资产”来源切换、全局资产读取、关键词搜索、媒体类型筛选、点击与稳定 ID 拖入；“项目文件”独立读取可访问项目列表和所选项目的资产库，不改动当前工作台项目。全局来源可按现有后端约束上传角色/场景/道具图片或音色音频，上传后刷新同一来源列表；主用户可从全局资产卡片软删除或编辑标签，团队子账户不显示这些操作且服务端保留删除授权拒绝。全局资产标签由 `team_assets.tags_json` 持久化，显示为 chip，可按标签筛选和参与搜索；项目、短剧和画布产物卡片也可编辑标签，项目/短剧通过既有项目资产最新版本的 `metadata_json.tags` 写入，画布产物通过其稳定 `asset_versions.metadata_json.tags` 写入，均限制为最多 12 个、每个 32 字符，并保留版本其它元数据、Artifact、Storage 与归属。四类卡片均已提供同级内联标签编辑区，输入后 Enter 或失焦保存，现有标签点击 `×` 删除；保存按来源和资产串行并在重渲染后保持编辑焦点。具备稳定 Storage 关联的项目图片版本、团队全局图片和短剧图片均可复制为 Canvas 专属对象并设为风格母图，源对象不改变；短剧图片复用其已有的项目 `assetVersionId`。项目中的角色/场景/道具稳定图片版本还可复制为新的团队全局 Storage 对象和资产，源项目对象、版本与归属均不移动，子账户必须具有该项目的编辑能力；集成测试已通过真实 HTTP 子账户会话验证 `viewer` 被 `403 permission_denied/capability_missing` 拒绝，且不创建团队资产或无作用域 Storage 对象。桌面资产列表已使用与四类来源共用的瀑布流卡片布局，并提供 2-6 列控制；上游的每批 48 张、`rootMargin: 300px` 侧栏滚动增量加载和懒图策略已适配到全部四个来源，变更来源、搜索、媒体或标签筛选、项目切换时重置为首批。项目/短剧资产复用现有资产库数据。文件夹管理和外部文件夹仍待补齐。
+- [部分完成] Canvas 资产侧栏已补齐与上游一致的“画布产物 / 项目文件 / 全局资产 / 短剧资产”来源切换、全局资产读取、关键词搜索、媒体类型筛选、点击与稳定 ID 拖入；“项目文件”独立读取可访问项目列表和所选项目的资产库，不改动当前工作台项目。全局来源可按现有后端约束上传角色/场景/道具图片或音色音频，上传后刷新同一来源列表；主用户可从全局资产卡片软删除或编辑标签，团队子账户不显示这些操作且服务端保留删除授权拒绝。全局资产标签由 `team_assets.tags_json` 持久化，显示为 chip，可按标签筛选和参与搜索；项目、短剧和画布产物卡片也可编辑标签，项目/短剧通过既有项目资产最新版本的 `metadata_json.tags` 写入，画布产物通过其稳定 `asset_versions.metadata_json.tags` 写入，均限制为最多 12 个、每个 32 字符，并保留版本其它元数据、Artifact、Storage 与归属。四类卡片均已提供同级内联标签编辑区，输入后 Enter 或失焦保存，现有标签点击 `×` 删除；保存按来源和资产串行并在重渲染后保持编辑焦点。具备稳定 Storage 关联的项目图片版本、团队全局图片和短剧图片均可复制为 Canvas 专属对象并设为风格母图，源对象不改变；短剧图片复用其已有的项目 `assetVersionId`。项目中的角色/场景/道具稳定图片版本还可复制为新的团队全局 Storage 对象和资产，源项目对象、版本与归属均不移动，子账户必须具有该项目的编辑能力；集成测试已通过真实 HTTP 子账户会话验证 `viewer` 被 `403 permission_denied/capability_missing` 拒绝，且不创建团队资产或无作用域 Storage 对象。桌面资产列表已使用与四类来源共用的瀑布流卡片布局，并提供 2-6 列控制；上游的每批 48 张、`rootMargin: 300px` 侧栏滚动增量加载和懒图策略已适配到全部四个来源，变更来源、搜索、媒体或标签筛选、项目切换时重置为首批。项目/短剧资产复用现有资产库数据。全局分类采用 `team_assets.folder_name` 的 COS 虚拟前缀；不创建独立空文件夹实体，也不接入外部本地文件夹。
 - [已完成] “项目文件”来源可从当前所选项目导入图片或视频，直接复用现有上传会话和项目资产导入 API；项目导入与更新均要求 `projectEdit`，只读成员会在存储/上传校验之前收到 `403 permission_denied/capability_missing`。
 - [已完成] 项目剧集的创建、改名和删除现统一要求 `projectEdit`；短剧抽屉后续复用这些路由时，`viewer` 不能创建或改名剧集，团队子账户仍不能删除剧集。
 - [已完成] Canvas 短剧资产抽屉使用独立状态加载项目、剧集以及角色/场景/道具列表，不挂载完整剧集工作台，也不写入其 `selectedEpisodeId`、`importedAssets` 或生成会话状态；已覆盖新建、图片导入、简介保存、单项删除、固定图替换/解绑与按分类事务清空。固定图替换直接复用既有上传会话并为同一资产创建稳定新版本，不产生额外可见资产；解绑仅移除固定图关联，不删除原文件或历史版本。真实 HTTP viewer 会话已验证创建被 `403 permission_denied/capability_missing` 拒绝，且 viewer 不能解绑或批量删除剧集资产。
@@ -998,26 +999,26 @@ AdminBackedTextModelResolver
 - Canary 至少监控保存冲突率、run 恢复率、Provider 重复提交、计费 reservation 未结算、SSE 重连、Agent Policy deny 和前端错误率。
 - 回滚只关闭“新画布”入口和新写操作，保留 revision、run、artifact、账单和审计只读查询；禁止通过删表或删除对象回滚。
 
-### 16.1 当前未完成与发布阻塞（2026-07-27）
+### 16.1 当前未完成与发布阻塞（2026-09-04）
 
 以下项目仍不能标记为发布完成：
 
 1. **P1 Agent 真实外部与重启闭环**：MCP、配置草稿、生产搜索 Provider、完整 Worker 审批恢复、SSE、会话恢复、管理端指标、`structuredJsonPrompt` probe 和 owner 真实文本 Provider happy path 已完成。`run-canvas-agent-smoke.mjs` 已支持 queued submit/resume 两阶段证据，并新增恢复前状态、外部提交时间戳和可选真实搜索引用门禁；`scripts/run-canvas-agent-smoke.test.mjs` 已覆盖这些契约，但 `npm run smoke:canvas-agent` 仍需在正式 `.env` 分别以 owner/member 执行，并补搜索 Provider 真实外部凭据以及 Provider 已提交后进程重启的恢复证据。
 3. **P1 真实媒体 Provider**：歌词生成/编辑/同步、无音频纯文本转录和 derivation/batch 刷新恢复逻辑已完成；真实音乐/音频文件转录 Provider E2E、真实图片高级编辑 Provider 以及 Provider 取消确认/长时间恢复仍待发布环境执行。
 4. **P2 浏览器压力与最终回写**：桌面 Canvas、真实 X6 挂载/节点入框、10 轮 mount/unmount、Director 场景和截图、390px 项目列表/编辑器、44px 触控、软键盘焦点保持及横竖屏核心 E2E 已完成；本轮新增动态背景、Director 移动掌镜、稳定音视频节点和页面级全屏已有 DOM/Canvas/GPU 自动测试。仓库内 `new-canvas-pressure-gate.spec.mjs` 已通过 2,000 Agent 事件/1,000 消息/2MB Base64/2,000 媒体节点预门禁，新增 `director-artifact-handoff.test.ts` 覆盖截图/参考视频经 Storage 上传后写入 Canvas Artifact 的稳定 ID 和敏感值隔离，但仍需统一真实浏览器回归、真实浏览器长 Agent 会话和大图内存压力证据。
-5. **发布依赖门禁**：普通 Canvas SSE `id`/backlog、主用户/子用户灰度、Canary 聚合、敏感文档值拦截、服务端 2,000/5,000 性能门禁、网页/Skill Prompt 注入与上传/日志组合攻击门禁、Director GPU、SBOM 和 Third-Party Notices 已完成；依赖漏洞门禁以最终 lockfile 的官方 registry 审计结果为准。
+5. **发布依赖门禁**：普通 Canvas SSE `id`/backlog、主用户/子用户灰度、Canary 聚合、敏感文档值拦截、服务端 2,000/5,000 性能门禁、网页/Skill Prompt 注入与上传/日志组合攻击门禁、Director GPU、SBOM 和 Third-Party Notices 已完成；Tiptap 全套已升级到 `3.31.3`，`npm audit --registry=https://registry.npmjs.org --audit-level=high` 当前无漏洞，完整 JSON 审计结果已归档到 `docs/legal/npm-audit-2026-09-04.json`。
 6. **P1 正式 runtime API 契约**：基础 Canvas creator API、generation-history、settings、Canvas artifact 标签/选择、节点运行、generation-batches、Agent conversations/tasks、derivations、annotation layers、Director artifact、SSE 和前端错误遥测均已纳入 `canvas-api.contract.ts` 与 `docs/api/canvas.openapi.json`，并由契约测试校验路径集合、命令 DTO 和 SSE 响应。节点运行以实际已实现的 `POST /api/canvas/:canvasId/nodes/:nodeId/run` 与 `GET /api/canvas/:canvasId/nodes/:nodeId/runs` 为准，不新增未实现的通用 `/runs` 兼容路由。
-7. **P1 上游资产与设置页面 parity**：资产侧栏的来源切换、独立项目选择、全局读取、受控全局上传、搜索、媒体类型筛选、稳定拖入、主用户删除全局资产、四来源标签编辑、项目角色/场景/道具图片保存到全局及四来源共用的桌面瀑布流卡片与 2-6 列控制已完成初版；全局标签由 `team_assets.tags_json` 持久化，项目/短剧标签写入所属项目资产最新版本的 `metadata_json.tags`，画布产物标签写入其稳定版本的 `metadata_json.tags`。三类版本写入和全局标签均限制为最多 12 个、每个 32 字符，增量合并不改变既有元数据、Artifact、Storage 或所有权；项目资产写入要求 `projectEdit`，画布产物写入要求 Canvas `edit`。四类卡片均已提供内联输入区，支持 Enter/失焦新增和 `×` 删除，并复用同一串行保存与来源刷新策略。保存到全局会按授权项目版本读取字节并创建新的无项目作用域 Storage 对象，源项目对象不移动；真实 HTTP 子账户会话的回归测试确认 `viewer` 不具备项目编辑能力时会被 `403 permission_denied/capability_missing` 拒绝，且不会创建任何目标资产或 Storage 对象。上游每批 48 张、搜索延后、`rootMargin: 300px` 触发的侧栏增量加载与懒图策略已经适配；本实现对来源、搜索、媒体/标签筛选和项目切换均重置首批，仍保留现有后端资产读取契约。上游 AssetsPanel 的文件夹/外部文件管理和完整项目/短剧资产 CRUD 仍未完整嵌入。设置抽屉已有画风 ID、锁定、稳定 Canvas 产物资产引用选择、持久化的母图启用开关、选择后的缩略图/名称/暂停状态预览、图片/视频“跟随节点”默认输出控件，以及复用当前激活模型目录、按 Provider 分组并保留不可用已保存值的图片/视频模型选择。本地风格图已通过现有 Storage 上传会话物化为当前 Canvas 的 `assets`、`asset_versions` 与内部 artifact；项目来源的稳定图片版本、具备稳定 Storage 关联的团队全局图片和短剧图片均可在资产侧栏直接复制为 Canvas 专属对象再设为母图，源对象不改变。短剧图片复用其已有的项目 `assetVersionId`；新上传、替换或生成完成的团队全局资产已保存可审计的稳定 Storage 关联，历史 URL-only 资产保持空关联且不作猜测。启用时服务端按 Canvas actor scope 将 `assets.id` 解析为可用、未删除的 `asset_versions.id`，再合并进 image/video 的内部参考版本列表，关闭时保留资产 ID 但不注入引用。
+7. **P1 上游资产与设置页面 parity**：资产侧栏的来源切换、独立项目选择、全局读取、受控全局上传、搜索、媒体类型筛选、稳定拖入、主用户删除全局资产、四来源标签编辑、项目角色/场景/道具图片保存到全局及四来源共用的桌面瀑布流卡片与 2-6 列控制已完成初版；全局标签由 `team_assets.tags_json` 持久化，项目/短剧标签写入所属项目资产最新版本的 `metadata_json.tags`，画布产物标签写入其稳定版本的 `metadata_json.tags`。三类版本写入和全局标签均限制为最多 12 个、每个 32 字符，增量合并不改变既有元数据、Artifact、Storage 或所有权；项目资产写入要求 `projectEdit`，画布产物写入要求 Canvas `edit`。四类卡片均已提供内联输入区，支持 Enter/失焦新增和 `×` 删除，并复用同一串行保存与来源刷新策略。保存到全局会按授权项目版本读取字节并创建新的无项目作用域 Storage 对象，源项目对象不移动；真实 HTTP 子账户会话的回归测试确认 `viewer` 不具备项目编辑能力时会被 `403 permission_denied/capability_missing` 拒绝，且不会创建任何目标资产或 Storage 对象。上游每批 48 张、搜索延后、`rootMargin: 300px` 触发的侧栏增量加载与懒图策略已经适配；本实现对来源、搜索、媒体/标签筛选和项目切换均重置首批，仍保留现有后端资产读取契约。COS 资产使用 `team_assets.folder_name` 作为带对象 key 前缀的虚拟分类，API 仅返回仍有资产的文件夹名称；不创建独立资产文件夹实体、空目录或本地路径，外部文件夹管理明确排除。设置抽屉已有画风 ID、锁定、稳定 Canvas 产物资产引用选择、持久化的母图启用开关、选择后的缩略图/名称/暂停状态预览、图片/视频“跟随节点”默认输出控件，以及复用当前激活模型目录、按 Provider 分组并保留不可用已保存值的图片/视频模型选择。本地风格图已通过现有 Storage 上传会话物化为当前 Canvas 的 `assets`、`asset_versions` 与内部 artifact；项目来源的稳定图片版本、具备稳定 Storage 关联的团队全局图片和短剧图片均可在资产侧栏直接复制为 Canvas 专属对象再设为母图，源对象不改变。短剧图片复用其已有的项目 `assetVersionId`；新上传、替换或生成完成的团队全局资产已保存可审计的稳定 Storage 关联，历史 URL-only 资产保持空关联且不作猜测。启用时服务端按 Canvas actor scope 将 `assets.id` 解析为可用、未删除的 `asset_versions.id`，再合并进 image/video 的内部参考版本列表，关闭时保留资产 ID 但不注入引用。
 
 已完成但必须保持回归的门禁包括：Canvas 列表/创建入口、切换前草稿 flush、普通 Canvas `/live` 与显式冲突恢复、主用户/子用户 CanvasActorScope 权限、X6 vendor 静态路由/真实挂载/节点适配/释放、X6 节点对齐/分布、连接释放快速创建、资产稳定 ID 拖入与流式传输控制、Canvas settings/toolbar/output defaults、生成历史服务端搜索/分页/集合删除、歌词/纯文本转录、文本/媒体混合批次 DAG、跨批次/同批次稳定资产版本注入、v0.6.7 角色库/媒体提示词偏好/吉祥物、Agent 真实记忆管理与持久化跳步、pin/rename/rewind/归档恢复、Director 多实例绑定/节点级视频/Artifact 回写、稳定音视频节点、动态 Three.js 背景、Storage Canvas 引用保留语义，以及现有任务/计费/恢复链路的 HTTP/数据库测试。正式数据库的 Canvas Agent 知识/引用/外部边界表和 step input payload 历史迁移漂移已通过独立前向迁移修复，并有旧 schema 升级回归。
 
-### 16.2 资产侧栏状态说明（2026-07-27）
+### 16.2 资产侧栏状态说明（2026-09-04）
 
-第 16.1 节第 7 项中的“完整项目/短剧资产 CRUD”剩余项仅指项目资产和 Web 虚拟文件夹；Canvas 短剧资产抽屉的创建、图片导入、简介、固定图替换/解绑、单项删除和按分类事务清空已完成，并复用项目上传、资产版本和剧集资产授权链路。
+第 16.1 节第 7 项中的“完整项目/短剧资产 CRUD”剩余项仅指项目资产编辑边界；Canvas 短剧资产抽屉的创建、图片导入、简介、固定图替换/解绑、单项删除和按分类事务清空已完成，并复用项目上传、资产版本和剧集资产授权链路。全局 Web 虚拟分类已完成，独立空文件夹实体、批量目录操作和外部本地文件夹不在本项目范围内。
 
-### 16.3 全局资产虚拟文件夹与项目资产 CRUD 状态（2026-07-27）
+### 16.3 全局资产虚拟文件夹与项目资产 CRUD 状态（2026-09-04）
 
-Canvas 的“全局资产”来源现以 `team_assets.folder_name` 持久化 Web 虚拟文件夹，支持按文件夹/未分类筛选，并由主用户在同一资产卡片中输入名称创建或移动资产；团队子账户不能移动。该模型不记录本地路径，也不创建无资产的空目录。空文件夹、批量重命名和显式删除空文件夹仍待具备独立文件夹实体的后续 API 后接入。
+Canvas 的“全局资产”来源现以 `team_assets.folder_name` 持久化 Web 虚拟文件夹，支持按文件夹/未分类筛选，并由主用户在同一资产卡片中输入名称创建或移动资产；团队子账户不能移动。资产库接口会返回当前仍有资产的文件夹名称。该模型不记录本地路径，也不创建无资产的空目录；COS 对象 key 前缀是资产归档的 canonical 边界，因此独立空文件夹、批量重命名和显式删除空文件夹实体不纳入本项目范围。
 
 Canvas 的“项目文件”来源已在同一侧栏中覆盖导入、名称/简介编辑、媒体替换、标签编辑、删除、保存到全局和风格母图设置；所有写操作复用既有项目资产 API 与 `projectEdit` 授权，不切换到项目工作台。
 

@@ -1076,7 +1076,7 @@ describe("canvas workflow document", () => {
 
     assert.deepEqual(
       templates.filter((template) => template.visible !== false).map((template) => template.title),
-      ["文本", "图片", "视频", "智能剪辑", "音频", "导演台", "逐帧拉片", "脚本"],
+      ["文本", "图片", "视频", "智能剪辑", "音频", "分镜表", "导演台", "逐帧拉片", "脚本", "画布笔记"],
     );
     assert.equal(templates.find((template) => template.id === "template-upload").visible, false);
     assert.equal(templates.find((template) => template.id === "template-ai-panorama").visible, false);

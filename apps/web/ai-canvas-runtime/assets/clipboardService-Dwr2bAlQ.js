@@ -1,0 +1,65 @@
+import { a as e } from "./core-D3lATfku.js";
+import { M as t } from "./directorSceneSchema-D22Qlbpb.js";
+//#region src/services/clipboardService.ts
+function n(e) {
+	let t = e.match(/^data:(image\/[\w.+-]+)[;,]/i);
+	return t ? t[1].toLowerCase() : {
+		png: "image/png",
+		jpg: "image/jpeg",
+		jpeg: "image/jpeg",
+		gif: "image/gif",
+		webp: "image/webp",
+		bmp: "image/bmp",
+		svg: "image/svg+xml"
+	}[e.split("?")[0].split("#")[0].split(".").pop()?.toLowerCase() || ""] || "image/png";
+}
+async function r(e) {
+	if (!e) return !1;
+	try {
+		return await navigator.clipboard.writeText(e), !0;
+	} catch {
+		return !1;
+	}
+}
+async function i() {
+	try {
+		return await navigator.clipboard.readText() || "";
+	} catch {
+		return "";
+	}
+}
+async function a(e) {
+	if (!e) return !1;
+	try {
+		let t = n(e);
+		if (!navigator.clipboard?.write || typeof ClipboardItem > "u") throw Error("当前 WebView 不支持图片剪贴板");
+		if (typeof ClipboardItem.supports == "function" && !ClipboardItem.supports(t)) throw Error(`当前 WebView 不支持复制 ${t}`);
+		let r = fetch(e).then(async (e) => {
+			if (!e.ok) throw Error(`图片读取失败 (${e.status})`);
+			let n = await e.blob();
+			if (n.type && n.type !== "application/octet-stream" && n.type !== t) throw Error(`图片类型不匹配 (${n.type})`);
+			return n.type === t ? n : new Blob([n], { type: t });
+		}), i = new ClipboardItem({ [t]: r });
+		return await navigator.clipboard.write([i]), !0;
+	} catch (e) {
+		return console.error("[剪贴板] 复制图片失败:", e), !1;
+	}
+}
+async function o(n) {
+	if (!n || !t()) return !1;
+	try {
+		return await e("copy_files_to_clipboard", { paths: [n] }), !0;
+	} catch {
+		return !1;
+	}
+}
+async function s(n) {
+	if (n.length === 0 || !t()) return !1;
+	try {
+		return await e("copy_files_to_clipboard", { paths: n }), !0;
+	} catch {
+		return !1;
+	}
+}
+//#endregion
+export { i as a, r as i, s as n, a as r, o as t };

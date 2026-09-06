@@ -7,6 +7,7 @@ import {
   handleWorkbenchActionForTest,
   handleNewCanvasHostInputForTest,
   readWorkbenchRouteTokenForTest,
+  scheduleLazySurfaceLoadForTest,
   syncWorkbenchRouteStateForTest,
 } from "../src/features/production-workbench/index.js";
 
@@ -32,14 +33,29 @@ test("workbench rail omits the community tab", () => {
   assert.doesNotMatch(html, /data-action="open-community"/);
 });
 
-test("workbench exposes a single Canvas rail entry", () => {
+test("workbench exposes legacy and new Canvas rail entries", () => {
   const html = renderProjectDetail({
     state: { project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" } },
     session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1", phone: "13800138000" } },
     ui: { activeNavTab: "home", canvasProjectView: "list" },
   });
   assert.match(html, /data-action="set-nav-tab"\s+data-tab="tools"/);
-  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="new-canvas"/);
+  assert.match(html, /data-action="set-nav-tab"\s+data-tab="new-canvas"/);
+});
+
+test("new Canvas rail entry reuses the existing Canvas project gallery", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "new-canvas",
+      canvasProjectView: "list",
+      canvasProjects: [{ id: "canvas-1", title: "分镜草稿" }],
+    },
+  });
+  assert.match(html, /class="rail-item active"[\s\S]*data-tab="new-canvas"/);
+  assert.match(html, /class="canvas-project-gallery"/);
+  assert.match(html, /分镜草稿/);
 });
 
 test("opening new Canvas shows the project list without auto-creating or opening a project", async () => {
@@ -58,9 +74,34 @@ test("opening new Canvas shows the project list without auto-creating or opening
   };
   await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-new-canvas" } });
   assert.equal(listCalls, 1);
-  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
   assert.equal(workbench.ui.canvasProjectView, "list");
   assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-1");
+});
+
+test("opening a new Canvas project records the AI Canvas runtime marker", async () => {
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1" } },
+    api: {
+      async getStandaloneCanvas() {
+        return { canvas: { serverRevision: 1, document: { version: 1, canvasProjectId: "canvas-1", nodes: [], edges: [], viewport: {} } } };
+      },
+      async getCanvasSession() { return { session: {} }; },
+    },
+    ui: {
+      activeNavTab: "new-canvas",
+      canvasProjectView: "list",
+      selectedCanvasProjectId: "",
+      canvasProjects: [{ id: "canvas-1", title: "分镜草稿" }],
+    },
+  };
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "open-canvas-project", canvasProjectId: "canvas-1" },
+  });
+  assert.equal(workbench.ui.canvasRuntime, "ai-canvas");
+  assert.match(workbench.ui.canvasRuntimeAdapterVersion, /^\d+\.\d+\.\d+$/);
 });
 
 test("team member sessions omit the team tab from the workbench rail", () => {
@@ -113,6 +154,35 @@ test("team member initial route falls back to the project panel", () => {
   assert.equal(nextTab, "project");
 });
 
+test("refreshing the skills route loads the Skill plaza catalog", async () => {
+  const requests = [];
+  const workbench = {
+    session: { authenticated: false },
+    ui: {
+      activeNavTab: "skills",
+      skillPlazaSection: "catalog",
+      skillPlazaCategory: "recommended",
+      skillPlazaQuery: "",
+    },
+    api: {
+      async getSkills(request) {
+        requests.push(request);
+        return { items: [] };
+      },
+    },
+  };
+
+  await scheduleLazySurfaceLoadForTest(workbench);
+
+  assert.deepEqual(requests, [{
+    section: "catalog",
+    category: "all",
+    query: "",
+    page: 1,
+    pageSize: 20,
+  }]);
+});
+
 test("Canvas remains available when the legacy feature flag is disabled", () => {
   const session = {
     authenticated: true,
@@ -142,22 +212,22 @@ test("Canvas remains available when the legacy feature flag is disabled", () => 
   assert.equal(workbench.ui.canvasProjectView, "detail");
 });
 
-test("legacy Canvas path and detail token restore the unified tools navigation state", () => {
+test("legacy and new Canvas paths restore their navigation state", () => {
   const session = {
     authenticated: true,
     features: { newCanvas: true },
     user: { id: "user-1", phone: "13800000000" },
   };
-  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/new-canvas/", hash: "" }), "tools");
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/new-canvas/", hash: "" }), "new-canvas");
   assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/canvas", hash: "" }), "tools");
-  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "tools");
+  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "new-canvas");
 
   const workbench = {
     session,
     ui: { activeNavTab: "tools", canvasProjectView: "list", selectedCanvasNodeId: "node-1" },
   };
   syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
-  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
   assert.equal(workbench.ui.canvasProjectView, "detail");
 
   syncWorkbenchRouteStateForTest(workbench, "#tools");
@@ -165,50 +235,32 @@ test("legacy Canvas path and detail token restore the unified tools navigation s
   assert.equal(workbench.ui.canvasProjectView, "list");
 });
 
-test("Canvas sidebar filter, search, and collapse controls expose working state", async () => {
+test("Skill Plaza restores from its own path and legacy hash", () => {
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/skills", hash: "" }), "skills");
+  assert.equal(deriveInitialNavTabForTest("skills"), "skills");
+
   const workbench = {
-    root: { innerHTML: "", querySelector() { return null; } },
-    state: {},
-    session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1" } },
-    api: {},
-    ui: {
-      activeNavTab: "new-canvas",
-      canvasProjectView: "detail",
-      canvasSidebarCollapsed: false,
-      canvasDocument: {
-        nodes: [
-          { id: "text-1", type: "ai-text", data: { title: "旁白节点" } },
-          { id: "image-1", type: "ai-image", data: { title: "主视觉" } },
-        ],
-        edges: [],
-        viewport: {},
-      },
-    },
+    session: { authenticated: true, user: { id: "user-1", phone: "13800000000" } },
+    ui: { activeNavTab: "new-canvas", projectPanelMode: "library", canvasProjectView: "detail" },
   };
 
-  await handleWorkbenchActionForTest(workbench, { dataset: { action: "toggle-canvas-node-search" } });
-  await handleWorkbenchActionForTest(workbench, { dataset: { action: "toggle-canvas-sidebar" } });
-  handleNewCanvasHostInputForTest(workbench, {
-    value: "image",
-    matches(selector) { return selector === "[data-canvas-node-filter]"; },
-  });
-  handleNewCanvasHostInputForTest(workbench, {
-    value: "主视觉",
-    matches(selector) { return selector === "[data-canvas-node-search]"; },
-    closest() { return null; },
-  });
+  syncWorkbenchRouteStateForTest(workbench, "#skills");
 
-  assert.equal(workbench.ui.canvasNodeSearchOpen, true);
-  assert.equal(workbench.ui.canvasSidebarCollapsed, true);
-  assert.equal(workbench.ui.canvasNodeFilter, "image");
-  assert.equal(workbench.ui.canvasNodeSearch, "主视觉");
+  assert.equal(workbench.ui.activeNavTab, "skills");
+  assert.equal(workbench.ui.projectPanelMode, "library");
+});
 
-  const html = renderProjectDetail({ state: {}, session: workbench.session, ui: { ...workbench.ui, canvasHostMount: false } });
-  assert.doesNotMatch(html, /canvas-help-panel|toggle-canvas-help|画布说明/);
-  assert.match(html, /data-canvas-node-filter aria-label="筛选画布节点"/);
-  assert.match(html, /data-action="toggle-canvas-sidebar"[^>]+aria-label="展开资产管理"/);
-  assert.match(html, /主视觉/);
-  assert.doesNotMatch(html, /旁白节点/);
+test("Canvas detail uses the upstream runtime host instead of the legacy X6 controls", () => {
+  for (const activeNavTab of ["tools", "new-canvas"]) {
+    const html = renderProjectDetail({
+      state: {},
+      session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1" } },
+      ui: { activeNavTab, canvasProjectView: "detail" },
+    });
+    assert.match(html, /data-new-canvas-mount/);
+    assert.match(html, /ai-canvas-standalone-page/);
+    assert.doesNotMatch(html, /data-canvas-x6-mount|data-canvas-node-filter|global-statusbar|workbench-rail/);
+  }
 });
 
 test("Canvas storyboard grid controls persist axis counts and custom divider positions", async () => {

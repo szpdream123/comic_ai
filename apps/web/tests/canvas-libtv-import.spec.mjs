@@ -104,11 +104,11 @@ test("LibTV assigns stable distinct identities to projects without an external p
   assert.equal(second.document.nodes.length, 2);
 });
 
-test("canonical Canvas catalog exposes eight nodes and keeps legacy templates hidden", () => {
+test("canonical Canvas catalog exposes current nodes and keeps legacy templates hidden", () => {
   const templates = resolveCanvasNodeTemplates({});
   assert.deepEqual(
     templates.filter((template) => template.visible !== false).map((template) => template.title),
-    ["文本", "图片", "视频", "智能剪辑", "音频", "导演台", "逐帧拉片", "脚本"],
+    ["文本", "图片", "视频", "智能剪辑", "音频", "分镜表", "导演台", "逐帧拉片", "脚本", "画布笔记"],
   );
   assert.equal(templates.find((template) => template.id === "template-smart-edit").defaultData.videoGenerationMode, "edit-video");
   assert.equal(templates.find((template) => template.id === "template-frame-analysis").defaultData.canvasMode, "frame-analysis");

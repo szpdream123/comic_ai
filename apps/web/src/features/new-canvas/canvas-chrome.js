@@ -17,28 +17,35 @@ const CHROME_ICON_PATHS = {
   settings: '<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" /><path d="m4.9 4.9 1.4 1.4M17.7 17.7l1.4 1.4M4 12H2M22 12h-2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4M12 4V2M12 22v-2" />',
   character: '<circle cx="12" cy="8" r="3" /><path d="M5 20a7 7 0 0 1 14 0" />',
   media: '<rect x="4" y="5" width="16" height="14" rx="2" /><path d="m8 15 3-3 2 2 2-2 3 3" />',
+  guide: '<rect x="5" y="4" width="14" height="16" rx="2" /><path d="M8 8h8M8 12h6M8 16h4" />',
   sparkle: '<path d="m12 3 1.4 5.6L19 10l-5.6 1.4L12 17l-1.4-5.6L5 10l5.6-1.4L12 3Z" /><path d="m19 16 .6 2.4L22 19l-2.4.6L19 22l-.6-2.4L16 19l2.4-.6L19 16Z" />',
 };
 
 function renderChromeIcon(name, options = {}) {
   const path = CHROME_ICON_PATHS[name] ?? CHROME_ICON_PATHS.sparkle;
   const label = options.label ? ` aria-label="${escapeHtml(options.label)}"` : "";
-  return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="${label ? "false" : "true"}"${label}>${path}</svg>`;
+  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="${label ? "false" : "true"}"${label}>${path}</svg>`;
 }
 
 export function renderNewCanvasChromeRail(ui = {}) {
   const actions = [
     ["toggle-canvas-add-menu", "plus", "添加节点"],
+    ["add-canvas-template", "layers", "分镜表", "template-ai-shotlist"],
+    ["add-canvas-template", "media", "智能剪辑", "template-smart-edit"],
+    ["add-canvas-template", "guide", "导演台", "template-ai-director"],
     ["set-canvas-sidebar-mode", "layers", "资产", "assets"],
     ["set-canvas-sidebar-mode", "history", "输出历史", "history"],
+    ["toggle-canvas-style-guide", "guide", "样式指南"],
   ];
   const interactionMode = ui.canvasDocument?.viewport?.interactionMode === "hand" ? "hand" : "default";
   const interactionIcon = interactionMode === "hand" ? "hand" : "cursor";
   const interactionLabel = interactionMode === "hand" ? "抓手工具" : "移动";
   return `<nav class="new-canvas-chrome-rail" aria-label="画布功能">
-      ${actions.map(([action, icon, label, sidebarMode], index) => action === "set-canvas-sidebar-mode"
-        ? `<button type="button" class="new-canvas-chrome-tool" data-action="${action}" data-canvas-sidebar-mode="${escapeHtml(sidebarMode)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${renderChromeIcon(icon)}</button>`
-        : `<button type="button" class="new-canvas-chrome-tool ${index === 0 ? "is-primary" : ""}" data-action="${action}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${renderChromeIcon(icon)}</button>`).join("")}
+      ${actions.map(([action, icon, label, value], index) => action === "set-canvas-sidebar-mode"
+        ? `<button type="button" class="new-canvas-chrome-tool is-labeled" data-action="${action}" data-canvas-sidebar-mode="${escapeHtml(value)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${renderChromeIcon(icon)}<span>${escapeHtml(label)}</span></button>`
+          : action === "add-canvas-template"
+          ? `<button type="button" class="new-canvas-chrome-tool is-labeled" data-action="${action}" data-template-id="${escapeHtml(value)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${renderChromeIcon(icon)}<span>${escapeHtml(label)}</span></button>`
+          : `<button type="button" class="new-canvas-chrome-tool ${index === 0 ? "is-primary" : ""} ${index === 0 ? "" : "is-labeled"}" data-action="${action}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${renderChromeIcon(icon)}${index === 0 ? "" : `<span>${escapeHtml(label)}</span>`}</button>`).join("")}
       <details class="new-canvas-chrome-tool-menu">
         <summary class="new-canvas-chrome-tool new-canvas-interaction-tool is-active" data-interaction-mode="${interactionMode}" aria-label="${escapeHtml(interactionLabel)}" title="${escapeHtml(interactionLabel)}">${renderChromeIcon(interactionIcon)}<span>${escapeHtml(interactionLabel)}</span></summary>
         <div class="new-canvas-tool-menu-popover" role="menu" aria-label="画布交互工具">

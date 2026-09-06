@@ -16,12 +16,14 @@ import {
 } from "../production-workbench/home-agent-model-picker.js";
 import { renderPromptAttachmentCard } from "../production-workbench/episode-workbench-rebuilt.js?video-category=2&storyboard-style-picker=1";
 import { renderNewCanvasChromeRail } from "./canvas-chrome.js";
+import { renderCanvasStyleGuide } from "./canvas-style-guide.js";
+import { confirmCanvasAction } from "./canvas-ui-controls.js";
 
 const AGENT_MODES = [
-  { id: "b", label: "审核批准", description: "读取和分析自动进行，修改画布等有副作用的操作会先请求你的批准。" },
-  { id: "c", label: "自动执行", description: "按照管理员策略自动执行，高风险操作仍可能需要你的批准。" },
-  { id: "plan", label: "计划模式", description: "只生成执行计划，不修改画布或执行有副作用的操作。" },
-  { id: "expert", label: "分析模式", description: "只进行只读分析，不修改画布或执行其他操作。" },
+  { id: "plan", label: "规划", description: "Plan 模式：仅分析与规划，只能使用只读工具。" },
+  { id: "b", label: "协作", description: "B 协作模式：画布写操作先预览确认。" },
+  { id: "c", label: "自主", description: "C 自主模式：画布操作自动执行，付费媒体和文件写入仍需确认。" },
+  { id: "expert", label: "分析", description: "项目扩展模式：只进行只读分析，不修改画布。" },
 ];
 
 const FREE_GENERATION_PERMISSION_MODES = [
@@ -100,21 +102,27 @@ const FREE_GENERATION_KINDS = [
 const AGENT_HEADER_ICON_PATHS = {
   new: '<path d="M12 5v14M5 12h14" />',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 7v5l3 2" />',
+  collapse: '<path d="M5 12h14" /><path d="m13 6 6 6-6 6" />',
+  // Keep the legacy name available for callers that render the old icon key.
   close: '<path d="M5 12h14" /><path d="m13 6 6 6-6 6" />',
   open: '<path d="M19 12H5" /><path d="m11 6-6 6 6 6" />',
   expand: '<path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5" />',
+  agents: '<path d="M12 3a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V7a4 4 0 0 1 4-4Z" /><path d="M4 12a8 8 0 0 0 16 0M12 20v2M8 22h8" />',
+  tasks: '<path d="M9 5h6M9 3h6v4H9z" /><path d="M6 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1" /><path d="m8 13 2 2 5-5" />',
+  memory: '<path d="M9 3h6l1 3h3v12H5V6h3z" /><path d="M8 10h8M8 14h6" />',
+  subAgents: '<circle cx="9" cy="8" r="3" /><circle cx="17" cy="9" r="2" /><path d="M3 20a6 6 0 0 1 12 0M15 20a4 4 0 0 1 6 0" />',
   trash: '<path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="m9 7 1-3h4l1 3" /><path d="M6 7l1 14h10l1-14" />',
   pin: '<path d="m15 4 5 5-3 1-4 4v4l-2 2-2-2v-4l-4-4-3-1 5-5z" /><path d="M12 20v2" />',
 };
 
 function renderAgentHeaderIcon(name) {
-  return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${AGENT_HEADER_ICON_PATHS[name] ?? AGENT_HEADER_ICON_PATHS.history}</svg>`;
+  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${AGENT_HEADER_ICON_PATHS[name] ?? AGENT_HEADER_ICON_PATHS.history}</svg>`;
 }
 
 function renderAgentComposerActionIcon(running = false) {
   return running
-    ? '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" /></svg>'
-    : '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V4" /><path d="m5 11 7-7 7 7" /></svg>';
+    ? '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" /></svg>'
+    : '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V4" /><path d="m5 11 7-7 7 7" /></svg>';
 }
 
 export function ensureCanvasAgentState(ui = {}) {
@@ -181,6 +189,13 @@ export function ensureCanvasAgentState(ui = {}) {
     taskCenterStatus: "idle",
     taskCenterError: "",
     memoryEvents: [],
+    skillItems: [],
+    skillStatus: "idle",
+    skillQuery: "",
+    skillMenuOpen: false,
+    agentPackages: [],
+    agentDefaultPackageId: "",
+    subAgents: [],
     skippedStepIds: [],
     mediaPreview: null,
     rewindConfirmOpen: false,
@@ -259,8 +274,9 @@ export function renderCanvasAgentPanel(ui = {}) {
   const timelineEmpty = !active
     && !collapseAgentTimelineEvents(agent.events).length
     && !collapseAgentGenerationMessages(agent.messages).length;
-  agent.panelView = "timeline";
-  const panelView = "timeline";
+  const panelView = ["timeline", "tasks", "memory", "agents", "sub-agents"].includes(agent.panelView)
+    ? agent.panelView
+    : "timeline";
   const conversationTitle = selectedConversation?.title || "新会话";
   const titleMarkup = agent.titleEditing && (!mediaOnly || !agent.titleEditingConversationId)
     ? `<input class="canvas-agent-title-input" type="text" data-agent-field="conversationTitle" value="${escapeAttr(agent.titleDraft || conversationTitle)}" maxlength="10" aria-label="当前会话名称" />`
@@ -287,13 +303,17 @@ export function renderCanvasAgentPanel(ui = {}) {
         <div class="canvas-agent-head-actions">
           <button type="button" class="canvas-agent-icon-button" data-agent-action="new-conversation" aria-label="新建对话" title="新建对话">${renderAgentHeaderIcon("new")}</button>
           <button type="button" class="canvas-agent-icon-button ${agent.historyOpen ? "active" : ""}" data-agent-action="open-agent-history" aria-label="历史对话" title="历史对话" aria-expanded="${agent.historyOpen}">${renderAgentHeaderIcon("history")}</button>
-          ${mediaOnly ? "" : `<button type="button" class="canvas-agent-icon-button" data-agent-action="close-agent-panel" aria-label="关闭 Agent 面板" title="关闭">${renderAgentHeaderIcon("close")}</button>`}
+          ${mediaOnly ? "" : `<button type="button" class="canvas-agent-icon-button ${panelView === "agents" ? "active" : ""}" data-agent-action="open-agent-center" aria-label="智能体中心" title="智能体中心">${renderAgentHeaderIcon("agents")}</button>
+          <button type="button" class="canvas-agent-icon-button ${panelView === "tasks" ? "active" : ""}" data-agent-action="open-task-center" aria-label="任务中心" title="任务中心">${renderAgentHeaderIcon("tasks")}${countActiveAgentTasks(agent) ? '<i class="canvas-agent-head-badge" aria-hidden="true"></i>' : ""}</button>
+          <button type="button" class="canvas-agent-icon-button ${panelView === "memory" ? "active" : ""}" data-agent-action="open-memory" aria-label="项目记忆" title="项目记忆">${renderAgentHeaderIcon("memory")}</button>
+          <button type="button" class="canvas-agent-icon-button ${panelView === "sub-agents" ? "active" : ""}" data-agent-action="open-sub-agents" aria-label="子智能体" title="子智能体">${renderAgentHeaderIcon("subAgents")}</button>`}
+          ${mediaOnly ? "" : `<button type="button" class="canvas-agent-icon-button" data-agent-action="collapse-agent-panel" aria-label="收起 AI 助手" title="收起 AI 助手">${renderAgentHeaderIcon("collapse")}</button>`}
         </div>
       </header>
 
       ${agent.historyOpen ? renderAgentHistoryPopover(agent) : ""}
 
-      ${agent.historyOpen ? "" : (panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : `
+      ${agent.historyOpen ? "" : (panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : panelView === "agents" ? renderAgentCenterPanel(agent, busy) : panelView === "sub-agents" ? renderSubAgentPanel(agent, busy) : `
       <section class="canvas-agent-timeline${timelineEmpty ? " is-empty" : ""}" aria-label="Agent 事件" aria-live="polite">
         ${renderAgentTimeline(agent, mediaOnly ? null : ui.canvasDocument, active, { mediaOnly, fileGrants: agent.fileGrants })}
       </section>
@@ -309,6 +329,7 @@ export function renderCanvasAgentPanel(ui = {}) {
           <div class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor>
             <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : mediaOnly ? "描述要生成的图片或视频，可添加参考素材" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
           </div>
+          ${!mediaOnly && agent.skillMenuOpen ? renderAgentSkillPicker(agent, busy) : ""}
         </div>
         <div class="canvas-agent-composer-footer">
           <div class="canvas-agent-composer-left">
@@ -328,6 +349,7 @@ export function renderCanvasAgentPanel(ui = {}) {
           </div>
           <span class="canvas-agent-composer-actions">
             <button type="button" class="canvas-agent-attachment-button" data-agent-action="pick-attachments" aria-label="添加图片、视频或文件" title="添加图片、视频或文件" ${busy || conversationArchived || agent.attachmentUploading ? "disabled" : ""}>${renderAgentAttachmentIcon("add")}</button>
+            ${mediaOnly ? "" : `<button type="button" class="canvas-agent-attachment-button ${agent.skillMenuOpen ? "active" : ""}" data-agent-action="toggle-skill-menu" aria-label="调用 Skill" title="调用 Skill">/</button>`}
             <input type="file" data-agent-attachment-input accept="image/*,video/*,audio/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" multiple hidden />
             <label class="canvas-agent-model-picker">
               <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="文本模型">
@@ -628,6 +650,9 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
   const sessionReady = ui.canvasSessionUiStateReady !== false;
   const agentOnly = options.agentOnly === true || ui.canvasAgentOnly === true;
   const agentPanelClosed = !sessionReady || ui.canvasAgent?.panelOpen === false;
+  const agentUi = agentOnly && ui.canvasAgent?.panelOpen === false
+    ? { ...ui, canvasAgent: { ...ui.canvasAgent, panelOpen: true } }
+    : ui;
   const agentPanelWidth = resolveCanvasAgentPanelWidth(ui);
   const sidebarWidth = ui.canvasSidebarCollapsed !== false
     ? 0
@@ -639,7 +664,8 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
       ${agentOnly ? "" : `
       <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
       `}
-      ${sessionReady ? renderCanvasAgentPanel(ui) : ""}
+      ${sessionReady && !agentOnly ? renderCanvasStyleGuide(ui) : ""}
+      ${sessionReady ? renderCanvasAgentPanel(agentUi) : ""}
       ${sessionReady && !agentOnly ? renderCanvasAgentRewindConfirmModal(ui) : ""}
       ${agentOnly ? "" : auxiliaryMarkup}
     </div>
@@ -647,7 +673,7 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
 }
 
 function renderCanvasAgentReopenButton() {
-  return `<button type="button" class="canvas-agent-reopen" data-agent-action="open-agent-panel" aria-label="展开 Agent 面板" title="展开 Agent 面板">${renderAgentHeaderIcon("open")}</button>`;
+  return `<button type="button" class="canvas-agent-reopen" data-agent-action="open-agent-panel" aria-label="展开 AI 助手" title="展开 AI 助手">${renderAgentHeaderIcon("open")}<span>AI 助手</span></button>`;
 }
 
 function renderCanvasAgentRewindConfirmModal(ui = {}) {
@@ -931,6 +957,12 @@ export function createCanvasAgentController({
       const input = editorHost.querySelector?.("[data-tiptap-prompt-editor]");
       input?.setAttribute?.("data-agent-prompt-input", "");
       input?.addEventListener?.("keydown", (event) => {
+        if (!mediaOnly && event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          agent.skillMenuOpen = true;
+          syncPanel();
+          void loadAgentSkills();
+          return;
+        }
         if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
         const mentionMenu = editorHost.ownerDocument?.querySelector?.(".episode-prompt-editor-menu:not([hidden])");
         if (mentionMenu) return;
@@ -1711,6 +1743,35 @@ export function createCanvasAgentController({
     return agent.taskItems;
   };
 
+  const loadAgentSkills = async () => {
+    if (disposed || typeof workbench.api?.getSkills !== "function") {
+      agent.skillItems = [];
+      agent.skillStatus = "unavailable";
+      syncPanel();
+      return agent.skillItems;
+    }
+    agent.skillStatus = "loading";
+    syncPanel();
+    try {
+      const payload = await workbench.api.getSkills({ query: agent.skillQuery, page: 1, pageSize: 50 });
+      const rows = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.skills) ? payload.skills : Array.isArray(payload) ? payload : [];
+      agent.skillItems = rows.map((skill) => ({
+        id: String(skill.id ?? skill.skillId ?? ""),
+        name: String(skill.name ?? skill.title ?? "未命名 Skill"),
+        summary: String(skill.summary ?? skill.description ?? ""),
+        category: String(skill.category ?? "general"),
+        source: String(skill.source ?? (skill.ownerUserId ? "mine" : "official")),
+      })).filter((skill) => skill.id);
+      agent.skillStatus = "ready";
+    } catch (error) {
+      agent.skillItems = [];
+      agent.skillStatus = "unavailable";
+      agent.error = friendlyAgentError(error);
+    }
+    syncPanel();
+    return agent.skillItems;
+  };
+
   const run = async (action, operation) => {
     if (agent.busyAction) return;
     agent.busyAction = action;
@@ -1750,6 +1811,7 @@ export function createCanvasAgentController({
     loadFileGrants,
     loadMemories,
     loadTaskCenter,
+    loadAgentSkills,
     handleClick(target) {
       if (
         agent.promptMention?.open
@@ -1769,6 +1831,11 @@ export function createCanvasAgentController({
         syncPanel();
         return true;
       }
+      if (agent.skillMenuOpen && !target?.closest?.(".canvas-agent-skill-picker, [data-agent-action=\"toggle-skill-menu\"]")) {
+        agent.skillMenuOpen = false;
+        syncPanel();
+        return true;
+      }
       if (!agent.modeMenuOpen || target?.closest?.(".canvas-agent-mode-picker")) return false;
       agent.modeMenuOpen = false;
       syncPanel();
@@ -1781,7 +1848,29 @@ export function createCanvasAgentController({
         void run("upload-agent-attachments", () => uploadAgentAttachments(files));
         return true;
       }
+      if (target?.matches?.("[data-agent-package-input]")) {
+        const file = Array.from(target.files ?? [])[0];
+        target.value = "";
+        if (!file) return true;
+        void run("upload-agent-package", async () => {
+          if (typeof workbench.api?.uploadFile !== "function") throw new Error("智能体包上传接口暂不可用");
+          const result = await workbench.api.uploadFile(file, { category: "canvas-agent-package", projectId: null });
+          const upload = result?.upload ?? result ?? {};
+          agent.agentPackages = [...(Array.isArray(agent.agentPackages) ? agent.agentPackages : []), {
+            id: String(upload.storageObjectId ?? upload.id ?? globalThis.crypto?.randomUUID?.() ?? Date.now()),
+            name: String(file.name || "智能体包"),
+            detail: "已上传，等待管理员启用",
+            enabled: false,
+          }];
+        });
+        return true;
+      }
       const field = String(target?.dataset?.agentField ?? "");
+      if (field === "skillQuery") {
+        agent.skillQuery = String(target.value ?? "");
+        syncPanel();
+        return true;
+      }
       if (field === "generationModelCode") {
         const kind = normalizeFreeGenerationKind(target?.dataset?.generationKind ?? agent.generationKind);
         const model = listFreeGenerationModels(agent, kind).find((item) => item.modelCode === String(target.value ?? ""));
@@ -1926,6 +2015,21 @@ export function createCanvasAgentController({
         agent.modeMenuOpen = false;
         syncPanel();
         queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-mode-menu"]')?.focus?.());
+        return true;
+      }
+      if (action === "toggle-skill-menu") {
+        agent.skillMenuOpen = !agent.skillMenuOpen;
+        if (agent.skillMenuOpen && agent.skillStatus !== "ready") await run("load-agent-skills", loadAgentSkills);
+        syncPanel();
+        return true;
+      }
+      if (action === "select-agent-skill") {
+        const skill = (Array.isArray(agent.skillItems) ? agent.skillItems : []).find((item) => item.id === String(target.dataset.skillId ?? ""));
+        if (!skill) return true;
+        const prefix = agent.promptDraft.trim() ? `${agent.promptDraft.trim()} ` : "";
+        agent.promptDraft = `${prefix}/${skill.name} `;
+        agent.skillMenuOpen = false;
+        syncPanel();
         return true;
       }
       if (action === "set-generation-kind") {
@@ -2110,7 +2214,7 @@ export function createCanvasAgentController({
         syncPanel();
         return true;
       }
-      if (action === "close-agent-panel" || action === "open-agent-panel") {
+      if (action === "close-agent-panel" || action === "collapse-agent-panel" || action === "open-agent-panel") {
         agent.panelOpen = action === "open-agent-panel";
         agent.historyOpen = false;
         persistCanvasAgentUiState(workbench.ui, agent);
@@ -2125,6 +2229,59 @@ export function createCanvasAgentController({
         agent.panelView = action === "open-task-center" ? "tasks" : "memory";
         syncPanel();
         await run(action === "open-task-center" ? "load-agent-history" : "load-agent-memories", action === "open-task-center" ? loadTaskCenter : loadMemories);
+        return true;
+      }
+      if (action === "open-agent-center" || action === "open-sub-agents") {
+        agent.panelView = action === "open-agent-center" ? "agents" : "sub-agents";
+        syncPanel();
+        if (action === "open-agent-center") await run("load-agent-skills", loadAgentSkills);
+        return true;
+      }
+      if (action === "refresh-agent-skills") {
+        await run("load-agent-skills", loadAgentSkills);
+        return true;
+      }
+      if (action === "pick-agent-package") {
+        surface.querySelector?.("[data-agent-package-input]")?.click?.();
+        return true;
+      }
+      if (action === "toggle-agent-package") {
+        const id = String(target.dataset.packageId ?? "");
+        agent.agentPackages = (Array.isArray(agent.agentPackages) ? agent.agentPackages : []).map((item) => item.id === id ? { ...item, enabled: item.enabled === false } : item);
+        if (agent.agentPackages.find((item) => item.id === id)?.enabled === false && agent.agentDefaultPackageId === id) agent.agentDefaultPackageId = "";
+        syncPanel();
+        return true;
+      }
+      if (action === "set-default-agent-package") {
+        const id = String(target.dataset.packageId ?? "");
+        if ((agent.agentPackages ?? []).some((item) => item.id === id && item.enabled !== false)) agent.agentDefaultPackageId = id;
+        syncPanel();
+        return true;
+      }
+      if (action === "remove-agent-package") {
+        const id = String(target.dataset.packageId ?? "");
+        if (!(await confirmCanvasAction("确定移除这个智能体包吗？", { title: "移除智能体包" }))) return true;
+        agent.agentPackages = (Array.isArray(agent.agentPackages) ? agent.agentPackages : []).filter((item) => item.id !== id);
+        if (agent.agentDefaultPackageId === id) agent.agentDefaultPackageId = "";
+        syncPanel();
+        return true;
+      }
+      if (action === "add-sub-agent") {
+        const nextId = `sub-agent-${Date.now()}`;
+        const currentSubAgents = Array.isArray(agent.subAgents) ? agent.subAgents : [];
+        agent.subAgents = [...currentSubAgents, {
+          id: nextId,
+          name: `子智能体 ${currentSubAgents.length + 1}`,
+          description: "协作任务代理",
+          enabled: true,
+        }];
+        syncPanel();
+        return true;
+      }
+      if (action === "toggle-sub-agent") {
+        const id = String(target.dataset.subAgentId ?? "");
+        agent.subAgents = (Array.isArray(agent.subAgents) ? agent.subAgents : []).map((item) => item.id === id ? { ...item, enabled: item.enabled === false } : item);
+        syncPanel();
         return true;
       }
       if (action === "close-agent-view") {
@@ -2205,7 +2362,7 @@ export function createCanvasAgentController({
         return true;
       }
       if (action === "delete-agent-memory") {
-        if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定永久删除这条画布记忆吗？")) return true;
+        if (!(await confirmCanvasAction("确定永久删除这条画布记忆吗？", { title: "删除画布记忆" }))) return true;
         await run(action, async () => {
           const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
           const memoryId = String(target.dataset.memoryId ?? "");
@@ -2906,6 +3063,41 @@ function renderAgentTaskCenter(agent, busy) {
   </section>`;
 }
 
+function renderAgentCenterPanel(agent, busy) {
+  const skills = Array.isArray(agent.skillItems) ? agent.skillItems : [];
+  const loading = agent.skillStatus === "loading" || agent.busyAction === "load-agent-skills";
+  return `<section class="canvas-agent-special-view canvas-agent-center" aria-label="智能体中心">
+    <header class="canvas-agent-special-head">
+      <span><strong>智能体中心</strong><small>Skill 与智能体包</small></span>
+      <button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭智能体中心" title="关闭">×</button>
+    </header>
+    <div class="canvas-agent-special-content">
+      <section class="canvas-agent-center-section">
+        <div class="canvas-agent-center-section-head"><strong>已启用 Skill</strong><button type="button" data-agent-action="refresh-agent-skills" ${busy ? "disabled" : ""}>刷新</button></div>
+        ${loading && !skills.length ? renderAgentSpecialEmpty("正在同步 Skill", "读取官方和个人 Skill 目录。") : ""}
+        ${!loading && !skills.length ? renderAgentSpecialEmpty("暂无可用 Skill", "可在平台 Skill 广场添加后，在输入框使用 / 调用。") : ""}
+        <div class="canvas-agent-skill-list">${skills.map((skill) => `<article class="canvas-agent-skill-item"><span class="canvas-agent-skill-mark">/</span><div><strong>${escapeHtml(skill.name)}</strong><small>${escapeHtml(skill.summary || skill.category)}</small></div><em>${escapeHtml(skill.source === "mine" ? "我的" : "官方")}</em></article>`).join("")}</div>
+      </section>
+      <section class="canvas-agent-center-section">
+        <div class="canvas-agent-center-section-head"><strong>智能体包</strong><button type="button" data-agent-action="pick-agent-package" ${busy ? "disabled" : ""}>上传包</button></div>
+        ${(agent.agentPackages ?? []).length ? (agent.agentPackages ?? []).map((item) => `<article class="canvas-agent-package-item"><div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.detail || "浏览器上传")}</small></div><span>${item.id === agent.agentDefaultPackageId ? "默认 · " : ""}${item.enabled === false ? "已停用" : "已启用"}</span><footer><button type="button" data-agent-action="toggle-agent-package" data-package-id="${escapeAttr(item.id)}" ${busy ? "disabled" : ""}>${item.enabled === false ? "启用" : "停用"}</button><button type="button" data-agent-action="set-default-agent-package" data-package-id="${escapeAttr(item.id)}" ${busy || item.enabled === false ? "disabled" : ""}>设为默认</button><button type="button" class="danger" data-agent-action="remove-agent-package" data-package-id="${escapeAttr(item.id)}" ${busy ? "disabled" : ""}>删除</button></footer></article>`).join("") : renderAgentSpecialEmpty("暂无智能体包", "上传 ZIP 后可在当前项目会话中管理。")}
+        <input type="file" data-agent-package-input accept=".zip,.json" hidden />
+      </section>
+    </div>
+  </section>`;
+}
+
+function renderSubAgentPanel(agent, busy) {
+  const items = Array.isArray(agent.subAgents) ? agent.subAgents : [];
+  return `<section class="canvas-agent-special-view canvas-agent-sub-agents" aria-label="子智能体">
+    <header class="canvas-agent-special-head"><span><strong>子智能体</strong><small>${items.length} 个配置</small></span><button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭子智能体" title="关闭">×</button></header>
+    <div class="canvas-agent-special-content">
+      ${items.length ? items.map((item) => `<article class="canvas-agent-sub-agent-item"><div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.description || "协作任务代理")}</small></div><button type="button" data-agent-action="toggle-sub-agent" data-sub-agent-id="${escapeAttr(item.id)}" ${busy ? "disabled" : ""}>${item.enabled === false ? "启用" : "停用"}</button></article>`).join("") : renderAgentSpecialEmpty("还没有子智能体", "子任务会沿用当前项目权限、模型和审批策略。")}
+    </div>
+    <footer class="canvas-agent-special-footer"><button type="button" data-agent-action="add-sub-agent" ${busy ? "disabled" : ""}>添加子智能体</button></footer>
+  </section>`;
+}
+
 function renderAgentTaskCenterItem(task, busy) {
   const steps = Array.isArray(task.steps) ? task.steps : [];
   const activeStep = [...steps].reverse().find((step) => isSkippableAgentStep(step));
@@ -3003,6 +3195,16 @@ function renderAgentMemoryCategoryOptions(selected) {
 
 function renderAgentSpecialEmpty(title, detail) {
   return `<div class="canvas-agent-special-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
+}
+
+function renderAgentSkillPicker(agent, busy) {
+  const query = String(agent.skillQuery ?? "").trim().toLowerCase();
+  const skills = (Array.isArray(agent.skillItems) ? agent.skillItems : [])
+    .filter((skill) => !query || `${skill.name} ${skill.summary} ${skill.category}`.toLowerCase().includes(query));
+  return `<div class="canvas-agent-skill-picker" role="listbox" aria-label="Skill">
+    <div class="canvas-agent-skill-picker-head"><strong>调用 Skill</strong><input type="search" data-agent-field="skillQuery" value="${escapeAttr(agent.skillQuery)}" placeholder="搜索 Skill" /></div>
+    ${skills.length ? skills.map((skill) => `<button type="button" role="option" data-agent-action="select-agent-skill" data-skill-id="${escapeAttr(skill.id)}" ${busy ? "disabled" : ""}><span>/</span><strong>${escapeHtml(skill.name)}</strong><small>${escapeHtml(skill.summary || skill.category)}</small></button>`).join("") : renderAgentSpecialEmpty(agent.skillStatus === "loading" ? "正在加载 Skill" : "暂无可用 Skill", "使用智能体中心刷新 Skill 目录。")}
+  </div>`;
 }
 
 function renderAgentSkipStepButton(agent, busy) {
@@ -3351,7 +3553,7 @@ function renderAgentAttachmentPreview(attachment = {}) {
 
 function renderAgentAttachmentIcon(name) {
   if (name === "add") {
-    return '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
+    return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
   }
   return "";
 }
@@ -4461,6 +4663,7 @@ function normalizeAgentModel(model = {}) {
   return {
     modelCode,
     modelLabel: String(model.modelLabel ?? model.name ?? model.label ?? modelCode).trim(),
+    provider: String(model.provider ?? model.providerName ?? model.providerGroup ?? "").trim(),
     capabilities: model.capabilities && typeof model.capabilities === "object" ? model.capabilities : {},
   };
 }

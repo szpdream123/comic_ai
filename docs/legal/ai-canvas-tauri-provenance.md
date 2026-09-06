@@ -3,6 +3,7 @@
 ## Source
 
 - Upstream: `https://github.com/Tenney95/AI-Canvas-tauri`
+- Latest upstream checked: `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` (v0.9.2, 2026-09-06)
 - Reviewed baseline: `87731295a121be601b1d4fa8616b0f2d1a38a3bb` (v0.6.7, 2026-07-26)
 - Previous reviewed baselines: `0f3ca1c`, `bded37f` (v0.6.6), `d7f3a3d`
 - Integration design: `docs/architecture/ai-canvas-integration-design.md`
@@ -39,10 +40,28 @@ No direct upstream source file is currently declared as copied verbatim. The imp
 
 ## Release checks
 
-当前仓库内的 `npm run legal:check` 已通过，且 SBOM/Third-Party Notices 已生成。默认 npm 配置当前指向的镜像未实现 security advisories endpoint，依赖审计必须显式使用官方 registry；正式发布基于最终 lockfile 重新执行盘点。
+## v0.9.2 Web runtime sync
+
+The browser runtime was rebuilt from upstream `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` using the project-owned `vite.runtime.config.ts` shape and embedded document bridge. Tauri-only window, filesystem, process, native plugin-window, and desktop permission code remains excluded from the Web product.
+
+## v0.9.2 comparison and Web adaptation status
+
+The v0.9.2 plugin platform is intentionally excluded from this Web product. It depends on the upstream Tauri window, local filesystem, process and plugin sandbox boundaries, and must not be copied into the browser host without a separate security review.
+
+The following v0.9.2 capabilities are now adapted to the project-owned Canvas contracts:
+
+- `ai-shotlist` node with editable shot rows, connected image/video frame binding, JSON result parsing, duration totals and revision persistence;
+- `canvas-note` node with text notes and data-driven rectangle, diamond, ellipse, arrow, line and freehand shapes, including bounded version-tolerant custom geometry points, draggable path controls, and resize-aware point persistence;
+- fixed-position Select menus that preserve native change events, application dialogs for destructive confirmations, and 280px audio node defaults;
+- a Web video editing MVP for connected video/image sources with preview, in/out points, clip removal, ordering, transition metadata, persisted timeline parameters, browser-side MP4/WebM encoding when the browser supports WebCodecs, downloadable timeline JSON fallback, and an MP4 server-export path that validates canvas-owned storage objects, preserves trim/transition metadata, supports development and COS/S3-compatible storage, and records a Canvas video Artifact;
+- a Web StyleGuide drawer that documents the shared Button, Select, Dialog, toolbar and status patterns.
+
+The following upstream capability remains intentionally staged rather than claimed as complete: production-grade durable asynchronous export orchestration. The current server composition path is intentionally synchronous and records a Canvas run/artifact through the existing submit-and-poll task model; no Canvas-specific in-process worker or queue was added. It renders the supported `dissolve` and `fade` transitions with bounded overlap timing, supports AI transition generation through the existing video generation task and polling flow, and supports up to eight validated audio tracks with trim, timeline offset, volume and fade controls mixed to AAC; the Web editor persists and exports the multi-track audio timeline. Browser-side single-video encoding is available when the browser codec probe succeeds, while server export supports development, COS, and S3-compatible storage with bounded temporary downloads, retry, timeout and cleanup guards. Shotlist candidate picking, per-cell generation and Shotlist-to-editor timeline push are available in the Web adaptation. A static CCC API model catalog is intentionally not imported; model discovery remains governed by the project administrator catalog, permissions, Secret References and billing.
+
+当前工作区已重新生成 SBOM/Third-Party Notices，`npm run legal:check` 已通过。Tiptap 全套已升级到 `3.31.3`，并已通过官方 npm registry 审计（生产依赖 287、总依赖 401，info/low/moderate/high/critical 均为 0）；完整 JSON 结果归档于 `docs/legal/npm-audit-2026-09-04.json`。
 
 - Confirm the archived authorization covers the releasing legal entity, commercial deployment, modification, distribution, duration, and attribution obligations.
-- Re-run dependency license and vulnerability inventory from the committed lockfile, using `npm audit --registry=https://registry.npmjs.org --json` (or an approved equivalent with advisory provenance).
+- Re-run dependency license and vulnerability inventory from the committed lockfile, using `npm audit --registry=https://registry.npmjs.org --json` (or an approved equivalent with advisory provenance), and replace the dated audit evidence when dependencies change.
 - Run `npm run legal:check` and archive `docs/legal/sbom.cdx.json` plus `docs/legal/THIRD_PARTY_NOTICES.md` with the release.
 - Record any future upstream dependency or source copy in this file before release.
 - Do not add Git URL dependencies or desktop-only packages without a pinned revision, integrity review, and license approval.

@@ -1,0 +1,37 @@
+//#region src/components/character/justifiedRows.ts
+function e(e, t) {
+	let n = e.reduce((e, t) => e + t, 0) / t, r = [], i = [], a = 0;
+	return e.forEach((e, o) => {
+		i.push(o), a += e, a >= n && r.length < t - 1 && (r.push(i), i = [], a = 0);
+	}), i.length > 0 && r.push(i), r;
+}
+function t(t, n, r, i) {
+	if (t.length === 0 || n <= 0 || r <= 0) return null;
+	let a = (e) => {
+		let r = e.map((e) => (n - i * (e.length - 1)) / e.reduce((e, n) => e + t[n], 0));
+		return {
+			heights: r,
+			total: r.reduce((e, t) => e + t, 0) + i * (e.length - 1)
+		};
+	}, o = null;
+	for (let n = 1; n <= t.length; n += 1) {
+		let i = e(t, n), { heights: s, total: c } = a(i);
+		(!o || c <= r && (o.total > r || c > o.total) || c > r && o.total > r && c < o.total) && (o = {
+			rows: i,
+			heights: s,
+			total: c
+		});
+	}
+	if (!o) return null;
+	let s = i * (o.rows.length - 1), c = o.total > r ? (r - s) / (o.total - s) : 1, l = o.rows.map((e, t) => ({
+		items: e,
+		height: o.heights[t] * c
+	}));
+	return {
+		width: n * c,
+		height: l.reduce((e, t) => e + t.height, 0) + s,
+		rows: l
+	};
+}
+//#endregion
+export { t };

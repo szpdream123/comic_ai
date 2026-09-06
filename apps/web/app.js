@@ -3,11 +3,1170 @@ import {
   consumeFirstLoginOnboarding,
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
+import { normalizeAiCanvasRuntimeGrouping } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
-  ? import("./src/features/production-workbench/index.js")
+  ? import("./src/features/production-workbench/index.js?skill-media-upload=5")
   : null;
+let aiCanvasRuntimePromise;
+let aiCanvasRuntimeStorePromise;
+let aiCanvasRuntimeGlobalStyle;
+
+function acquireAiCanvasRuntimeGlobalStyle() {
+  if (aiCanvasRuntimeGlobalStyle?.isConnected) {
+    return aiCanvasRuntimeGlobalStyle;
+  }
+  const stylesheet = document.createElement("link");
+  stylesheet.rel = "stylesheet";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css";
+  stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
+  document.head?.prepend(stylesheet);
+  aiCanvasRuntimeGlobalStyle = stylesheet;
+  return stylesheet;
+}
+
+function releaseAiCanvasRuntimeGlobalStyle(stylesheet) {
+  if (stylesheet !== aiCanvasRuntimeGlobalStyle) return;
+  stylesheet?.remove?.();
+  aiCanvasRuntimeGlobalStyle = null;
+}
+
+function normalizeAiCanvasTheme(theme) {
+  return String(theme ?? "").toLowerCase() === "light" ? "light" : "dark";
+}
+
+function createAiCanvasRuntimeThemeBridge(surface, theme) {
+  const documentElement = document.documentElement;
+  const previousTheme = documentElement?.getAttribute?.("data-theme") ?? null;
+  const previousSurfaceTheme = surface?.getAttribute?.("data-theme") ?? null;
+  let currentTheme = normalizeAiCanvasTheme(theme);
+  const applyTheme = () => {
+    if (documentElement?.getAttribute?.("data-theme") !== currentTheme) {
+      documentElement?.setAttribute?.("data-theme", currentTheme);
+    }
+    if (surface?.getAttribute?.("data-theme") !== currentTheme) {
+      surface?.setAttribute?.("data-theme", currentTheme);
+    }
+  };
+  applyTheme();
+  const observer = typeof MutationObserver === "function" && documentElement
+    ? new MutationObserver(applyTheme)
+    : null;
+  observer?.observe(documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return {
+    update(themeValue) {
+      currentTheme = normalizeAiCanvasTheme(themeValue);
+      applyTheme();
+    },
+    dispose() {
+      observer?.disconnect?.();
+      if (previousTheme === null) documentElement?.removeAttribute?.("data-theme");
+      else documentElement?.setAttribute?.("data-theme", previousTheme);
+      if (previousSurfaceTheme === null) surface?.removeAttribute?.("data-theme");
+      else surface?.setAttribute?.("data-theme", previousSurfaceTheme);
+    },
+  };
+}
+
+function createAiCanvasRuntimeConfigBridge(store, theme) {
+  if (!store?.getState || !store?.setState) {
+    return { update() {}, dispose() {} };
+  }
+  let currentTheme = normalizeAiCanvasTheme(theme);
+  const applyConfig = () => {
+    const state = store.getState();
+    const config = state?.config;
+    if (!config || typeof config !== "object") return;
+    const canvasBackground = currentTheme === "light" ? "off-white" : "default";
+    if (config.theme === currentTheme && config.canvasBackground === canvasBackground) return;
+    store.setState({
+      config: {
+        ...config,
+        theme: currentTheme,
+        canvasBackground,
+      },
+    });
+  };
+  applyConfig();
+  const unsubscribe = store.subscribe?.((nextState, previousState) => {
+    if (nextState?.config === previousState?.config) return;
+    const expectedBackground = currentTheme === "light" ? "off-white" : "default";
+    if (
+      nextState?.config?.theme === currentTheme
+      && nextState?.config?.canvasBackground === expectedBackground
+    ) {
+      return;
+    }
+    queueMicrotask(applyConfig);
+  });
+  return {
+    update(themeValue) {
+      currentTheme = normalizeAiCanvasTheme(themeValue);
+      applyConfig();
+    },
+    dispose() {
+      unsubscribe?.();
+    },
+  };
+}
+
+function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
+  if (!store?.getState || !store?.setState) return { update() {}, dispose() {} };
+  const originalState = store.getState();
+  const originalConfig = originalState?.config;
+  const originalSkills = originalState?.userSkills;
+  const backendProviderId = "comic-ai-backend";
+  const sanitizeCatalogValue = (value) => {
+    if (Array.isArray(value)) return value.map(sanitizeCatalogValue);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !/(?:api[_-]?key|token|secret|password|credential)/iu.test(key))
+      .map(([key, nested]) => [key, sanitizeCatalogValue(nested)]));
+  };
+  const normalizeModels = (models) => (Array.isArray(models) ? models : [])
+    .map((model) => {
+      const code = String(model?.modelCode ?? model?.model_code ?? model?.modelId ?? model?.model_id ?? model?.code ?? model?.id ?? "").trim();
+      if (!code) return null;
+      const category = String(model?.category ?? model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "text").trim().toLowerCase();
+      const schema = model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
+        ? model.parameterSchema
+        : {};
+      const enumValues = (field) => Array.isArray(schema?.[field]?.options)
+        ? schema[field].options.map(String).filter(Boolean)
+        : [];
+      const resolutions = (Array.isArray(model?.supportedResolutions) && model.supportedResolutions.length
+        ? model.supportedResolutions
+        : Array.isArray(model?.supportedQuality) && model.supportedQuality.length ? model.supportedQuality : enumValues("resolution"));
+      const ratios = Array.isArray(model?.supportedRatios) && model.supportedRatios.length ? model.supportedRatios : enumValues("aspectRatio");
+      const durations = Array.isArray(model?.supportedDurations) && model.supportedDurations.length ? model.supportedDurations : enumValues("durationSec");
+      const defaults = model?.defaultParams && typeof model.defaultParams === "object" && !Array.isArray(model.defaultParams) ? model.defaultParams : {};
+      return {
+        id: `comic-ai/${category}/${code}`,
+        name: String(model?.modelLabel ?? model?.modelName ?? model?.model_name ?? model?.name ?? model?.label ?? code).trim() || code,
+        modelId: code,
+        category: ["image", "video", "audio", "text"].includes(category) ? category : "text",
+        providerConfigId: backendProviderId,
+        inputModalities: Array.isArray(model?.inputModalities) ? model.inputModalities : undefined,
+        capabilities: model?.capabilities && typeof model.capabilities === "object" ? sanitizeCatalogValue(model.capabilities) : {},
+        supportedRatios: Array.isArray(model?.supportedRatios) ? model.supportedRatios.map(String).filter(Boolean) : undefined,
+        supportedQuality: Array.isArray(model?.supportedQuality) ? model.supportedQuality.map(String).filter(Boolean) : undefined,
+        supportedResolutions: Array.isArray(model?.supportedResolutions) ? model.supportedResolutions.map(String).filter(Boolean) : undefined,
+        supportedDurations: Array.isArray(model?.supportedDurations) ? model.supportedDurations.map(String).filter(Boolean) : undefined,
+        parameterSchema: model?.parameterSchema && typeof model.parameterSchema === "object" ? sanitizeCatalogValue(model.parameterSchema) : undefined,
+        defaultParams: model?.defaultParams && typeof model.defaultParams === "object" ? sanitizeCatalogValue(model.defaultParams) : undefined,
+        videoCapability: category === "video" && (resolutions.length || ratios.length || durations.length) ? {
+          resolutions: resolutions.map(String).filter(Boolean),
+          ratios: ratios.map(String).filter(Boolean),
+          durations: durations.map(Number).filter(Number.isFinite),
+          ...(defaults.resolution != null || defaults.quality != null ? { defaultResolution: String(defaults.resolution ?? defaults.quality) } : {}),
+          ...(defaults.aspectRatio != null || defaults.ratio != null ? { defaultRatio: String(defaults.aspectRatio ?? defaults.ratio) } : {}),
+          ...(defaults.durationSec != null ? { defaultDuration: Number(defaults.durationSec) } : {}),
+        } : undefined,
+        pricing: model?.pricing && typeof model.pricing === "object" ? sanitizeCatalogValue(model.pricing) : undefined,
+        source: "comic-ai-backend",
+      };
+    })
+    .filter(Boolean);
+  const normalizeSkills = (skills) => (Array.isArray(skills) ? skills : [])
+    .map((skill) => {
+      const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+      if (!id) return null;
+      return {
+        id,
+        name: String(skill?.name ?? skill?.title ?? "未命名 Skill").trim() || "未命名 Skill",
+        description: String(skill?.description ?? skill?.summary ?? "").trim(),
+        summary: String(skill?.summary ?? skill?.description ?? "").trim(),
+        category: String(skill?.category ?? "general").trim() || "general",
+        source: String(skill?.source ?? (skill?.ownerUserId ? "mine" : "official")).trim() || "official",
+        version: String(skill?.version ?? "").trim() || undefined,
+        content: typeof skill?.content === "string" ? skill.content : "",
+      };
+    })
+    .filter(Boolean);
+  let modelCatalog = normalizeModels(context.modelCatalog ?? context.models);
+  let skillCatalog = normalizeSkills(context.skillCatalog ?? context.skills);
+  let applying = false;
+  const apply = () => {
+    if (applying) return;
+    applying = true;
+    const state = store.getState();
+    const existingModels = Array.isArray(state?.config?.generalModels)
+      ? state.config.generalModels.filter((model) => model?.source !== "comic-ai-backend")
+      : [];
+    const providers = { ...(state?.config?.providers ?? {}) };
+    if (modelCatalog.length) providers[backendProviderId] = { name: "Comic AI 后端", protocol: "backend" };
+    try {
+      store.setState({
+        config: {
+          ...(state?.config ?? {}),
+          providers,
+          generalModels: [...modelCatalog, ...existingModels],
+        },
+        userSkills: skillCatalog,
+      });
+    } finally {
+      applying = false;
+    }
+  };
+  apply();
+  const unsubscribe = store.subscribe?.((nextState, previousState) => {
+    if (applying || nextState?.config === previousState?.config) return;
+    queueMicrotask(apply);
+  });
+  return {
+    update(next = {}) {
+      if (next.modelCatalog !== undefined || next.models !== undefined) modelCatalog = normalizeModels(next.modelCatalog ?? next.models);
+      if (next.skillCatalog !== undefined || next.skills !== undefined) skillCatalog = normalizeSkills(next.skillCatalog ?? next.skills);
+      if (next.modelCatalog !== undefined || next.models !== undefined || next.skillCatalog !== undefined || next.skills !== undefined) apply();
+    },
+    dispose() {
+      unsubscribe?.();
+      if (originalConfig) store.setState({ config: originalConfig, userSkills: originalSkills });
+    },
+  };
+}
+
+function createAiCanvasRuntimeScaleBridge(surface, options = {}) {
+  if (options.lightDom === true) {
+    return { dispose() {} };
+  }
+  const rootNode = surface?.getRootNode?.();
+  const host = rootNode?.host instanceof HTMLElement ? rootNode.host : surface;
+  const inheritedZoom = Number.parseFloat(getComputedStyle(document.body).zoom);
+  if (!(host instanceof HTMLElement) || !Number.isFinite(inheritedZoom) || inheritedZoom <= 0 || inheritedZoom === 1) {
+    return { dispose() {} };
+  }
+  const previousZoom = host.style.zoom;
+  const previousWidth = host.style.width;
+  const previousHeight = host.style.height;
+  host.style.zoom = String(1 / inheritedZoom);
+  host.style.width = `${inheritedZoom * 100}%`;
+  host.style.height = `${inheritedZoom * 100}%`;
+  return {
+    dispose() {
+      host.style.zoom = previousZoom;
+      host.style.width = previousWidth;
+      host.style.height = previousHeight;
+    },
+  };
+}
+
+function normalizeAiCanvasRuntimeProject(project) {
+  const id = String(project?.id ?? project?.projectId ?? "").trim();
+  if (!id) return null;
+  const name = String(project?.name ?? project?.title ?? "画布项目").trim() || "画布项目";
+  const normalizeDate = (value, fallback) => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    const parsed = Date.parse(String(value ?? ""));
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const createdAt = normalizeDate(project?.createdAt, Date.now());
+  const updatedAt = normalizeDate(project?.updatedAt, createdAt);
+  return {
+    id,
+    name,
+    title: name,
+    createdAt,
+    updatedAt,
+    status: String(project?.status ?? "草稿"),
+    externalCanvasProject: true,
+  };
+}
+
+function normalizeAiCanvasRuntimeProjects(projects) {
+  return (Array.isArray(projects) ? projects : [])
+    .map(normalizeAiCanvasRuntimeProject)
+    .filter(Boolean);
+}
+
+const AI_CANVAS_RUNTIME_NATIVE_NODE_TYPES = new Set([
+  "ai-text",
+  "ai-image",
+  "ai-video",
+  "ai-audio",
+  "ai-animation",
+  "ai-panorama",
+  "ai-markdown",
+  "ai-storyboard",
+  "ai-shotlist",
+  "ai-director",
+  "source-text",
+  "source-image",
+  "source-video",
+  "source-audio",
+  "canvas-note",
+  "comment",
+  "group",
+  "plugin-node",
+]);
+
+function inferAiCanvasRuntimeNodeType(node) {
+  const type = String(node?.type ?? node?.data?.type ?? "").trim();
+  if (AI_CANVAS_RUNTIME_NATIVE_NODE_TYPES.has(type)) return type;
+  const mediaKind = String(node?.data?.mediaKind ?? node?.data?.kind ?? "").trim().toLowerCase();
+  if (type === "script") return "source-text";
+  if (type === "send") {
+    if (mediaKind === "video") return "ai-video";
+    if (mediaKind === "audio") return "ai-audio";
+    if (mediaKind === "text") return "ai-text";
+    return "ai-image";
+  }
+  if (type === "image") return "source-image";
+  if (type === "video") return "source-video";
+  if (type === "audio") return "source-audio";
+  if (type === "upload") {
+    if (mediaKind === "video") return "source-video";
+    if (mediaKind === "audio") return "source-audio";
+    if (mediaKind === "text") return "source-text";
+    return "source-image";
+  }
+  if (type === "output") {
+    if (mediaKind === "video") return "ai-video";
+    if (mediaKind === "audio") return "ai-audio";
+    if (mediaKind === "text") return "ai-text";
+    return "ai-image";
+  }
+  if (type === "markdown") return "ai-markdown";
+  if (type === "director") return "ai-director";
+  return type || "ai-text";
+}
+
+function normalizeAiCanvasRuntimeNode(node, index = 0) {
+  if (!node || typeof node !== "object") return null;
+  const type = inferAiCanvasRuntimeNodeType(node);
+  const data = node.data && typeof node.data === "object" ? { ...node.data } : {};
+  const size = node.size && typeof node.size === "object" ? node.size : {};
+  const label = String(data.label ?? data.title ?? node.title ?? "").trim()
+    || (type === "comment" ? "备注" : "生成节点");
+  const status = data.status === "running" || data.status === "ready" || data.status === "empty"
+    ? "idle"
+    : data.status ?? "idle";
+  const nextData = {
+    ...data,
+    label,
+    type,
+    status,
+    ...(type === "source-text" ? { output: String(data.output ?? data.text ?? data.prompt ?? "") } : {}),
+    ...(type !== "source-text" && data.prompt === undefined && data.text !== undefined ? { prompt: String(data.text ?? "") } : {}),
+    ...(data.output === undefined && data.resultText !== undefined ? { output: data.resultText } : {}),
+    ...(data.model === undefined && data.modelCode !== undefined ? { model: data.modelCode } : {}),
+    ...(data.imageUrl === undefined && (data.url !== undefined || data.previewUrl !== undefined || data.resultUrl !== undefined)
+      && (type === "ai-image" || type === "source-image" || type === "ai-panorama")
+      ? { imageUrl: data.url ?? data.previewUrl ?? data.resultUrl }
+      : {}),
+    ...(data.videoUrl === undefined && (data.url !== undefined || data.previewUrl !== undefined || data.resultUrl !== undefined || data.resultVideoUrl !== undefined)
+      && (type === "ai-video" || type === "source-video")
+      ? { videoUrl: data.url ?? data.previewUrl ?? data.resultUrl ?? data.resultVideoUrl }
+      : {}),
+    ...(data.audioUrl === undefined && (data.url !== undefined || data.previewUrl !== undefined || data.resultUrl !== undefined)
+      && (type === "ai-audio" || type === "source-audio")
+      ? { audioUrl: data.url ?? data.previewUrl ?? data.resultUrl }
+      : {}),
+    ...(data.nodeWidth === undefined && Number.isFinite(Number(size.width)) ? { nodeWidth: Number(size.width) } : {}),
+    ...(data.nodeHeight === undefined && Number.isFinite(Number(size.height)) ? { nodeHeight: Number(size.height) } : {}),
+  };
+  delete nextData.ports;
+  if (!nextData.role && type.startsWith("source-")) nextData.role = "source";
+  if (!nextData.role && type.startsWith("ai-")) nextData.role = "generator";
+  return {
+    ...node,
+    id: String(node.id ?? `node-${index + 1}`),
+    type,
+    position: node.position && typeof node.position === "object"
+      ? { x: Number(node.position.x ?? 0), y: Number(node.position.y ?? 0) }
+      : { x: Number(node.x ?? 0), y: Number(node.y ?? 0) },
+    data: nextData,
+  };
+}
+
+function normalizeAiCanvasRuntimeEdge(edge, index = 0) {
+  if (!edge || typeof edge !== "object") return null;
+  const source = String(edge.source ?? edge.sourceNodeId ?? "").trim();
+  const target = String(edge.target ?? edge.targetNodeId ?? "").trim();
+  if (!source || !target) return null;
+  return {
+    ...edge,
+    id: String(edge.id ?? `edge-${index + 1}`),
+    source,
+    target,
+    ...(edge.sourceHandle !== undefined ? {} : edge.sourcePortId !== undefined ? { sourceHandle: edge.sourcePortId } : {}),
+    ...(edge.targetHandle !== undefined ? {} : edge.targetPortId !== undefined ? { targetHandle: edge.targetPortId } : {}),
+  };
+}
+
+function normalizeAiCanvasRuntimeDocument(document, canvasProjectId = "") {
+  const source = document && typeof document === "object" ? document : {};
+  const nodes = (Array.isArray(source.nodes) ? source.nodes : [])
+    .map(normalizeAiCanvasRuntimeNode)
+    .filter(Boolean);
+  const grouping = normalizeAiCanvasRuntimeGrouping(nodes, source.groups);
+  const nodeIds = new Set(grouping.nodes.map((node) => String(node?.id ?? "")).filter(Boolean));
+  return {
+    ...source,
+    version: Number(source.version ?? 1) || 1,
+    ...(canvasProjectId ? { canvasProjectId } : source.canvasProjectId ? { canvasProjectId: source.canvasProjectId } : {}),
+    nodes: grouping.nodes,
+    edges: (Array.isArray(source.edges) ? source.edges : [])
+      .map(normalizeAiCanvasRuntimeEdge)
+      .filter((edge) => edge && nodeIds.has(edge.source) && nodeIds.has(edge.target))
+      .filter(Boolean),
+    groups: grouping.groups,
+  };
+}
+
+function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
+  if (!store?.getState || !store?.setState) {
+    return { update() {}, dispose() {} };
+  }
+  let projectCatalog = normalizeAiCanvasRuntimeProjects(context.projectCatalog);
+  let currentProjectId = String(context.currentProjectId ?? context.canvasProjectId ?? "").trim();
+  let document = normalizeAiCanvasRuntimeDocument(
+    context.document ?? context.canvasDocument,
+    currentProjectId,
+  );
+  const originalState = store.getState();
+  const originalMethods = new Map();
+  const methodNames = [
+    "initFromDb",
+    "loadProject",
+    "migrateHistoryAndLoad",
+    "saveCurrentProject",
+    "saveCurrentProjectSilent",
+    "captureCurrentProjectSnapshot",
+  ];
+  for (const name of methodNames) {
+    if (typeof originalState?.[name] === "function") {
+      originalMethods.set(name, originalState[name]);
+    }
+  }
+  const cloneValue = (value) => {
+    if (value == null) return value;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return value;
+    }
+  };
+  const applyHostProjectState = (next = {}) => {
+    if (next.projectCatalog !== undefined) {
+      projectCatalog = normalizeAiCanvasRuntimeProjects(next.projectCatalog);
+    }
+    if (next.currentProjectId !== undefined) {
+      currentProjectId = String(next.currentProjectId ?? "").trim();
+    }
+    if (next.document !== undefined || next.canvasDocument !== undefined) {
+      document = normalizeAiCanvasRuntimeDocument(
+        next.document ?? next.canvasDocument,
+        currentProjectId,
+      );
+    }
+    const projects = projectCatalog;
+    const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0] ?? null;
+    const patch = {
+      ...(projects.length ? { projects } : {}),
+      currentProjectId: currentProject?.id ?? currentProjectId ?? null,
+      projectName: currentProject?.name ?? "",
+      projectLoadStatus: "ready",
+    };
+    patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
+    patch.edges = Array.isArray(document.edges) ? cloneValue(document.edges) : [];
+    patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
+    store.setState(patch);
+  };
+  const readRuntimeDocument = () => {
+    const state = store.getState();
+    return {
+      version: Number(document?.version ?? 1) || 1,
+      ...(currentProjectId ? { canvasProjectId: currentProjectId } : {}),
+      nodes: cloneValue(state.nodes ?? []),
+      edges: cloneValue(state.edges ?? []),
+      groups: cloneValue(state.groups ?? []),
+    };
+  };
+  const saveThroughHost = async () => {
+    const nextDocument = readRuntimeDocument();
+    document = nextDocument;
+    if (typeof context.onDocumentChange === "function") {
+      await context.onDocumentChange(nextDocument);
+    }
+    return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
+  };
+  store.setState({
+    initFromDb: async () => applyHostProjectState({ document }),
+    loadProject: async () => applyHostProjectState({ document }),
+    migrateHistoryAndLoad: async () => undefined,
+    saveCurrentProject: saveThroughHost,
+    saveCurrentProjectSilent: saveThroughHost,
+    captureCurrentProjectSnapshot: async () => undefined,
+  });
+  applyHostProjectState({ document });
+  return {
+    update(next = {}) {
+      if (next.projectCatalog !== undefined || next.currentProjectId !== undefined || next.document !== undefined || next.canvasDocument !== undefined) {
+        applyHostProjectState(next);
+      }
+    },
+    dispose() {
+      if (originalMethods.size) store.setState(Object.fromEntries(originalMethods));
+    },
+  };
+}
+
+async function createAiCanvasRuntimeProjectBridge(context = {}) {
+  let projectCatalog = normalizeAiCanvasRuntimeProjects(context.projectCatalog);
+  let currentProjectId = String(context.currentProjectId ?? "").trim();
+  try {
+    aiCanvasRuntimeStorePromise ??= aiCanvasRuntimePromise ?? import("/ai-canvas-runtime/runtime.js");
+    const storeModule = await aiCanvasRuntimeStorePromise;
+    const store = storeModule?.useAppStore ?? storeModule?.t;
+    if (!store?.getState || !store?.setState) {
+      throw new Error("ai_canvas_runtime_store_unavailable");
+    }
+    const originalActions = new Map();
+    const actionHandlers = {
+      switchProject: typeof context.onSwitchProject === "function"
+        ? async (projectId, ...args) => {
+          const targetId = String(projectId ?? "").trim();
+          const result = await context.onSwitchProject(projectId, ...args);
+          if (result !== false && targetId) currentProjectId = targetId;
+          return result;
+        }
+        : undefined,
+      createProject: context.onCreateProject,
+      renameProject: context.onRenameProject,
+      setProjectName: typeof context.onRenameProject === "function"
+        ? (name) => {
+          const targetName = String(name ?? "").trim();
+          if (!currentProjectId || !targetName) return false;
+          return context.onRenameProject(currentProjectId, targetName);
+        }
+        : undefined,
+      deleteProject: context.onDeleteProject,
+      duplicateProject: context.onDuplicateProject,
+      exportProject: context.onExportProject,
+      importProject: context.onImportProject,
+    };
+    const applyCatalog = (next = {}) => {
+      if (next.projectCatalog !== undefined) {
+        projectCatalog = normalizeAiCanvasRuntimeProjects(next.projectCatalog);
+      }
+      if (next.currentProjectId !== undefined) {
+        currentProjectId = String(next.currentProjectId ?? "").trim();
+      }
+      const projects = projectCatalog;
+      const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0];
+      const state = store.getState();
+      const resolvedCurrentProjectId = currentProject?.id ?? currentProjectId ?? state.currentProjectId ?? null;
+      const patch = {
+        projects,
+        currentProjectId: resolvedCurrentProjectId,
+        projectName: currentProject?.name ?? state.projectName ?? "",
+        ...(next.document !== undefined ? { projectLoadStatus: "ready" } : {}),
+      };
+      if (
+        state.currentProjectId === patch.currentProjectId
+        && state.projectName === patch.projectName
+        && Array.isArray(state.projects)
+        && state.projects.length === projects.length
+        && state.projects.every((project, index) => project.id === projects[index].id && project.name === projects[index].name)
+      ) {
+        return;
+      }
+      store.setState(patch);
+    };
+    applyCatalog({
+      projectCatalog,
+      currentProjectId,
+      document: context.document,
+    });
+    const originalState = store.getState();
+    for (const [name, handler] of Object.entries(actionHandlers)) {
+      if (typeof handler !== "function" || typeof originalState[name] !== "function") continue;
+      originalActions.set(name, originalState[name]);
+      store.setState({
+        [name]: async (...args) => handler(...args),
+      });
+    }
+    let applying = false;
+    const unsubscribe = store.subscribe((nextState, previousState) => {
+      if (applying || !nextState || nextState.projects === previousState?.projects) return;
+      queueMicrotask(() => {
+        if (applying) return;
+        applying = true;
+        try {
+          applyCatalog({ projectCatalog, currentProjectId });
+        } finally {
+          applying = false;
+        }
+      });
+    });
+    return {
+      update(next = {}) {
+        if (next.projectCatalog !== undefined || next.currentProjectId !== undefined || next.document !== undefined) {
+          applyCatalog(next);
+        }
+      },
+      dispose() {
+        unsubscribe?.();
+        if (originalActions.size) store.setState(Object.fromEntries(originalActions));
+      },
+    };
+  } catch (error) {
+    console.warn("[creator-app] AI Canvas project bridge unavailable", error);
+    return {
+      update() {},
+      dispose() {},
+    };
+  }
+}
+
+function resolveAiCanvasRuntimeConversationProjectId(projects, projectId) {
+  const id = String(projectId ?? "").trim();
+  if (!id) return "";
+  const parentId = Array.isArray(projects)
+    ? projects.find((project) => project?.id === id)?.parentId
+    : undefined;
+  return String(parentId ?? id).trim();
+}
+
+function isVisibleAiCanvasRuntimeConversation(conversation) {
+  return !!conversation && conversation.archived !== true && conversation.deletedAt == null;
+}
+
+async function ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context = {}) {
+  const initialState = runtimeStore?.getState?.();
+  // New Canvas always opens with the embedded assistant conversation view.
+  // Clear a stale detached-window flag left by a previous runtime session.
+  initialState?.setChatPanelDetached?.(false);
+  initialState?.openChat?.();
+
+  const currentProjectId = String(
+    initialState?.currentProjectId ?? context.currentProjectId ?? context.canvasProjectId ?? "",
+  ).trim();
+  if (!currentProjectId) return;
+
+  try {
+    await initialState?.loadConversationsForProject?.(currentProjectId);
+  } catch (error) {
+    console.warn("[creator-app] AI Canvas conversation load failed", error);
+  }
+
+  const state = runtimeStore?.getState?.() ?? initialState;
+  const settledProjectId = String(state?.currentProjectId ?? currentProjectId).trim();
+  if (!settledProjectId || settledProjectId !== currentProjectId) return;
+
+  const normalizedProjectId = resolveAiCanvasRuntimeConversationProjectId(state?.projects, settledProjectId);
+  const conversations = Array.isArray(state?.conversations) ? state.conversations : [];
+  const belongsToCurrentProject = (conversation) => (
+    isVisibleAiCanvasRuntimeConversation(conversation)
+      && resolveAiCanvasRuntimeConversationProjectId(state?.projects, conversation?.projectId) === normalizedProjectId
+  );
+  const activeConversation = conversations.find((conversation) => conversation?.id === state?.activeConversationId);
+  if (belongsToCurrentProject(activeConversation)) return;
+
+  const firstProjectConversation = conversations.find(belongsToCurrentProject);
+  if (firstProjectConversation?.id) {
+    state?.setActiveConversation?.(firstProjectConversation.id);
+    return;
+  }
+
+  state?.createConversation?.(settledProjectId);
+}
+
+function mountStandaloneAiCanvasRuntime(surface, context = {}) {
+  globalThis.process ??= { env: { NODE_ENV: "production" } };
+  aiCanvasRuntimePromise ??= import("/ai-canvas-runtime/runtime.js");
+  return aiCanvasRuntimePromise.then((runtimeModule) => {
+    const mountAiCanvasRuntime = runtimeModule?.mountAiCanvasRuntime;
+    const runtimeStore = runtimeModule?.useAppStore ?? runtimeModule?.t;
+    const rootNode = surface?.getRootNode?.();
+    const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
+    const styleRoot = isShadowRoot ? rootNode : document.head;
+    const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
+      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css";
+    if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
+      const layoutStyle = document.createElement("style");
+      layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
+      const isStandaloneHost = rootNode?.host?.classList?.contains?.("ai-canvas-standalone-mount");
+      layoutStyle.textContent = isShadowRoot ? `
+        :host {
+          width: 100% !important;
+          height: ${isStandaloneHost ? "100dvh" : "100%"} !important;
+          min-height: ${isStandaloneHost ? "100dvh" : "0"} !important;
+        }
+        .new-canvas-root,
+        .new-canvas-root > .app-shell {
+          width: 100% !important;
+          height: 100% !important;
+          min-height: 0 !important;
+        }
+        .new-canvas-root .canvas-controls {
+          display: none !important;
+        }
+        .app-header {
+          gap: 4px !important;
+          padding: 10px !important;
+          min-height: 72px !important;
+          min-width: 440px !important;
+          font-size: 16px !important;
+        }
+        .app-header button {
+          min-width: 56px !important;
+          min-height: 56px !important;
+          font-size: 20px !important;
+        }
+        .app-header [contenteditable="true"] {
+          min-width: 180px !important;
+          max-width: 260px !important;
+          font-size: 20px !important;
+          line-height: 1.4 !important;
+        }
+        .app-header span {
+          font-size: 20px !important;
+          line-height: 1.4 !important;
+        }
+        .app-header img {
+          width: 48px !important;
+          height: 48px !important;
+        }
+        .new-canvas-root .sidebar-floating {
+          top: 12px !important;
+          left: auto !important;
+          right: 12px !important;
+          width: max-content !important;
+          max-width: calc(100% - 24px) !important;
+          height: auto !important;
+          flex-direction: row !important;
+          gap: 4px !important;
+          padding: 7px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .sidebar-floating .sidebar-btn-v3 {
+          width: 44px !important;
+          height: 44px !important;
+        }
+        .new-canvas-root .sidebar-floating .sidebar-btn-v3 svg {
+          width: 24px !important;
+          height: 24px !important;
+        }
+        .new-canvas-root .app-shell:has(.chat-panel) .sidebar-floating {
+          right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+        }
+        .sidebar-floating {
+          top: 12px !important;
+          left: auto !important;
+          right: 12px !important;
+          width: max-content !important;
+          max-width: calc(100% - 24px) !important;
+          height: auto !important;
+          flex-direction: row !important;
+          gap: 4px !important;
+          padding: 7px !important;
+          transform: none !important;
+        }
+        .sidebar-floating .sidebar-btn-v3 {
+          width: 44px !important;
+          height: 44px !important;
+        }
+        .sidebar-floating .sidebar-btn-v3 svg {
+          width: 24px !important;
+          height: 24px !important;
+        }
+        .app-shell:has(.chat-panel) .sidebar-floating {
+          right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+        }
+        .new-canvas-root .model-selector {
+          flex: 0 0 auto !important;
+          width: 32px !important;
+        }
+        .new-canvas-root .model-selector-trigger {
+          width: 32px !important;
+          height: 32px !important;
+          justify-content: center !important;
+          padding: 0 !important;
+        }
+        .new-canvas-root .model-selector-label,
+        .new-canvas-root .model-selector-trigger .caret {
+          display: none !important;
+        }
+        .new-canvas-root .footer-toolbar {
+          gap: 8px !important;
+          padding: 6px 8px !important;
+        }
+        .new-canvas-root .footer-toolbar button {
+          width: 40px !important;
+          height: 40px !important;
+        }
+        .new-canvas-root .footer-toolbar svg {
+          width: 20px !important;
+          height: 20px !important;
+        }
+        .new-canvas-root .canvas-zoom-slider {
+          width: 120px !important;
+          height: 6px !important;
+        }
+        .new-canvas-root .footer-toolbar .text-xs {
+          width: auto !important;
+          font-size: 14px !important;
+        }
+        .new-canvas-root .canvas-drawing-toolbar {
+          gap: 6px !important;
+          padding: 6px !important;
+        }
+        .new-canvas-root .canvas-drawing-tool {
+          width: 40px !important;
+          height: 40px !important;
+          flex-basis: 40px !important;
+        }
+        .new-canvas-root .canvas-drawing-tool svg {
+          width: 22px !important;
+          height: 22px !important;
+        }
+        .new-canvas-root .canvas-drawing-toolbar-slot {
+          left: 50% !important;
+          bottom: 12px !important;
+          transform: translateX(-50%) !important;
+        }
+        .new-canvas-root .canvas-zoom-slot {
+          left: 12px !important;
+          bottom: 12px !important;
+        }
+        .new-canvas-root .app-shell {
+          --chat-panel-width: 600px;
+        }
+        .new-canvas-root .chat-panel {
+          top: 12px !important;
+          bottom: 12px !important;
+          height: auto !important;
+          width: var(--chat-panel-width, min(600px, calc(100vw - 24px))) !important;
+          max-width: calc(100vw - 24px) !important;
+        }
+        .new-canvas-root .chat-panel .chat-panel-textarea {
+          min-height: 92px !important;
+          max-height: 220px !important;
+        }
+        .new-canvas-root .chat-panel div:has(> .chat-panel-textarea) {
+          min-height: 92px !important;
+          max-height: 220px !important;
+        }
+        .new-canvas-root .chat-panel div:has(> .chat-panel-textarea) > span {
+          line-height: 22px !important;
+        }
+        .new-canvas-root .react-flow__minimap {
+          left: 12px !important;
+          right: auto !important;
+          bottom: 72px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .canvas-controls .react-flow__controls-button {
+          width: 40px !important;
+          height: 40px !important;
+        }
+        .new-canvas-root .canvas-controls .react-flow__controls-button svg {
+          max-width: 20px !important;
+          max-height: 20px !important;
+        }
+      ` : `
+        .ai-canvas-standalone-mount,
+        .ai-canvas-standalone-mount .new-canvas-root,
+        .ai-canvas-standalone-mount .new-canvas-root > .app-shell {
+          width: 100% !important;
+          height: 100% !important;
+          min-height: 0 !important;
+        }
+        .new-canvas-root .canvas-controls {
+          display: none !important;
+        }
+        .app-header {
+          gap: 4px !important;
+          padding: 10px !important;
+          min-height: 72px !important;
+          min-width: 440px !important;
+          font-size: 16px !important;
+        }
+        .app-header button {
+          min-width: 56px !important;
+          min-height: 56px !important;
+          font-size: 20px !important;
+        }
+        .app-header [contenteditable="true"] {
+          min-width: 180px !important;
+          max-width: 260px !important;
+          font-size: 20px !important;
+          line-height: 1.4 !important;
+        }
+        .app-header span {
+          font-size: 20px !important;
+          line-height: 1.4 !important;
+        }
+        .app-header img {
+          width: 48px !important;
+          height: 48px !important;
+        }
+        .new-canvas-root .sidebar-floating {
+          top: 12px !important;
+          left: auto !important;
+          right: 12px !important;
+          width: max-content !important;
+          max-width: calc(100% - 24px) !important;
+          height: auto !important;
+          flex-direction: row !important;
+          gap: 4px !important;
+          padding: 7px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .sidebar-floating .sidebar-btn-v3 {
+          width: 44px !important;
+          height: 44px !important;
+        }
+        .new-canvas-root .sidebar-floating .sidebar-btn-v3 svg {
+          width: 24px !important;
+          height: 24px !important;
+        }
+        .new-canvas-root .app-shell:has(.chat-panel) .sidebar-floating {
+          right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+        }
+        .sidebar-floating {
+          top: 12px !important;
+          left: auto !important;
+          right: 12px !important;
+          width: max-content !important;
+          max-width: calc(100% - 24px) !important;
+          height: auto !important;
+          flex-direction: row !important;
+          gap: 4px !important;
+          padding: 7px !important;
+          transform: none !important;
+        }
+        .sidebar-floating .sidebar-btn-v3 {
+          width: 44px !important;
+          height: 44px !important;
+        }
+        .sidebar-floating .sidebar-btn-v3 svg {
+          width: 24px !important;
+          height: 24px !important;
+        }
+        .app-shell:has(.chat-panel) .sidebar-floating {
+          right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+        }
+        .new-canvas-root .model-selector {
+          flex: 0 0 auto !important;
+          width: 32px !important;
+        }
+        .new-canvas-root .model-selector-trigger {
+          width: 32px !important;
+          height: 32px !important;
+          justify-content: center !important;
+          padding: 0 !important;
+        }
+        .new-canvas-root .model-selector-label,
+        .new-canvas-root .model-selector-trigger .caret {
+          display: none !important;
+        }
+        .new-canvas-root .footer-toolbar {
+          gap: 8px !important;
+          padding: 6px 8px !important;
+        }
+        .new-canvas-root .footer-toolbar button {
+          width: 40px !important;
+          height: 40px !important;
+        }
+        .new-canvas-root .footer-toolbar svg {
+          width: 20px !important;
+          height: 20px !important;
+        }
+        .new-canvas-root .canvas-zoom-slider {
+          width: 120px !important;
+          height: 6px !important;
+        }
+        .new-canvas-root .footer-toolbar .text-xs {
+          width: auto !important;
+          font-size: 14px !important;
+        }
+        .new-canvas-root .canvas-drawing-toolbar {
+          gap: 6px !important;
+          padding: 6px !important;
+        }
+        .new-canvas-root .canvas-drawing-tool {
+          width: 40px !important;
+          height: 40px !important;
+          flex-basis: 40px !important;
+        }
+        .new-canvas-root .canvas-drawing-tool svg {
+          width: 22px !important;
+          height: 22px !important;
+        }
+        .new-canvas-root .canvas-drawing-toolbar-slot {
+          left: 50% !important;
+          bottom: 12px !important;
+          transform: translateX(-50%) !important;
+        }
+        .new-canvas-root .canvas-zoom-slot {
+          left: 12px !important;
+          bottom: 12px !important;
+        }
+        .new-canvas-root .app-shell {
+          --chat-panel-width: 600px;
+        }
+        .new-canvas-root .chat-panel {
+          top: 12px !important;
+          bottom: 12px !important;
+          height: auto !important;
+          width: var(--chat-panel-width, min(600px, calc(100vw - 24px))) !important;
+          max-width: calc(100vw - 24px) !important;
+        }
+        .new-canvas-root .chat-panel .chat-panel-textarea {
+          min-height: 92px !important;
+          max-height: 220px !important;
+        }
+        .new-canvas-root .chat-panel div:has(> .chat-panel-textarea) {
+          min-height: 92px !important;
+          max-height: 220px !important;
+        }
+        .new-canvas-root .chat-panel div:has(> .chat-panel-textarea) > span {
+          line-height: 22px !important;
+        }
+        .new-canvas-root .react-flow__minimap {
+          left: 12px !important;
+          right: auto !important;
+          bottom: 72px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .canvas-controls .react-flow__controls-button {
+          width: 40px !important;
+          height: 40px !important;
+        }
+        .new-canvas-root .canvas-controls .react-flow__controls-button svg {
+          max-width: 20px !important;
+          max-height: 20px !important;
+        }
+        @media (min-width: 769px) {
+          .ai-canvas-standalone-mount {
+            height: calc(100dvh / var(--app-ui-scale, 1)) !important;
+          }
+          .ai-canvas-standalone-mount [data-new-canvas-light-dom-root] {
+            width: 100% !important;
+            height: 100% !important;
+            zoom: calc(1 / var(--app-ui-scale, 1));
+          }
+          .app-tooltip {
+            zoom: calc(1 / var(--app-ui-scale, 1));
+          }
+        }
+      `;
+      layoutStyle.textContent += `
+        .ai-canvas-standalone-mount [aria-label="AI Canvas 正在启动"] {
+          display: none !important;
+        }
+      `;
+      styleRoot.append(layoutStyle);
+    }
+    if (styleRoot?.querySelector && !styleRoot.querySelector(`link[data-ai-canvas-runtime-style="true"]`)) {
+      const stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet";
+      stylesheet.href = stylesheetHref;
+      stylesheet.dataset.aiCanvasRuntimeStyle = "true";
+      styleRoot.append(stylesheet);
+    }
+    const themeBridge = createAiCanvasRuntimeThemeBridge(surface, context.theme);
+    const configBridge = createAiCanvasRuntimeConfigBridge(runtimeStore, context.theme);
+    const catalogBridge = createAiCanvasRuntimeCatalogBridge(runtimeStore, context);
+    const scaleBridge = createAiCanvasRuntimeScaleBridge(surface, {
+      lightDom: !isShadowRoot,
+    });
+    const runtimeContext = {
+      // Keep the host bridge available to runtime extensions. The bundled
+      // renderer currently consumes the catalog through the store bridge below;
+      // no provider credentials are included in this context.
+      creatorApi: context.creatorApi ?? context.api,
+      api: context.api ?? context.creatorApi,
+      modelCatalog: context.modelCatalog ?? context.models,
+      skillCatalog: context.skillCatalog ?? context.skills,
+      document: normalizeAiCanvasRuntimeDocument(
+        context.document ?? context.canvasDocument,
+        context.currentProjectId ?? context.canvasProjectId,
+      ),
+      view: null,
+      embedded: context.embedded !== false,
+      theme: normalizeAiCanvasTheme(context.theme),
+      projectCatalog: context.projectCatalog,
+      currentProjectId: context.currentProjectId ?? context.canvasProjectId,
+      onSwitchProject: context.onSwitchProject,
+      onCreateProject: context.onCreateProject,
+      onRenameProject: context.onRenameProject,
+      onDeleteProject: context.onDeleteProject,
+      onDuplicateProject: context.onDuplicateProject,
+      onExportProject: context.onExportProject,
+      onImportProject: context.onImportProject,
+      onDirectorDeskOpen: context.onDirectorDeskOpen,
+      onDirectorDeskSyncFrame: context.onDirectorDeskSyncFrame,
+      onDirectorDeskExportVideo: context.onDirectorDeskExportVideo,
+      onDocumentChange: (document) => context.syncDocument?.(document, { scheduleSave: true }),
+    };
+    const hostProjectGuard = createAiCanvasRuntimeHostProjectGuard(runtimeStore, runtimeContext);
+    const runtimeWindow = surface?.ownerDocument?.defaultView ?? globalThis;
+    const onOpenProjectTaskCenter = (event) => {
+      if (typeof context.onOpenTaskCenter !== "function") return;
+      event.preventDefault();
+      // Let the runtime finish its React click dispatch before the host replaces
+      // the surrounding workbench chrome and updates the mounted canvas.
+      globalThis.setTimeout?.(() => {
+        void Promise.resolve(context.onOpenTaskCenter()).catch((error) => {
+          console.warn("[creator-app] project task center unavailable", error);
+        });
+      }, 0);
+    };
+    runtimeWindow?.addEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+    const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
+        ...context,
+        ...runtimeContext,
+      });
+    return projectBridgePromise.then((projectBridge) => mountAiCanvasRuntime(surface, runtimeContext).then(async (runtimeHandle) => {
+      await ensureAiCanvasRuntimeDefaultConversation(runtimeStore, runtimeContext);
+      return ({
+      ...runtimeHandle,
+      async update(next = {}) {
+        if (next.theme !== undefined) {
+          themeBridge.update(next.theme);
+          configBridge.update(next.theme);
+        }
+        catalogBridge.update(next);
+        hostProjectGuard.update(next);
+        projectBridge.update(next);
+        return runtimeHandle?.update?.(next);
+      },
+      async dispose() {
+        try {
+          runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+          projectBridge.dispose();
+          await runtimeHandle?.dispose?.();
+        } finally {
+          hostProjectGuard.dispose();
+          themeBridge.dispose();
+          configBridge.dispose();
+          catalogBridge.dispose();
+          scaleBridge.dispose();
+          releaseAiCanvasRuntimeGlobalStyle(globalStylesheet);
+        }
+      },
+      });
+    }).catch((error) => {
+      runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+      projectBridge.dispose();
+      throw error;
+    })).catch((error) => {
+      hostProjectGuard.dispose();
+      themeBridge.dispose();
+      configBridge.dispose();
+      catalogBridge.dispose();
+      scaleBridge.dispose();
+      releaseAiCanvasRuntimeGlobalStyle(globalStylesheet);
+      throw error;
+    });
+  });
+}
 const homeUrl =
   window.location.protocol === "file:"
     ? resolveApiUrl("/app.html")
@@ -16,7 +1175,7 @@ const LOCAL_STORAGE_PREFIXES = ["comic-ai-project-library", "comic-ai:production
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
-const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace", "getHomeRecommendations"]);
+const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace", "getHomeRecommendations", "getSkills"]);
 
 async function bootstrap() {
   renderInitialWorkbenchShell(root);
@@ -27,6 +1186,9 @@ async function bootstrap() {
     root,
     session: activeSession,
     api: createAnonymousApi(creatorApi),
+    aiCanvasRuntime: globalThis.__COMIC_AI_AI_CANVAS_RUNTIME__ ?? null,
+    aiCanvasRuntimeAdapter: globalThis.__COMIC_AI_AI_CANVAS_RUNTIME_ADAPTER__ ?? null,
+    mountAiCanvasRuntime: globalThis.__COMIC_AI_MOUNT_AI_CANVAS_RUNTIME__ ?? mountStandaloneAiCanvasRuntime,
     deferInitialRender: true,
     onLogout: async () => {
       if (!activeSession?.user?.id && !activeSession?.user?.phone) {

@@ -35045,7 +35045,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /创建画布/);
     assert.match(html, /data-action="open-new-canvas" title="新画布"/);
     assert.match(html, /<span class="rail-label">新画布<\/span>/);
-    assert.doesNotMatch(html, /data-tab="new-canvas"|data-new-canvas-href/);
+    assert.match(html, /data-tab="new-canvas"/);
     assert.doesNotMatch(html, /canvas-panel/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
   });

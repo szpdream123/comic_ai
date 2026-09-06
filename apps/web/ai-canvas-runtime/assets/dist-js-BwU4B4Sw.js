@@ -1,0 +1,1 @@
+import{invoke as e}from"./main-Dy-UM9eE.js";async function t(){await e(`plugin:process|restart`)}export{t as relaunch};

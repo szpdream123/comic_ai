@@ -89,6 +89,50 @@ test("createCanvasProject forwards an explicit idempotency key outside the reque
   });
 });
 
+test("exportCanvasVideo sends the encoded canvas route and forwards request options", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  let releaseResponse;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return new Promise((resolve) => {
+      releaseResponse = () => resolve({ ok: true, text: async () => "{}" });
+    });
+  };
+
+  const controller = new AbortController();
+  const input = {
+    format: "mp4",
+    width: 1920,
+    height: 1080,
+    clips: [{ nodeKey: "shot/1", sourceIn: 0, sourceOut: 2_000 }],
+  };
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    const request = creatorApi.exportCanvasVideo("canvas/project 1", input, {
+      idempotencyKey: "canvas.video.export:test-123",
+      signal: controller.signal,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/api/canvas/canvas%2Fproject%201/video-export");
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.headers["idempotency-key"], "canvas.video.export:test-123");
+    assert.equal(calls[0].options.headers["content-type"], "application/json");
+    assert.deepEqual(JSON.parse(calls[0].options.body), input);
+    assert.equal(calls[0].options.signal.aborted, false);
+
+    controller.abort();
+    assert.equal(calls[0].options.signal.aborted, true);
+    releaseResponse();
+    await request;
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("getStandaloneCanvas always reads the latest saved document", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

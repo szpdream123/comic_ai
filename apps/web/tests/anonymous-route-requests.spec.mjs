@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { initProductionWorkbench } from "../src/features/production-workbench/index.js";
 
-const ANONYMOUS_ROUTES = ["home", "tools", "project", "script", "team", "director"];
+const ANONYMOUS_ROUTES = ["home", "tools", "project", "script", "skills", "team", "director"];
 
 test("anonymous main routes only request public home recommendations", async () => {
   const previousWindow = globalThis.window;
@@ -58,7 +58,7 @@ test("anonymous main routes only request public home recommendations", async () 
 
       assert.deepEqual(
         calls,
-        route === "home" ? ["getHomeRecommendations"] : [],
+        route === "home" ? ["getHomeRecommendations"] : route === "skills" ? ["getSkills"] : [],
         `${route} requested unexpected page data`,
       );
       if (route === "director") {
@@ -76,6 +76,11 @@ test("anonymous main routes only request public home recommendations", async () 
 test("anonymous API policy permits home recommendations", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.match(appSource, /ANONYMOUS_READ_API_METHODS[\s\S]*?"getHomeRecommendations"/);
+});
+
+test("anonymous API policy permits the public Skill catalog", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /ANONYMOUS_READ_API_METHODS[\s\S]*?"getSkills"/);
 });
 
 function createMemoryStorage() {

@@ -91,6 +91,8 @@ const SAN_BAO_MEDIA_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "202
 const SAN_BAO_GPT_IMAGE2_VARIANTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260902-merge-san-bao-gpt-image2-variants.sql"];
 const GLOBALAIOPC_MODEL_CENTER_SOUNDCLONE_RELATIVE_PATH = ["packages", "db", "migrations", "20260903-add-globalaiopc-model-center-and-soundclone.sql"];
 const PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH = ["packages", "db", "migrations", "20260904-create-provider-material-assets.sql"];
+const SKILL_PLAZA_RELATIVE_PATH = ["packages", "db", "migrations", "20260904-create-skill-plaza.sql"];
+const SKILL_FAVORITES_RELATIVE_PATH = ["packages", "db", "migrations", "20260904-create-skill-favorites.sql"];
 const GEO_OPERATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260905-create-geo-operations.sql"];
 const GEO_GENERATION_LEASES_RELATIVE_PATH = ["packages", "db", "migrations", "20260906-add-geo-generation-leases.sql"];
 const HOME_RECOMMENDATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260905-home-recommendations.sql"];
@@ -556,6 +558,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260904-create-provider-material-assets.sql",
       sql: await readFile(join(rootDir, ...PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260904-create-skill-plaza.sql",
+      sql: await readFile(join(rootDir, ...SKILL_PLAZA_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260904-create-skill-favorites.sql",
+      sql: await readFile(join(rootDir, ...SKILL_FAVORITES_RELATIVE_PATH), "utf8"),
     },
     {
       name: "20260905-create-geo-operations.sql",

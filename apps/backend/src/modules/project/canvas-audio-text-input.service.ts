@@ -328,7 +328,7 @@ function isAudioNode(node: CanvasNode) {
 }
 
 function isTextNode(node: CanvasNode) {
-  return ["script", "director", "markdown", "source-text", "ai-text", "ai-markdown", "ai-storyboard", "ai-director"]
+  return ["script", "director", "markdown", "source-text", "ai-text", "ai-markdown", "ai-storyboard", "ai-shotlist", "ai-director"]
     .includes(node.type) || node.data?.mediaKind === "text";
 }
 

@@ -8,6 +8,7 @@ import {
   resolveCanvasAnimationSheetAspectRatio,
 } from "./canvas-animation-node.js";
 import { resolveCanvasMediaArtifactPatch } from "./canvas-media-node.js";
+import { parseCanvasShotlistText } from "./canvas-shotlist-node.js";
 
 const MODEL_MODE_BY_MEDIA_KIND = {
   image: new Set([
@@ -102,6 +103,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_text", kind: "text", label: "Markdown" }],
   },
   comment: { inputs: [], outputs: [] },
+  "canvas-note": { inputs: [], outputs: [] },
   group: {
     inputs: [{ id: "in_any", kind: "any", label: "输入" }],
     outputs: [{ id: "out_any", kind: "any", label: "输出" }],
@@ -138,6 +140,10 @@ const NODE_PORTS = {
     inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image", "video"], label: "文本/图片/视频" }],
     outputs: [{ id: "out_text", kind: "text", label: "分镜" }],
   },
+  "ai-shotlist": {
+    inputs: [{ id: "in_text", kind: "text", accepts: ["text", "image", "video"], label: "剧本/素材" }],
+    outputs: [{ id: "out_text", kind: "text", label: "分镜表" }],
+  },
   "ai-director": {
     inputs: [],
     outputs: [{ id: "out_text", kind: "text", label: "导演指令" }],
@@ -159,6 +165,7 @@ const NODE_TITLES = {
   output: "输出",
   markdown: "Markdown",
   comment: "评论",
+  "canvas-note": "画布笔记",
   group: "分组",
   "ai-text": "AI 文本",
   "ai-image": "AI 图片",
@@ -168,6 +175,7 @@ const NODE_TITLES = {
   "ai-panorama": "全景预览",
   "ai-markdown": "AI Markdown",
   "ai-storyboard": "图片切分",
+  "ai-shotlist": "分镜表",
   "ai-director": "导演台",
   "source-text": "文本源",
   "source-image": "图片源",
@@ -213,6 +221,10 @@ const CANVAS_NODE_TEMPLATES = [
     visible: false,
     id: "template-ai-storyboard", group: "AI", type: "ai-storyboard", title: "图片切分", description: "切分或编辑图片",
     mediaKind: "image", defaultData: { title: "图片切分", status: "ready", mediaKind: "image", text: "", prompt: "" },
+  },
+  {
+    id: "template-ai-shotlist", group: "核心节点", type: "ai-shotlist", title: "分镜表", description: "按镜头整理景别、运镜、内容和时长",
+    defaultData: { title: "分镜表", status: "ready", mediaKind: "text", prompt: "", canvasMode: "shotlist", shotlistRows: [] },
   },
   {
     id: "template-ai-director", group: "核心节点", type: "ai-director", title: "导演台", description: "分析素材并编排画布",
@@ -322,6 +334,29 @@ const CANVAS_NODE_TEMPLATES = [
     description: "组织一组相关节点",
     defaultData: { title: "分组", color: "#22c55e", childNodeIds: [], source: "manual" },
   },
+  {
+    id: "template-canvas-note",
+    group: "编排",
+    type: "canvas-note",
+    title: "画布笔记",
+    description: "在画布上记录文字或绘制简单形状",
+    defaultData: {
+      title: "画布笔记",
+      status: "ready",
+      noteKind: "text",
+      noteStyle: {
+        strokeColor: "#f3c969",
+        backgroundColor: "rgba(243,201,105,.12)",
+        strokeWidth: 2,
+        strokeStyle: "solid",
+        roundness: "round",
+        fontSize: 18,
+        textAlign: "left",
+        opacity: 100,
+      },
+      text: "",
+    },
+  },
 ];
 
 export function resolveCanvasNodeTemplates(generationConfig = {}) {
@@ -388,7 +423,7 @@ export function applyCanvasSettingsToTemplate(template = {}, settingsRecord = nu
       ["send", "image", "ai-image", "ai-animation", "ai-panorama"].includes(type) ? "image"
         : ["video", "ai-video"].includes(type) ? "video"
           : ["audio", "ai-audio"].includes(type) ? "audio"
-            : ["ai-text", "ai-markdown", "ai-storyboard", "ai-director"].includes(type) ? "text"
+            : ["ai-text", "ai-markdown", "ai-storyboard", "ai-shotlist", "ai-director"].includes(type) ? "text"
               : ""
     ),
   );
@@ -670,6 +705,7 @@ const CANVAS_ARRANGEMENT_STAGE = Object.freeze({
   "ai-animation": 2,
   "ai-panorama": 2,
   "ai-storyboard": 2,
+  "ai-shotlist": 2,
   image: 3,
   video: 3,
   audio: 3,
@@ -1248,7 +1284,7 @@ export function buildCanvasRunPreview(document, nodeId) {
   if (!node) {
     return { ok: false, reason: "canvas_run_node_missing" };
   }
-  if (!["send", "image", "video", "audio", "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard"].includes(node.type)) {
+  if (!["send", "image", "video", "audio", "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard", "ai-shotlist"].includes(node.type)) {
     return { ok: false, reason: "canvas_run_send_node_required" };
   }
   const prompt = String(node.data?.prompt ?? "").trim();
@@ -1283,7 +1319,7 @@ export function buildCanvasRunPreview(document, nodeId) {
     };
   }
   const animation = node.type === "ai-animation" ? normalizeCanvasAnimationState(node.data) : null;
-  const mediaKind = node.type === "ai-storyboard" || animation ? "image" : String(node.data?.mediaKind ?? "image");
+  const mediaKind = node.type === "ai-storyboard" || animation ? "image" : node.type === "ai-shotlist" ? "text" : String(node.data?.mediaKind ?? "image");
   const animationAspectRatio = animation ? resolveCanvasAnimationSheetAspectRatio(animation.frames) : "";
   const generationPrompt = animation
     ? buildCanvasAnimationSpritePrompt(promptReferences.expandedPrompt, {
@@ -1390,6 +1426,9 @@ export function applyCanvasRunResult(document, preview, task = null) {
             failureMessage,
             failure,
             ...(generatedText ? { text: generatedText, resultText: generatedText } : {}),
+            ...(generatedText && node.type === "ai-shotlist" && parseCanvasShotlistText(generatedText).length
+              ? { shotlistRows: parseCanvasShotlistText(generatedText) }
+              : {}),
             ...(lyrics ? {
               lyrics,
               lyricsMode: String(task?.result?.lyricsMode ?? task?.resultAssets?.[0]?.lyricsMode ?? node.data?.lyricsMode ?? "generate"),
@@ -1686,6 +1725,21 @@ export function createCanvasNode(type, input = {}) {
       data.animationFrames = 8;
       data.animationPreviewMode = "playing";
     }
+  }
+  if (normalizedType === "canvas-note") {
+    data.status = "ready";
+    data.noteKind = "text";
+    data.noteStyle = {
+      strokeColor: "#f3c969",
+      backgroundColor: "rgba(243,201,105,.12)",
+      strokeWidth: 2,
+      strokeStyle: "solid",
+      roundness: "round",
+      fontSize: 18,
+      textAlign: "left",
+      opacity: 100,
+    };
+    data.text = "";
   }
   if (normalizedType.startsWith("source-")) {
     data.status = normalizedType === "source-text" ? "ready" : "empty";
@@ -2082,7 +2136,7 @@ function upstreamTextFragments(document, nodeId) {
     .filter((edge) => edge.targetNodeId === nodeId)
     .map((edge) => nodeMap.get(edge.sourceNodeId))
     .filter((node) => node && (
-      ["script", "director", "markdown", "source-text", "ai-text", "ai-markdown", "ai-storyboard", "ai-director"].includes(node.type)
+      ["script", "director", "markdown", "source-text", "ai-text", "ai-markdown", "ai-storyboard", "ai-shotlist", "ai-director"].includes(node.type)
       || node.data?.mediaKind === "text"
     ))
     .map((node) => ({

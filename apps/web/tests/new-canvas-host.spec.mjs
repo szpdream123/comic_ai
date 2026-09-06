@@ -33,6 +33,10 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.equal(await unmountNewCanvas(null), false);
   const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
   assert.match(source, /attachShadow/);
+  assert.match(source, /const lightDom = options\.lightDom === true/);
+  assert.match(source, /host\.replaceChildren\(mountRoot\)/);
+  assert.match(source, /dataset\.newCanvasLightDomRoot/);
+  assert.match(source, /shadowRoot: mountRoot/);
   assert.match(source, /dataset\.newCanvasMounted/);
   assert.match(source, /data-new-canvas-mount|new-canvas-root/);
   assert.doesNotMatch(source, /apps\/web\/new-canvas/);
@@ -496,8 +500,10 @@ test("Canvas asset sources incrementally render waterfall cards", () => {
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /全局素材 48/);
-  assert.doesNotMatch(html, /全局素材 49/);
+  // Direct surface rendering uses the lightweight initial page size. The
+  // mounted workbench can expand this count after the sentinel intersects.
+  assert.match(html, /全局素材 12/);
+  assert.doesNotMatch(html, /全局素材 13/);
   assert.match(html, /data-canvas-asset-load-more-sentinel/);
   assert.match(html, /data-canvas-asset-total="49"/);
 
@@ -1177,7 +1183,7 @@ test("selected nodes render the primary toolbar zone before secondary actions", 
   assert.match(html, /data-media-tool="remove_background"/);
   assert.match(html, /data-media-tool="camera_studio"/);
   assert.match(html, /data-canvas-sidebar-mode="assets"/);
-  assert.match(html, /data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="history" aria-label="历史"/);
+  assert.match(html, /data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="history"[^>]*>(?:历史|输出历史)<\/button>/);
   assert.match(html, /<template data-canvas-node-action-toolbar-template>/);
   assert.doesNotMatch(html, /left:clamp\(/);
 });
@@ -1352,18 +1358,16 @@ test("director desk is an in-page Canvas overlay with capture writeback", () => 
   assert.doesNotMatch(overlaySource, /<iframe|window\.open/);
 });
 
-test("canvas detail hands rendering to the in-project shadow host while the host adapter keeps the Canvas surface", () => {
+test("Canvas detail hands the complete page to the upstream runtime host", () => {
   const detailHtml = renderProjectDetail({
     ui: {
       activeNavTab: "tools",
       canvasProjectView: "detail",
-      canvasHostMount: true,
     },
   });
   assert.match(detailHtml, /data-new-canvas-mount/);
-  assert.match(detailHtml, /new-canvas-loading-skeleton/);
-  assert.match(detailHtml, /role="status"/);
-  assert.match(detailHtml, /data-workbench-global-overlays/);
+  assert.match(detailHtml, /ai-canvas-standalone-page/);
+  assert.doesNotMatch(detailHtml, /workbench-rail|global-statusbar|new-canvas-loading-skeleton/);
   assert.doesNotMatch(detailHtml, /data-canvas-x6-mount/);
 
   const workbenchSource = readFileSync(
@@ -1375,6 +1379,9 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(workbenchSource, /restoreNewCanvasMountAfterRender/);
   assert.match(workbenchSource, /function replaceWorkbenchChrome/);
   assert.match(workbenchSource, /function renderWorkbenchChrome/);
+  assert.match(workbenchSource, /nextStandalonePage = template\.content\.querySelector\("\[data-ai-canvas-standalone-page\]"\)/);
+  assert.match(workbenchSource, /currentOverlays\.replaceWith\(nextOverlays\)/);
+  assert.match(workbenchSource, /Keep the React runtime root mounted/);
   assert.match(workbenchSource, /currentStatusbar\.replaceWith\(nextStatusbar\)/);
   assert.match(workbenchSource, /currentOverlays\.replaceWith\(nextOverlays\)/);
   const chromeRenderBlock = workbenchSource.match(/function renderWorkbenchChrome[\s\S]*?function shouldMountNewCanvas/)?.[0] ?? "";
@@ -1407,6 +1414,27 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(workbenchCss, /\.canvas-x6-editor-overlay \.canvas-node-editor\s*\{[\s\S]*?position:\s*relative !important;/);
   assert.match(newCanvasCss, /\.canvas-storyboard-cell-extract::after\s*\{[\s\S]*?content:\s*attr\(data-tooltip\)/);
   assert.doesNotMatch(newCanvasCss, /\.new-canvas-root \.canvas-zoom-tools\s*\{/);
+});
+
+test("standalone Canvas keeps task-center UI beside the mounted runtime", () => {
+  const detailHtml = renderProjectDetail({
+    ui: {
+      activeNavTab: "new-canvas",
+      canvasProjectView: "detail",
+      taskCenterOpen: true,
+    },
+  });
+  assert.match(detailHtml, /data-new-canvas-mount/);
+  assert.match(detailHtml, /data-ai-canvas-standalone-overlays/);
+  assert.match(detailHtml, /class="task-center-drawer"/);
+
+  const workbenchSource = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const standaloneReplaceBlock = workbenchSource.match(/const nextStandalonePage = template\.content\.querySelector\("\[data-ai-canvas-standalone-page\]"\);[\s\S]*?return true;\n  \}/)?.[0] ?? "";
+  assert.match(standaloneReplaceBlock, /currentOverlays\.replaceWith\(nextOverlays\)/);
+  assert.doesNotMatch(standaloneReplaceBlock, /root\.replaceChildren\(nextStandalonePage\)/);
 });
 
 test("free generation keeps the application shell around the standalone Agent host", () => {
@@ -1458,7 +1486,9 @@ test("home creation mode tabs update only the home creation surface", () => {
   );
   const handler = source.match(/if \(action === "set-home-creation-mode"\)[\s\S]*?if \(action === "remove-home-agent-attachment"\)/)?.[0] ?? "";
   assert.match(handler, /renderHomeCreationModeSurface\(workbench\)/);
-  assert.doesNotMatch(handler, /render\(workbench\)/);
+  // Free generation changes the route and therefore still needs a full host
+  // render; agent/workflow tabs update only their home creation surface.
+  assert.match(handler, /if \(mode === "free"\)[\s\S]*?render\(workbench\)/);
   const surfaceRenderer = source.match(/function renderHomeCreationModeSurface[\s\S]*?function render\(workbench, options = \{\}\)/)?.[0] ?? "";
   assert.match(surfaceRenderer, /currentModeSurface\.replaceWith\(nextModeSurface\)/);
   assert.doesNotMatch(surfaceRenderer, /\.seo-home-scroll\)/);
@@ -1503,6 +1533,64 @@ test("canvas startup preserves a pending shadow host across follow-up renders", 
   assert.ok(
     mountStart.indexOf("host.dataset.canvasProjectId") < mountStart.indexOf("workbench.newCanvasPendingHost = host"),
   );
+});
+
+test("Canvas detail mounts carry an explicit upstream runtime marker", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const mountSync = source.match(/async function syncNewCanvasMount[\s\S]*?async function runNewCanvasHostAction/)?.[0] ?? "";
+  assert.match(mountSync, /const isAiCanvasRuntime = isCanvasNavTab\(workbench\.ui\?\.activeNavTab\)/);
+  assert.match(mountSync, /canvasRuntime: AI_CANVAS_RUNTIME_KIND/);
+  assert.match(mountSync, /canvasRuntimeAdapterVersion: AI_CANVAS_RUNTIME_ADAPTER_VERSION/);
+  assert.match(mountSync, /\.\.\.runtimeContext/);
+  assert.doesNotMatch(mountSync, /fallbackAdapter: createProductionCanvasAdapter/);
+});
+
+test("new Canvas forwards the injected runtime bridge, creator API, document, and sync hook", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const mountSync = source.match(/async function syncNewCanvasMount[\s\S]*?async function runNewCanvasHostAction/)?.[0] ?? "";
+  assert.match(mountSync, /const aiCanvasRuntimeAdapter = isAiCanvasRuntime[\s\S]*?workbench\.aiCanvasRuntimeAdapter/);
+  assert.doesNotMatch(mountSync, /fallbackAdapter: createProductionCanvasAdapter/);
+  assert.match(mountSync, /api: workbench\.api/);
+  assert.match(mountSync, /isAiCanvasRuntime && workbench\.ui\?\.canvasDocument/);
+  assert.match(mountSync, /adapter: aiCanvasRuntimeAdapter/);
+  assert.match(mountSync, /syncDocument: async \(document, metadata = \{\}\)/);
+  assert.match(mountSync, /workbench\.updateCanvasDocument\(document/);
+});
+
+test("new Canvas injects the outer project catalog and delegates runtime project actions", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const mountSync = source.match(/async function syncNewCanvasMount[\s\S]*?async function runNewCanvasHostAction/)?.[0] ?? "";
+  assert.match(mountSync, /getAiCanvasRuntimeProjectBridge\(workbench\)/);
+  assert.match(source, /projectCatalog: buildAiCanvasRuntimeProjectCatalog\(workbench\)/);
+  assert.match(source, /onSwitchProject: \(projectId\) => switchAiCanvasRuntimeProject/);
+  assert.match(source, /onCreateProject: \(name\) => createAiCanvasRuntimeProject/);
+  assert.match(source, /onRenameProject: \(projectId, name\) => renameAiCanvasRuntimeProject/);
+  assert.match(source, /onDeleteProject: \(projectId\) => deleteAiCanvasRuntimeProject/);
+  assert.match(source, /onDuplicateProject: \(projectId\) => duplicateAiCanvasRuntimeProject/);
+  assert.match(source, /onExportProject: \(projectId\) => exportAiCanvasRuntimeProject/);
+  assert.match(source, /onImportProject: \(\) => importAiCanvasRuntimeProject/);
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const projectBridge = appSource.match(/async function createAiCanvasRuntimeProjectBridge[\s\S]*?\n\}\n\nfunction mountStandaloneAiCanvasRuntime/)?.[0] ?? "";
+  assert.doesNotMatch(projectBridge, /if \(!projectCatalog\.length\)/);
+  assert.doesNotMatch(projectBridge, /const projects = projectCatalog;\s*if \(!projects\.length\) return;/);
+  assert.match(projectBridge, /const resolvedCurrentProjectId = currentProject\?\.id \?\? currentProjectId \?\? state\.currentProjectId \?\? null/);
+  assert.match(appSource, /setProjectName: typeof context\.onRenameProject === "function"/);
+  assert.match(appSource, /context\.onRenameProject\(currentProjectId, targetName\)/);
+  assert.match(appSource, /onSwitchProject: context\.onSwitchProject/);
+  assert.match(appSource, /onRenameProject: context\.onRenameProject/);
+  assert.match(appSource, /\.new-canvas-root \.app-shell \{[\s\S]*?--chat-panel-width: 600px;/);
+  assert.match(appSource, /\.new-canvas-root \.app-shell:has\(\.chat-panel\) \.sidebar-floating \{[\s\S]*?right: calc\(var\(--chat-panel-width, 600px\) \+ 24px\) !important;/);
+  assert.match(appSource, /\.new-canvas-root \.chat-panel \{[\s\S]*?top: 12px !important;[\s\S]*?width: var\(--chat-panel-width, min\(600px, calc\(100vw - 24px\)\)\) !important;/);
+  assert.doesNotMatch(appSource, /\.new-canvas-root \.chat-panel \{[\s\S]*?top: 72px !important;/);
 });
 
 test("canvas startup reapplies the latest document after a pending shadow mount completes", () => {
@@ -1564,7 +1652,7 @@ test("canvas host renders the zoom label from the preserved X6 graph", () => {
   const mountSync = source.match(/async function syncNewCanvasMount[\s\S]*?async function runNewCanvasHostAction/)?.[0] ?? "";
   assert.match(
     mountSync,
-    /onRender\(\{ graph \}\)[\s\S]*?syncCanvasZoomControlDisplay\(host\.shadowRoot, graph\?\.zoom\?\.\(\)\)/,
+    /onRender\(\{ graph \}\)[\s\S]*?const canvasRoot = isAiCanvasRuntime[\s\S]*?host\.querySelector\?\.\("\[data-new-canvas-light-dom-root\]"\)[\s\S]*?: host\.shadowRoot[\s\S]*?syncCanvasZoomControlDisplay\(canvasRoot, graph\?\.zoom\?\.\(\)\)/,
   );
 
   const hostSource = readFileSync(

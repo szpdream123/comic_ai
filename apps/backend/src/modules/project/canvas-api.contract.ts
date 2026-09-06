@@ -38,6 +38,7 @@ export const canvasRuntimeApiPaths = Object.freeze({
   frontendErrors: "/api/canvas/{canvasId}/telemetry/frontend-errors",
   nodeRun: "/api/canvas/{canvasId}/nodes/{nodeId}/run",
   nodeRuns: "/api/canvas/{canvasId}/nodes/{nodeId}/runs",
+  videoExport: "/api/canvas/{canvasId}/video-export",
   generationBatches: "/api/canvas/{canvasId}/generation-batches",
   generationBatch: "/api/canvas/{canvasId}/generation-batches/{batchId}",
   generationBatchReconcile: "/api/canvas/{canvasId}/generation-batches/{batchId}/reconcile",

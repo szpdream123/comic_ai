@@ -52,10 +52,15 @@ import {
   normalizeCanvasPanoramaView,
 } from "./special-media-nodes.js";
 import { createCanvasPanoramaViewerController } from "./canvas-panorama-viewer.js";
+import {
+  createCanvasVideoEditorController,
+  renderCanvasVideoEditorShell,
+} from "./canvas-video-editor.js";
+import { installCanvasSelectEnhancer } from "./canvas-ui-controls.js";
 
 const DEFAULT_STYLE_HREFS = [
   "/src/features/production-workbench/production-workbench.css",
-  "/src/features/new-canvas/new-canvas.css?v=20260813-2",
+  "/src/features/new-canvas/new-canvas.css?v=20260906-2",
 ];
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
 export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-storyboard-cell";
@@ -132,7 +137,7 @@ function normalizeStyleHrefs(styleHrefs) {
   return [...new Set(values.map((href) => String(href ?? "").trim()).filter(Boolean))];
 }
 
-function appendStyles(shadowRoot, styleHrefs) {
+function appendStyles(root, styleHrefs) {
   const fragment = document.createDocumentFragment();
   const criticalStyle = document.createElement("style");
   criticalStyle.dataset.newCanvasCriticalStyle = "true";
@@ -200,7 +205,7 @@ function appendStyles(shadowRoot, styleHrefs) {
     links.push({ link, loaded, retry });
     fragment.append(link);
   }
-  shadowRoot.append(fragment);
+  root.append(fragment);
   revealWhenReady();
   return () => {
     disposed = true;
@@ -217,12 +222,12 @@ function appendStyles(shadowRoot, styleHrefs) {
   };
 }
 
-function createSurface(shadowRoot) {
+function createSurface(root) {
   const surface = document.createElement("div");
   surface.className = "new-canvas-root";
   surface.dataset.newCanvasSurface = "true";
   surface.setAttribute("part", "surface");
-  shadowRoot.append(surface);
+  root.append(surface);
   return surface;
 }
 
@@ -280,6 +285,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
       const minimapController = createCanvasMinimapController({ surface, workbench });
       const characterLibraryController = createCanvasCharacterLibraryController({ surface, workbench });
       const panoramaViewerController = createCanvasPanoramaViewerController({ surface });
+      const videoEditorController = createCanvasVideoEditorController({ surface, workbench, render: () => render() });
       let mediaToolsController = null;
       let panoramaDrag = null;
       let canvasAgentResize = null;
@@ -288,6 +294,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
       let suppressStoryboardExtractClickUntil = 0;
       let canvasNodePointer = null;
       let suppressCanvasBlankClickUntil = 0;
+      const disposeCanvasSelectEnhancer = installCanvasSelectEnhancer(surface);
       workbench.onDirectorDeskOpen = (node) => directorDeskOverlay.open(node);
       workbench.onDirectorDeskSyncFrame = (node) => directorDeskOverlay.syncCurrentFrame(node);
       workbench.onDirectorDeskExportVideo = (node) => directorDeskOverlay.exportReferenceVideo(node);
@@ -309,7 +316,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           api: workbench.api,
         }),
         renderUi,
-        `${renderCanvasMediaToolsShell(renderUi)}${renderCanvasConfigLibraryShell(renderUi)}${renderCanvasCharacterLibraryShell(renderUi)}`,
+        `${renderCanvasMediaToolsShell(renderUi)}${renderCanvasConfigLibraryShell(renderUi)}${renderCanvasCharacterLibraryShell(renderUi)}${renderCanvasVideoEditorShell(renderUi)}`,
         renderCanvasMinimap(renderUi),
         { agentOnly: context.agentOnly === true },
       );
@@ -669,6 +676,13 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
       };
       const onClick = (event) => {
+        const videoEditorActionTarget = event.target?.closest?.("[data-video-editor-action]");
+        if (videoEditorActionTarget) {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          videoEditorController.handleAction(videoEditorActionTarget);
+          return;
+        }
         if (agentController.handleClick(event.target)) {
           event.stopPropagation();
           return;
@@ -713,6 +727,17 @@ function createProductionCanvasAdapter(dependencies = {}) {
             .find((candidate) => candidate?.matches?.("[data-action]"));
         const action = actionTarget?.dataset?.action;
         if (action) {
+          if (action === "toggle-canvas-style-guide") {
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            workbench.ui.canvasStyleGuideOpen = workbench.ui.canvasStyleGuideOpen !== true;
+            const guide = surface.querySelector?.("[data-canvas-style-guide]");
+            if (guide) {
+              guide.hidden = workbench.ui.canvasStyleGuideOpen !== true;
+              guide.setAttribute("aria-hidden", String(!workbench.ui.canvasStyleGuideOpen));
+            }
+            return;
+          }
           if (action === "retry-canvas-x6-mount") {
             event.preventDefault?.();
             event.stopPropagation?.();
@@ -726,6 +751,12 @@ function createProductionCanvasAdapter(dependencies = {}) {
             return;
           }
           if (action === "pick-canvas-upload-file") return;
+          if (action === "open-canvas-video-editor") {
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            videoEditorController.open(actionTarget.dataset.nodeId || workbench.ui.selectedCanvasNodeId);
+            return;
+          }
           if (action === "arrange-canvas-nodes") {
             event.preventDefault?.();
             event.stopPropagation();
@@ -932,6 +963,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         agentController.handleBlur(event.target);
       };
       const onChange = (event) => {
+        if (videoEditorController.handleChange(event.target)) {
+          event.stopPropagation?.();
+          return;
+        }
         mediaToolsController?.handleInput(event.target);
         void mediaToolsController?.handleChange?.(event.target);
         agentController.handleInput(event.target);
@@ -1365,6 +1400,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           directorDeskOverlay.dispose();
           minimapController.dispose();
           panoramaViewerController.dispose();
+          disposeCanvasSelectEnhancer();
           mediaToolsController?.dispose();
           delete workbench.onDirectorDeskOpen;
           delete workbench.onDirectorDeskSyncFrame;
@@ -1704,13 +1740,25 @@ export async function mountNewCanvas(target, options = {}) {
     await unmountNewCanvas(host);
   }
 
-  const shadowRoot = host.shadowRoot ?? host.attachShadow?.({ mode: "open" });
-  if (!shadowRoot) {
+  const lightDom = options.lightDom === true;
+  const shadowRoot = lightDom ? null : host.shadowRoot ?? host.attachShadow?.({ mode: "open" });
+  const mountRoot = lightDom ? document.createElement("div") : shadowRoot;
+  if (!mountRoot) {
     throw new Error("new_canvas_shadow_root_unavailable");
   }
-  shadowRoot.replaceChildren();
-  const disposeStyles = appendStyles(shadowRoot, options.styleHrefs);
-  const surface = createSurface(shadowRoot);
+  if (lightDom) {
+    mountRoot.dataset.newCanvasLightDomRoot = "true";
+    host.replaceChildren(mountRoot);
+    if (host.shadowRoot) {
+      const slot = document.createElement("slot");
+      slot.dataset.newCanvasLightDomSlot = "true";
+      host.shadowRoot.replaceChildren(slot);
+    }
+  } else {
+    shadowRoot.replaceChildren();
+  }
+  const disposeStyles = appendStyles(mountRoot, options.styleHrefs);
+  const surface = createSurface(mountRoot);
   surface.innerHTML = `<div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布"><span class="new-canvas-loading-skeleton__rail"></span><div class="new-canvas-loading-skeleton__stage"><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--one" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--two" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--three" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--four" aria-hidden="true"></span><div class="new-canvas-loading-skeleton__copy"><span class="new-canvas-loading-skeleton__spinner" aria-hidden="true"></span><strong>正在打开画布</strong><small>正在载入节点与连接</small></div></div><span class="new-canvas-loading-skeleton__panel"></span></div>`;
   host.dataset.newCanvasMounted = "pending";
   const adapter = options.adapter ?? createProductionCanvasAdapter(options.dependencies);
@@ -1719,12 +1767,15 @@ export async function mountNewCanvas(target, options = {}) {
     adapterHandle = await adapter.mount(surface, {
       ...options,
       surface,
-      shadowRoot,
+      shadowRoot: mountRoot,
+      mountRoot,
     });
     const instance = {
       host,
       surface,
-      shadowRoot,
+      shadowRoot: mountRoot,
+      mountRoot,
+      lightDom,
       adapter,
       adapterHandle,
       disposeStyles,
@@ -1748,7 +1799,11 @@ export async function mountNewCanvas(target, options = {}) {
     host.dataset.newCanvasMounted = "failed";
     disposeStyles();
     adapterHandle?.dispose?.();
-    shadowRoot.replaceChildren();
+    if (lightDom) {
+      host.replaceChildren();
+    } else {
+      mountRoot.replaceChildren();
+    }
     throw error;
   }
 }
@@ -1762,7 +1817,12 @@ export async function unmountNewCanvas(target) {
   instances.delete(host);
   instance.disposeStyles?.();
   await instance.adapterHandle?.dispose?.();
-  if (instance.shadowRoot?.host === host) {
+  if (instance.lightDom) {
+    host.replaceChildren();
+    if (host.shadowRoot) {
+      host.shadowRoot.replaceChildren();
+    }
+  } else if (instance.shadowRoot?.host === host) {
     instance.shadowRoot.replaceChildren();
   }
   delete host.dataset.newCanvasMounted;
@@ -1774,4 +1834,12 @@ export function getNewCanvasInstance(target) {
   return host ? instances.get(host) ?? null : null;
 }
 
-export { createProductionCanvasAdapter };
+export { createProductionCanvasAdapter, createDirectorDeskOverlay };
+export {
+  AI_CANVAS_DOCUMENT_VERSION,
+  AI_CANVAS_RUNTIME_ADAPTER_VERSION,
+  AI_CANVAS_RUNTIME_KIND,
+  createAiCanvasRuntimeAdapter,
+  deserializeAiCanvasDocument,
+  serializeAiCanvasDocument,
+} from "./ai-canvas-runtime-adapter.js";

@@ -23,7 +23,7 @@ test("AI Canvas legal artifacts match the committed lockfile", async () => {
   const packages = Object.entries(lock.packages).filter(
     ([path, value]) => path.startsWith("node_modules/") && value?.version && !value?.link,
   );
-  assert.equal(packages.length, 345);
+  assert.equal(packages.length, 401);
   assert.ok(packages.every(([, value]) => value.integrity), "every locked package needs integrity");
   assert.ok(
     packages.every(([, value]) => !/^(git|git\+|https?:\/\/github\.com\/)/i.test(value.resolved ?? "")),
@@ -31,11 +31,11 @@ test("AI Canvas legal artifacts match the committed lockfile", async () => {
   );
 
   const upstream = sbom.components.find((component) => component.name === "AI-Canvas-tauri");
-  assert.equal(upstream?.version, "87731295a121be601b1d4fa8616b0f2d1a38a3bb");
+  assert.equal(upstream?.version, "236be2f0aec59b3ec0b623bcf563e65fb223d7f4");
   assert.match(notices, /Tenney95\/AI-Canvas-tauri/);
-  assert.match(notices, /87731295a121be601b1d4fa8616b0f2d1a38a3bb/);
+  assert.match(notices, /236be2f0aec59b3ec0b623bcf563e65fb223d7f4/);
   assert.match(provenance, /npm audit --registry=https:\/\/registry\.npmjs\.org --json/);
-  assert.match(provenance, /13 个漏洞（1 critical、8 high、3 moderate、1 low）/);
+  assert.match(provenance, /总依赖 401，info\/low\/moderate\/high\/critical 均为 0/);
 
   const result = await runNode(["scripts/generate-third-party-notices.mjs", "--check"]);
   assert.equal(result.code, 0, result.stderr || result.stdout);

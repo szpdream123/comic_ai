@@ -16,6 +16,18 @@ import {
   resolveAgentApprovalPresentation,
 } from "../src/features/new-canvas/canvas-agent-panel.js";
 
+test("Agent Center keeps package upload behind the Tauri IPC capability check", () => {
+  const source = readFileSync(
+    new URL("../ai-canvas-runtime/assets/ChatPanel-D-dIH-Xx.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /typeof window\.__TAURI_INTERNALS__\?\.invoke !== "function"/);
+  assert.match(source, /智能体上传需要桌面客户端/);
+  assert.match(source, /智能体上传需在桌面客户端完成/);
+  assert.match(source, /disabled: p !== null \|\| typeof window === "undefined" \|\| typeof window\.__TAURI_INTERNALS__\?\.invoke !== "function"/);
+});
+
 test("Canvas Agent timeline collapses lifecycle events by step", () => {
   const events = [
     { id: "task-started", sequence: 1, eventType: "task.started", event: {} },
@@ -433,11 +445,11 @@ test("Canvas Agent panel exposes conversation modes and a running stop action", 
   assert.match(html, /data-agent-mode="c"/);
   assert.match(html, /data-agent-mode="plan"/);
   assert.match(html, /data-agent-mode="expert"/);
-  assert.match(html, /审核批准/);
-  assert.match(html, /自动执行/);
-  assert.match(html, /计划模式/);
-  assert.match(html, /分析模式/);
-  assert.match(html, /修改画布等有副作用的操作会先请求你的批准/);
+  assert.match(html, /协作/);
+  assert.match(html, /自主/);
+  assert.match(html, /规划/);
+  assert.match(html, /分析/);
+  assert.match(html, /画布写操作先预览确认/);
   assert.match(html, /role="listbox"/);
   assert.doesNotMatch(html, /role="tablist"/);
   assert.match(html, /class="canvas-agent-send-button is-running"/);
@@ -507,7 +519,7 @@ test("Canvas Agent mode menu opens upward and applies the selected mode", async 
   await controller.handleAction({ dataset: { agentAction: "set-mode", agentMode: "c" } });
   assert.equal(workbench.ui.canvasAgent.mode, "c");
   assert.equal(workbench.ui.canvasAgent.modeMenuOpen, false);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-mode-trigger [^"]*"[^>]*>[\s\S]*自动执行/);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-mode-trigger [^"]*"[^>]*>[\s\S]*自主/);
   controller.dispose();
 });
 
@@ -745,7 +757,7 @@ test("media-only Agent renders a standalone conversation workspace with history 
   assert.doesNotMatch(html, /class="home-agent-composer-footer canvas-agent-generation-config"[\s\S]*home-agent-model-picker/);
   assert.doesNotMatch(html, /canvas-agent-generation-model"[^>]*>\s*<select|canvas-agent-generation-parameters/);
   assert.doesNotMatch(html, /episode-replica-video-settings-trigger/);
-  assert.doesNotMatch(html, /class="canvas-agent-generation-kinds"|class="canvas-agent-mode-picker"|审核批准/);
+  assert.doesNotMatch(html, /class="canvas-agent-generation-kinds"|class="canvas-agent-mode-picker"|协作/);
   assert.doesNotMatch(html, /添加到画布|定位节点/);
   assert.doesNotMatch(html, /data-canvas-agent-resize|关闭 Agent 面板/);
   assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-generation-config\s*\{[\s\S]*?justify-content:\s*flex-end;/);
@@ -1011,7 +1023,7 @@ test("media-only Agent ignores staged approval modes while regular Canvas Agent 
 
   const canvasHtml = renderCanvasAgentPanel({ canvasAgent: {} });
   assert.match(canvasHtml, /class="canvas-agent-mode-picker"/);
-  assert.match(canvasHtml, /审核批准/);
+  assert.match(canvasHtml, /协作/);
 });
 
 test("media-only Agent sends the selected generation permission mode", async () => {
@@ -2906,16 +2918,15 @@ test("Canvas Agent exposes task center, canvas memory, and estimated context usa
   assert.ok(usage.estimatedTokens > 1_200);
 
   const html = renderCanvasAgentPanel(ui);
-  assert.doesNotMatch(html, /data-agent-action="open-task-center"/);
-  assert.doesNotMatch(html, /data-agent-action="open-memory"/);
+  assert.match(html, /data-agent-action="open-task-center"/);
+  assert.match(html, /data-agent-action="open-memory"/);
   assert.match(html, /class="canvas-agent-context-usage normal"/);
   assert.match(html, /aria-label="上下文占用约 \d+%"/);
 
   ui.canvasAgent.panelView = "memory";
   const memoryHtml = renderCanvasAgentPanel(ui);
-  assert.doesNotMatch(memoryHtml, /aria-label="画布记忆"/);
-  assert.doesNotMatch(memoryHtml, /data-agent-action="refresh-agent-memories"/);
-  assert.match(memoryHtml, /data-agent-action="send"/);
+  assert.match(memoryHtml, /aria-label="画布记忆"/);
+  assert.match(memoryHtml, /data-agent-action="refresh-agent-memories"/);
 });
 
 test("Canvas Agent memory panel reads real records and supports filter, edit, toggle, and delete", async () => {
@@ -2971,16 +2982,15 @@ test("Canvas Agent memory panel reads real records and supports filter, edit, to
   assert.equal(workbench.ui.canvasAgent.memoryRecords.length, 2);
 
   let html = renderCanvasAgentPanel(workbench.ui);
-  assert.doesNotMatch(html, /preference\.visual_style/);
-  assert.doesNotMatch(html, /Agent 任务/);
-  assert.doesNotMatch(html, /data-agent-action="edit-agent-memory"/);
-  assert.doesNotMatch(html, /data-agent-action="toggle-agent-memory"/);
-  assert.match(html, /data-agent-action="send"/);
+  assert.match(html, /preference\.visual_style/);
+  assert.match(html, /Agent 任务/);
+  assert.match(html, /data-agent-action="edit-agent-memory"/);
+  assert.match(html, /data-agent-action="toggle-agent-memory"/);
 
   controller.handleInput({ dataset: { agentField: "memoryCategoryFilter" }, value: "fact" });
   html = renderCanvasAgentPanel(workbench.ui);
   assert.doesNotMatch(html, /preference\.visual_style/);
-  assert.doesNotMatch(html, /fact\.hero_name/);
+  assert.match(html, /fact\.hero_name/);
 
   await controller.handleAction({ dataset: { agentAction: "edit-agent-memory", memoryId: "memory-1" } });
   controller.handleInput({ dataset: { agentField: "memoryDraftKey" }, value: "preference.art_style" });
@@ -2998,7 +3008,14 @@ test("Canvas Agent memory panel reads real records and supports filter, edit, to
 
   await controller.handleAction({ dataset: { agentAction: "toggle-agent-memory", memoryId: "memory-2" } });
   assert.ok(calls.some((call) => call[0] === "update" && call[3] === "memory-2" && call[4].status === "active"));
-  await controller.handleAction({ dataset: { agentAction: "delete-agent-memory", memoryId: "memory-1" } });
+  const originalWindow = globalThis.window;
+  globalThis.window = { ...(originalWindow ?? {}), confirm: () => true };
+  try {
+    await controller.handleAction({ dataset: { agentAction: "delete-agent-memory", memoryId: "memory-1" } });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
   assert.ok(calls.some((call) => call[0] === "delete" && call[3] === "memory-1"));
   controller.dispose();
 });
@@ -3083,9 +3100,9 @@ test("Canvas Agent task center aggregates existing conversation events and uses 
   assert.equal(agent.memoryEvents.length, 1);
   agent.panelView = "tasks";
   const taskHtml = renderCanvasAgentPanel(workbench.ui);
-  assert.doesNotMatch(taskHtml, /aria-label="Agent 任务中心"/);
-  assert.doesNotMatch(taskHtml, /规划三段镜头/);
-  assert.doesNotMatch(taskHtml, /data-agent-action="skip-step"[^>]+data-step-id="step-memory"/);
+  assert.match(taskHtml, /aria-label="Agent 任务中心"/);
+  assert.match(taskHtml, /规划三段镜头/);
+  assert.match(taskHtml, /data-agent-action="skip-step"[^>]+data-step-id="step-memory"/);
 
   await controller.handleAction({
     dataset: { agentAction: "skip-step", taskId: "task-active", stepId: "step-memory" },

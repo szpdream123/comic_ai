@@ -1,0 +1,33 @@
+import { t as e } from "./justifiedRows-lVQTbax6.js";
+//#region src/services/characterReferenceMerge.ts
+var t = 1536, n = 12, r = "#ffffff";
+function i(e) {
+	return new Promise((t) => {
+		let n = new Image();
+		n.crossOrigin = "anonymous", n.onload = () => t(n), n.onerror = () => t(null), n.src = e;
+	});
+}
+async function a(a) {
+	if (a.length < 2) return null;
+	let o = (await Promise.all(a.map(i))).filter((e) => !!e && e.naturalWidth > 0 && e.naturalHeight > 0);
+	if (o.length < 2) return null;
+	let s = o.map((e) => e.naturalWidth / e.naturalHeight), c = e(s, t, t, n);
+	if (!c) return null;
+	let l = c.rows.reduce((e, t) => e + t.height, 0) + n * (c.rows.length - 1), u = document.createElement("canvas");
+	u.width = Math.round(c.width), u.height = Math.round(l);
+	let d = u.getContext("2d");
+	if (!d) return null;
+	d.fillStyle = r, d.fillRect(0, 0, u.width, u.height);
+	let f = 0;
+	for (let e of c.rows) {
+		let t = c.width - n * (e.items.length - 1), r = e.items.reduce((e, t) => e + s[t], 0), i = 0;
+		for (let a of e.items) {
+			let c = t * s[a] / r;
+			d.drawImage(o[a], i, f, c, e.height), i += c + n;
+		}
+		f += e.height + n;
+	}
+	return u.toDataURL("image/png");
+}
+//#endregion
+export { a as mergeReferenceImages };

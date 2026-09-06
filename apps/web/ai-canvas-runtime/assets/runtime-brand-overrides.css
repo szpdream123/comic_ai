@@ -1,0 +1,60 @@
+@import url("./runtime-DvQFP_BS.css");
+
+/* Keep the project controls on the left and the Lingxi brand mark at the end. */
+.app-header .app-brand {
+  order: 10;
+  position: static;
+  margin-left: auto;
+}
+
+/* Show canvas tooltips immediately on hover/focus. */
+.app-tooltip,
+.app-tooltip[data-open="true"] {
+  transition: none !important;
+}
+
+/* Agent mode is rendered by the standalone runtime bundle. Keep its menu
+   layout explicit because the host may load a CSS build without these
+   utility classes. */
+.agent-mode-selector {
+  position: relative;
+  display: block;
+  pointer-events: auto;
+}
+
+.agent-mode-selector > .agent-mode-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 10rem;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 4px;
+  border: 1px solid var(--theme-border, rgba(120, 140, 170, .35));
+  border-radius: 6px;
+  background: var(--theme-card, #1b2230);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .28);
+}
+
+.agent-mode-selector > .agent-mode-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--theme-text-secondary, #aab5c5);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-mode-selector > .agent-mode-menu > button:hover,
+.agent-mode-selector > .agent-mode-menu > button[aria-selected="true"] {
+  background: var(--theme-hover, rgba(255, 255, 255, .08));
+  color: var(--theme-text, #eef3f8);
+}

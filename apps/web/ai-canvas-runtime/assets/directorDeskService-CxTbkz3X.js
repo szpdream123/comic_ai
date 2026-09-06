@@ -1,0 +1,21 @@
+//#region src/services/directorDeskService.ts
+var e = "director-desk://localhost/index.html";
+function t(t, n = "dark") {
+	return `${e}?${new URLSearchParams({
+		instanceId: t,
+		theme: n,
+		transport: "tauri",
+		hostWindowLabel: "main"
+	}).toString()}`;
+}
+function n(e) {
+	let t = [], n = /* @__PURE__ */ new Set(), r = (e) => {
+		if (typeof e != "string") return;
+		let r = e.trim();
+		!r || n.has(r) || (n.add(r), t.push(r));
+	};
+	if (r(e.imageUrl), Array.isArray(e.directorCaptureUrls)) for (let t of e.directorCaptureUrls) r(t);
+	return t;
+}
+//#endregion
+export { n, t };

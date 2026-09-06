@@ -1,0 +1,413 @@
+import { o as e, t } from "./react-Dfufv8pq.js";
+import { t as n } from "./jsx-runtime-BAkIPmuO.js";
+import { r } from "./ViewportImage-Dsz9jsTU.js";
+import { $ as i, Rt as a, ht as o, ot as s, st as c } from "./useTooltipAutoPlacement-BSvTkR9V.js";
+import { l } from "./assetFormat-UuOoHpLo.js";
+import { t as u } from "./FullscreenOverlay-Dpw1A125.js";
+import { t as d } from "./ModelSelector-BaXUXLCf.js";
+//#region src/components/nodes/shared/image/ExpandEditor.tsx
+var f = /* @__PURE__ */ e(t(), 1), p = n(), m = [
+	{
+		key: "original",
+		label: "原比例"
+	},
+	{
+		key: "1:1",
+		label: "1:1",
+		ratio: 1
+	},
+	{
+		key: "4:3",
+		label: "4:3",
+		ratio: 4 / 3
+	},
+	{
+		key: "16:9",
+		label: "16:9",
+		ratio: 16 / 9
+	},
+	{
+		key: "3:4",
+		label: "3:4",
+		ratio: 3 / 4
+	},
+	{
+		key: "9:16",
+		label: "9:16",
+		ratio: 9 / 16
+	}
+], h = [{
+	id: "apimart",
+	name: "APIMart",
+	description: "一个 API 搞定一切——节省 30-70%",
+	iconType: "badge",
+	badgeText: "AM",
+	models: [
+		{
+			value: "apimart/gemini-3.1-flash-image-preview",
+			provider: "apimart",
+			label: "Nano Banana 3.1",
+			description: "最新 Nano Banana，扩图无缝衔接",
+			nodeTypes: ["ai-image"],
+			iconType: "badge",
+			badgeText: "AM"
+		},
+		{
+			value: "apimart/gemini-3-pro-image-preview",
+			provider: "apimart",
+			label: "Nano Banana Pro",
+			description: "专业级画质，光影渲染深度优化",
+			nodeTypes: ["ai-image"],
+			iconType: "badge",
+			badgeText: "AM"
+		},
+		{
+			value: "apimart/gpt-image-2",
+			provider: "apimart",
+			label: "GPT Image 2",
+			description: "OpenAI 图像生成，支持图生图",
+			nodeTypes: ["ai-image"],
+			iconType: "badge",
+			badgeText: "AM"
+		}
+	]
+}], g = [
+	{
+		size: "1:1",
+		ratio: 1
+	},
+	{
+		size: "4:3",
+		ratio: 4 / 3
+	},
+	{
+		size: "3:4",
+		ratio: 3 / 4
+	},
+	{
+		size: "16:9",
+		ratio: 16 / 9
+	},
+	{
+		size: "9:16",
+		ratio: 9 / 16
+	}
+];
+function _(e) {
+	let t = g[0], n = Infinity;
+	for (let r of g) {
+		let i = Math.abs(Math.log(r.ratio / e));
+		i < n && (n = i, t = r);
+	}
+	return t.size;
+}
+function v({ isOpen: e, imageUrl: t, onClose: n, onGenerate: g }) {
+	let v = (0, f.useRef)(null), y = (0, f.useRef)(null), b = (0, f.useRef)(0), [x, S] = (0, f.useState)("1:1"), [C, w] = (0, f.useState)(.8), [T, E] = (0, f.useState)({
+		x: 0,
+		y: 0
+	}), [D, O] = (0, f.useState)(null), [k, ee] = (0, f.useState)({
+		w: 0,
+		h: 0
+	}), [A, j] = (0, f.useState)(""), [M, N] = (0, f.useState)(!1), [P, F] = (0, f.useState)(null), [I, L] = (0, f.useState)(null), [R, z] = (0, f.useState)(null), [B, V] = (0, f.useState)("apimart/gemini-3.1-flash-image-preview"), [H, U] = (0, f.useState)("apimart");
+	(0, f.useEffect)(() => {
+		e || (b.current += 1);
+	}, [e]), (0, f.useEffect)(() => () => {
+		b.current += 1;
+	}, []), (0, f.useEffect)(() => {
+		if (!e || !t) return;
+		let n = !0, r = null;
+		return i(t, "扩图源图").then((e) => {
+			if (!n) {
+				e.release();
+				return;
+			}
+			r = e, L(e), O({
+				w: e.dimensions.width,
+				h: e.dimensions.height
+			}), F(null);
+		}).catch((e) => {
+			n && F(e instanceof Error ? e.message : "扩图源图读取失败，请重试");
+		}), () => {
+			n = !1, r?.release();
+		};
+	}, [e, t]);
+	let W = I?.sourceUrl === t ? I : null;
+	(0, f.useEffect)(() => {
+		if (!e) return;
+		let t = v.current;
+		if (!t) return;
+		let n = () => ee({
+			w: t.clientWidth,
+			h: t.clientHeight
+		});
+		n();
+		let r = new ResizeObserver(n);
+		return r.observe(t), () => r.disconnect();
+	}, [e]);
+	let G = (0, f.useMemo)(() => {
+		if (!D) return null;
+		let { w: e, h: t } = D, n = e / t, r = m.find((e) => e.key === x)?.ratio ?? n, i, a;
+		r >= n ? (a = t, i = Math.round(t * r)) : (i = e, a = Math.round(e / r));
+		let o = Math.max(.3, Math.min(1, C)), s = Math.round(i / o), c = Math.round(a / o);
+		return {
+			tw: s,
+			th: c,
+			sw: e,
+			sh: t,
+			maxOffX: (s - e) / 2,
+			maxOffY: (c - t) / 2,
+			ratio: r
+		};
+	}, [
+		D,
+		x,
+		C
+	]), K = (0, f.useMemo)(() => G ? o(G.tw, G.th, "扩图输出") : null, [G]), q = (0, f.useMemo)(() => {
+		if (!G || !k.w || !k.h) return null;
+		let e = .82, t = Math.min(k.w * e / G.tw, k.h * e / G.th);
+		return {
+			scale: t,
+			frameW: G.tw * t,
+			frameH: G.th * t,
+			imgW: G.sw * t,
+			imgH: G.sh * t
+		};
+	}, [G, k]), J = (0, f.useCallback)((e) => {
+		S(e), E({
+			x: 0,
+			y: 0
+		}), F(null);
+	}, []), Y = (0, f.useRef)(null), X = (0, f.useCallback)((e) => {
+		e.preventDefault(), e.stopPropagation(), Y.current = {
+			startX: e.clientX,
+			startY: e.clientY,
+			ox: T.x,
+			oy: T.y
+		}, e.target.setPointerCapture(e.pointerId);
+	}, [T]), Z = (0, f.useCallback)((e) => {
+		let t = Y.current;
+		if (!t || !G || !q) return;
+		let n = (e.clientX - t.startX) / q.scale, r = (e.clientY - t.startY) / q.scale, i = G.maxOffX > 0 ? t.ox + n / (2 * G.maxOffX) : 0, a = G.maxOffY > 0 ? t.oy + r / (2 * G.maxOffY) : 0;
+		E({
+			x: Math.max(-.5, Math.min(.5, i)),
+			y: Math.max(-.5, Math.min(.5, a))
+		});
+	}, [G, q]), Q = (0, f.useCallback)((e) => {
+		Y.current = null, e.target.releasePointerCapture(e.pointerId);
+	}, []), $ = (0, f.useCallback)(() => {
+		b.current += 1, S("1:1"), w(.8), E({
+			x: 0,
+			y: 0
+		}), j(""), N(!1), F(null), n();
+	}, [n]), te = (0, f.useCallback)((e) => {
+		V(e.value), U(e.provider);
+	}, []), ne = (0, f.useCallback)((e) => {
+		w(e), E({
+			x: 0,
+			y: 0
+		}), F(null);
+	}, []), re = (0, f.useCallback)(async () => {
+		let e = y.current;
+		if (!G || !e || !e.complete || R !== t || M) return;
+		if (K) {
+			F(K);
+			return;
+		}
+		let n = b.current + 1;
+		b.current = n;
+		let r = () => b.current === n;
+		N(!0), F(null);
+		let i = null, a = null;
+		try {
+			let { tw: t, th: n, sw: o, sh: l, maxOffX: u, maxOffY: d } = G;
+			s(t, n, "扩图输出"), i = document.createElement("canvas"), i.width = t, i.height = n;
+			let f = i.getContext("2d");
+			if (!f) throw Error("扩图画布初始化失败，请重试");
+			let p = (t - o) / 2 + T.x * 2 * u, h = (n - l) / 2 + T.y * 2 * d;
+			f.drawImage(e, p, h, o, l);
+			let g = await c(i);
+			if (!r()) return;
+			a = {
+				dataUrl: g,
+				meta: {
+					size: x === "original" ? _(t / n) : m.find((e) => e.key === x)?.ratio ? x : _(t / n),
+					width: t,
+					height: n,
+					model: B,
+					provider: H,
+					prompt: A
+				}
+			};
+		} catch (e) {
+			console.error("[ExpandEditor] composite failed:", e), r() && F(e instanceof Error ? e.message : "扩图垫图生成失败，请重试");
+		} finally {
+			i && (i.width = 1, i.height = 1), r() && N(!1);
+		}
+		a && r() && (S("1:1"), w(.8), E({
+			x: 0,
+			y: 0
+		}), j(""), F(null), g(a.dataUrl, a.meta));
+	}, [
+		G,
+		M,
+		K,
+		R,
+		t,
+		T,
+		x,
+		B,
+		H,
+		A,
+		g
+	]);
+	return /* @__PURE__ */ (0, p.jsx)(u, {
+		isOpen: e,
+		onClose: $,
+		"data-tooltip": "扩图",
+		hidePanel: !0,
+		className: "crop-overlay expand-overlay",
+		children: /* @__PURE__ */ (0, p.jsxs)(r.div, {
+			className: "crop-content",
+			initial: {
+				opacity: 0,
+				scale: .94
+			},
+			animate: {
+				opacity: 1,
+				scale: 1
+			},
+			transition: l,
+			onClick: (e) => e.stopPropagation(),
+			children: [
+				/* @__PURE__ */ (0, p.jsxs)("div", {
+					className: "crop-aspect-bar",
+					children: [
+						m.map((e) => /* @__PURE__ */ (0, p.jsx)("button", {
+							type: "button",
+							className: `crop-aspect-btn${x === e.key ? " active" : ""}`,
+							onClick: () => J(e.key),
+							children: e.label
+						}, e.key)),
+						/* @__PURE__ */ (0, p.jsx)("div", { className: "crop-aspect-spacer" }),
+						/* @__PURE__ */ (0, p.jsxs)(a, {
+							className: "crop-action-btn confirm",
+							"data-tooltip": "开始扩图",
+							"aria-label": "开始扩图",
+							disabled: M || !W || R !== t,
+							onClick: re,
+							children: [/* @__PURE__ */ (0, p.jsx)("svg", {
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2",
+								width: "16",
+								height: "16",
+								children: /* @__PURE__ */ (0, p.jsx)("path", { d: "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" })
+							}), /* @__PURE__ */ (0, p.jsx)("span", { children: "扩图" })]
+						}),
+						/* @__PURE__ */ (0, p.jsx)(a, {
+							type: "button",
+							className: "crop-aspect-btn crop-aspect-close crop-toolbar-close act-cancel",
+							"data-tooltip": "关闭 (Esc)",
+							"aria-label": "关闭",
+							onClick: $,
+							children: /* @__PURE__ */ (0, p.jsx)("svg", {
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2",
+								width: "18",
+								height: "18",
+								children: /* @__PURE__ */ (0, p.jsx)("path", { d: "M18 6L6 18M6 6l12 12" })
+							})
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, p.jsxs)("div", {
+					className: "crop-stage expand-stage",
+					ref: v,
+					children: [q && G && W && /* @__PURE__ */ (0, p.jsx)("div", {
+						className: "expand-frame",
+						style: {
+							width: q.frameW,
+							height: q.frameH
+						},
+						children: /* @__PURE__ */ (0, p.jsx)("img", {
+							ref: y,
+							src: W.src,
+							alt: "原图",
+							className: "expand-src-img",
+							draggable: !1,
+							onLoad: () => z(t),
+							onPointerDown: X,
+							onPointerMove: Z,
+							onPointerUp: Q,
+							style: {
+								width: q.imgW,
+								height: q.imgH,
+								left: (q.frameW - q.imgW) / 2 + T.x * (q.frameW - q.imgW),
+								top: (q.frameH - q.imgH) / 2 + T.y * (q.frameH - q.imgH)
+							}
+						})
+					}), G && /* @__PURE__ */ (0, p.jsxs)("span", {
+						className: "crop-zoom-indicator",
+						children: [
+							G.tw,
+							" × ",
+							G.th
+						]
+					})]
+				}),
+				/* @__PURE__ */ (0, p.jsxs)("div", {
+					className: "expand-controls",
+					children: [
+						/* @__PURE__ */ (0, p.jsxs)("div", {
+							className: "expand-control-row",
+							children: [
+								/* @__PURE__ */ (0, p.jsx)("span", {
+									className: "expand-label",
+									children: "外扩量"
+								}),
+								/* @__PURE__ */ (0, p.jsx)("input", {
+									type: "range",
+									className: "fa-slider expand-slider",
+									min: .3,
+									max: 1,
+									step: .02,
+									value: C,
+									onChange: (e) => ne(Number(e.target.value))
+								}),
+								/* @__PURE__ */ (0, p.jsxs)("span", {
+									className: "expand-value",
+									children: [Math.round((1 - C) * 100), "%"]
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, p.jsx)("input", {
+							type: "text",
+							className: "expand-prompt-input",
+							placeholder: "补充描述（可选）：希望补全区域出现什么…",
+							value: A,
+							onChange: (e) => j(e.target.value)
+						}),
+						(P || K) && /* @__PURE__ */ (0, p.jsx)("p", {
+							className: "m-0 text-xs leading-relaxed text-red-300",
+							role: "alert",
+							children: P || K
+						}),
+						/* @__PURE__ */ (0, p.jsx)(d, {
+							nodeType: "ai-image",
+							selectedModel: B,
+							selectedProvider: H,
+							onSelect: te,
+							groups: h,
+							defaultExpandedGroupIds: ["apimart"]
+						})
+					]
+				})
+			]
+		})
+	});
+}
+//#endregion
+export { v as default };

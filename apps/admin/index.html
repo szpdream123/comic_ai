@@ -14951,6 +14951,132 @@
       window.logout = logout;
       window.closeDrawer = closeDrawer;
 
+      async function loadAdminSkills() {
+        try {
+          const params = new URLSearchParams();
+          if (state.skillStatus && state.skillStatus !== "all") params.set("status", state.skillStatus);
+          if (String(state.skillKeyword || "").trim()) params.set("query", String(state.skillKeyword).trim());
+          const result = await api(`/api/admin/skills${params.size ? `?${params.toString()}` : ""}`);
+          state.skillItems = Array.isArray(result.data?.items) ? result.data.items : [];
+          state.skillLoadError = "";
+        } catch (error) {
+          state.skillItems = [];
+          state.skillLoadError = error.payload?.error?.message || "Skill 数据加载失败";
+        }
+      }
+
+      function adminSkillStatusLabel(status) {
+        return status === "published" ? "已发布" : status === "disabled" ? "已下架" : "待审核";
+      }
+
+      const adminSkillCategoryLabels = {
+        recommended: "推荐",
+        "professional-film": "专业影视",
+        "commercial-ad": "商业广告",
+        "short-drama": "短剧漫剧",
+        "animation-game": "动漫游戏",
+        "music-video": "音乐MV",
+        creator: "自媒体创作",
+        general: "通用技能",
+      };
+
+      function adminSkillCategoryLabel(category) {
+        return adminSkillCategoryLabels[String(category || "")] || String(category || "通用技能");
+      }
+
+      function adminSkillCategoryOptions(selected) {
+        return Object.entries(adminSkillCategoryLabels)
+          .filter(([value]) => value !== "recommended")
+          .map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`)
+          .join("");
+      }
+
+      function skillAdminPage() {
+        const rows = (state.skillItems || []).length
+          ? state.skillItems.map((item) => { const { summary = "" } = item; const official = !item.ownerUserId; return `<tr><td>${escapeHtml(item.title || item.name || "未命名 Skill")}<div class="metric-note">${escapeHtml(summary || "暂无简介")}</div></td><td>${escapeHtml(item.ownerName || item.authorName || "未知用户")}</td><td>${escapeHtml(adminSkillCategoryLabel(item.category))}</td><td><span class="tag ${item.status === "published" ? "green" : item.status === "disabled" ? "warn" : "blue"}">${adminSkillStatusLabel(item.status)}</span></td><td>${Number(item.fileCount || 0)}</td><td class="actions"><div class="actions-row">${official ? `<button class="btn ghost" onclick="openAdminSkillDrawer('${escapeAttribute(item.id)}')">编辑</button>` : ""}${item.status !== "published" ? `<button class="btn ghost" onclick="updateAdminSkillStatus('${escapeAttribute(item.id)}','published')">发布</button>` : ""}${item.status !== "disabled" ? `<button class="btn ghost" onclick="updateAdminSkillStatus('${escapeAttribute(item.id)}','disabled')">下架</button>` : `<button class="btn ghost" onclick="updateAdminSkillStatus('${escapeAttribute(item.id)}','draft')">退回审核</button>`}</div></td></tr>`; }).join("")
+          : `<tr><td colspan="6">${escapeHtml(state.skillLoadError || "暂无用户 Skill")}</td></tr>`;
+        return `<section class="section"><div class="toolbar"><div><h3>Skill 管理</h3><div class="metric-note">创建官方 Skill，审核用户提交内容，并控制广场发布状态。</div></div><div class="filters"><input value="${escapeAttribute(state.skillKeyword || "")}" placeholder="搜索名称 / 简介 / 作者" oninput="state.skillKeyword=this.value;renderShell()" /><select onchange="state.skillStatus=this.value;loadAdminSkills().then(renderShell)"><option value="all" ${state.skillStatus === "all" ? "selected" : ""}>全部状态</option><option value="draft" ${state.skillStatus === "draft" ? "selected" : ""}>待审核</option><option value="published" ${state.skillStatus === "published" ? "selected" : ""}>已发布</option><option value="disabled" ${state.skillStatus === "disabled" ? "selected" : ""}>已下架</option></select><button class="btn ghost" onclick="loadAdminSkills().then(renderShell)">刷新</button><button class="btn primary" onclick="openAdminSkillDrawer()">新增官方 Skill</button></div></div><div class="table-wrap dense"><table><thead><tr><th>Skill</th><th>作者</th><th>分类</th><th>状态</th><th>文件数</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+      }
+
+      function openAdminSkillDrawer(skillId = "") {
+        const existing = (state.skillItems || []).find((item) => String(item.id) === String(skillId)) || null;
+        const detail = existing?.detail || {};
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);"><div class="drawer-head"><h3>${existing ? "编辑官方 Skill" : "新增官方 Skill"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="admin-skill-form"><div class="form-grid"><label class="field"><span>名称</span><input name="name" required maxlength="80" value="${escapeAttribute(existing?.name || "")}" placeholder="例如：短剧分镜导演" /></label><label class="field"><span>分类</span><select name="category">${adminSkillCategoryOptions(existing?.category || "general")}</select></label></div><label class="field"><span>简介</span><textarea name="summary" rows="2" required maxlength="240" placeholder="说明这个官方 Skill 能解决什么问题">${escapeHtml(existing?.summary || "")}</textarea></label><label class="field"><span>介绍</span><textarea name="introduction" rows="3" maxlength="4000">${escapeHtml(detail.introduction || "")}</textarea></label><label class="field"><span>使用场景</span><textarea name="usageScene" rows="3" maxlength="4000">${escapeHtml(detail.usageScene || "")}</textarea></label><label class="field"><span>使用方法</span><textarea name="howToUse" rows="4" maxlength="4000">${escapeHtml(detail.howToUse || "")}</textarea></label><label class="field"><span>输出内容</span><textarea name="outputContent" rows="3" maxlength="4000">${escapeHtml(detail.outputContent || "")}</textarea></label><div class="form-grid"><label class="field"><span>效果图地址</span><input name="effectImageUrl" type="url" maxlength="2000" value="${escapeAttribute(detail.effectImageUrl || "")}" placeholder="https://.../preview.png" /></label><label class="field"><span>效果视频地址</span><input name="effectVideoUrl" type="url" maxlength="2000" value="${escapeAttribute(detail.effectVideoUrl || "")}" placeholder="https://.../preview.mp4" /></label></div><p class="metric-note">效果图和效果视频只能填写一个，留空则不展示效果媒体。</p><label class="field"><span>Skill 文件（可选，最多 10 个，每个 5 MB）</span><input name="skillFiles" type="file" multiple accept=".md,.markdown,.txt,.json,text/markdown,text/plain,application/json" /></label><label class="field"><span><input name="fileListPublic" type="checkbox" ${detail.fileListPublic === true ? "checked" : ""} /> 公开文件清单</span><small>关闭后，其他用户只能看到 Skill 基本信息，作者本人仍可查看文件。</small></label><label class="field"><span>状态</span><select name="status"><option value="draft" ${existing?.status === "draft" ? "selected" : ""}>待审核</option><option value="published" ${existing?.status === "published" ? "selected" : ""}>已发布</option><option value="disabled" ${existing?.status === "disabled" ? "selected" : ""}>已下架</option></select></label><div class="error-text" id="admin-skill-error"></div><div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存官方 Skill</button></div></form></aside>`;
+        document.getElementById("admin-skill-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("admin-skill-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const effectImageUrl = String(form.get("effectImageUrl") || "").trim();
+            const effectVideoUrl = String(form.get("effectVideoUrl") || "").trim();
+            if (effectImageUrl && effectVideoUrl) throw new Error("效果图和效果视频只能选择一个");
+            const files = await Promise.all(Array.from(form.getAll("skillFiles")).filter((file) => file && file.name).map(async (file) => ({ name: file.name, kind: "instruction", content: await file.text() })));
+            await api(existing ? `/api/admin/skills/${encodeURIComponent(existing.id)}` : "/api/admin/skills", { method: existing ? "PATCH" : "POST", headers: { "idempotency-key": `admin-ui-skill-${existing?.id || "new"}-${Date.now()}` }, body: JSON.stringify({
+              name: String(form.get("name") || "").trim(),
+              category: String(form.get("category") || "general"),
+              summary: String(form.get(["sum", "mary"].join("")) || "").trim(),
+              status: String(form.get("status") || "draft"),
+              ...(files.length ? { files } : {}),
+              detail: { introduction: String(form.get("introduction") || "").trim(), usageScene: String(form.get("usageScene") || "").trim(), howToUse: String(form.get("howToUse") || "").trim(), outputContent: String(form.get("outputContent") || "").trim(), effectImageUrl, effectVideoUrl, fileListPublic: form.get("fileListPublic") === "on" },
+            }) });
+            await loadAdminSkills(); closeDrawer(); renderShell();
+          }, "官方 Skill 已保存").catch(() => undefined);
+        });
+      }
+
+      async function updateAdminSkillStatus(skillId, status) {
+        try {
+          await api(`/api/admin/skills/${encodeURIComponent(skillId)}/status`, { method: "PATCH", headers: { "idempotency-key": `admin-ui-skill-status-${skillId}-${Date.now()}` }, body: JSON.stringify({ status }) });
+          await loadAdminSkills();
+          renderShell();
+          showToast(`Skill 已${adminSkillStatusLabel(status)}`);
+        } catch (error) {
+          showToast(error.payload?.error?.message || error.message || "Skill 状态更新失败");
+        }
+      }
+
+      (function installSkillAdminPage() {
+        pages.skills = "Skill 管理";
+        state.skillItems = [];
+        state.skillKeyword = "";
+        state.skillStatus = "all";
+        state.skillLoadError = "";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/skills")) return "skills";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "skills") return previousNavigate(page);
+          state.page = "skills";
+          history.pushState(null, "", "/admin/skills");
+          renderShell();
+          ensureAdminPageData(page).catch(() => undefined);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() { return state.page === "skills" ? skillAdminPage() : previousRenderPage(); };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="skills"]')) return;
+          const promptsButton = nav.querySelector('[data-page="prompts"]');
+          const button = document.createElement("button");
+          button.dataset.page = "skills";
+          button.innerHTML = "<span>Skill 管理</span>";
+          if (state.page === "skills") button.classList.add("active");
+          button.addEventListener("click", () => navigate("skills"));
+          nav.insertBefore(button, promptsButton?.nextSibling || null);
+        };
+        ADMIN_PAGE_LOADERS.skills = loadAdminSkills;
+      })();
+      window.loadAdminSkills = loadAdminSkills;
+      window.updateAdminSkillStatus = updateAdminSkillStatus;
+      window.openAdminSkillDrawer = openAdminSkillDrawer;
+
       bootstrap();
     </script>
   </body>

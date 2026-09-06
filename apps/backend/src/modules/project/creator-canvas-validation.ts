@@ -35,8 +35,8 @@ export const CANVAS_DOCUMENT_LIMITS = CANVAS_PRODUCT_LIMITS.document;
 
 export const CANVAS_DOCUMENT_NODE_TYPES = Object.freeze([
   "ai-text", "ai-image", "ai-video", "ai-audio",
-  "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard", "ai-director",
-  "source-text", "source-image", "source-video", "source-audio", "comment", "group",
+  "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard", "ai-shotlist", "ai-director",
+  "source-text", "source-image", "source-video", "source-audio", "comment", "canvas-note", "group",
   // Historical X6 documents remain readable while the frontend migrates to the versioned names.
   "script", "send", "image", "video", "audio", "upload", "director", "output",
   "text", "markdown", "shape", "loomic_scene",

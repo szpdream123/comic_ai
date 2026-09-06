@@ -289,12 +289,19 @@ test("Director capture deletion rebases onto the latest server revision without 
     return { canvas: { canvasProjectId: "canvas-1", serverRevision: 3, document: input.document } };
   });
 
-  await handleWorkbenchActionForTest(workbench, {
-    dataset: { action: "delete-canvas-director-capture", nodeId: "director-1", artifactId: "artifact-1", mediaKind: "image" },
-  });
-  await handleWorkbenchActionForTest(workbench, {
-    dataset: { action: "confirm-canvas-director-capture-delete" },
-  });
+  const originalWindow = globalThis.window;
+  globalThis.window = { ...(originalWindow ?? {}), confirm: () => true };
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "delete-canvas-director-capture", nodeId: "director-1", artifactId: "artifact-1", mediaKind: "image" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-canvas-director-capture-delete" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
 
   assert.deepEqual(saves.map((save) => save.clientRevision), [1, 2]);
   assert.deepEqual(workbench.ui.canvasDocument.nodes.find((node) => node.id === "director-1").data.directorCaptures, []);

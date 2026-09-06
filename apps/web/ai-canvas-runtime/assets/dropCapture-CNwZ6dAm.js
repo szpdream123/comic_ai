@@ -1,0 +1,1 @@
+var e=!1;function t(t){e=t}function n(){return e}export{n as isExternalDropCaptured,t as setExternalDropCaptured};

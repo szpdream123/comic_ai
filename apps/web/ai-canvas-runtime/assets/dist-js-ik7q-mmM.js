@@ -1,0 +1,1 @@
+import{ko as e}from"./main-DNYKnb7J.js";async function t(){await e(`plugin:process|restart`)}export{t as relaunch};

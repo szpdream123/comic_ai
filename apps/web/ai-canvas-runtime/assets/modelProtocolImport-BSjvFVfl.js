@@ -1,0 +1,1989 @@
+import { Bn as e, Hn as t, Kn as n, Un as r, Vn as i, Xn as a, an as o, cn as s, ln as c, nn as l, on as u, rn as d, sn as f, tn as p, un as m } from "./useAppStore-CcUL4Jo0.js";
+//#region src/services/ai/providerBaseUrl.ts
+var h = /\/(?:chat\/completions|completions|responses|models|embeddings|images\/generations|videos|audio\/(?:speech|transcriptions))\/?$/i;
+function g(e) {
+	let t = (e ?? "").trim();
+	if (!t) return "";
+	let n = /^[a-z][a-z\d+.-]*:\/\//i.test(t) ? t : `https://${t}`, r;
+	try {
+		r = new URL(n);
+	} catch {
+		return t.replace(/\/+$/, "");
+	}
+	return r.hash = "", r.search = "", r.pathname = r.pathname.replace(h, ""), r.toString().replace(/\/+$/, "");
+}
+function _(e) {
+	let t = g(e);
+	if (!t) return [];
+	let n;
+	try {
+		n = new URL(t).pathname;
+	} catch {
+		return [t];
+	}
+	return /\/v\d/i.test(n) ? [t] : [t, `${t}/v1`];
+}
+//#endregion
+//#region src/services/ai/providers/xaiModelManifest.ts
+var v = "https://api.x.ai/v1", y = {
+	version: 2,
+	mode: "sync",
+	auth: { type: "bearer" },
+	submit: {
+		method: "POST",
+		path: "/images/generations",
+		bodyEncoding: "json",
+		body: {
+			model: "{{model}}",
+			prompt: "{{prompt}}",
+			response_format: "url"
+		}
+	},
+	response: {
+		type: "json",
+		result: { urlPath: "data.*.url" },
+		errorPath: "error.message"
+	}
+}, b = {
+	method: "GET",
+	path: "/videos/{{submit.request_id}}",
+	response: {
+		statusPath: "status",
+		successValues: ["done"],
+		failureValues: ["failed", "expired"],
+		result: {
+			urlPath: "video.url",
+			mimeType: "video/mp4"
+		},
+		errorPath: "error.message",
+		progressPath: "progress"
+	},
+	intervalMs: 1e4,
+	maxDurationMs: 36e5,
+	retry: {
+		httpStatuses: [
+			408,
+			429,
+			500,
+			502,
+			503,
+			504
+		],
+		maxRetries: 5,
+		backoff: "exponential",
+		maxDelayMs: 6e4,
+		honorRetryAfter: !0,
+		retryNetworkErrors: !0
+	}
+}, x = [
+	{
+		id: "grok-4.5",
+		name: "Grok 4.5",
+		category: "text",
+		provider: "xai",
+		description: "xAI 官方旗舰文本与推理模型",
+		executionProfile: { preset: "openai-chat" }
+	},
+	{
+		id: "grok-imagine-image",
+		name: "Grok Imagine Image",
+		category: "image",
+		provider: "xai",
+		description: "xAI 官方标准图片生成模型",
+		executionProfile: {
+			preset: "custom",
+			protocol: y
+		}
+	},
+	{
+		id: "grok-imagine-image-quality",
+		name: "Grok Imagine Image Quality",
+		category: "image",
+		provider: "xai",
+		description: "xAI 官方高质量图片生成模型",
+		executionProfile: {
+			preset: "custom",
+			protocol: y
+		}
+	},
+	{
+		id: "grok-imagine-video",
+		name: "Grok Imagine Video（文生视频）",
+		category: "video",
+		provider: "xai",
+		description: "xAI 官方文生视频模型",
+		executionProfile: {
+			preset: "custom",
+			protocol: {
+				version: 2,
+				mode: "async",
+				auth: { type: "bearer" },
+				submit: {
+					method: "POST",
+					path: "/videos/generations",
+					bodyEncoding: "json",
+					body: {
+						model: "{{model}}",
+						prompt: "{{prompt}}",
+						duration: "{{duration}}",
+						aspect_ratio: "{{aspectRatio}}",
+						resolution: "{{seedanceResolution}}"
+					}
+				},
+				response: {
+					type: "json",
+					taskIdPath: "request_id",
+					errorPath: "error.message"
+				},
+				poll: b
+			}
+		}
+	},
+	{
+		id: "grok-imagine-video-1.5",
+		name: "Grok Imagine Video 1.5（单图生视频）",
+		category: "video",
+		provider: "xai",
+		description: "xAI 官方单图生视频模型，需要连接一张参考图",
+		executionProfile: {
+			preset: "custom",
+			protocol: {
+				version: 2,
+				mode: "async",
+				auth: { type: "bearer" },
+				submit: {
+					method: "POST",
+					path: "/videos/generations",
+					bodyEncoding: "json",
+					body: {
+						model: "{{model}}",
+						prompt: "{{prompt}}",
+						image: { url: "{{firstImage}}" },
+						duration: "{{duration}}",
+						aspect_ratio: "{{aspectRatio}}",
+						resolution: "{{seedanceResolution}}"
+					}
+				},
+				response: {
+					type: "json",
+					taskIdPath: "request_id",
+					errorPath: "error.message"
+				},
+				poll: b
+			}
+		}
+	}
+], S = "https://generativelanguage.googleapis.com/v1beta/openai", C = {
+	type: "header",
+	name: "x-goog-api-key"
+}, w = (e, t) => ({
+	version: 2,
+	mode: "sync",
+	auth: C,
+	submit: {
+		method: "POST",
+		path: "/v1beta/interactions",
+		pathMode: "origin",
+		bodyEncoding: "json",
+		body: {
+			model: "{{model}}",
+			input: "{{prompt}}",
+			response_format: {
+				type: e,
+				aspect_ratio: "{{aspectRatio}}",
+				...e === "image" ? { image_size: t ?? "{{imageSize}}" } : {}
+			}
+		}
+	},
+	response: {
+		type: "json",
+		result: {
+			base64Path: "steps.*.content.*.data",
+			mimeType: e === "image" ? "image/png" : "video/mp4"
+		},
+		errorPath: "error.message"
+	}
+}), T = {
+	version: 2,
+	mode: "sync",
+	auth: C,
+	submit: {
+		method: "POST",
+		path: "/v1beta/interactions",
+		pathMode: "origin",
+		bodyEncoding: "json",
+		body: {
+			model: "{{model}}",
+			input: "{{prompt}}",
+			response_format: { type: "audio" },
+			generation_config: { speech_config: [{ voice: "Kore" }] }
+		}
+	},
+	response: {
+		type: "json",
+		result: {
+			base64Path: "steps.*.content.*.data",
+			mimeType: "audio/wav",
+			base64Transform: {
+				type: "pcm-s16le-to-wav",
+				sampleRate: 24e3,
+				channels: 1
+			}
+		},
+		errorPath: "error.message"
+	}
+}, E = {
+	version: 2,
+	mode: "async",
+	auth: C,
+	submit: {
+		method: "POST",
+		path: "/v1beta/models/{{model}}:predictLongRunning",
+		pathMode: "origin",
+		bodyEncoding: "json",
+		body: {
+			instances: [{ prompt: "{{prompt}}" }],
+			parameters: { aspectRatio: "{{aspectRatio}}" }
+		}
+	},
+	response: {
+		type: "json",
+		taskIdPath: "name",
+		errorPath: "error.message"
+	},
+	poll: {
+		method: "GET",
+		path: "/v1beta/{{submit.name}}",
+		pathMode: "origin",
+		response: {
+			statusPath: "done",
+			successValues: ["true"],
+			failureValues: [
+				"failed",
+				"error",
+				"cancelled"
+			],
+			result: {
+				urlPath: "response.generateVideoResponse.generatedSamples.*.video.uri",
+				mimeType: "video/mp4",
+				fetchUrl: !0
+			},
+			errorPath: "error.message"
+		},
+		intervalMs: 1e4,
+		maxDurationMs: 36e5,
+		retry: {
+			httpStatuses: [
+				408,
+				429,
+				500,
+				502,
+				503,
+				504
+			],
+			maxRetries: 5,
+			backoff: "exponential",
+			maxDelayMs: 6e4,
+			honorRetryAfter: !0,
+			retryNetworkErrors: !0
+		}
+	}
+}, ee = w("image"), D = w("image", "1K"), O = w("video"), te = [
+	{
+		id: "gemini-3.6-flash",
+		name: "Gemini 3.6 Flash",
+		category: "text",
+		provider: "google",
+		description: "Google 官方生产级文本与多模态模型",
+		executionProfile: { preset: "openai-chat" }
+	},
+	{
+		id: "gemini-3.5-flash-lite",
+		name: "Gemini 3.5 Flash-Lite",
+		category: "text",
+		provider: "google",
+		description: "Google 官方低延迟、低成本文本模型",
+		executionProfile: { preset: "openai-chat" }
+	},
+	...[
+		{
+			id: "gemini-3.1-flash-lite-image",
+			name: "Gemini 3.1 Flash Lite Image",
+			protocol: D
+		},
+		{
+			id: "gemini-3.1-flash-image",
+			name: "Gemini 3.1 Flash Image",
+			protocol: ee
+		},
+		{
+			id: "gemini-3-pro-image",
+			name: "Gemini 3 Pro Image",
+			protocol: ee
+		}
+	].map(({ id: e, name: t, protocol: n }) => ({
+		id: e,
+		name: t,
+		category: "image",
+		provider: "google",
+		description: "Google 官方 Nano Banana 图片生成模型（当前接入文生图）",
+		executionProfile: {
+			preset: "custom",
+			protocol: n
+		}
+	})),
+	{
+		id: "gemini-omni-flash-preview",
+		name: "Gemini Omni Flash Video（文生视频）",
+		category: "video",
+		provider: "google",
+		description: "Google 官方原生多模态视频模型，当前接入文生视频",
+		executionProfile: {
+			preset: "custom",
+			protocol: O
+		}
+	},
+	{
+		id: "veo-3.1-generate-preview",
+		name: "Veo 3.1（文生视频）",
+		category: "video",
+		provider: "google",
+		description: "Google 官方高质量异步视频生成模型，自动鉴权下载结果",
+		executionProfile: {
+			preset: "custom",
+			protocol: E
+		}
+	},
+	{
+		id: "gemini-3.1-flash-tts-preview",
+		name: "Gemini 3.1 Flash TTS（Kore / WAV）",
+		category: "audio",
+		provider: "google",
+		description: "Google 官方语音生成模型，24kHz 单声道 PCM 自动封装为 WAV",
+		executionProfile: {
+			preset: "custom",
+			protocol: T
+		}
+	}
+], k = "https://sora2u.com", ne = {
+	utm_source: "tenney",
+	utm_medium: "canvas",
+	utm_content: "wx"
+}, re = {
+	httpStatuses: [
+		408,
+		429,
+		500,
+		502,
+		503,
+		504
+	],
+	maxRetries: 5,
+	backoff: "exponential",
+	maxDelayMs: 6e4,
+	honorRetryAfter: !0,
+	retryNetworkErrors: !0
+};
+function ie(e) {
+	return {
+		version: 2,
+		mode: "async",
+		auth: { type: "bearer" },
+		submit: {
+			method: "POST",
+			path: "/api/v1/videos",
+			query: { ...ne },
+			bodyEncoding: "json",
+			body: {
+				model: "{{model}}",
+				prompt: "{{prompt}}",
+				duration: "{{duration}}",
+				aspect_ratio: "{{aspectRatio}}",
+				resolution: e === "task.image_url" ? "{{imageSize}}" : "{{seedanceResolution}}",
+				disable_audio: "{{disableAudio}}",
+				reference_urls: e === "task.image_url" ? "{{imageUrls}}" : "{{referenceUrls}}",
+				...e === "task.video_url" ? { references: "{{inlineReferences}}" } : {}
+			}
+		},
+		response: {
+			type: "json",
+			taskIdPath: "task.id",
+			errorPath: "error.message"
+		},
+		poll: {
+			method: "GET",
+			path: "/api/v1/videos/{{submit.task.id}}",
+			query: { ...ne },
+			response: {
+				statusPath: "task.status",
+				successValues: ["completed"],
+				failureValues: ["failed", "canceled"],
+				result: { urlPath: e },
+				errorPath: "task.error",
+				progressPath: "task.progress"
+			},
+			intervalMs: 5e3,
+			maxDurationMs: 36e5,
+			retry: re
+		}
+	};
+}
+var ae = ie("task.image_url"), oe = ie("task.video_url"), se = {
+	promptMinCharacters: 10,
+	maxBase64DecodedBytes: 20 * 1024 * 1024,
+	referenceVideo: {
+		width: { min: 300 },
+		durationSeconds: {
+			max: 15,
+			maxExclusive: !0
+		}
+	},
+	referenceAudio: { durationSeconds: {
+		min: 3,
+		max: 15,
+		maxExclusive: !0
+	} }
+};
+function ce(e, t) {
+	return Array.from({ length: t - e + 1 }, (t, n) => e + n);
+}
+function le(e, t, n, r = {}) {
+	return {
+		durations: ce(e, t),
+		minDuration: e,
+		maxDuration: t,
+		defaultDuration: e,
+		supportsAudio: !0,
+		inputConstraints: se,
+		...n,
+		...r
+	};
+}
+function A(e, t, n, r) {
+	return {
+		id: e,
+		name: t,
+		category: "video",
+		provider: "sora2u",
+		description: r,
+		videoCapability: n,
+		executionProfile: {
+			preset: "custom",
+			protocol: oe
+		}
+	};
+}
+var j = le(5, 15, {
+	maxImageReferences: 9,
+	maxVideoReferences: 3,
+	maxAudioReferences: 3
+}, { supportsStandaloneAudio: !0 }), M = le(5, 30, {
+	maxImageReferences: 30,
+	maxVideoReferences: 10,
+	maxAudioReferences: 10
+}, {
+	requiresReference: !0,
+	supportsStandaloneAudio: !0,
+	defaultDuration: 15
+}), ue = [
+	A("seedance-1.5", "Seedance 1.5", le(5, 12, {
+		maxImageReferences: 1,
+		maxVideoReferences: 0,
+		maxAudioReferences: 0
+	}, {
+		requiresReference: !0,
+		ratios: ["9:16"],
+		defaultRatio: "9:16",
+		resolutions: ["720p"],
+		defaultResolution: "720p",
+		supportsAudio: !1
+	}), "Sora2U 图片驱动视频模型"),
+	A("seedance-2.0", "Seedance 2.0", j, "Sora2U 全模态视频模型，支持文生视频"),
+	A("seedance-2.0-character", "Seedance 2.0 Character", j, "Sora2U 角色一致性全模态视频模型"),
+	A("seedance-2.0-character-mono", "Seedance 2.0 Character Mono", j, "Sora2U 单角色一致性全模态视频模型"),
+	A("seedance-2.5", "Seedance 2.5", M, "Sora2U 多模态参考视频模型，至少需要一份参考素材"),
+	A("seedance-2.5-character", "Seedance 2.5 Character", M, "Sora2U 角色一致性多模态视频模型，至少需要一份参考素材"),
+	A("seedance-2.5-character-mono", "Seedance 2.5 Character Mono", {
+		...M,
+		maxVideoReferences: 3,
+		maxAudioReferences: 3
+	}, "Sora2U 单角色一致性多模态视频模型，至少需要一份参考素材"),
+	{
+		id: "gemini-image",
+		name: "Gemini Image",
+		category: "image",
+		provider: "sora2u",
+		description: "Sora2U Gemini 图片生成模型，支持最多 4 张参考图",
+		inputModalities: ["text", "image"],
+		executionProfile: {
+			preset: "custom",
+			protocol: ae
+		}
+	},
+	{
+		id: "kontext-image",
+		name: "Kontext Image",
+		category: "image",
+		provider: "sora2u",
+		description: "Sora2U Kontext 图片生成模型，支持最多 4 张参考图",
+		inputModalities: ["text", "image"],
+		executionProfile: {
+			preset: "custom",
+			protocol: ae
+		}
+	}
+], N = {
+	key: "apiKey",
+	label: "API Key",
+	required: !0,
+	secret: !0
+}, de = [
+	{
+		id: "gpt-5.6",
+		name: "GPT-5.6",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.6 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-5.6-sol",
+		name: "GPT-5.6 Sol",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.6 Sol 文本与多模态模型"
+	},
+	{
+		id: "gpt-5.6-luna",
+		name: "GPT-5.6 Luna",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.6 Luna 文本与多模态模型"
+	},
+	{
+		id: "gpt-5.6-terra",
+		name: "GPT-5.6 Terra",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.6 Terra 文本与多模态模型"
+	},
+	{
+		id: "gpt-5.5",
+		name: "GPT-5.5",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.5 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-5.4",
+		name: "GPT-5.4",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.4 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-5.4-mini",
+		name: "GPT-5.4 mini",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.4 mini 轻量文本与多模态模型"
+	},
+	{
+		id: "gpt-5.3-codex-spark",
+		name: "GPT-5.3 Codex Spark",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.3 Codex Spark 编码模型"
+	},
+	{
+		id: "gpt-5.2",
+		name: "GPT-5.2",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.2 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-5.2-pro",
+		name: "GPT-5.2 Pro",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5.2 Pro 高能力文本与多模态模型"
+	},
+	{
+		id: "gpt-5",
+		name: "GPT-5",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-5 通用文本与多模态模型"
+	},
+	{
+		id: "o4-mini",
+		name: "o4-mini",
+		category: "text",
+		provider: "cccapi",
+		description: "o4-mini 轻量推理模型，支持多模态输入"
+	},
+	{
+		id: "o3",
+		name: "o3",
+		category: "text",
+		provider: "cccapi",
+		description: "o3 强推理模型，支持多模态输入"
+	},
+	{
+		id: "o3-mini",
+		name: "o3-mini",
+		category: "text",
+		provider: "cccapi",
+		description: "o3-mini 轻量推理模型",
+		inputModalities: ["text"]
+	},
+	{
+		id: "gpt-4.1",
+		name: "GPT-4.1",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-4.1 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-4.1-mini",
+		name: "GPT-4.1 mini",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-4.1 mini 轻量文本与多模态模型"
+	},
+	{
+		id: "gpt-4.1-nano",
+		name: "GPT-4.1 nano",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-4.1 nano 极轻量文本与多模态模型"
+	},
+	{
+		id: "gpt-4o",
+		name: "GPT-4o",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-4o 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-4o-mini",
+		name: "GPT-4o mini",
+		category: "text",
+		provider: "cccapi",
+		description: "OpenAI 兼容文本与多模态模型",
+		inputModalities: ["text", "image"]
+	},
+	{
+		id: "gpt-4-turbo",
+		name: "GPT-4 Turbo",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-4 Turbo 通用文本与多模态模型"
+	},
+	{
+		id: "gpt-4",
+		name: "GPT-4",
+		category: "text",
+		provider: "cccapi",
+		description: "GPT-4 通用文本模型",
+		inputModalities: ["text"]
+	},
+	{
+		id: "codex-auto-review",
+		name: "Codex Auto Review",
+		category: "text",
+		provider: "cccapi",
+		description: "Codex 自动代码评审模型"
+	},
+	{
+		id: "gpt-image-2",
+		name: "GPT Image 2",
+		category: "image",
+		provider: "cccapi",
+		description: "OpenAI 兼容图片生成模型"
+	},
+	{
+		id: "gpt-image-1",
+		name: "GPT Image 1",
+		category: "image",
+		provider: "cccapi",
+		description: "OpenAI 兼容图片生成模型（上一代）"
+	}
+], fe = [
+	"seedance-2.5",
+	"seedance-2.5-character",
+	"seedance-2.5-character-mono"
+], pe = new Set(fe), me = [
+	"tavily",
+	"bocha",
+	"zhipu-search",
+	"exa"
+], P = [
+	{
+		id: "apimart",
+		name: "APIMart",
+		description: "OpenAI 兼容的多类型模型服务",
+		badgeText: "AM",
+		authType: "api-key",
+		catalogAdapter: "openai-compatible",
+		defaultBaseUrl: p,
+		modelsPath: "/models",
+		allowCustomBaseUrl: !1,
+		credentials: [N, {
+			key: "baseUrl",
+			label: "接口地址",
+			required: !1,
+			placeholder: p
+		}]
+	},
+	{
+		id: "cccapi",
+		name: "CCC API",
+		description: "群内大佬自建自用中转！平价对接，纯公益不赚一分钱✅，稳定、速度快、出图质量高",
+		badgeText: "CCC",
+		authType: "api-key",
+		catalogAdapter: "openai-compatible",
+		defaultBaseUrl: d,
+		modelsPath: "/models",
+		allowCustomBaseUrl: !1,
+		externalUrl: "https://cccapi.cn",
+		credentials: [{
+			...N,
+			placeholder: "sk-..."
+		}],
+		models: de
+	},
+	{
+		id: "xai",
+		name: "xAI / Grok 官方",
+		description: "Grok 官方文本、图片与视频模型",
+		badgeText: "xAI",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: v,
+		credentials: [{
+			...N,
+			placeholder: "xai-..."
+		}],
+		models: x
+	},
+	{
+		id: "google",
+		name: "Google Gemini 官方",
+		description: "Gemini 文本、Nano Banana 图片、Omni/Veo 视频与 TTS",
+		badgeText: "G",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: S,
+		credentials: [{
+			...N,
+			placeholder: "Google AI Studio API Key"
+		}],
+		models: te
+	},
+	{
+		id: "sora2u",
+		name: "Sora2U",
+		description: "Seedance 全模态视频与 Gemini/Kontext 图片模型",
+		badgeText: "S2U",
+		authType: "api-key",
+		catalogAdapter: "openai-compatible",
+		defaultBaseUrl: k,
+		modelsPath: "/api/v1/models",
+		allowCustomBaseUrl: !1,
+		externalUrl: "https://sora2u.com/?utm_source=tenney&utm_medium=canvas&utm_content=wx",
+		connectionTestPath: "/api/v1/credits",
+		requestQuery: ne,
+		hiddenModelIds: fe,
+		credentials: [{
+			...N,
+			placeholder: "sk_sora_..."
+		}],
+		models: ue.filter((e) => !pe.has(e.id))
+	},
+	{
+		id: "volcengine",
+		name: "火山方舟",
+		description: "火山引擎方舟模型服务",
+		badgeText: "V",
+		authType: "api-key",
+		catalogAdapter: "openai-compatible",
+		defaultBaseUrl: c,
+		modelsPath: "/models",
+		allowCustomBaseUrl: !1,
+		credentials: [N, {
+			key: "baseUrl",
+			label: "接口地址",
+			required: !1,
+			placeholder: c
+		}]
+	},
+	{
+		id: "runninghub-model",
+		name: "RunningHub",
+		description: "RunningHub 标准模型 API 与工作流",
+		badgeText: "RH",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: f,
+		credentials: [{
+			...N,
+			label: "企业级-共享 API Key",
+			placeholder: "用于 RunningHub 标准模型 API"
+		}]
+	},
+	{
+		id: "grsai",
+		name: "GRSAI",
+		description: "图像生成与多模态文本模型服务",
+		badgeText: "GR",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: u,
+		allowCustomBaseUrl: !1,
+		credentials: [N, {
+			key: "baseUrl",
+			label: "接口地址",
+			required: !1,
+			placeholder: u
+		}]
+	},
+	{
+		id: "dreamina",
+		name: "即梦",
+		description: "通过官方 OAuth 登录使用即梦模型",
+		badgeText: "JM",
+		authType: "oauth",
+		catalogAdapter: "local-manifest",
+		credentials: []
+	},
+	{
+		id: "tavily",
+		name: "Tavily",
+		description: "面向 AI Agent 的搜索与来源服务",
+		badgeText: "TV",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: s,
+		credentials: [{
+			...N,
+			placeholder: "tvly-..."
+		}],
+		kind: "web-search"
+	},
+	{
+		id: "bocha",
+		name: "博查 Web Search",
+		description: "国内网络环境友好的结构化搜索服务",
+		badgeText: "BC",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: l,
+		credentials: [{
+			...N,
+			placeholder: "sk-..."
+		}],
+		kind: "web-search"
+	},
+	{
+		id: "zhipu-search",
+		name: "智谱联网搜索",
+		description: "智谱开放平台提供的 Web Search API",
+		badgeText: "ZP",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: m,
+		credentials: [{
+			...N,
+			placeholder: "智谱 API Key"
+		}],
+		kind: "web-search"
+	},
+	{
+		id: "exa",
+		name: "Exa",
+		description: "支持语义检索与网页摘要的搜索服务",
+		badgeText: "EX",
+		authType: "api-key",
+		catalogAdapter: "local-manifest",
+		defaultBaseUrl: o,
+		credentials: [{
+			...N,
+			placeholder: "Exa API Key"
+		}],
+		kind: "web-search"
+	},
+	{
+		id: "custom-openai",
+		name: "自定义接口",
+		description: "OpenAI 兼容接口；非标准接口用模型的调用协议单独声明",
+		badgeText: "API",
+		authType: "api-key",
+		catalogAdapter: "openai-compatible",
+		modelsPath: "/models",
+		allowCustomBaseUrl: !0,
+		credentials: [N, {
+			key: "baseUrl",
+			label: "接口地址",
+			required: !0
+		}]
+	}
+];
+function F(e, t) {
+	return e ? !P.find((t) => t.id === e)?.hiddenModelIds?.includes(t) : !0;
+}
+var he = new Map(P.map((e) => [e.id, e]));
+function ge(e, t) {
+	if (e.length <= 300) return e;
+	let n = e.filter((e) => t.has(e.id)), r = 300 - n.length;
+	return r <= 0 ? n : [...n, ...e.filter((e) => !t.has(e.id)).slice(0, r)];
+}
+function _e() {
+	return P;
+}
+function ve(e) {
+	return me.includes(e);
+}
+function ye() {
+	return P.filter((e) => e.kind === "web-search");
+}
+function be(e) {
+	let t = (t) => !!e.providers[t]?.apiKey?.trim();
+	return ve(e.webSearchProviderId) && t(e.webSearchProviderId) ? e.webSearchProviderId : t("tavily") ? "tavily" : me.find(t);
+}
+function xe(e) {
+	return e === "custom-openai" ? `custom-${globalThis.crypto?.randomUUID?.().slice(0, 8) ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`}` : e;
+}
+function Se(e, t) {
+	return he.get(t?.catalogId || e);
+}
+function Ce(e) {
+	let t = e.toLowerCase();
+	return /tts|speech|audio|music|voice|whisper|transcri/.test(t) ? "audio" : /video|seedance|sora|veo|kling|hailuo|wan\d|skyreels|vidu|minimax[-\s_.]?h3/.test(t) ? "video" : /image|seedream|imagen|flux|banana|midjourney|recraft|dall-e/.test(t) ? "image" : "text";
+}
+function we(e) {
+	if (Array.isArray(e)) return e;
+	if (!e || typeof e != "object") return [];
+	let t = e;
+	return Array.isArray(t.data) ? t.data : Array.isArray(t.models) ? t.models : [];
+}
+function Te(e) {
+	if (!Array.isArray(e)) return;
+	let t = e.filter((e) => typeof e == "string" && e.trim() !== "");
+	return t.length > 0 ? t : void 0;
+}
+function Ee(e) {
+	if (!Array.isArray(e)) return;
+	let t = e.filter((e) => typeof e == "number" && Number.isFinite(e));
+	return t.length > 0 ? t : void 0;
+}
+function I(e) {
+	return typeof e == "number" && Number.isFinite(e) ? e : void 0;
+}
+function De(e) {
+	return e && typeof e == "object" && !Array.isArray(e) ? e : void 0;
+}
+function Oe(e, t) {
+	if (t !== "video") return;
+	let n = Ee(e.durations), r = De(e.duration_range ?? e.durationRange), i = De(e.reference_limits ?? e.referenceLimits), a = {
+		durations: n,
+		minDuration: I(r?.min) ?? (n ? Math.min(...n) : void 0),
+		maxDuration: I(r?.max) ?? (n ? Math.max(...n) : void 0),
+		defaultDuration: I(e.default_duration ?? e.defaultDuration),
+		ratios: Te(e.aspect_ratios ?? e.aspectRatios),
+		defaultRatio: typeof (e.default_aspect_ratio ?? e.defaultAspectRatio) == "string" ? String(e.default_aspect_ratio ?? e.defaultAspectRatio) : void 0,
+		resolutions: Te(e.resolutions),
+		defaultResolution: typeof (e.default_resolution ?? e.defaultResolution) == "string" ? String(e.default_resolution ?? e.defaultResolution) : void 0,
+		maxImageReferences: I(i?.image),
+		maxVideoReferences: I(i?.video),
+		maxAudioReferences: I(i?.audio),
+		supportsStandaloneAudio: e.supports_audio === !0 ? !0 : void 0,
+		requiresReference: e.supports_text_only === !1 ? !0 : void 0
+	};
+	return Object.values(a).some((e) => e !== void 0) ? a : void 0;
+}
+function ke(e, t) {
+	if (typeof e == "string") {
+		let n = e.trim();
+		return n ? {
+			id: n,
+			name: n,
+			category: Ce(n),
+			provider: t
+		} : null;
+	}
+	if (!e || typeof e != "object") return null;
+	let n = e, r = n.id ?? n.model ?? n.model_id;
+	if (typeof r != "string" || !r.trim()) return null;
+	let i = r.trim(), a = n.name ?? n.display_name ?? n.displayName, o = typeof a == "string" && a.trim() ? a.trim() : i, s = Ce(i);
+	return {
+		id: i,
+		name: o,
+		category: s,
+		provider: t,
+		inputModalities: n.supports_image === !0 || n.supportsImage === !0 ? ["text", "image"] : void 0,
+		videoCapability: Oe(n, s)
+	};
+}
+function Ae(e, t) {
+	let n = /* @__PURE__ */ new Map();
+	for (let r of e) {
+		let e = r.id.trim();
+		!e || n.has(e) || n.set(e, {
+			...r,
+			id: e,
+			name: r.name.trim() || e,
+			provider: t
+		});
+	}
+	return [...n.values()].sort((e, t) => e.name.localeCompare(t.name, "zh-CN", { sensitivity: "base" }));
+}
+function je(e, t) {
+	let n = new Map(t.map((e) => [e.id, e]));
+	return e.map((e) => {
+		let t = n.get(e.id);
+		return t ? {
+			...t,
+			...e,
+			description: e.description ?? t.description,
+			inputModalities: e.inputModalities ?? t.inputModalities,
+			executionProfile: e.executionProfile ?? t.executionProfile,
+			imageReferenceRequestMode: e.imageReferenceRequestMode ?? t.imageReferenceRequestMode,
+			videoCapability: e.videoCapability || t.videoCapability ? {
+				...t.videoCapability,
+				...e.videoCapability
+			} : void 0
+		} : e;
+	});
+}
+function Me(e) {
+	return e instanceof DOMException && e.name === "AbortError" ? "模型列表拉取已取消" : e instanceof Error && /^模型列表拉取失败 \(HTTP \d{3}\)$/.test(e.message) ? e.message : "无法连接模型目录，请检查接口地址、网络和 API Key";
+}
+async function Ne(e, t, n) {
+	return a(e, {
+		method: "GET",
+		headers: t ? { Authorization: `Bearer ${t}` } : void 0,
+		signal: n
+	});
+}
+async function Pe(e, t, n, r, i) {
+	let a = new URL(`${e}${t.modelsPath || "/models"}`);
+	for (let [e, n] of Object.entries(t.requestQuery ?? {})) a.searchParams.set(e, n);
+	let o = await Ne(a.toString(), r.apiKey, i);
+	if (!o.ok) throw Error(`模型列表拉取失败 (HTTP ${o.status})`);
+	let s = we(await o.json().catch(() => null)).map((e) => ke(e, n)).filter((e) => e !== null && F(t.id, e.id));
+	if (s.length === 0) throw Error("模型列表拉取失败 (HTTP 200)");
+	return Ae(s, n);
+}
+async function Fe(e, t, n, r) {
+	let i = _(n.baseUrl || e.defaultBaseUrl);
+	if (i.length === 0) throw Error("请填写接口地址");
+	let a;
+	for (let o of i) try {
+		return {
+			models: await Pe(o, e, t, n, r),
+			baseUrl: o
+		};
+	} catch (e) {
+		if (e instanceof DOMException && e.name === "AbortError") throw e;
+		a = e;
+	}
+	throw a instanceof Error ? a : /* @__PURE__ */ Error("模型列表拉取失败");
+}
+async function Ie(e) {
+	let { providerId: t, config: n, fallbackModels: r = [], signal: i } = e;
+	if (i?.aborted) throw new DOMException("模型列表拉取已取消", "AbortError");
+	let a = Se(t, n);
+	if (!a) throw Error("未知厂商目录");
+	let o = Ae(r, t).filter((e) => F(a.id, e.id));
+	if (a.catalogAdapter === "local-manifest") return {
+		models: o,
+		source: "local-manifest"
+	};
+	try {
+		let { models: e, baseUrl: r } = await Fe(a, t, n, i);
+		return {
+			models: je(e, o),
+			source: "remote",
+			resolvedBaseUrl: r
+		};
+	} catch (e) {
+		if (e instanceof DOMException && e.name === "AbortError") throw e;
+		let t = Me(e);
+		if (o.length > 0) return {
+			models: o,
+			source: "local-fallback",
+			warning: t
+		};
+		throw Error(t, { cause: e });
+	}
+}
+//#endregion
+//#region src/services/ai/modelProtocolImport.ts
+var Le = /(?:\b(?:const|let|var)\s+)?\b(?:url|endpoint|api_url|apiUrl)\b\s*=\s*(["'`])(https?:\/\/[^"'`]+)\1/g, Re = /\bfetch\s*\(\s*(["'`])(https?:\/\/[^"'`]+)\1/g, ze = /\b(?:axios|requests|httpx)\.(get|post)\s*\(\s*(["'`])(https?:\/\/[^"'`]+)\2/gi, Be = /\bmethod\s*:\s*(["'])(GET|POST)\1/i, Ve = /(?:callback|webhook|notify|notification)[_-]?(?:url|uri)|(?:callback|webhook)/i, He = /(?:bearer\s+)?(?:<[^>]+>|\{\{[^}]+}}|\$\{[^}]+}|YOUR_[A-Z_]+|sk-[A-Za-z0-9_-]+|[A-Za-z0-9_-]{20,})/i, Ue = /^(?:api|openai|anthropic|v\d+(?:\.\d+)?)$/i, We = /^(?:tasks?|jobs?|predictions?|requests?|operations?|videos?|video[_-]generation)$/i, Ge = new Set([
+	"imageurl",
+	"videourl",
+	"audiourl"
+]), Ke = new Set([
+	"imageurl",
+	"videourl",
+	"audiourl"
+]), qe = /^{{\s*([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_-]+)*)\s*}}$/, Je = new Set(r), L = /^(?:https?:\/\/|data:[^;,]+;base64,)/i, Ye = /\/models\/[^/]+:generateContent\/?$/i, R = new Set([
+	"__proto__",
+	"prototype",
+	"constructor"
+]), z = "需要人工确认：", Xe = class {
+	index = 0;
+	source;
+	constructor(e) {
+		this.source = e;
+	}
+	parse() {
+		this.skipWhitespace();
+		let e = this.parseValue();
+		return this.skipWhitespace(), e;
+	}
+	parseValue() {
+		this.skipWhitespace();
+		let e = this.source[this.index];
+		return e === "{" ? this.parseObject() : e === "[" ? this.parseArray() : e === "\"" || e === "'" || e === "`" ? this.parseString() : e === "-" || /\d/.test(e || "") ? this.parseNumber() : this.parseIdentifierValue();
+	}
+	parseObject() {
+		let e = Object.create(null);
+		for (this.index += 1, this.skipWhitespace(); this.index < this.source.length && this.source[this.index] !== "}";) {
+			let t = this.parseKey();
+			if (this.skipWhitespace(), this.source[this.index] !== ":") throw Error("对象字段缺少冒号");
+			if (this.index += 1, e[t] = this.parseValue(), this.skipWhitespace(), this.source[this.index] === ",") this.index += 1, this.skipWhitespace();
+			else if (this.source[this.index] !== "}") throw Error("对象字段之间缺少逗号");
+		}
+		if (this.source[this.index] !== "}") throw Error("对象没有结束");
+		return this.index += 1, e;
+	}
+	parseArray() {
+		let e = [];
+		for (this.index += 1, this.skipWhitespace(); this.index < this.source.length && this.source[this.index] !== "]";) if (e.push(this.parseValue()), this.skipWhitespace(), this.source[this.index] === ",") this.index += 1, this.skipWhitespace();
+		else if (this.source[this.index] !== "]") throw Error("数组元素之间缺少逗号");
+		if (this.source[this.index] !== "]") throw Error("数组没有结束");
+		return this.index += 1, e;
+	}
+	parseKey() {
+		this.skipWhitespace();
+		let e = this.source[this.index];
+		if (e === "\"" || e === "'" || e === "`") return this.parseString();
+		let t = /^[A-Za-z_$][A-Za-z0-9_$-]*/.exec(this.source.slice(this.index));
+		if (!t) throw Error("对象字段名无效");
+		return this.index += t[0].length, t[0];
+	}
+	parseString() {
+		let e = this.source[this.index];
+		this.index += 1;
+		let t = "";
+		for (; this.index < this.source.length;) {
+			let n = this.source[this.index];
+			if (this.index += 1, n === e) return t;
+			if (n === "$" && e === "`" && this.source[this.index] === "{") throw Error("不支持模板字符串表达式");
+			if (n !== "\\") {
+				t += n;
+				continue;
+			}
+			let r = this.source[this.index];
+			this.index += 1, t += {
+				n: "\n",
+				r: "\r",
+				t: "	",
+				b: "\b",
+				f: "\f",
+				v: "\v",
+				0: "\0"
+			}[r] ?? r;
+		}
+		throw Error("字符串没有结束");
+	}
+	parseNumber() {
+		let e = /^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/i.exec(this.source.slice(this.index));
+		if (!e) throw Error("数字无效");
+		return this.index += e[0].length, Number(e[0]);
+	}
+	parseIdentifierValue() {
+		let e = /^[A-Za-z_$][A-Za-z0-9_$.]*/.exec(this.source.slice(this.index));
+		if (!e) throw Error("值无效");
+		return this.index += e[0].length, e[0] === "true" || e[0] === "True" ? !0 : e[0] === "false" || e[0] === "False" ? !1 : e[0] === "null" || e[0] === "None" || e[0] === "undefined" ? null : e[0];
+	}
+	skipWhitespace() {
+		for (; this.index < this.source.length;) {
+			if (/\s/.test(this.source[this.index])) {
+				this.index += 1;
+				continue;
+			}
+			if (this.source.startsWith("//", this.index)) {
+				let e = this.source.indexOf("\n", this.index + 2);
+				this.index = e < 0 ? this.source.length : e + 1;
+				continue;
+			}
+			if (this.source.startsWith("/*", this.index)) {
+				let e = this.source.indexOf("*/", this.index + 2);
+				this.index = e < 0 ? this.source.length : e + 2;
+				continue;
+			}
+			break;
+		}
+	}
+};
+function B(e) {
+	return !!e && typeof e == "object" && !Array.isArray(e);
+}
+function Ze(e) {
+	return [...new Set(e)];
+}
+function Qe(e, t) {
+	let n = e[t], r = n === "{" ? "}" : n === "[" ? "]" : void 0;
+	if (!r) return;
+	let i = [r], a = "", o = !1;
+	for (let n = t + 1; n < e.length; n += 1) {
+		let r = e[n];
+		if (a) {
+			o ? o = !1 : r === "\\" ? o = !0 : r === a && (a = "");
+			continue;
+		}
+		if (r === "\"" || r === "'" || r === "`") {
+			a = r;
+			continue;
+		}
+		if (r === "{") i.push("}");
+		else if (r === "[") i.push("]");
+		else if (r === i[i.length - 1] && (i.pop(), i.length === 0)) return {
+			start: t,
+			end: n + 1
+		};
+	}
+}
+function $e(e) {
+	try {
+		return new Xe(e).parse();
+	} catch {
+		return;
+	}
+}
+function et(e, t) {
+	let n = t.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), r = RegExp(`(?:\\b(?:const|let|var)\\s+)?\\b(?:${n})\\b\\s*=\\s*`, "i").exec(e);
+	if (!r) return {};
+	let i = r.index + r[0].length;
+	for (; /\s/.test(e[i] || "");) i += 1;
+	let a = /^JSON\.stringify\s*\(\s*/i.exec(e.slice(i));
+	if (a && (i += a[0].length), e[i] !== "{" && e[i] !== "[") return {};
+	let o = Qe(e, i);
+	return o ? {
+		value: $e(e.slice(o.start, o.end)),
+		range: o
+	} : {};
+}
+function tt(e, t) {
+	let n = 0, r = {};
+	for (; n < e.length;) {
+		let i = et(e.slice(n), t);
+		if (!i.range) break;
+		let a = {
+			start: n + i.range.start,
+			end: n + i.range.end
+		};
+		r = {
+			value: i.value,
+			range: a
+		}, n = a.end;
+	}
+	return r;
+}
+function nt(e, t) {
+	return t.some((t) => e >= t.start && e < t.end);
+}
+function V(e, t = []) {
+	let n = [];
+	for (let r = 0; r < e.length; r += 1) {
+		if (e[r] !== "{" && e[r] !== "[" || nt(r, t)) continue;
+		let i = Qe(e, r);
+		if (i) {
+			try {
+				let t = JSON.parse(e.slice(i.start, i.end));
+				n.push({
+					value: t,
+					range: i
+				});
+			} catch {}
+			r = i.end - 1;
+		}
+	}
+	return n;
+}
+function rt(e) {
+	let t = {};
+	for (let n of e.split(/\r?\n/)) {
+		let e = /^\s*([^:\s][^:]*):\s*(.+?)\s*$/.exec(n);
+		!e || /^(?:https?|const|let|var)$/i.test(e[1]) || (t[e[1].trim()] = e[2].trim());
+	}
+	return t;
+}
+function it(e) {
+	return B(e) ? Object.fromEntries(Object.entries(e).filter((e) => typeof e[1] == "string")) : {};
+}
+function H(e, t) {
+	if (t === void 0) return;
+	let n = Object.entries(e).find(([e]) => e.toLowerCase() === "content-type")?.[1]?.toLowerCase() ?? "";
+	return n.includes("multipart/form-data") ? "multipart" : n.includes("application/x-www-form-urlencoded") ? "form-urlencoded" : "json";
+}
+function at(e, t) {
+	let n = e.slice(t, t + 2e3);
+	return /\b(?:requests|httpx)\.(?:get|post)\s*\(/i.test(n) ? "python" : /\baxios\.(?:get|post)\s*\(/i.test(n) ? "axios" : "fetch";
+}
+function ot(e) {
+	let t = [];
+	for (let n of e.matchAll(Le)) t.push({
+		start: n.index,
+		url: n[2],
+		format: at(e, n.index)
+	});
+	for (let n of e.matchAll(Re)) t.push({
+		start: n.index,
+		url: n[2],
+		format: "fetch"
+	});
+	for (let n of e.matchAll(ze)) t.push({
+		start: n.index,
+		url: n[3],
+		format: /^axios/i.test(n[0]) ? "axios" : "python"
+	});
+	return t.sort((e, t) => e.start - t.start).filter((e, t, n) => t === 0 || e.start !== n[t - 1].start);
+}
+function st(e) {
+	let t = ot(e);
+	return t.map((n, r) => {
+		let i = e.slice(n.start, t[r + 1]?.start ?? e.length), a = et(i, [
+			"payload",
+			"body",
+			"data",
+			"json"
+		]), o = !a.range && /\bbody\b/i.test(i) ? tt(e.slice(0, n.start), [
+			"payload",
+			"body",
+			"data",
+			"json"
+		]) : {}, s = a.range ? a : o, c = et(i, ["headers", "header"]), l = Be.exec(i) ?? /\b(?:axios|requests|httpx)\.(get|post)\s*\(/i.exec(i), u = l?.[2] ?? l?.[1], d = String(u || (s.value === void 0 ? "GET" : "POST")).toUpperCase(), f = it(c.value), p = V(i, [a.range, c.range].filter((e) => !!e));
+		return {
+			start: n.start,
+			url: n.url,
+			method: d,
+			headers: f,
+			query: {},
+			body: s.value,
+			bodyEncoding: H(f, s.value),
+			response: p[0]?.value,
+			format: n.format
+		};
+	});
+}
+function ct(e) {
+	return [...e.matchAll(/(?:^|\n)\s*curl\b/g)].map((e) => e.index + e[0].indexOf("curl"));
+}
+function lt(e) {
+	let t = ct(e);
+	return t.flatMap((n, r) => {
+		let i = e.slice(n, t[r + 1] ?? e.length), a = /https?:\/\/[^\s'"\\]+/.exec(i);
+		if (!a) return [];
+		let o = /(?:^|\s)(?:-d|--data(?:-raw)?|--data-binary)\s+(["'])([\s\S]*?)\1/.exec(i), s = o ? $e(o[2]) : void 0, c = o && o.index >= 0 ? {
+			start: o.index + o[0].indexOf(o[2]),
+			end: o.index + o[0].indexOf(o[2]) + o[2].length
+		} : void 0, l = {};
+		for (let e of i.matchAll(/(?:-H|--header)\s+(["'])([\s\S]*?)\1/g)) {
+			let t = e[2].indexOf(":");
+			t > 0 && (l[e[2].slice(0, t).trim()] = e[2].slice(t + 1).trim());
+		}
+		let u = /(?:-X|--request)\s+(GET|POST)/i.exec(i)?.[1], d = String(u || (s === void 0 ? "GET" : "POST")).toUpperCase(), f = V(i, c ? [c] : []);
+		return [{
+			start: n,
+			url: a[0],
+			method: d,
+			headers: l,
+			query: {},
+			body: s,
+			bodyEncoding: H(l, s),
+			response: f[0]?.value,
+			format: "curl"
+		}];
+	});
+}
+function ut(e) {
+	let t = [...e.matchAll(/^(GET|POST)\s+(\S+)\s+HTTP\/\d(?:\.\d)?\s*$/gim)];
+	return t.flatMap((n, r) => {
+		let i = e.slice(n.index, t[r + 1]?.index ?? e.length), a = i.search(/^HTTP\/\d(?:\.\d)?\s+\d+/im), o = a >= 0 ? i.slice(0, a) : i, s = a >= 0 ? i.slice(a) : "", c = o.search(/\r?\n\s*\r?\n/), l = c >= 0 ? o.slice(0, c) : o, u = c >= 0 ? o.slice(c).replace(/^\s+/, "") : "", d = rt(l), f = Object.entries(d).find(([e]) => e.toLowerCase() === "host")?.[1];
+		if (!f) return [];
+		let p = V(u), m = s.search(/\r?\n\s*\r?\n/), h = V(m >= 0 ? s.slice(m).replace(/^\s+/, "") : s);
+		return [{
+			start: n.index,
+			url: `https://${f}${n[2]}`,
+			method: n[1].toUpperCase(),
+			headers: d,
+			query: {},
+			body: p[0]?.value,
+			bodyEncoding: H(d, p[0]?.value),
+			response: h[0]?.value,
+			format: "raw-http"
+		}];
+	});
+}
+function dt(e) {
+	if (!(!e || typeof e != "object" || Array.isArray(e))) for (let t of Object.values(e)) {
+		if (!t || typeof t != "object" || Array.isArray(t)) continue;
+		let e = t;
+		if (e.example !== void 0) return e.example;
+		if (e.examples && typeof e.examples == "object" && !Array.isArray(e.examples)) {
+			let t = Object.values(e.examples)[0];
+			if (t && typeof t == "object" && !Array.isArray(t)) {
+				let e = t.value;
+				if (e !== void 0) return e;
+			}
+		}
+	}
+}
+function ft(e) {
+	let t;
+	try {
+		t = JSON.parse(e);
+	} catch {
+		return [];
+	}
+	if (!t || typeof t != "object" || Array.isArray(t)) return [];
+	let n = t;
+	if (typeof n.openapi != "string" || !n.paths || typeof n.paths != "object" || Array.isArray(n.paths)) return [];
+	let r = Array.isArray(n.servers) ? n.servers[0] : void 0, i = r && typeof r == "object" && !Array.isArray(r) ? r.url : void 0;
+	if (typeof i != "string") return [];
+	let a = n.components && typeof n.components == "object" && !Array.isArray(n.components) ? n.components.securitySchemes : void 0, o = a && typeof a == "object" && !Array.isArray(a) && Object.values(a).some((e) => {
+		if (!e || typeof e != "object" || Array.isArray(e)) return !1;
+		let t = e;
+		return t.type === "http" && String(t.scheme).toLowerCase() === "bearer";
+	});
+	for (let [e, t] of Object.entries(n.paths)) if (!(!t || typeof t != "object" || Array.isArray(t))) for (let n of ["post", "get"]) {
+		let r = t[n];
+		if (!r || typeof r != "object" || Array.isArray(r)) continue;
+		let a = r, s = dt((a.requestBody && typeof a.requestBody == "object" && !Array.isArray(a.requestBody) ? a.requestBody : void 0)?.content), c = a.responses && typeof a.responses == "object" && !Array.isArray(a.responses) ? a.responses : {}, l = Object.entries(c).find(([e]) => /^2\d\d$/.test(e))?.[1], u = l && typeof l == "object" && !Array.isArray(l) ? l : void 0;
+		return [{
+			start: 0,
+			url: `${i.replace(/\/+$/, "")}/${e.replace(/^\/+/, "")}`,
+			method: n.toUpperCase(),
+			headers: o ? {
+				Authorization: "Bearer <token>",
+				"Content-Type": "application/json"
+			} : { "Content-Type": "application/json" },
+			query: {},
+			body: s,
+			bodyEncoding: s === void 0 ? void 0 : "json",
+			response: dt(u?.content),
+			format: "openapi"
+		}];
+	}
+	return [];
+}
+function pt(e) {
+	let t = ft(e);
+	if (t.length > 0) return t;
+	let n = ut(e);
+	if (n.length > 0) return n;
+	let r = lt(e);
+	return r.length > 0 ? r : st(e);
+}
+function mt(e) {
+	let t = new URL(e.url);
+	for (let [n, r] of t.searchParams.entries()) e.query[n] = r;
+	return t.search = "", t;
+}
+function ht(e) {
+	if (e.length === 0 || e.some((t) => t.origin !== e[0].origin)) return;
+	let t = e.map((e) => e.pathname.split("/").filter(Boolean)), n = [];
+	if (t.length > 1) {
+		let e = Math.min(...t.map((e) => e.length));
+		for (let r = 0; r < e && t.every((e) => e[r] === t[0][r]); r += 1) n.push(t[0][r]);
+	} else n = t[0].filter((e, t) => Ue.test(e));
+	let r = n.findLastIndex((e) => Ue.test(e));
+	n = r >= 0 ? n.slice(0, r + 1) : [];
+	let i = n.length > 0 ? `/${n.join("/")}` : "";
+	return {
+		baseUrl: `${e[0].origin}${i}`,
+		prefix: i
+	};
+}
+function gt(e) {
+	let t = e?.trim();
+	if (t) try {
+		let e = new URL(t);
+		if (e.protocol !== "https:" || e.username || e.password || e.port && e.port !== "443") return;
+		let n = e.pathname.replace(/\/+$/, ""), r = n === "/" ? "" : n;
+		return {
+			baseUrl: `${e.origin}${r}`,
+			prefix: r
+		};
+	} catch {
+		return;
+	}
+}
+function _t(e, t) {
+	return vt(e.pathname, t);
+}
+function vt(e, t) {
+	return t && (e === t || e.startsWith(`${t}/`)) ? e.slice(t.length) || "/" : e || "/";
+}
+function yt(e, t) {
+	return !!t && e.pathname !== t && !e.pathname.startsWith(`${t}/`);
+}
+function U(e) {
+	return e.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function W(e, t, r, i) {
+	let a = U(e);
+	if (Ge.has(a) && B(t)) {
+		let e = Object.entries(t).find(([e]) => U(e) === "url");
+		if (e && typeof e[1] == "string") {
+			let o = n(a, e[1], r);
+			if (o) return Object.fromEntries(Object.entries(t).filter(([e]) => !R.has(e)).map(([e, t]) => [e, U(e) === "url" ? o : W(e, t, r, i)]));
+		}
+	}
+	let o = n(a, t, r);
+	if (o) return o;
+	if (Array.isArray(t)) {
+		let e = t.map((e) => St(e, r, i));
+		return r === "video" && a === "content" ? e.map((e) => xt(e, i)) : e;
+	}
+	return B(t) ? Object.fromEntries(Object.entries(t).filter(([e]) => !R.has(e)).map(([e, t]) => [e, W(e, t, r, i)])) : t;
+}
+function G(e, t = /* @__PURE__ */ new Set()) {
+	if (typeof e == "string") {
+		let n = qe.exec(e);
+		return n && Je.has(n[1].split(".")[0]) && t.add(`{{${n[1]}}}`), t;
+	}
+	return Array.isArray(e) ? (e.forEach((e) => G(e, t)), t) : (B(e) && Object.values(e).forEach((e) => G(e, t)), t);
+}
+function K(e, t) {
+	e.includes(t) || e.push(t);
+}
+function bt(e, t) {
+	if (e === "imageurl" && t === "firstframe") return {
+		variable: "firstImage",
+		repeat: !1
+	};
+	if (e === "imageurl" && t === "lastframe") return {
+		variable: "lastImage",
+		repeat: !1
+	};
+	if (e === "imageurl" && (t === "referenceimage" || t === "reference")) return {
+		variable: "referenceImageUrls",
+		repeat: !0
+	};
+	if (e === "videourl" && (t === "referencevideo" || t === "reference")) return {
+		variable: "referenceVideoUrls",
+		repeat: !0
+	};
+	if (e === "audiourl" && (t === "referenceaudio" || t === "reference")) return {
+		variable: "referenceAudioUrls",
+		repeat: !0
+	};
+}
+function q(e, t, n) {
+	return typeof e == "string" ? e === t ? n : e : Array.isArray(e) ? e.map((e) => q(e, t, n)) : B(e) ? Object.fromEntries(Object.entries(e).map(([e, r]) => [e, q(r, t, n)])) : e;
+}
+function xt(e, t) {
+	let n = [...G(e)], r = B(e) && typeof e.role == "string" ? U(e.role) : "";
+	if (n.length === 0) return r === "reference" && K(t, `${z}content[] 中 role="reference" 的媒体类型或 URL 字段无法高置信映射，禁止保留示例素材地址。`), e;
+	if (!B(e)) return K(t, `${z}content[] 中检测到复合参考素材项，无法安全推断缺少素材时的请求结构。`), e;
+	let i = typeof e.type == "string" ? U(e.type) : "", a = Ke.has(i) && Object.keys(e).some((e) => U(e) === i), o = new Set([
+		"type",
+		"role",
+		i
+	]), s = Object.keys(e).some((e) => !o.has(U(e)));
+	if (!a || s || n.length !== 1) return K(t, `${z}content[] 中检测到复合或多参考媒体项，无法安全推断缺少素材时的请求结构。`), e;
+	let c = bt(i, r);
+	if (c) {
+		let t = `{{${c.variable}}}`, r = q(e, n[0], t);
+		return c.repeat ? {
+			$forEach: t,
+			$value: r
+		} : {
+			$whenPresent: t,
+			$value: r
+		};
+	}
+	return {
+		$whenPresent: n[0],
+		$value: e
+	};
+}
+function St(e, t, n) {
+	return Array.isArray(e) ? e.map((e) => St(e, t, n)) : B(e) ? Object.fromEntries(Object.entries(e).filter(([e]) => !R.has(e)).map(([e, r]) => [e, W(e, r, t, n)])) : e;
+}
+function Ct(e, t, n) {
+	if (!B(e)) return e;
+	let r = Object.entries(e).filter(([e]) => R.has(e) ? (K(n, "请求体包含不安全对象键，已从导入协议中移除。"), !1) : !Et(e));
+	return Object.fromEntries(r.map(([e, r]) => [e, W(e, r, t, n)]));
+}
+function wt(e, n) {
+	if (!(n !== "image" || !B(e.body))) for (let [n, r] of Object.entries(e.body)) {
+		let a = U(n);
+		if (i.includes(a)) return "generation-json-image-urls";
+		if (t.includes(a)) {
+			if (e.bodyEncoding === "multipart") return "edits-multipart";
+			if ((Array.isArray(r) ? r : [r]).some((e) => typeof e == "string" && /^data:image\//i.test(e.trim()))) return "generation-json-image-data-urls";
+		}
+	}
+}
+function Tt(e, t) {
+	if (t !== "image" || !B(e)) return e;
+	let n = Array.isArray(e.contents) ? e.contents : [], r = (n.length > 0 ? n : [{}]).map((e) => {
+		let t = B(e) ? e : {}, n = (Array.isArray(t.parts) ? t.parts : []).map((e) => !B(e) || !Object.hasOwn(e, "text") ? e : {
+			...e,
+			text: "{{prompt}}"
+		});
+		return n.some((e) => B(e) && Object.hasOwn(e, "text")) || n.unshift({ text: "{{prompt}}" }), {
+			...t,
+			role: typeof t.role == "string" && t.role !== "string" ? t.role : "user",
+			parts: n
+		};
+	}), i = B(e.generationConfig) ? e.generationConfig : {};
+	return {
+		...Object.fromEntries(Object.entries(e).filter(([e]) => !["model", "prompt"].includes(U(e)))),
+		contents: r,
+		generationConfig: {
+			...i,
+			responseModalities: ["IMAGE"]
+		}
+	};
+}
+function Et(e) {
+	return [
+		"apikey",
+		"accesstoken",
+		"authorization",
+		"secret",
+		"token"
+	].includes(U(e));
+}
+function J(e) {
+	return Array.isArray(e) ? e.some(J) : B(e) ? Object.entries(e).some(([e, t]) => Et(e) || J(t)) : !1;
+}
+function Dt(e) {
+	if (!B(e)) return;
+	let t = Object.entries(e).find(([e, t]) => [
+		"model",
+		"modelid",
+		"modelname"
+	].includes(U(e)) && typeof t == "string");
+	return typeof t?.[1] == "string" ? t[1] : void 0;
+}
+function Y(e, t = "") {
+	if (Array.isArray(e)) return e.flatMap((e, n) => Y(e, t ? `${t}.${n}` : String(n)));
+	if (e && typeof e == "object") return Object.entries(e).flatMap(([e, n]) => Y(n, t ? `${t}.${e}` : e));
+	let n = t.split(".");
+	return t ? [{
+		path: t,
+		key: n[n.length - 1],
+		value: e
+	}] : [];
+}
+function Ot(e) {
+	return e.split(".").map((e) => /^\d+$/.test(e) ? "*" : e).join(".");
+}
+function X(e, t) {
+	return e.map((e) => ({
+		leaf: e,
+		score: t(e)
+	})).filter((e) => e.score > 0).sort((e, t) => t.score - e.score)[0]?.leaf;
+}
+function kt(e, t) {
+	let n = new URL(e.url).pathname.toLowerCase(), r = B(e.body) ? Object.keys(e.body).map(U) : [], i = Y(t).filter((e) => typeof e.value == "string" && L.test(e.value));
+	return /\bvideos?\b|video[_-]generation/.test(n) || r.some((e) => [
+		"numframes",
+		"framerate",
+		"videoduration"
+	].includes(e)) ? "video" : /\b(?:audio|speech|music|transcriptions?)\b/.test(n) || r.some((e) => [
+		"voice",
+		"audiovoice",
+		"audioformat"
+	].includes(e)) ? "audio" : /\b(?:images?|image-generation)\b/.test(n) || i.some((e) => /\.(?:png|jpe?g|webp)(?:\?|$)/i.test(String(e.value))) ? "image" : "text";
+}
+function At(e) {
+	for (let t of e) {
+		for (let [e, n] of Object.entries(t.headers)) {
+			if (e.toLowerCase() === "authorization") {
+				let e = n.match(/^([^<{]*?)(?:<|\{\{|\$\{|YOUR_|sk-)/i)?.[1];
+				return {
+					type: "bearer",
+					...e && e !== "Bearer " ? { prefix: e } : {}
+				};
+			}
+			if (/(?:api[-_]?key|token|authorization)/i.test(e) || He.test(n)) return {
+				type: "header",
+				name: e
+			};
+		}
+		let e = Object.keys(t.query).find((e) => /(?:api[-_]?key|access[-_]?token|token)/i.test(e));
+		if (e) return {
+			type: "query",
+			name: e
+		};
+	}
+	return { type: "none" };
+}
+function jt(e, t) {
+	let n = At(e);
+	return n.type === "none" && /(?:["']Authorization["']|Authorization)\s*:?\s*["']?Bearer(?:\s|["'<]|$)/i.test(t) ? { type: "bearer" } : n;
+}
+function Z(e) {
+	let t = Object.entries(e).filter(([e, t]) => {
+		let n = e.toLowerCase();
+		return !([
+			"authorization",
+			"content-type",
+			"host",
+			"content-length"
+		].includes(n) || /(?:api[-_]?key|token)/i.test(e) || He.test(t));
+	});
+	return t.length > 0 ? Object.fromEntries(t) : void 0;
+}
+function Mt(e) {
+	if (!e) return;
+	let t = Object.keys(e.query).find((e) => /(?:task|job|video|request|prediction).*id|^id$/i.test(e));
+	return t ? U(t) : new URL(e.url).pathname.split("/").filter(Boolean).findIndex((e) => We.test(e)) >= 0 ? "taskid" : void 0;
+}
+function Nt(e, t) {
+	return X(Y(e), (e) => {
+		if (typeof e.value != "string" && typeof e.value != "number") return 0;
+		let n = U(e.key), r = 0;
+		return t && n === t && (r += 120), [
+			"taskid",
+			"videoid",
+			"jobid",
+			"predictionid",
+			"requestid"
+		].includes(n) ? r += 100 : n === "id" && (r += 45), /task|video|job|prediction|request/i.test(String(e.value)) && (r += 20), r;
+	})?.path;
+}
+function Pt(e) {
+	return X(Y(e), (e) => {
+		if (typeof e.value != "string") return 0;
+		let t = U(e.key);
+		return t === "status" ? 100 : ["state", "phase"].includes(t) ? 75 : 0;
+	})?.path;
+}
+function Ft(e) {
+	return X(Y(e), (e) => [
+		"progress",
+		"percentage",
+		"percent"
+	].includes(U(e.key)) && typeof e.value == "number" ? 100 : 0)?.path;
+}
+function Q(e) {
+	return X(Y(e), (e) => {
+		let t = U(e.key);
+		return t === "error" ? 100 : t === "message" && /error|fail/i.test(e.path) ? 90 : ["errormessage", "detail"].includes(t) ? 75 : 0;
+	})?.path;
+}
+function It(e) {
+	let t = X(Y(e), (e) => {
+		if (typeof e.value != "string" || !L.test(e.value)) return 0;
+		let t = U(e.key) === "url" ? 100 : 45;
+		return /result|output|data/i.test(e.path) && (t += 25), /\.(?:png|jpe?g|webp|mp4|webm|mov|mp3|wav|flac)(?:\?|$)/i.test(e.value) && (t += 20), t;
+	});
+	return t ? Ot(t.path) : void 0;
+}
+function Lt(e) {
+	let t = X(Y(e), (e) => {
+		if (typeof e.value != "string" || L.test(e.value)) return 0;
+		let t = U(e.key), n = [
+			"content",
+			"text",
+			"output",
+			"answer"
+		].includes(t) ? 80 : 0;
+		return /choices|message|result/i.test(e.path) && (n += 30), /status|error|id/i.test(e.path) && (n -= 50), n;
+	});
+	return t ? Ot(t.path) : void 0;
+}
+function Rt(e) {
+	let t = X(Y(e), (e) => [
+		"b64json",
+		"base64",
+		"base64data"
+	].includes(U(e.key)) && typeof e.value == "string" ? 100 : 0);
+	return t ? Ot(t.path) : void 0;
+}
+function zt(e) {
+	if (!B(e) || !Array.isArray(e.candidates)) return;
+	let t = !1;
+	for (let n of e.candidates) if (!(!B(n) || !B(n.content) || !Array.isArray(n.content.parts))) {
+		t = !0;
+		for (let e of n.content.parts) if (B(e)) {
+			if (B(e.inlineData) && typeof e.inlineData.data == "string") return "candidates.*.content.parts.*.inlineData.data";
+			if (B(e.inline_data) && typeof e.inline_data.data == "string") return "candidates.*.content.parts.*.inline_data.data";
+		}
+	}
+	return t ? "candidates.*.content.parts.*.inlineData.data" : void 0;
+}
+function Bt(e, t) {
+	return !t || !Ye.test(e) ? e : e.replace(/(\/models\/)[^/]+(:generateContent\/?$)/i, "$1{{model}}$2");
+}
+function Vt(e, t, n, r) {
+	let i = `{{submit.${r}}}`, a = { ...t }, o = Object.keys(a).find((e) => /(?:task|job|video|request|prediction).*id|^id$/i.test(e));
+	if (o) return a[o] = i, {
+		path: e.pathname,
+		query: a,
+		preferredKey: U(o)
+	};
+	let s = e.pathname.split("/").filter(Boolean), c = s.findIndex((e) => We.test(e));
+	return c >= 0 && s[c + 1] ? (s[c + 1] = i, {
+		path: `/${s.join("/")}`,
+		query: a,
+		preferredKey: "taskid"
+	}) : (n.push("未能确定轮询请求中的任务 ID 位置，请手动检查轮询 path 或 query。"), {
+		path: e.pathname,
+		query: a
+	});
+}
+function $(e) {
+	return Object.keys(e).length > 0 ? e : void 0;
+}
+function Ht(e) {
+	let t = [], n = (n, r, i, a = e.confidence) => {
+		i && t.push({
+			id: n,
+			label: r,
+			value: i,
+			confidence: a
+		});
+	};
+	return n("base-url", "连接地址", e.baseUrl), n("model", "模型 ID", e.modelId), n("category", "模型分类", e.category), n("image-reference", "参考图请求", e.imageReferenceRequestMode), n("submit", "提交请求", e.protocol ? `${e.protocol.submit.method} ${e.protocol.submit.path}` : void 0), n("task-id", "任务 ID 路径", e.protocol?.response.taskIdPath), n("poll", "查询请求", e.protocol?.poll ? `${e.protocol.poll.method} ${e.protocol.poll.path}` : void 0), n("status", "状态路径", e.protocol?.poll?.response.statusPath), n("result", "结果路径", e.protocol?.mode === "async" ? e.protocol.poll?.response.result.urlPath ?? e.protocol.poll?.response.result.textPath : e.protocol?.response.result?.urlPath ?? e.protocol?.response.result?.textPath), t;
+}
+function Ut(e) {
+	return e >= .82 ? "high" : e >= .55 ? "medium" : "low";
+}
+function Wt(e, t = {}) {
+	let n = e.submitRequest.trim(), r = e.submitResponse.trim(), i = e.pollRequest?.trim() ?? "", a = e.pollResponse?.trim() ?? "";
+	if (!n) throw Error("请填写提交请求示例");
+	if (!r) throw Error("请填写提交响应示例");
+	if (!!i != !!a) throw Error("轮询请求示例和轮询响应示例必须同时填写");
+	return Gt([
+		n,
+		r,
+		...i ? [i, a] : []
+	].join("\n\n"), t);
+}
+function Gt(t, n = {}) {
+	let r = t.replace(/\r\n/g, "\n").trim();
+	if (!r) throw Error("请先粘贴接口文档或请求示例");
+	let i = pt(r).sort((e, t) => e.start - t.start);
+	if (i.length === 0) throw /^\s*(?:openapi|swagger)\s*:/im.test(r) ? Error("检测到 OpenAPI YAML；当前版本请粘贴 JSON 格式规范或文档中的请求/响应代码块") : Error("没有识别到请求示例，请粘贴 Fetch、Axios、cURL、Python requests、Raw HTTP 或 OpenAPI JSON");
+	let a = [], o = Ze([...i.map((e) => e.format), ...i.some((e) => e.response !== void 0) ? ["json"] : []]), s = i.map(mt), c = gt(n.baseUrl), l = s.some((e) => e.hostname.toLowerCase() === "loading"), u = c ?? (l ? void 0 : ht(s));
+	n.baseUrl && !c ? a.push("显式 Base URL 无效，必须是无凭据的标准 HTTPS 地址。") : !u && l ? a.push("请求示例使用 https://loading 占位地址，需要提供实际 Base URL。") : u || a.push("检测到多个不同域名，请确认提交和查询接口是否属于同一连接。");
+	let d = i[0], f = i[1], p = d.response, m = f?.response, h = n.category ?? kt(d, m ?? p), g = wt(d, h), _ = n.modelId?.trim() || Dt(d.body);
+	_ || a.push("未从请求体识别到模型 ID，需要手动填写模型。"), p || a.push("未识别到提交响应示例，无法可靠推断返回值路径。"), B(d.body) && Object.keys(d.body).some((e) => Ve.test(e)) && a.push("检测到 Webhook/回调地址；当前声明式协议不支持等待外部回调，请改用可轮询的查询接口。");
+	let v = J(d.body) || i.slice(1).some((e) => J(e.body));
+	v && a.push("检测到请求体鉴权字段；当前协议只支持 Header、Bearer 或 Query 鉴权，已移除密钥且禁止直接应用。");
+	let y = jt(i, r), b = u?.prefix ?? "", x = s[0], S = { ...d.query };
+	y.type === "query" && y.name && delete S[y.name];
+	let C = _t(x, b), w = Ct(d.body, h, a), T = {
+		method: d.method,
+		path: Bt(C, _),
+		...Z(d.headers) ? { headers: Z(d.headers) } : {},
+		...$(S) ? { query: $(S) } : {},
+		...d.bodyEncoding ? { bodyEncoding: d.bodyEncoding } : {},
+		...d.body === void 0 ? {} : { body: Ye.test(x.pathname) ? Tt(w, h) : w }
+	}, E = Nt(p, Mt(f)), ee = !!f && !!m && !!E, D;
+	if (ee && u) {
+		let e = s[1], t = { ...f.query };
+		y.type === "query" && y.name && delete t[y.name];
+		let n = Vt(e, t, a, E), r = Pt(m), i = It(m), o = h === "text" ? Lt(m) : void 0, c = Rt(m);
+		r || a.push("未从查询响应识别到任务状态路径。"), !i && !o && !c && a.push("未从查询响应识别到结果 URL、文本或 Base64 路径。"), r && (i || o || c) && (D = {
+			version: 2,
+			mode: "async",
+			auth: y,
+			submit: T,
+			response: {
+				type: "json",
+				taskIdPath: E,
+				...Q(p) ? { errorPath: Q(p) } : {}
+			},
+			poll: {
+				method: f.method,
+				path: vt(n.path, b),
+				...yt(e, b) ? { pathMode: "origin" } : {},
+				...Z(f.headers) ? { headers: Z(f.headers) } : {},
+				...$(n.query) ? { query: $(n.query) } : {},
+				...f.bodyEncoding ? { bodyEncoding: f.bodyEncoding === "multipart" ? "json" : f.bodyEncoding } : {},
+				...f.body === void 0 ? {} : { body: Ct(f.body, h, a) },
+				response: {
+					statusPath: r,
+					successValues: [
+						"completed",
+						"succeeded",
+						"success",
+						"done"
+					],
+					failureValues: [
+						"failed",
+						"error",
+						"canceled",
+						"cancelled"
+					],
+					result: {
+						...i ? { urlPath: i } : {},
+						...o ? { textPath: o } : {},
+						...c ? {
+							base64Path: c,
+							mimeType: h === "image" ? "image/png" : "application/octet-stream"
+						} : {}
+					},
+					...Q(m) ? { errorPath: Q(m) } : {},
+					...Ft(m) ? { progressPath: Ft(m) } : {}
+				},
+				intervalMs: 3e3
+			}
+		});
+	} else if (p && u) if (E) a.push("提交响应包含任务 ID，但未识别到完整的查询请求和查询响应，暂不能生成异步协议。");
+	else {
+		let e = It(p), t = h === "text" ? Lt(p) : void 0, n = h === "image" && Ye.test(x.pathname) ? zt(p) : Rt(p);
+		!e && !t && !n && a.push("未从同步响应识别到结果 URL、文本或 Base64 路径。"), (e || t || n) && (D = {
+			version: 2,
+			mode: "sync",
+			auth: y,
+			submit: T,
+			response: {
+				type: "json",
+				result: {
+					...e ? { urlPath: e } : {},
+					...t ? { textPath: t } : {},
+					...n ? {
+						base64Path: n,
+						mimeType: h === "image" ? "image/png" : "application/octet-stream"
+					} : {}
+				},
+				...Q(p) ? { errorPath: Q(p) } : {}
+			}
+		});
+	}
+	if (a.some((e) => e.includes("Webhook/回调")) && (D = void 0), v && (D = void 0), a.some((e) => e.startsWith(z)) && (D = void 0), D) {
+		let t = e(D);
+		t.length > 0 && (a.push(`生成的协议未通过校验：${t[0]}`), D = void 0);
+	}
+	let O = 1;
+	u || (O -= .35), _ || (O -= .2), D || (O -= .35), O -= Math.min(.24, a.length * .06), o.includes("raw-http") && (O -= .05);
+	let te = Ut(O), k = {
+		baseUrl: u?.baseUrl,
+		modelId: _,
+		category: h,
+		imageReferenceRequestMode: g,
+		protocol: D,
+		confidence: te,
+		formats: o,
+		warnings: a
+	};
+	return {
+		...k,
+		fields: Ht(k)
+	};
+}
+//#endregion
+export { Se as a, F as c, g as d, Ie as i, be as l, ge as n, _e as o, xe as r, ye as s, Wt as t, _ as u };

@@ -1,0 +1,24 @@
+{
+  "auditReportVersion": 2,
+  "registry": "https://registry.npmjs.org",
+  "omit": ["dev"],
+  "vulnerabilities": {},
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "dependencies": {
+      "prod": 287,
+      "dev": 3,
+      "optional": 91,
+      "peer": 21,
+      "peerOptional": 0,
+      "total": 401
+    }
+  }
+}

@@ -1,0 +1,1893 @@
+import { o as e, t } from "./react-Dfufv8pq.js";
+import { t as n } from "./jsx-runtime-BAkIPmuO.js";
+import { F as r, N as i, Ni as a, P as o, c as s, l as c, t as l } from "./useAppStore-CcUL4Jo0.js";
+import { i as u } from "./core-CoHQ9AE0.js";
+import { O as d } from "./fileService-zQLozbOU.js";
+import { t as f } from "./ModalOverlay-DopvjrY3.js";
+import { B as p, Rt as m, Tt as h } from "./useTooltipAutoPlacement-BSvTkR9V.js";
+import { n as g } from "./rasterImageDimensions-CX1VK2cM.js";
+import { a as _, l as v, o as y, r as b, t as x, u as S } from "./pluginRuntime-BcmSSkf4.js";
+//#region src/components/nodes/shared/toolbar/toolbarRegistry.ts
+var C = /* @__PURE__ */ e(t(), 1), w = "more";
+function T(e) {
+	return `${e.pluginId}:${e.tool.id}`;
+}
+function E(e, t) {
+	return y(e, t, "node-toolbar").map((e) => ({
+		key: T(e),
+		label: `${e.tool.title} · ${e.pluginName}`,
+		icon: e.tool.icon || "lucide:blocks",
+		defaultZone: "更多"
+	}));
+}
+function D(e) {
+	return {
+		key: w,
+		label: "更多",
+		icon: "mdi:dots-horizontal",
+		defaultZone: e
+	};
+}
+var O = [
+	{
+		key: "copy",
+		label: "复制",
+		icon: "mdi:content-copy",
+		defaultZone: "常用"
+	},
+	{
+		key: "clearEmptyLines",
+		label: "清除空行",
+		icon: "mdi:format-line-spacing",
+		defaultZone: "常用"
+	},
+	{
+		key: "showPrompt",
+		label: "查看提示词",
+		icon: "mdi:message-text-outline",
+		defaultZone: "常用"
+	},
+	{
+		key: "fullscreen",
+		label: "全屏显示",
+		icon: "mdi:fullscreen",
+		defaultZone: "常用"
+	},
+	D("常用")
+], k = [
+	{
+		key: "copyFile",
+		label: "复制视频",
+		icon: "mdi:content-copy",
+		defaultZone: "常用"
+	},
+	{
+		key: "captureFrame",
+		label: "截取帧",
+		icon: "mdi:camera-outline",
+		defaultZone: "常用"
+	},
+	{
+		key: "showPrompt",
+		label: "查看提示词",
+		icon: "mdi:message-text-outline",
+		defaultZone: "常用"
+	},
+	{
+		key: "reversePrompt",
+		label: "反推提示词",
+		icon: "mdi:text-search",
+		defaultZone: "常用"
+	},
+	{
+		key: "fullscreen",
+		label: "全屏预览",
+		icon: "mdi:fullscreen",
+		defaultZone: "常用"
+	},
+	D("常用")
+], A = [
+	{
+		key: "upload",
+		label: "上传全景图",
+		icon: "mdi:upload",
+		defaultZone: "常用"
+	},
+	{
+		key: "toggleMode",
+		label: "切换视图模式",
+		icon: "mdi:rotate-3d",
+		defaultZone: "常用"
+	},
+	{
+		key: "screenshot",
+		label: "截图当前视角",
+		icon: "mdi:camera",
+		defaultZone: "常用"
+	},
+	{
+		key: "fullscreen",
+		label: "全屏显示",
+		icon: "mdi:fullscreen",
+		defaultZone: "常用"
+	},
+	D("常用")
+], j = [
+	{
+		key: "matting",
+		label: "遮罩编辑器",
+		icon: "mdi:circle-edit-outline",
+		defaultZone: "Primary"
+	},
+	{
+		key: "expand",
+		label: "扩图",
+		icon: "mdi:arrow-expand-all",
+		defaultZone: "Primary"
+	},
+	{
+		key: "multiGrid",
+		label: "宫格裁切",
+		icon: "mdi:grid",
+		defaultZone: "Primary"
+	},
+	{
+		key: "cameraStudio",
+		label: "小逻摄影棚",
+		icon: "mdi:camera-control",
+		defaultZone: "Primary"
+	},
+	{
+		key: "repaint",
+		label: "查看提示词",
+		icon: "mdi:message-text-outline",
+		defaultZone: "Primary"
+	},
+	{
+		key: "upscale",
+		label: "高清超分",
+		icon: "mdi:image-auto-adjust",
+		defaultZone: "Primary"
+	},
+	{
+		key: "subjectMatting",
+		label: "自动识别主体",
+		icon: "mdi:hexagon-outline",
+		defaultZone: "Primary"
+	},
+	{
+		key: "annotate",
+		label: "标注",
+		icon: "mdi:draw-pen",
+		defaultZone: "Primary"
+	},
+	{
+		key: "crop",
+		label: "裁切",
+		icon: "mdi:crop",
+		defaultZone: "Primary"
+	},
+	{
+		key: "compose",
+		label: "多图编辑",
+		icon: "mdi:layers-triple-outline",
+		defaultZone: "Primary"
+	},
+	D("Primary"),
+	{
+		key: "upload",
+		label: "上传图片",
+		icon: "mdi:upload",
+		defaultZone: "Primary"
+	},
+	{
+		key: "reversePrompt",
+		label: "反推提示词",
+		icon: "mdi:text-search",
+		defaultZone: "Primary"
+	},
+	{
+		key: "copyFile",
+		label: "复制图像",
+		icon: "mdi:content-copy",
+		defaultZone: "Secondary"
+	},
+	{
+		key: "history",
+		label: "生成历史",
+		icon: "mdi:history",
+		defaultZone: "Secondary"
+	},
+	{
+		key: "fullscreen",
+		label: "全屏显示",
+		icon: "mdi:fullscreen",
+		defaultZone: "Secondary"
+	}
+], M = [
+	{
+		key: "togglePlay",
+		label: "播放/暂停",
+		icon: "mdi:play-pause",
+		defaultZone: "常用"
+	},
+	{
+		key: "speechToText",
+		label: "语音转文本",
+		icon: "mdi:microphone-message",
+		defaultZone: "常用"
+	},
+	{
+		key: "transcribe",
+		label: "转录音频",
+		icon: "mdi:text-box-search-outline",
+		defaultZone: "常用"
+	},
+	{
+		key: "copyFile",
+		label: "复制音频",
+		icon: "mdi:content-copy",
+		defaultZone: "常用"
+	},
+	{
+		key: "upload",
+		label: "上传音频",
+		icon: "mdi:upload",
+		defaultZone: "常用"
+	},
+	{
+		key: "fullscreen",
+		label: "全屏显示",
+		icon: "mdi:fullscreen",
+		defaultZone: "常用"
+	},
+	D("常用")
+];
+function N(e, t = 1) {
+	let n = /* @__PURE__ */ new Map();
+	for (let t of e) {
+		let e = n.get(t.defaultZone) || [];
+		e.push(t.key), n.set(t.defaultZone, e);
+	}
+	let r = [], i = 0;
+	for (let [e, t] of n) r.push({
+		id: `zone-${i++}`,
+		name: e,
+		buttonKeys: t
+	});
+	return {
+		zones: r,
+		version: t
+	};
+}
+var P = N(O, 2), ee = N(k, 2), F = N(A, 2), te = N(j, 8), ne = N(M, 3);
+function re(e) {
+	if (e.version >= 7) return e;
+	let t = e.zones.some((e) => e.buttonKeys.includes("cameraStudio")), n = e.zones.map((e) => {
+		let n = [];
+		for (let r of e.buttonKeys) {
+			if (r === "multiAngle") {
+				t ||= (n.push("cameraStudio"), !0);
+				continue;
+			}
+			n.push(r);
+		}
+		return {
+			...e,
+			buttonKeys: n
+		};
+	});
+	if (!t && e.version < 3) {
+		let e = n.findIndex((e) => e.name === "Primary");
+		e >= 0 ? n[e] = {
+			...n[e],
+			buttonKeys: [...n[e].buttonKeys, "cameraStudio"]
+		} : n.push({
+			id: "zone-camera-studio",
+			name: "Primary",
+			buttonKeys: ["cameraStudio"]
+		});
+	}
+	if (!n.some((e) => e.buttonKeys.includes("history"))) {
+		let e = n.findIndex((e) => e.name === "Secondary");
+		if (e >= 0) n[e] = {
+			...n[e],
+			buttonKeys: [...n[e].buttonKeys, "history"]
+		};
+		else if (n.length > 0) {
+			let e = n.length - 1;
+			n[e] = {
+				...n[e],
+				buttonKeys: [...n[e].buttonKeys, "history"]
+			};
+		} else n = [{
+			id: "zone-image-history",
+			name: "Secondary",
+			buttonKeys: ["history"]
+		}];
+	}
+	return e.version === 4 && (n = n.map((e) => {
+		let t = e.buttonKeys.indexOf("history"), n = e.buttonKeys.indexOf("fullscreen");
+		if (t < 0 || n !== t + 1) return e;
+		let r = [...e.buttonKeys];
+		return [r[t], r[n]] = [r[n], r[t]], {
+			...e,
+			buttonKeys: r
+		};
+	})), [[[
+		"matting",
+		"expand",
+		"multiGrid",
+		"cameraStudio",
+		"repaint",
+		"upscale",
+		"subjectMatting"
+	], [
+		"annotate",
+		"crop",
+		"compose",
+		"upload",
+		"copyFile",
+		"fullscreen",
+		"history"
+	]], [[
+		"matting",
+		"expand",
+		"multiGrid",
+		"cameraStudio",
+		"repaint",
+		"upscale",
+		"subjectMatting",
+		"annotate",
+		"crop",
+		"compose",
+		"upload",
+		"copyFile"
+	], ["fullscreen", "history"]]].some((e) => n.length === e.length && n.every((t, n) => t.buttonKeys.length === e[n].length && t.buttonKeys.every((t, r) => t === e[n][r]))) ? R("ai-image") : {
+		...e,
+		zones: n,
+		version: 7
+	};
+}
+function ie(e) {
+	if (e.zones.some((e) => e.buttonKeys.includes("speechToText"))) return e;
+	let t = e.zones.map((e) => ({
+		...e,
+		buttonKeys: [...e.buttonKeys]
+	})), n = t.findIndex((e) => e.buttonKeys.includes("togglePlay"));
+	if (n >= 0) {
+		let r = t[n].buttonKeys.indexOf("togglePlay") + 1;
+		return t[n].buttonKeys.splice(r, 0, "speechToText"), {
+			...e,
+			zones: t
+		};
+	}
+	return t.length > 0 ? (t[0].buttonKeys.unshift("speechToText"), {
+		...e,
+		zones: t
+	}) : {
+		...e,
+		zones: [{
+			id: "zone-audio-asr",
+			name: "常用",
+			buttonKeys: ["speechToText"]
+		}]
+	};
+}
+function ae(e, t) {
+	let n = e === "ai-image" ? 8 : e === "ai-audio" ? 3 : [
+		"ai-text",
+		"ai-video",
+		"ai-panorama"
+	].includes(e) ? 2 : t.version;
+	if (t.version >= n) return t;
+	let r = e === "ai-image" ? re(t) : e === "ai-audio" ? ie(t) : t;
+	if (r.version >= n) return r;
+	let i = I(e).find((e) => e.key === w);
+	if (!i) return r;
+	let a = r.zones.map((e) => ({
+		...e,
+		buttonKeys: [...e.buttonKeys]
+	}));
+	if (!a.some((e) => e.buttonKeys.includes("more"))) {
+		let t = a.findIndex((e) => e.name === i.defaultZone);
+		if (t < 0 && (t = a.length - 1), t >= 0) {
+			let n = a[t], r = [...n.buttonKeys], i = e === "ai-image" ? r.indexOf("compose") : -1;
+			r.splice(i >= 0 ? i + 1 : r.length, 0, w), a[t] = {
+				...n,
+				buttonKeys: r
+			};
+		} else a = [{
+			id: "zone-more",
+			name: i.defaultZone,
+			buttonKeys: [w]
+		}];
+	}
+	return {
+		...r,
+		zones: a,
+		version: n
+	};
+}
+function I(e) {
+	switch (e) {
+		case "ai-text": return O;
+		case "ai-video": return k;
+		case "ai-panorama": return A;
+		case "ai-image": return j;
+		case "ai-audio": return M;
+		default: return [];
+	}
+}
+function L(e, t) {
+	return e.filter((e) => e.key !== "more" && !t.has(e.key));
+}
+function R(e) {
+	let t = (e) => ({
+		...e,
+		zones: e.zones.map((e) => ({
+			...e,
+			buttonKeys: [...e.buttonKeys]
+		}))
+	});
+	switch (e) {
+		case "ai-text": return t(P);
+		case "ai-video": return t(ee);
+		case "ai-panorama": return t(F);
+		case "ai-image": return t(te);
+		case "ai-audio": return t(ne);
+		default: return {
+			zones: [],
+			version: 1
+		};
+	}
+}
+//#endregion
+//#region src/hooks/useToolbarEdit.ts
+var z = 600;
+function B({ nodeType: e }) {
+	let t = l((t) => t.toolbarLayouts[e]), n = l((e) => e.setToolbarLayout), r = l((e) => e.installedPlugins), i = (0, C.useMemo)(() => [...I(e), ...E(r, e)], [r, e]), [a, o] = (0, C.useState)(!1), [s, c] = (0, C.useState)(null), u = (0, C.useMemo)(() => ae(e, t ?? R(e)), [e, t]), d = a && s ? s : u, f = (0, C.useRef)(null), p = (0, C.useRef)(!1), m = (0, C.useCallback)(() => {
+		f.current &&= (clearTimeout(f.current), null);
+	}, []), h = (0, C.useCallback)(() => {
+		p.current = !1, f.current = setTimeout(() => {
+			p.current = !0, o((e) => (e || c(structuredClone(u)), !e));
+		}, z);
+	}, [u]), g = (0, C.useCallback)(() => {
+		m();
+	}, [m]), _ = (0, C.useCallback)(() => {
+		o(!1), s && n(e, s), c(null);
+	}, [
+		s,
+		e,
+		n
+	]), v = (0, C.useCallback)((e, t) => {
+		c((n) => n && {
+			...n,
+			zones: n.zones.map((n) => n.id === e ? {
+				...n,
+				buttonKeys: n.buttonKeys.filter((e) => e !== t)
+			} : n)
+		});
+	}, []), y = (0, C.useCallback)((e, t) => {
+		c((n) => !n || n.zones.some((e) => e.buttonKeys.includes(t)) ? n : {
+			...n,
+			zones: n.zones.map((n) => n.id === e ? {
+				...n,
+				buttonKeys: [...n.buttonKeys, t]
+			} : n)
+		});
+	}, []), b = (0, C.useCallback)((e, t, n, r) => {
+		c((i) => {
+			if (!i) return i;
+			if (e === n) {
+				let n = i.zones.findIndex((t) => t.id === e);
+				if (n === -1) return i;
+				let a = i.zones[n], o = [...a.buttonKeys], [s] = o.splice(t, 1);
+				o.splice(r, 0, s);
+				let c = [...i.zones];
+				return c[n] = {
+					...a,
+					buttonKeys: o
+				}, {
+					...i,
+					zones: c
+				};
+			}
+			let a = i.zones.find((t) => t.id === e);
+			if (!a) return i;
+			let o = a.buttonKeys[t];
+			if (!o) return i;
+			let s = i.zones.map((i) => {
+				if (i.id === e) {
+					let e = [...i.buttonKeys];
+					return e.splice(t, 1), {
+						...i,
+						buttonKeys: e
+					};
+				}
+				if (i.id === n) {
+					let e = [...i.buttonKeys];
+					return e.splice(r, 0, o), {
+						...i,
+						buttonKeys: e
+					};
+				}
+				return i;
+			}).filter((t) => t.buttonKeys.length > 0 || t.id === e || t.id === n);
+			return {
+				...i,
+				zones: s
+			};
+		});
+	}, []), x = (0, C.useCallback)(() => {
+		c((e) => {
+			if (!e) return e;
+			let t = `zone-${Date.now()}`;
+			return {
+				...e,
+				zones: [...e.zones, {
+					id: t,
+					name: "新分区",
+					buttonKeys: []
+				}]
+			};
+		});
+	}, []), S = (0, C.useCallback)((e) => {
+		c((t) => {
+			if (!t) return t;
+			let n = t.zones.filter((t) => t.id !== e || t.buttonKeys.length > 0);
+			return n.length === 0 ? {
+				...t,
+				zones: [{
+					id: "zone-0",
+					name: "常用",
+					buttonKeys: []
+				}]
+			} : {
+				...t,
+				zones: n
+			};
+		});
+	}, []), w = (0, C.useCallback)((e, t) => {
+		c((n) => n && {
+			...n,
+			zones: n.zones.map((n) => n.id === e ? {
+				...n,
+				name: t
+			} : n)
+		});
+	}, []), T = (0, C.useCallback)((e) => {
+		c(structuredClone(e));
+	}, []), D = (0, C.useCallback)(() => {
+		let t = R(e);
+		c(structuredClone(t));
+	}, [e]), O = (0, C.useMemo)(() => {
+		let e = /* @__PURE__ */ new Set();
+		for (let t of d.zones) for (let n of t.buttonKeys) e.add(n);
+		return e;
+	}, [d]), k = (0, C.useMemo)(() => i.filter((e) => !O.has(e.key)), [i, O]);
+	return {
+		isEditing: a,
+		layout: d,
+		exitEdit: _,
+		longPressHandlers: (0, C.useMemo)(() => ({
+			onMouseDown: h,
+			onMouseUp: g,
+			onMouseLeave: g,
+			onTouchStart: h,
+			onTouchEnd: g
+		}), [h, g]),
+		removeButton: v,
+		addButton: y,
+		moveButtonAcross: b,
+		addZone: x,
+		removeZone: S,
+		renameZone: w,
+		setToolbarLayout: T,
+		resetLayout: D,
+		registry: i,
+		activeButtonKeys: O,
+		removedButtons: k
+	};
+}
+//#endregion
+//#region src/components/nodes/shared/toolbar/ToolbarEditor.tsx
+var V = n(), H = 5, oe = 420, se = 1.2, ce = (e) => 1 - (1 - e) ** 3;
+function U({ icon: e }) {
+	return e ? e.includes(":") ? /* @__PURE__ */ (0, V.jsx)(g, {
+		icon: e,
+		width: 14,
+		height: 14
+	}) : /* @__PURE__ */ (0, V.jsx)("span", {
+		style: { fontSize: 12 },
+		children: e
+	}) : null;
+}
+function le({ icon: e, label: t, isPreset: n, onClick: r }) {
+	return /* @__PURE__ */ (0, V.jsxs)("button", {
+		type: "button",
+		className: `toolbar-edit-bank-item nodrag${n ? " is-preset" : ""}`,
+		onClick: r,
+		"data-tooltip": t,
+		children: [/* @__PURE__ */ (0, V.jsx)("span", {
+			className: "toolbar-edit-bank-icon",
+			children: /* @__PURE__ */ (0, V.jsx)(U, { icon: e })
+		}), /* @__PURE__ */ (0, V.jsx)("span", {
+			className: "toolbar-edit-bank-label",
+			children: t
+		})]
+	});
+}
+function ue({ name: e, onRename: t }) {
+	let [n, r] = (0, C.useState)(!1), [i, a] = (0, C.useState)(e), o = (0, C.useRef)(null);
+	return (0, C.useEffect)(() => {
+		n && o.current && (o.current.focus(), o.current.select());
+	}, [n]), n ? /* @__PURE__ */ (0, V.jsx)("input", {
+		ref: o,
+		className: "toolbar-edit-zone-name-input nodrag",
+		value: i,
+		onChange: (e) => a(e.target.value),
+		onBlur: () => {
+			t(i || e), r(!1);
+		},
+		onKeyDown: (n) => {
+			n.key === "Enter" && (t(i || e), r(!1)), n.key === "Escape" && (a(e), r(!1));
+		},
+		onClick: (e) => e.stopPropagation()
+	}) : /* @__PURE__ */ (0, V.jsxs)("span", {
+		className: "toolbar-edit-zone-name",
+		onClick: (e) => {
+			e.stopPropagation(), r(!0);
+		},
+		"data-tooltip": "点击编辑分区名",
+		children: [e, /* @__PURE__ */ (0, V.jsx)(g, {
+			icon: "mdi:pencil",
+			width: 10,
+			height: 10,
+			style: {
+				marginLeft: 4,
+				opacity: .5
+			}
+		})]
+	});
+}
+function W({ edit: e, presetItems: t = [], userPresetItems: n = [], nodeType: r }) {
+	let i = (0, C.useRef)(null), o = (0, C.useRef)(null), s = (0, C.useRef)(null), c = (0, C.useRef)(null), { getViewport: u, screenToFlowPosition: d, setCenter: f, setViewport: m } = a(), h = (0, C.useRef)(null), _ = (0, C.useRef)(null), [v, y] = (0, C.useState)(null), [b, x] = (0, C.useState)(null), [S, w] = (0, C.useState)(null), T = (0, C.useRef)(null), E = e.layout.zones, D = e.moveButtonAcross, O = e.setToolbarLayout, k = e.exitEdit, A = (0, C.useCallback)(() => {
+		let e = h.current;
+		e && (h.current = null, m(e, {
+			duration: oe,
+			ease: ce
+		}));
+	}, [m]), j = (0, C.useCallback)(() => {
+		A(), k();
+	}, [k, A]);
+	(0, C.useEffect)(() => (_.current !== null && (cancelAnimationFrame(_.current), _.current = null), () => {
+		h.current && (_.current = requestAnimationFrame(() => {
+			_.current = null, A();
+		}));
+	}), [A]), (0, C.useEffect)(() => {
+		if (!e.isEditing) return;
+		h.current ??= u();
+		let t = requestAnimationFrame(() => {
+			let e = i.current;
+			if (!e) return;
+			let t = e.getBoundingClientRect(), n = d({
+				x: t.left + t.width / 2,
+				y: t.top + t.height / 2
+			});
+			f(n.x, n.y, {
+				zoom: se,
+				duration: oe,
+				ease: ce
+			});
+		});
+		return () => cancelAnimationFrame(t);
+	}, [
+		e.isEditing,
+		u,
+		d,
+		f
+	]);
+	let M = (0, C.useCallback)((e) => {
+		let t = i.current?.querySelector(".toolbar-edit-zones"), n = t ? Array.from(t.querySelectorAll(".toolbar-edit-zone")) : [];
+		if (!t || n.length === 0) return null;
+		let r = t.getBoundingClientRect();
+		if (e < r.top - 24 || e > r.bottom + 24) return null;
+		for (let t = 0; t < n.length; t++) {
+			let r = n[t].getBoundingClientRect();
+			if (e < r.top + r.height / 2) return t;
+		}
+		return n.length;
+	}, []), N = (0, C.useCallback)((e) => {
+		w((t) => t === e ? t : e);
+	}, []), P = (0, C.useCallback)((e, t, n) => {
+		let r = c.current;
+		r && (r.style.setProperty("--toolbar-zone-drag-x", `${e - n.offsetX}px`), r.style.setProperty("--toolbar-zone-drag-y", `${t - n.offsetY}px`));
+	}, []), ee = (0, C.useCallback)((e, t, n) => {
+		e.active = !0, x(e.fromIndex), i.current?.classList.add("is-zone-dragging"), document.body.classList.add("toolbar-edit-zone-dragging");
+		let r = e.sourceEl.cloneNode(!0);
+		r.classList.remove("is-zone-drag-from", "is-zone-drag-over", "is-zone-drag-over-end"), r.classList.add("toolbar-edit-zone-drag-ghost"), r.removeAttribute("data-zone-id"), r.querySelectorAll("[data-tooltip]").forEach((e) => e.removeAttribute("data-tooltip")), r.setAttribute("aria-hidden", "true"), r.style.width = `${e.sourceEl.getBoundingClientRect().width}px`, document.body.appendChild(r), c.current = r, P(t, n, e);
+	}, [P]), F = (0, C.useCallback)(() => {
+		let e = T.current;
+		e && (T.current = null, e.frameId !== null && cancelAnimationFrame(e.frameId), i.current?.classList.remove("is-zone-dragging"), document.body.classList.remove("toolbar-edit-zone-dragging"), c.current?.remove(), c.current = null, x(null), N(null), e.captureEl.hasPointerCapture(e.pointerId) && e.captureEl.releasePointerCapture(e.pointerId));
+	}, [N]), te = (0, C.useCallback)((e, t) => {
+		let n = T.current;
+		n && (n.lastX = e, n.lastY = t, n.frameId === null && (n.frameId = requestAnimationFrame(() => {
+			let e = T.current;
+			e?.active && (e.frameId = null, P(e.lastX, e.lastY, e), N(M(e.lastY)));
+		})));
+	}, [
+		M,
+		P,
+		N
+	]), ne = (0, C.useCallback)((e, t) => {
+		if (!e.isPrimary || e.button !== 0) return;
+		e.preventDefault(), e.stopPropagation();
+		let n = e.currentTarget;
+		n.setPointerCapture(e.pointerId);
+		let r = n.closest(".toolbar-edit-zone");
+		if (!r) {
+			n.releasePointerCapture(e.pointerId);
+			return;
+		}
+		let i = r.getBoundingClientRect();
+		T.current = {
+			fromIndex: t,
+			pointerId: e.pointerId,
+			startX: e.clientX,
+			startY: e.clientY,
+			lastX: e.clientX,
+			lastY: e.clientY,
+			offsetX: e.clientX - i.left,
+			offsetY: e.clientY - i.top,
+			active: !1,
+			frameId: null,
+			sourceEl: r,
+			captureEl: n
+		};
+	}, []), re = (0, C.useCallback)((e) => {
+		let t = T.current;
+		if (!(!t || e.pointerId !== t.pointerId)) {
+			if (e.preventDefault(), !t.active) {
+				let n = e.clientX - t.startX, r = e.clientY - t.startY;
+				if (n * n + r * r < H * H) return;
+				ee(t, e.clientX, e.clientY);
+			}
+			te(e.clientX, e.clientY);
+		}
+	}, [te, ee]), ie = (0, C.useCallback)((t) => {
+		let n = T.current;
+		if (!n || t.pointerId !== n.pointerId) return;
+		let r = n.active ? M(t.clientY) : null;
+		if (F(), r !== null && r !== n.fromIndex && r !== n.fromIndex + 1) {
+			let t = [...E], [i] = t.splice(n.fromIndex, 1), a = r > n.fromIndex ? r - 1 : r;
+			t.splice(a, 0, i), O({
+				...e.layout,
+				zones: t
+			});
+		}
+	}, [
+		M,
+		e.layout,
+		F,
+		O,
+		E
+	]), ae = (0, C.useCallback)((e) => {
+		T.current?.pointerId === e.pointerId && F();
+	}, [F]), I = l((e) => e.userPresets), L = (0, C.useMemo)(() => {
+		let e = p(r), t = [], n = (e) => {
+			for (let r of e) r.promptTemplate && t.push({
+				id: r.id,
+				title: r.title,
+				icon: r.icon,
+				description: r.description
+			}), r.children && n(r.children);
+		};
+		return n(e), t;
+	}, [r]), R = (0, C.useMemo)(() => I.filter((e) => e.nodeType === r), [I, r]), z = (0, C.useCallback)((e, t) => {
+		if (!i.current) return null;
+		let n = Array.from(i.current.querySelectorAll(".toolbar-edit-zone"));
+		for (let r of n) {
+			let n = r.getBoundingClientRect();
+			if (t >= n.top && t <= n.bottom && e >= n.left && e <= n.right) {
+				let n = r.dataset.zoneId;
+				if (!n) return null;
+				let i = r.querySelector(".toolbar-edit-zone-body"), a = i ? Array.from(i.querySelectorAll(".toolbar-edit-btn")) : [];
+				if (a.length === 0) return {
+					zoneId: n,
+					index: 0
+				};
+				let o = [];
+				a.forEach((e, t) => {
+					let n = e.getBoundingClientRect(), r = o.at(-1);
+					if (!r || n.top > r.bottom - 2) {
+						o.push({
+							top: n.top,
+							bottom: n.bottom,
+							items: [{
+								index: t,
+								rect: n
+							}]
+						});
+						return;
+					}
+					r.bottom = Math.max(r.bottom, n.bottom), r.items.push({
+						index: t,
+						rect: n
+					});
+				});
+				let s = o[0], c = Infinity;
+				for (let e of o) {
+					let n = t < e.top ? e.top - t : t > e.bottom ? t - e.bottom : 0;
+					n < c && (s = e, c = n);
+				}
+				for (let t of s.items) if (e < t.rect.left + t.rect.width / 2) return {
+					zoneId: n,
+					index: t.index
+				};
+				return {
+					zoneId: n,
+					index: s.items.at(-1).index + 1
+				};
+			}
+		}
+		return null;
+	}, []), B = (0, C.useCallback)((e) => {
+		y((t) => t?.zoneId === e?.zoneId && t?.index === e?.index ? t : e);
+	}, []), W = (0, C.useCallback)((e, t, n) => {
+		let r = s.current;
+		r && (r.style.setProperty("--toolbar-drag-x", `${e - n.offsetX}px`), r.style.setProperty("--toolbar-drag-y", `${t - n.offsetY}px`));
+	}, []), de = (0, C.useCallback)((e, t, n) => {
+		e.active = !0, e.sourceEl.classList.add("is-dragging"), i.current?.classList.add("is-dragging"), document.body.classList.add("toolbar-edit-dragging");
+		let r = e.sourceEl.cloneNode(!0);
+		r.classList.remove("is-dragging"), r.classList.add("toolbar-edit-drag-ghost"), r.removeAttribute("data-tooltip"), r.querySelectorAll("[data-tooltip]").forEach((e) => e.removeAttribute("data-tooltip")), r.setAttribute("aria-hidden", "true"), r.style.width = `${e.sourceEl.getBoundingClientRect().width}px`, document.body.appendChild(r), s.current = r, W(t, n, e);
+	}, [W]), G = (0, C.useCallback)(() => {
+		let e = o.current;
+		e && (o.current = null, e.frameId !== null && cancelAnimationFrame(e.frameId), e.sourceEl.classList.remove("is-dragging"), i.current?.classList.remove("is-dragging"), document.body.classList.remove("toolbar-edit-dragging"), s.current?.remove(), s.current = null, B(null), e.captureEl.hasPointerCapture(e.pointerId) && e.captureEl.releasePointerCapture(e.pointerId));
+	}, [B]), fe = (0, C.useCallback)((e, t) => {
+		let n = o.current;
+		n && (n.lastX = e, n.lastY = t, n.frameId === null && (n.frameId = requestAnimationFrame(() => {
+			let e = o.current;
+			e?.active && (e.frameId = null, W(e.lastX, e.lastY, e), B(z(e.lastX, e.lastY)));
+		})));
+	}, [
+		z,
+		W,
+		B
+	]), K = (0, C.useCallback)((e, t, n) => {
+		if (!e.isPrimary || e.button !== 0 || e.target.closest("button")) return;
+		e.preventDefault(), e.stopPropagation();
+		let r = e.currentTarget;
+		r.setPointerCapture(e.pointerId);
+		let i = r.getBoundingClientRect();
+		o.current = {
+			zoneId: t,
+			index: n,
+			pointerId: e.pointerId,
+			startX: e.clientX,
+			startY: e.clientY,
+			lastX: e.clientX,
+			lastY: e.clientY,
+			offsetX: e.clientX - i.left,
+			offsetY: e.clientY - i.top,
+			active: !1,
+			frameId: null,
+			sourceEl: r,
+			captureEl: r
+		};
+	}, []), q = (0, C.useCallback)((e) => {
+		let t = o.current;
+		if (!(!t || e.pointerId !== t.pointerId)) {
+			if (e.preventDefault(), !t.active) {
+				let n = e.clientX - t.startX, r = e.clientY - t.startY;
+				if (n * n + r * r < H * H) return;
+				de(t, e.clientX, e.clientY);
+			}
+			fe(e.clientX, e.clientY);
+		}
+	}, [fe, de]), J = (0, C.useCallback)((e) => {
+		let t = o.current;
+		if (!(!t || e.pointerId !== t.pointerId)) {
+			if (t.active) {
+				let n = z(e.clientX, e.clientY);
+				if (n) {
+					let e = n.zoneId === t.zoneId && n.index > t.index ? n.index - 1 : n.index;
+					(n.zoneId !== t.zoneId || e !== t.index) && D(t.zoneId, t.index, n.zoneId, e);
+				}
+			}
+			G();
+		}
+	}, [
+		z,
+		D,
+		G
+	]), pe = (0, C.useCallback)((e) => {
+		o.current?.pointerId === e.pointerId && G();
+	}, [G]), me = (0, C.useCallback)((e) => {
+		T.current ? re(e) : q(e);
+	}, [q, re]), he = (0, C.useCallback)((e) => {
+		T.current ? ie(e) : J(e);
+	}, [J, ie]), ge = (0, C.useCallback)((e) => {
+		T.current ? ae(e) : pe(e);
+	}, [pe, ae]);
+	(0, C.useEffect)(() => () => {
+		let e = o.current;
+		e?.frameId !== null && e?.frameId !== void 0 && cancelAnimationFrame(e.frameId), e?.sourceEl.classList.remove("is-dragging");
+		let t = T.current;
+		t?.frameId !== null && t?.frameId !== void 0 && cancelAnimationFrame(t.frameId), document.body.classList.remove("toolbar-edit-dragging"), document.body.classList.remove("toolbar-edit-zone-dragging"), s.current?.remove(), c.current?.remove(), s.current = null, c.current = null, o.current = null, T.current = null;
+	}, []), (0, C.useEffect)(() => {
+		let t = (e) => {
+			i.current && !i.current.contains(e.target) && j();
+		};
+		if (e.isEditing) return document.addEventListener("mousedown", t, !0), () => document.removeEventListener("mousedown", t, !0);
+	}, [e.isEditing, j]);
+	let Y = (0, C.useCallback)((t) => {
+		let n = E[0]?.id;
+		n && e.addButton(n, t);
+	}, [e, E]);
+	if (!e.isEditing) return null;
+	let _e = e.removedButtons;
+	return /* @__PURE__ */ (0, V.jsxs)("div", {
+		className: `toolbar-editor nodrag toolbar-editor--${r}`,
+		ref: i,
+		onPointerMove: me,
+		onPointerUp: he,
+		onPointerCancel: ge,
+		onLostPointerCapture: ge,
+		children: [/* @__PURE__ */ (0, V.jsxs)("div", {
+			className: "toolbar-edit-bank nodrag",
+			children: [
+				/* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "toolbar-edit-bank-header",
+					children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "按钮库" }), /* @__PURE__ */ (0, V.jsx)("span", {
+						className: "toolbar-edit-bank-hint",
+						children: "点击添加按钮到下方 Toolbar"
+					})]
+				}),
+				/* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "toolbar-edit-bank-list nodrag",
+					children: [
+						_e.map((e) => /* @__PURE__ */ (0, V.jsx)(le, {
+							icon: e.icon,
+							label: e.label,
+							onClick: () => Y(e.key)
+						}, e.key)),
+						t.map((t) => e.activeButtonKeys.has(t.id) ? null : /* @__PURE__ */ (0, V.jsx)(le, {
+							icon: t.icon,
+							label: t.title,
+							isPreset: !0,
+							onClick: () => Y(t.id)
+						}, `preset-${t.id}`)),
+						n.map((t) => e.activeButtonKeys.has(t.id) ? null : /* @__PURE__ */ (0, V.jsx)(le, {
+							icon: t.icon || "mdi:star",
+							label: t.name,
+							isPreset: !0,
+							onClick: () => Y(t.id)
+						}, `upreset-${t.id}`))
+					]
+				}),
+				/* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "toolbar-edit-bank-actions",
+					children: [/* @__PURE__ */ (0, V.jsxs)("button", {
+						type: "button",
+						className: "toolbar-edit-action-btn nodrag",
+						onClick: e.resetLayout,
+						"data-tooltip": "恢复为默认按钮布局",
+						children: [/* @__PURE__ */ (0, V.jsx)(g, {
+							icon: "mdi:restore",
+							width: 14,
+							height: 14
+						}), /* @__PURE__ */ (0, V.jsx)("span", { children: "恢复默认" })]
+					}), /* @__PURE__ */ (0, V.jsxs)("button", {
+						type: "button",
+						className: "toolbar-edit-action-btn toolbar-edit-action-btn--done nodrag",
+						onClick: j,
+						children: [/* @__PURE__ */ (0, V.jsx)(g, {
+							icon: "mdi:check",
+							width: 14,
+							height: 14
+						}), /* @__PURE__ */ (0, V.jsx)("span", { children: "完成" })]
+					})]
+				})
+			]
+		}), /* @__PURE__ */ (0, V.jsxs)("div", {
+			className: "toolbar-edit-main nodrag",
+			children: [/* @__PURE__ */ (0, V.jsxs)("div", {
+				className: "toolbar-edit-zones nodrag",
+				children: [E.map((t, n) => /* @__PURE__ */ (0, V.jsxs)("div", {
+					className: `toolbar-edit-zone nodrag${v?.zoneId === t.id ? " drag-over" : ""}${b === n ? " is-zone-drag-from" : ""}${S === n ? " is-zone-drag-over" : ""}${S === E.length && n === E.length - 1 ? " is-zone-drag-over-end" : ""}`,
+					"data-zone-id": t.id,
+					children: [
+						/* @__PURE__ */ (0, V.jsxs)("div", {
+							className: "toolbar-edit-zone-header",
+							children: [
+								/* @__PURE__ */ (0, V.jsx)("span", {
+									className: "toolbar-edit-btn-grip nodrag toolbar-edit-zone-grip",
+									onPointerDown: (e) => ne(e, n),
+									"data-tooltip": "拖拽调整分区顺序",
+									children: /* @__PURE__ */ (0, V.jsx)(g, {
+										icon: "mdi:drag-vertical",
+										width: 12,
+										height: 12
+									})
+								}),
+								/* @__PURE__ */ (0, V.jsx)(ue, {
+									name: t.name,
+									onRename: (n) => e.renameZone(t.id, n)
+								}),
+								t.buttonKeys.length === 0 && E.length > 1 && /* @__PURE__ */ (0, V.jsx)("button", {
+									type: "button",
+									className: "toolbar-edit-zone-del nodrag",
+									onClick: () => e.removeZone(t.id),
+									"data-tooltip": "删除此分区",
+									children: /* @__PURE__ */ (0, V.jsx)(g, {
+										icon: "mdi:close",
+										width: 12,
+										height: 12
+									})
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, V.jsxs)("div", {
+							className: "toolbar-edit-zone-body nodrag",
+							children: [
+								t.buttonKeys.map((n, r) => {
+									let i = v?.zoneId === t.id && v?.index === r, a = e.registry.find((e) => e.key === n) ?? (() => {
+										let e = L.find((e) => e.id === n), r = R.find((e) => e.id === n);
+										return {
+											key: n,
+											label: e?.title || r?.name || n,
+											icon: e?.icon || r?.icon || "mdi:star",
+											defaultZone: t.name
+										};
+									})();
+									return /* @__PURE__ */ (0, V.jsxs)("span", {
+										style: { display: "contents" },
+										children: [i && /* @__PURE__ */ (0, V.jsx)("div", { className: "toolbar-edit-insert-indicator" }), /* @__PURE__ */ (0, V.jsxs)("div", {
+											className: "toolbar-edit-btn nodrag",
+											"data-tooltip": `${a.label} · 拖拽排序 / 点 × 移除`,
+											onPointerDown: (e) => K(e, t.id, r),
+											children: [
+												/* @__PURE__ */ (0, V.jsx)("span", {
+													className: "toolbar-edit-btn-grip nodrag",
+													children: /* @__PURE__ */ (0, V.jsx)(g, {
+														icon: "mdi:drag-vertical",
+														width: 12,
+														height: 12
+													})
+												}),
+												/* @__PURE__ */ (0, V.jsx)("span", {
+													className: "toolbar-edit-btn-icon",
+													children: /* @__PURE__ */ (0, V.jsx)(U, { icon: a.icon })
+												}),
+												/* @__PURE__ */ (0, V.jsx)("span", {
+													className: "toolbar-edit-btn-label",
+													children: a.label
+												}),
+												/* @__PURE__ */ (0, V.jsx)("button", {
+													type: "button",
+													className: "toolbar-edit-btn-remove nodrag",
+													onClick: (r) => {
+														r.stopPropagation(), e.removeButton(t.id, n);
+													},
+													"data-tooltip": "移除此按钮",
+													children: /* @__PURE__ */ (0, V.jsx)(g, {
+														icon: "mdi:close",
+														width: 12,
+														height: 12
+													})
+												})
+											]
+										})]
+									}, n);
+								}),
+								v?.zoneId === t.id && (v?.index ?? -1) >= t.buttonKeys.length && /* @__PURE__ */ (0, V.jsx)("div", { className: "toolbar-edit-insert-indicator toolbar-edit-insert-indicator--end" }),
+								t.buttonKeys.length === 0 && v?.zoneId !== t.id && /* @__PURE__ */ (0, V.jsx)("div", {
+									className: "toolbar-edit-zone-empty",
+									children: "拖拽按钮到此处或点击上方按钮添加"
+								})
+							]
+						}),
+						E.indexOf(t) < E.length - 1 && /* @__PURE__ */ (0, V.jsx)("div", { className: "toolbar-edit-zone-divider" })
+					]
+				}, t.id)), /* @__PURE__ */ (0, V.jsxs)("button", {
+					type: "button",
+					className: "toolbar-edit-add-zone nodrag",
+					onClick: e.addZone,
+					"data-tooltip": "新建分区",
+					children: [/* @__PURE__ */ (0, V.jsx)(g, {
+						icon: "mdi:plus",
+						width: 14,
+						height: 14
+					}), /* @__PURE__ */ (0, V.jsx)("span", { children: "新建分区" })]
+				})]
+			}), (L.length > 0 || R.length > 0) && /* @__PURE__ */ (0, V.jsxs)("div", {
+				className: "toolbar-edit-commands nodrag",
+				children: [/* @__PURE__ */ (0, V.jsx)("div", {
+					className: "toolbar-edit-commands-header",
+					children: "快捷指令"
+				}), /* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "toolbar-edit-commands-list nodrag nowheel",
+					children: [L.map((t) => e.activeButtonKeys.has(t.id) ? null : /* @__PURE__ */ (0, V.jsxs)("button", {
+						type: "button",
+						className: "toolbar-edit-command-item nodrag",
+						onClick: () => Y(t.id),
+						"data-tooltip": t.description,
+						children: [/* @__PURE__ */ (0, V.jsx)("span", {
+							className: "toolbar-edit-bank-icon",
+							children: /* @__PURE__ */ (0, V.jsx)(U, { icon: t.icon })
+						}), /* @__PURE__ */ (0, V.jsx)("span", {
+							className: "toolbar-edit-command-label",
+							children: t.title
+						})]
+					}, `sc-${t.id}`)), R.map((t) => e.activeButtonKeys.has(t.id) ? null : /* @__PURE__ */ (0, V.jsxs)("button", {
+						type: "button",
+						className: "toolbar-edit-command-item nodrag",
+						onClick: () => Y(t.id),
+						"data-tooltip": t.description || t.name,
+						children: [/* @__PURE__ */ (0, V.jsx)("span", {
+							className: "toolbar-edit-bank-icon",
+							children: /* @__PURE__ */ (0, V.jsx)(U, { icon: t.icon || "mdi:star" })
+						}), /* @__PURE__ */ (0, V.jsx)("span", {
+							className: "toolbar-edit-command-label",
+							children: t.name
+						})]
+					}, `up-${t.id}`))]
+				})]
+			})]
+		})]
+	});
+}
+var de = (0, C.memo)(W);
+//#endregion
+//#region src/components/nodes/shared/toolbar/ToolbarMoreMenu.tsx
+function G({ items: e, renderItem: t }) {
+	let [n, r] = (0, C.useState)(!1), i = (0, C.useRef)(null), a = (0, C.useCallback)((e) => {
+		e.stopPropagation(), r((e) => !e);
+	}, []);
+	return (0, C.useEffect)(() => {
+		if (!n) return;
+		let e = (e) => {
+			i.current?.contains(e.target) || r(!1);
+		}, t = (e) => {
+			e.key === "Escape" && r(!1);
+		};
+		return document.addEventListener("mousedown", e, !0), document.addEventListener("keydown", t), () => {
+			document.removeEventListener("mousedown", e, !0), document.removeEventListener("keydown", t);
+		};
+	}, [n]), /* @__PURE__ */ (0, V.jsxs)("div", {
+		ref: i,
+		className: "toolbar-more-wrap nodrag",
+		children: [/* @__PURE__ */ (0, V.jsx)(m, {
+			type: "button",
+			className: `ftb-btn icon-only act-more${n ? " is-active" : ""}`,
+			"data-tooltip": "更多",
+			"aria-label": "更多",
+			"aria-haspopup": "menu",
+			"aria-expanded": n,
+			onClick: a,
+			children: /* @__PURE__ */ (0, V.jsx)(g, {
+				icon: "mdi:dots-horizontal",
+				width: 14,
+				height: 14
+			})
+		}), n && /* @__PURE__ */ (0, V.jsx)("div", {
+			className: "toolbar-more-menu nodrag",
+			role: "menu",
+			"aria-label": "已隐藏的工具栏按钮",
+			onClick: (e) => {
+				e.stopPropagation(), e.target.closest(".act-multigrid") || r(!1);
+			},
+			children: e.length > 0 ? e.map((e) => /* @__PURE__ */ (0, V.jsx)("div", {
+				className: "toolbar-more-menu-item",
+				children: t(e.key)
+			}, e.key)) : /* @__PURE__ */ (0, V.jsx)("div", {
+				className: "toolbar-more-menu-empty",
+				children: "暂无隐藏按钮"
+			})
+		})]
+	});
+}
+var fe = (0, C.memo)(G), K = "ai-canvas-plugin-ui-v1", q = 4, J = 4, pe = 64, me = 64, he = 32, ge = 8, Y = 128, _e = 256, ve = 256e3, ye = new Set([
+	"__proto__",
+	"constructor",
+	"prototype",
+	"filePath",
+	"relativePath",
+	"directorCaptureFilePaths"
+]), X = /* @__PURE__ */ new Map(), be = !1;
+function Z(e, t) {
+	let n = e?.trim().toLowerCase().replace(/^sha256-/, "");
+	if (!n || !/^[a-f0-9]{64}$/u.test(n)) throw Error(`${t}缺失或无效`);
+	return n;
+}
+function xe(e) {
+	let t = e.trim().toLowerCase();
+	return t.startsWith("asset:") || t.startsWith("file:") || t.startsWith("blob:") || t.startsWith("data:") || t.startsWith("http://asset.localhost/") || t.startsWith("https://asset.localhost/");
+}
+function Q(e, t = 0) {
+	if (!(t > ge || e === void 0 || typeof e == "function" || typeof e == "symbol")) {
+		if (e === null || typeof e == "boolean") return e;
+		if (typeof e == "number") return Number.isFinite(e) ? e : void 0;
+		if (typeof e == "string") return xe(e) ? void 0 : e.slice(0, ve);
+		if (Array.isArray(e)) return e.slice(0, _e).map((e) => Q(e, t + 1)).filter((e) => e !== void 0);
+		if (typeof e == "object") {
+			let n = {};
+			for (let [r, i] of Object.entries(e).slice(0, Y)) {
+				if (ye.has(r)) continue;
+				let e = Q(i, t + 1);
+				e !== void 0 && (n[r] = e);
+			}
+			return n;
+		}
+	}
+}
+function Se(e, t) {
+	let n = {};
+	for (let r of e.inputFields) {
+		if (ye.has(r)) continue;
+		let e = Q(t[r]);
+		e !== void 0 && (n[r] = e);
+	}
+	return n;
+}
+function Ce(e) {
+	let t = l.getState(), n = t.installedPlugins.find((t) => t.id === e.pluginId);
+	if (!n?.enabled) throw Error("插件已停用或卸载");
+	if (n.sourceDigest !== e.sourceDigest || n.revisionDigest !== e.revisionDigest) throw Error("插件 revision 已变化");
+	if (Z(n.uiDigest ?? n.manifest.ui?.integrity, "插件界面摘要") !== e.uiDigest) throw Error("插件界面已更新");
+	if (!o(e.guard, t)) throw Error("画布或项目已变化，插件界面会话已失效");
+	return n;
+}
+function we(e, t) {
+	return e.manifest.permissions.includes("models.read") ? v(l.getState().config, S(t.dialog?.fields ?? [])) : [];
+}
+function Te(e, t) {
+	return {
+		pluginId: e.id,
+		pluginName: e.manifest.name,
+		runtime: e.manifest.runtime,
+		source: e.source,
+		sourceDigest: e.sourceDigest,
+		revisionDigest: e.revisionDigest,
+		tool: t.tool,
+		permissions: e.manifest.permissions
+	};
+}
+function Ee(e, t) {
+	return {
+		pluginId: t.id,
+		sourceDigest: e.sourceDigest,
+		revisionDigest: e.revisionDigest,
+		invocationId: e.sessionId,
+		projectId: e.projectId,
+		nodeId: e.nodeId,
+		baseRevision: e.guard.baseRevision,
+		permissions: t.manifest.permissions,
+		state: l.getState()
+	};
+}
+function $(e, t, n) {
+	e.frameWindow?.postMessage({
+		channel: K,
+		direction: "response",
+		sessionId: e.sessionId,
+		requestId: t,
+		...n
+	}, "*");
+}
+function De(e, t) {
+	let n = X.get(e);
+	n && (X.delete(e), s(n.sessionId), i(n.guard), t && queueMicrotask(n.onClose));
+}
+function Oe(e) {
+	if (!e || typeof e != "object" || Array.isArray(e)) return null;
+	let t = e;
+	return t.channel !== K || t.direction !== "request" || typeof t.sessionId != "string" || t.sessionId.length > 64 || typeof t.requestId != "string" || t.requestId.length > me || typeof t.kind != "string" || t.kind.length > he ? null : t;
+}
+async function ke(e) {
+	let t = Oe(e.data);
+	if (!t) return;
+	let n = X.get(t.sessionId);
+	if (!n || e.source !== n.frameWindow) return;
+	if (t.kind !== "close" && n.requestCount >= pe) {
+		$(n, t.requestId, {
+			ok: !1,
+			error: "插件界面请求次数已达上限"
+		});
+		return;
+	}
+	t.kind !== "close" && (n.requestCount += 1);
+	let r = t.kind === "effect" || t.kind === "set-parameters" || t.kind === "submit";
+	if (r && n.requestInFlight) {
+		$(n, t.requestId, {
+			ok: !1,
+			error: "插件界面已有操作正在执行"
+		});
+		return;
+	}
+	r && (n.requestInFlight = !0);
+	try {
+		let e = Ce(n);
+		switch (t.kind) {
+			case "context": {
+				let r = l.getState(), i = r.nodes.find((e) => e.id === n.nodeId);
+				if (!i) throw Error("源节点已不存在");
+				let a = Se(n.tool, i.data);
+				$(n, t.requestId, {
+					ok: !0,
+					value: {
+						surface: n.surface,
+						theme: r.config.theme,
+						node: {
+							id: n.nodeId,
+							type: i.data.type,
+							data: a
+						},
+						models: we(e, n.tool),
+						parameters: n.parameters,
+						resources: n.resources
+					}
+				});
+				return;
+			}
+			case "effect": {
+				if (n.effectBudget >= q) throw Error(`宿主操作不能超过 ${q} 次`);
+				n.effectBudget += 1;
+				let r = await _({
+					pluginId: e.id,
+					projectId: n.projectId,
+					title: n.tool.title,
+					permissions: e.manifest.permissions,
+					nodeId: n.nodeId,
+					effect: t.payload,
+					models: we(e, n.tool),
+					trustedMediaReferences: n.trustedMediaReferences,
+					resources: n.resources,
+					resourceReadContext: Ee(n, e)
+				});
+				Ce(n), $(n, t.requestId, {
+					ok: !0,
+					value: r
+				});
+				return;
+			}
+			case "set-parameters": {
+				let e = Q(t.payload);
+				if (!e || typeof e != "object" || Array.isArray(e)) throw Error("参数更新必须是对象");
+				n.parameters = {
+					...n.parameters,
+					...e
+				}, $(n, t.requestId, {
+					ok: !0,
+					value: !0
+				});
+				return;
+			}
+			case "submit": {
+				let r = Q(t.payload), i = (r && typeof r == "object" && !Array.isArray(r) ? r : {}).data;
+				if (i !== void 0) {
+					if (!i || typeof i != "object" || Array.isArray(i)) throw Error("提交参数必须是对象");
+					n.parameters = {
+						...n.parameters,
+						...i
+					};
+				}
+				await b(Te(e, n), n.nodeId, n.parameters, {
+					invocationId: n.sessionId,
+					guard: n.guard,
+					resources: n.resources,
+					trustedMediaReferences: n.trustedMediaReferences
+				}), $(n, t.requestId, {
+					ok: !0,
+					value: !0
+				}), De(n.sessionId, !0);
+				return;
+			}
+			case "close":
+				$(n, t.requestId, {
+					ok: !0,
+					value: !0
+				}), De(n.sessionId, !0);
+				return;
+			case "toast": {
+				let e = Q(t.payload), r = e && typeof e == "object" && !Array.isArray(e) ? e : {}, i = typeof r.message == "string" ? r.message.slice(0, 240) : "";
+				l.getState().showToast(i, r.type === "error" ? "error" : "success"), $(n, t.requestId, {
+					ok: !0,
+					value: !0
+				});
+				return;
+			}
+			default: throw Error(`未知请求: ${t.kind}`);
+		}
+	} catch (e) {
+		$(n, t.requestId, {
+			ok: !1,
+			error: e instanceof Error ? e.message : String(e)
+		});
+	} finally {
+		r && (n.requestInFlight = !1);
+	}
+}
+function Ae() {
+	be || (be = !0, window.addEventListener("message", (e) => void ke(e)));
+}
+async function je(e) {
+	if (X.size >= J) throw Error(`同时最多打开 ${J} 个插件界面`);
+	Ae();
+	let t = l.getState(), n = t.installedPlugins.find((t) => t.id === e.plugin.id);
+	if (!n?.enabled) throw Error("插件已停用或卸载");
+	let a = Z(n.sourceDigest, "插件源码摘要"), o = Z(n.revisionDigest, "插件 revision 摘要"), d = n.manifest.ui;
+	if (!d) throw Error("插件没有声明自定义界面");
+	let f = d.exports[e.exportName];
+	if (!f) throw Error(`插件未导出组件: ${e.exportName}`);
+	let p = Z(n.uiDigest ?? d.integrity, "插件界面摘要"), m = t.currentProjectId;
+	if (!m) throw Error("当前项目不存在");
+	let h = r(t, e.nodeId);
+	if (!h) throw Error("无法创建插件界面保护");
+	let g = crypto.randomUUID();
+	try {
+		let r = await c({
+			pluginId: n.id,
+			sourceDigest: a,
+			revisionDigest: o,
+			invocationId: g,
+			projectId: m,
+			nodeId: e.nodeId,
+			baseRevision: h.baseRevision,
+			access: e.tool.resourceAccess,
+			packageResources: n.manifest.resources,
+			state: t
+		}), i = Q(e.parameters ?? {});
+		if (!i || typeof i != "object" || Array.isArray(i)) throw Error("插件界面初始参数无效");
+		let s = t.nodes.find((t) => t.id === e.nodeId);
+		if (!s) throw Error("插件目标节点不存在");
+		let l = x(s.data.type, Se(e.tool, s.data)), d = {
+			sessionId: g,
+			surface: "tool-dialog",
+			pluginId: n.id,
+			sourceDigest: a,
+			revisionDigest: o,
+			uiDigest: p,
+			tool: e.tool,
+			nodeId: e.nodeId,
+			projectId: m,
+			parameters: i,
+			resources: r,
+			guard: h,
+			effectBudget: 0,
+			requestCount: 0,
+			requestInFlight: !1,
+			trustedMediaReferences: l,
+			onClose: e.onClose
+		};
+		X.set(g, d);
+		let _ = new URL(u(n.id, "plugin-ui"));
+		_.searchParams.set("digest", p);
+		let v = _.toString();
+		return {
+			sessionId: g,
+			src: `/plugin-ui-host.html?${new URLSearchParams({
+				session: g,
+				export: f,
+				bundle: v
+			}).toString()}`,
+			attach: (e) => {
+				let t = X.get(g);
+				t && e && (t.frameWindow = e);
+			},
+			updateTheme: (e) => {
+				X.get(g)?.frameWindow?.postMessage({
+					channel: K,
+					direction: "event",
+					sessionId: g,
+					kind: "theme",
+					value: e
+				}, "*");
+			},
+			dispose: () => De(g, !1)
+		};
+	} catch (e) {
+		throw s(g), i(h), e;
+	}
+}
+//#endregion
+//#region src/components/nodes/shared/toolbar/NodePluginToolDialog.tsx
+function Me(e) {
+	let t = {};
+	for (let n of e.tool.dialog?.fields ?? []) n.type === "boolean" ? t[n.id] = n.defaultValue === !0 : n.defaultValue === void 0 ? t[n.id] = "" : t[n.id] = String(n.defaultValue);
+	return t;
+}
+function Ne(e) {
+	let t = {};
+	for (let n of e.tool.dialog?.fields ?? []) n.defaultValue !== void 0 && (n.type === "boolean" ? t[n.id] = n.defaultValue === !0 : n.type === "number" ? t[n.id] = Number(n.defaultValue) : t[n.id] = String(n.defaultValue));
+	return t;
+}
+function Pe({ pluginTool: e, nodeId: t, onClose: n }) {
+	let r = l((e) => e.showToast), i = l((e) => e.config), a = e.tool.dialog, o = (0, C.useMemo)(() => e.permissions.includes("models.read") ? v(i, S(e.tool.dialog?.fields ?? [])) : [], [i, e]), [s, c] = (0, C.useState)(() => Me(e)), [u, d] = (0, C.useState)(null), [p, _] = (0, C.useState)(!1), [y, x] = (0, C.useState)(null), [w, T] = (0, C.useState)(!!a?.ui), E = (0, C.useRef)(null), D = (0, C.useRef)(n);
+	if ((0, C.useEffect)(() => {
+		D.current = n;
+	}, [n]), (0, C.useEffect)(() => {
+		y?.updateTheme(i.theme);
+	}, [i.theme, y]), (0, C.useEffect)(() => {
+		let n = a?.ui;
+		if (!n) return;
+		let i = !1, o = l.getState().installedPlugins.find((t) => t.id === e.pluginId);
+		return o ? (je({
+			plugin: o,
+			tool: e.tool,
+			nodeId: t,
+			exportName: n,
+			parameters: Ne(e),
+			onClose: () => D.current()
+		}).then((e) => {
+			if (i) {
+				e.dispose();
+				return;
+			}
+			E.current = e, x(e), d(null), T(!1);
+		}).catch((e) => {
+			if (i) return;
+			T(!1), x(null);
+			let t = e instanceof Error ? e.message : "插件界面加载失败";
+			d(t), r(t, "error");
+		}), () => {
+			i = !0, E.current?.dispose(), E.current = null;
+		}) : (queueMicrotask(() => {
+			i || (T(!1), x(null), d("找不到已安装的插件"));
+		}), () => {
+			i = !0;
+		});
+	}, [
+		a?.ui,
+		t,
+		e,
+		r
+	]), !a) return null;
+	let O = () => {
+		p || (E.current?.dispose(), n());
+	}, k = (e) => {
+		let t = {};
+		for (let n of a.fields) {
+			let r = s[n.id];
+			if (n.type === "boolean") {
+				if (e && n.required && r !== !0) return d(`请勾选“${n.label}”`), null;
+				t[n.id] = r === !0;
+				continue;
+			}
+			let i = typeof r == "string" ? r : "";
+			if (e && n.required && !i.trim()) return d(`请填写“${n.label}”`), null;
+			if (!(!i && !n.required)) if (n.type === "number") {
+				let e = Number(i);
+				if (!Number.isFinite(e)) return d(`“${n.label}”必须是有效数字`), null;
+				t[n.id] = e;
+			} else t[n.id] = i;
+		}
+		return t;
+	}, A = async (i) => {
+		i.preventDefault();
+		let o = k(!a.ui);
+		if (o) {
+			d(null), _(!0);
+			try {
+				await b(e, t, o), n();
+			} catch (e) {
+				let t = e instanceof Error ? e.message : "插件工具执行失败";
+				d(t), r(t, "error");
+			} finally {
+				_(!1);
+			}
+		}
+	}, j = "mt-1.5 w-full rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2 text-xs text-canvas-text outline-none transition-colors placeholder:text-canvas-text-muted focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-400/15";
+	return a.ui ? /* @__PURE__ */ (0, V.jsxs)(f, {
+		isOpen: !0,
+		onClose: O,
+		ariaLabel: a.title || e.tool.title,
+		className: "w-[min(780px,calc(100vw-32px))] border-canvas-border",
+		closeOnBackdrop: !0,
+		motionPreset: "quick",
+		children: [/* @__PURE__ */ (0, V.jsxs)("header", {
+			className: "flex items-center gap-3 border-b border-canvas-border px-4 py-3",
+			children: [
+				/* @__PURE__ */ (0, V.jsx)("span", {
+					className: "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400",
+					children: /* @__PURE__ */ (0, V.jsx)(g, {
+						icon: e.tool.icon || "lucide:blocks",
+						width: 18,
+						height: 18
+					})
+				}),
+				/* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "min-w-0 flex-1",
+					children: [/* @__PURE__ */ (0, V.jsx)("h2", {
+						className: "truncate text-sm font-semibold text-canvas-text",
+						children: a.title || e.tool.title
+					}), /* @__PURE__ */ (0, V.jsx)("p", {
+						className: "mt-0.5 truncate text-[11px] text-canvas-text-muted",
+						children: e.pluginName
+					})]
+				}),
+				/* @__PURE__ */ (0, V.jsx)(h, { onClick: O })
+			]
+		}), /* @__PURE__ */ (0, V.jsxs)("div", {
+			className: "h-[min(640px,calc(100vh-160px))] min-h-80 bg-canvas-surface",
+			children: [
+				w && /* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "flex h-full items-center justify-center gap-2 text-xs text-canvas-text-secondary",
+					children: [/* @__PURE__ */ (0, V.jsx)(g, {
+						icon: "lucide:loader-circle",
+						width: 16,
+						height: 16,
+						className: "animate-spin"
+					}), "正在加载插件界面…"]
+				}),
+				!w && u && /* @__PURE__ */ (0, V.jsx)("div", {
+					role: "alert",
+					className: "m-4 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-300",
+					children: u
+				}),
+				y && !u && /* @__PURE__ */ (0, V.jsx)("iframe", {
+					ref: (e) => y.attach(e?.contentWindow ?? null),
+					src: y.src,
+					title: `${e.pluginName} · ${a.title || e.tool.title}`,
+					sandbox: "allow-scripts",
+					referrerPolicy: "no-referrer",
+					className: "h-full w-full border-0 bg-canvas-surface"
+				})
+			]
+		})]
+	}) : /* @__PURE__ */ (0, V.jsx)(f, {
+		isOpen: !0,
+		onClose: O,
+		ariaLabel: a.title || e.tool.title,
+		className: "w-[min(460px,calc(100vw-32px))] border-canvas-border",
+		closeOnBackdrop: !p,
+		motionPreset: "quick",
+		children: /* @__PURE__ */ (0, V.jsxs)("form", {
+			onSubmit: (e) => void A(e),
+			children: [
+				/* @__PURE__ */ (0, V.jsxs)("header", {
+					className: "flex items-center gap-3 border-b border-canvas-border px-4 py-3",
+					children: [
+						/* @__PURE__ */ (0, V.jsx)("span", {
+							className: "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400",
+							children: /* @__PURE__ */ (0, V.jsx)(g, {
+								icon: e.tool.icon || "lucide:blocks",
+								width: 18,
+								height: 18
+							})
+						}),
+						/* @__PURE__ */ (0, V.jsxs)("div", {
+							className: "min-w-0 flex-1",
+							children: [/* @__PURE__ */ (0, V.jsx)("h2", {
+								className: "truncate text-sm font-semibold text-canvas-text",
+								children: a.title || e.tool.title
+							}), /* @__PURE__ */ (0, V.jsx)("p", {
+								className: "mt-0.5 truncate text-[11px] text-canvas-text-muted",
+								children: e.pluginName
+							})]
+						}),
+						/* @__PURE__ */ (0, V.jsx)(h, {
+							disabled: p,
+							onClick: O
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, V.jsxs)("div", {
+					className: "max-h-[min(560px,calc(100vh-180px))] space-y-4 overflow-y-auto px-4 py-4",
+					children: [
+						(a.description || e.tool.description) && /* @__PURE__ */ (0, V.jsx)("p", {
+							className: "text-xs leading-5 text-canvas-text-secondary",
+							children: a.description || e.tool.description
+						}),
+						a.fields.map((e) => /* @__PURE__ */ (0, V.jsx)("label", {
+							className: "block text-xs text-canvas-text-secondary",
+							children: e.type === "boolean" ? /* @__PURE__ */ (0, V.jsxs)("span", {
+								className: "flex items-start gap-2 rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2.5",
+								children: [/* @__PURE__ */ (0, V.jsx)("input", {
+									type: "checkbox",
+									checked: s[e.id] === !0,
+									disabled: p,
+									className: "mt-0.5 h-3.5 w-3.5 accent-indigo-500",
+									onChange: (t) => {
+										let n = t.currentTarget.checked;
+										c((t) => ({
+											...t,
+											[e.id]: n
+										}));
+									}
+								}), /* @__PURE__ */ (0, V.jsxs)("span", { children: [/* @__PURE__ */ (0, V.jsx)("span", {
+									className: "block font-medium text-canvas-text",
+									children: e.label
+								}), e.description && /* @__PURE__ */ (0, V.jsx)("span", {
+									className: "mt-0.5 block text-[11px] leading-4 text-canvas-text-muted",
+									children: e.description
+								})] })]
+							}) : /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
+								/* @__PURE__ */ (0, V.jsxs)("span", {
+									className: "font-medium text-canvas-text",
+									children: [e.label, e.required && /* @__PURE__ */ (0, V.jsx)("span", {
+										className: "ml-1 text-red-400",
+										children: "*"
+									})]
+								}),
+								e.type === "textarea" ? /* @__PURE__ */ (0, V.jsx)("textarea", {
+									value: String(s[e.id] ?? ""),
+									rows: 4,
+									required: e.required,
+									disabled: p,
+									placeholder: e.placeholder,
+									className: `${j} resize-y`,
+									onChange: (t) => {
+										let n = t.currentTarget.value;
+										c((t) => ({
+											...t,
+											[e.id]: n
+										}));
+									}
+								}) : e.type === "select" ? /* @__PURE__ */ (0, V.jsxs)("select", {
+									value: String(s[e.id] ?? ""),
+									required: e.required,
+									disabled: p,
+									className: j,
+									onChange: (t) => {
+										let n = t.currentTarget.value;
+										c((t) => ({
+											...t,
+											[e.id]: n
+										}));
+									},
+									children: [/* @__PURE__ */ (0, V.jsx)("option", {
+										value: "",
+										children: e.placeholder || "请选择"
+									}), e.options?.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
+										value: e.value,
+										children: e.label
+									}, e.value))]
+								}) : e.type === "model" ? /* @__PURE__ */ (0, V.jsxs)("select", {
+									value: String(s[e.id] ?? ""),
+									required: e.required,
+									disabled: p,
+									className: j,
+									onChange: (t) => {
+										let n = t.currentTarget.value;
+										c((t) => ({
+											...t,
+											[e.id]: n
+										}));
+									},
+									children: [/* @__PURE__ */ (0, V.jsx)("option", {
+										value: "",
+										children: o.length > 0 ? e.placeholder || "选择可调用模型" : "暂无可调用模型"
+									}), o.filter((t) => !e.modelCategories || e.modelCategories.includes(t.category)).map((e) => /* @__PURE__ */ (0, V.jsxs)("option", {
+										value: e.id,
+										children: [
+											e.name,
+											" · ",
+											e.category
+										]
+									}, e.id))]
+								}) : /* @__PURE__ */ (0, V.jsx)("input", {
+									type: e.type === "number" ? "number" : "text",
+									value: String(s[e.id] ?? ""),
+									required: e.required,
+									disabled: p,
+									placeholder: e.placeholder,
+									className: j,
+									onChange: (t) => {
+										let n = t.currentTarget.value;
+										c((t) => ({
+											...t,
+											[e.id]: n
+										}));
+									}
+								}),
+								e.description && /* @__PURE__ */ (0, V.jsx)("span", {
+									className: "mt-1 block text-[11px] leading-4 text-canvas-text-muted",
+									children: e.description
+								})
+							] })
+						}, e.id)),
+						a.fields.length === 0 && /* @__PURE__ */ (0, V.jsx)("div", {
+							className: "rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2.5 text-xs text-canvas-text-secondary",
+							children: "确认后将对当前节点执行此插件工具。"
+						}),
+						u && /* @__PURE__ */ (0, V.jsx)("div", {
+							role: "alert",
+							className: "rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-[11px] leading-4 text-red-300",
+							children: u
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, V.jsxs)("footer", {
+					className: "flex justify-end gap-2 border-t border-canvas-border px-4 py-3",
+					children: [/* @__PURE__ */ (0, V.jsx)(m, {
+						type: "button",
+						className: "rounded-lg border border-canvas-border px-3 py-2 text-xs text-canvas-text-secondary hover:bg-canvas-hover",
+						disabled: p,
+						onClick: O,
+						children: "取消"
+					}), /* @__PURE__ */ (0, V.jsxs)(m, {
+						type: "submit",
+						className: "inline-flex min-w-20 items-center justify-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-60",
+						disabled: p,
+						children: [p && /* @__PURE__ */ (0, V.jsx)(g, {
+							icon: "lucide:loader-circle",
+							width: 14,
+							height: 14,
+							className: "animate-spin"
+						}), p ? "执行中…" : a.submitLabel || "执行"]
+					})]
+				})
+			]
+		})
+	});
+}
+//#endregion
+//#region src/components/nodes/shared/toolbar/NodePluginToolbarButtons.tsx
+function Fe({ nodeId: e, iconSize: t = 14, rounded: n = !1 }) {
+	let r = l((e) => e.installedPlugins), i = l((t) => t.nodes.find((t) => t.id === e)?.data.type), [a, o] = (0, C.useState)(null), s = (0, C.useMemo)(() => new Map(y(r, i, "node-toolbar").map((e) => [T(e), e])), [i, r]);
+	return {
+		renderButton: (0, C.useCallback)((e) => {
+			let r = s.get(e);
+			if (!r) return null;
+			let i = `${r.tool.title} · ${r.pluginName}`;
+			return /* @__PURE__ */ (0, V.jsx)(m, {
+				type: "button",
+				className: `ftb-btn icon-only act-plugin${n ? " rounded-[6px]" : ""}`,
+				"data-tooltip": i,
+				"aria-label": `${r.tool.title}（${r.pluginName}）`,
+				onClick: (e) => {
+					e.stopPropagation(), o(r);
+				},
+				children: /* @__PURE__ */ (0, V.jsx)(g, {
+					icon: r.tool.icon || "lucide:blocks",
+					width: t,
+					height: t
+				})
+			}, e);
+		}, [
+			t,
+			n,
+			s
+		]),
+		dialog: a ? /* @__PURE__ */ (0, V.jsx)(Pe, {
+			pluginTool: a,
+			nodeId: e,
+			onClose: () => o(null)
+		}, T(a)) : null
+	};
+}
+//#endregion
+//#region src/hooks/useCompletionFlash.ts
+function Ie(e, t = 700) {
+	let n = (0, C.useRef)(e), [r, i] = (0, C.useState)(!1);
+	return (0, C.useEffect)(() => {
+		if (n.current === "loading" && e === "success") {
+			i(!0);
+			let r = setTimeout(() => i(!1), t);
+			return n.current = e, () => clearTimeout(r);
+		}
+		n.current = e;
+	}, [e, t]), r;
+}
+//#endregion
+//#region src/components/nodes/shared/useSourceFileUpload.ts
+function Le(e) {
+	let t = l((e) => e.currentProjectId), [n, r] = (0, C.useState)(!1);
+	return {
+		isUploading: n,
+		handleUpload: (0, C.useCallback)(async () => {
+			r(!0);
+			try {
+				return await d(e, t);
+			} catch {
+				return null;
+			} finally {
+				r(!1);
+			}
+		}, [e, t])
+	};
+}
+//#endregion
+export { fe as a, w as c, Pe as i, L as l, Ie as n, de as o, Fe as r, B as s, Le as t };

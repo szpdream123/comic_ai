@@ -23,7 +23,7 @@ const components = (await Promise.all(Object.entries(lock.packages ?? {})
 components.push({
   type: "application",
   name: "AI-Canvas-tauri",
-  version: "87731295a121be601b1d4fa8616b0f2d1a38a3bb",
+  version: "236be2f0aec59b3ec0b623bcf563e65fb223d7f4",
   licenses: [{ license: { name: "AI Canvas Tauri Source-Available License + separate author authorization" } }],
   externalReferences: [{ type: "vcs", url: "https://github.com/Tenney95/AI-Canvas-tauri" }],
   properties: [{ name: "comic-ai:integration", value: "authorized-adaptation" }],
@@ -45,7 +45,7 @@ const notices = `# Third-Party Notices
 
 Generated from \`package-lock.json\`. Run \`npm run legal:generate\` after dependency changes.
 
-The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri) at commit \`87731295a121be601b1d4fa8616b0f2d1a38a3bb\` (v0.6.7) under the upstream source-available license and the separately archived author authorization. See \`docs/legal/ai-canvas-tauri-provenance.md\`.
+The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri) at commit \`236be2f0aec59b3ec0b623bcf563e65fb223d7f4\` (v0.9.2) under the upstream source-available license and the separately archived author authorization. See \`docs/legal/ai-canvas-tauri-provenance.md\`.
 
 | Package | Version | Declared license |
 | --- | --- | --- |

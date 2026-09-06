@@ -41,6 +41,18 @@ describe("creator canvas record service", { concurrency: false }, () => {
     assert.equal(document.edges[0]?.kind, "reference");
   });
 
+  it("accepts React Flow edge fields from the standalone canvas runtime", () => {
+    const document = normalizeCanvasDocument({
+      runtime: "ai-canvas",
+      nodes: [{ id: "a", type: "ai-text", data: { label: "文本" } }, { id: "b", type: "ai-image" }],
+      edges: [{ id: "edge-1", source: "a", target: "b", sourceHandle: "out_text", targetHandle: "in_asset" }],
+    }, { canvasProjectId: "canvas-1", now: "2026-07-25T00:00:00.000Z" });
+    assert.equal(document.runtime, "ai-canvas");
+    assert.equal(document.edges[0]?.sourceNodeId, "a");
+    assert.equal(document.edges[0]?.targetPortId, "in_asset");
+    assert.equal(document.edges[0]?.source, "a");
+  });
+
   it("uses a team-member scope for document access and records the actual actor", async () => {
     const db = await createMigratedTestDb();
     try {

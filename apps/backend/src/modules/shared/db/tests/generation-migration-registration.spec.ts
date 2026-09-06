@@ -12,12 +12,21 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     assert.ok(names.includes("20260728-add-bananarouter-models.sql"));
     assert.ok(names.includes("20260825-bananarouter-image-async-recovery.sql"));
     assert.ok(names.includes("20260828-bananarouter-image-async-config-convergence.sql"));
+    assert.ok(names.includes("20260904-create-skill-favorites.sql"));
     const productionMigrationScript = await readFile(
       join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
       "utf8",
     );
     assert.match(productionMigrationScript, /20260825-bananarouter-image-async-recovery\.sql/);
     assert.match(productionMigrationScript, /20260828-bananarouter-image-async-config-convergence\.sql/);
+    assert.match(
+      productionMigrationScript,
+      /\["20260904-create-skill-favorites\.sql", "packages\/db\/migrations\/20260904-create-skill-favorites\.sql"\]/,
+    );
+    assert.match(
+      productionMigrationScript,
+      /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20260904-create-skill-favorites\.sql"[\s\S]*\]\);/,
+    );
   });
 
   it("preserves administrator SanBao image pricing while filling missing resolution defaults", async () => {

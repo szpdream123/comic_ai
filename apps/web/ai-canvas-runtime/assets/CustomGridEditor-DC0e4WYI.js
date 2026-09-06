@@ -1,0 +1,208 @@
+import { o as e, t } from "./react-Dfufv8pq.js";
+import { t as n } from "./jsx-runtime-BAkIPmuO.js";
+import { r } from "./ViewportImage-Dsz9jsTU.js";
+import { Rt as i } from "./useTooltipAutoPlacement-BSvTkR9V.js";
+import { l as a } from "./assetFormat-UuOoHpLo.js";
+import { t as o } from "./FullscreenOverlay-Dpw1A125.js";
+//#region src/components/nodes/shared/image/CustomGridEditor.tsx
+var s = /* @__PURE__ */ e(t(), 1), c = n(), l = 0, u = () => `gl-${++l}`;
+function d({ isOpen: e, imageUrl: t, initialHPercentages: n, initialVPercentages: l, onClose: d, onConfirm: f }) {
+	let p = (0, s.useRef)(null), m = (0, s.useRef)(!1), [h, g] = (0, s.useState)([]), [_, v] = (0, s.useState)([]), [y, b] = (0, s.useState)("h"), [x, S] = (0, s.useState)(null), C = (0, s.useRef)(!1);
+	(0, s.useEffect)(() => {
+		if (e && !C.current) {
+			let e = (e) => (e ?? []).map((e) => ({
+				id: u(),
+				pos: e
+			}));
+			g(e(n)), v(e(l));
+		}
+		C.current = e;
+	}, [
+		e,
+		n,
+		l
+	]);
+	let w = (0, s.useCallback)(() => {
+		g([]), v([]), b("h"), d();
+	}, [d]), T = (0, s.useCallback)((e) => {
+		if (m.current) {
+			m.current = !1;
+			return;
+		}
+		if (!p.current) return;
+		let t = p.current.getBoundingClientRect();
+		if (y === "h") {
+			let n = (e.clientY - t.top) / t.height * 100;
+			g((e) => [...e, {
+				id: u(),
+				pos: Math.max(0, Math.min(100, n))
+			}]);
+		} else {
+			let n = (e.clientX - t.left) / t.width * 100;
+			v((e) => [...e, {
+				id: u(),
+				pos: Math.max(0, Math.min(100, n))
+			}]);
+		}
+	}, [y]), E = (0, s.useCallback)((e, t) => (n) => {
+		n.stopPropagation(), n.preventDefault(), S(e);
+		let r = (n) => {
+			if (!p.current) return;
+			let r = p.current.getBoundingClientRect();
+			if (t === "h") {
+				let t = (n.clientY - r.top) / r.height * 100, i = Math.max(0, Math.min(100, t));
+				g((t) => t.map((t) => t.id === e ? {
+					...t,
+					pos: i
+				} : t));
+			} else {
+				let t = (n.clientX - r.left) / r.width * 100, i = Math.max(0, Math.min(100, t));
+				v((t) => t.map((t) => t.id === e ? {
+					...t,
+					pos: i
+				} : t));
+			}
+		}, i = () => {
+			m.current = !0, S(null), window.removeEventListener("pointermove", r), window.removeEventListener("pointerup", i);
+		};
+		window.addEventListener("pointermove", r), window.addEventListener("pointerup", i);
+	}, []), D = (0, s.useCallback)((e, t) => {
+		t === "h" ? g((t) => t.filter((t) => t.id !== e)) : v((t) => t.filter((t) => t.id !== e));
+	}, []), O = (0, s.useCallback)(() => {
+		g([]), v([]);
+	}, []), k = (0, s.useCallback)(() => {
+		f([...h].sort((e, t) => e.pos - t.pos).map((e) => e.pos), [..._].sort((e, t) => e.pos - t.pos).map((e) => e.pos)), g([]), v([]), b("h");
+	}, [
+		h,
+		_,
+		f
+	]), A = h.length > 0 || _.length > 0, j = `点击图像添加${y === "h" ? "横向" : "竖向"}分割线 · 拖拽调整 · 点 × 删除`;
+	return /* @__PURE__ */ (0, c.jsx)(o, {
+		isOpen: e,
+		onClose: w,
+		"data-tooltip": "自定义宫格裁切",
+		hidePanel: !0,
+		className: "customgrid-overlay",
+		children: /* @__PURE__ */ (0, c.jsxs)(r.div, {
+			className: "customgrid-content",
+			initial: {
+				opacity: 0,
+				scale: .94
+			},
+			animate: {
+				opacity: 1,
+				scale: 1
+			},
+			transition: a,
+			onClick: (e) => e.stopPropagation(),
+			children: [/* @__PURE__ */ (0, c.jsxs)("div", {
+				className: "customgrid-toolbar",
+				children: [
+					/* @__PURE__ */ (0, c.jsx)(i, {
+						type: "button",
+						className: "customgrid-btn act-cancel",
+						"data-tooltip": "关闭 (Esc)",
+						"aria-label": "关闭",
+						onClick: w,
+						children: /* @__PURE__ */ (0, c.jsx)("svg", {
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							strokeWidth: "2",
+							width: "18",
+							height: "18",
+							children: /* @__PURE__ */ (0, c.jsx)("path", { d: "M18 6L6 18M6 6l12 12" })
+						})
+					}),
+					/* @__PURE__ */ (0, c.jsxs)("div", {
+						className: "customgrid-mode-toggle",
+						children: [/* @__PURE__ */ (0, c.jsx)("button", {
+							type: "button",
+							className: `customgrid-btn${y === "h" ? " active" : ""}`,
+							onClick: () => b("h"),
+							children: "横线"
+						}), /* @__PURE__ */ (0, c.jsx)("button", {
+							type: "button",
+							className: `customgrid-btn${y === "v" ? " active" : ""}`,
+							onClick: () => b("v"),
+							children: "竖线"
+						})]
+					}),
+					/* @__PURE__ */ (0, c.jsx)("div", { className: "customgrid-bar-divider" }),
+					/* @__PURE__ */ (0, c.jsx)("span", {
+						className: "customgrid-hint",
+						children: j
+					}),
+					/* @__PURE__ */ (0, c.jsx)("div", { className: "customgrid-bar-spacer" }),
+					/* @__PURE__ */ (0, c.jsx)("button", {
+						type: "button",
+						className: "customgrid-btn",
+						onClick: O,
+						disabled: !A,
+						children: "清除全部"
+					}),
+					/* @__PURE__ */ (0, c.jsxs)(i, {
+						className: "customgrid-btn act-confirm",
+						"data-tooltip": "确认裁切",
+						"aria-label": "确认裁切",
+						onClick: k,
+						children: [/* @__PURE__ */ (0, c.jsx)("svg", {
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							strokeWidth: "2",
+							width: "16",
+							height: "16",
+							children: /* @__PURE__ */ (0, c.jsx)("path", { d: "M3 17l5-5 3 3 8-8" })
+						}), /* @__PURE__ */ (0, c.jsx)("span", { children: "确认" })]
+					})
+				]
+			}), /* @__PURE__ */ (0, c.jsx)("div", {
+				className: "customgrid-stage",
+				onClick: T,
+				children: /* @__PURE__ */ (0, c.jsxs)("div", {
+					className: "customgrid-image-wrap",
+					children: [
+						/* @__PURE__ */ (0, c.jsx)("img", {
+							ref: p,
+							src: t,
+							alt: "Custom grid preview",
+							className: "customgrid-image",
+							draggable: !1
+						}),
+						h.map((e) => /* @__PURE__ */ (0, c.jsx)("div", {
+							className: `customgrid-line customgrid-line--h${x === e.id ? " dragging" : ""}`,
+							style: { top: `${e.pos}%` },
+							onPointerDown: E(e.id, "h"),
+							children: /* @__PURE__ */ (0, c.jsx)("button", {
+								type: "button",
+								className: "customgrid-line-del",
+								onPointerDown: (e) => e.stopPropagation(),
+								onClick: (t) => {
+									t.stopPropagation(), D(e.id, "h");
+								},
+								"aria-label": "删除横线"
+							})
+						}, e.id)),
+						_.map((e) => /* @__PURE__ */ (0, c.jsx)("div", {
+							className: `customgrid-line customgrid-line--v${x === e.id ? " dragging" : ""}`,
+							style: { left: `${e.pos}%` },
+							onPointerDown: E(e.id, "v"),
+							children: /* @__PURE__ */ (0, c.jsx)("button", {
+								type: "button",
+								className: "customgrid-line-del",
+								onPointerDown: (e) => e.stopPropagation(),
+								onClick: (t) => {
+									t.stopPropagation(), D(e.id, "v");
+								},
+								"aria-label": "删除竖线"
+							})
+						}, e.id))
+					]
+				})
+			})]
+		})
+	});
+}
+//#endregion
+export { d as default };

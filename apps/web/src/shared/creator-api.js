@@ -757,6 +757,7 @@ function postJsonWithIdempotency(url, body, options = {}) {
     headers: {
       "content-type": "application/json",
       "idempotency-key": pending.key,
+      ...(options.headers ?? {}),
     },
     body: JSON.stringify(body ?? {}),
   }).then((result) => {
@@ -808,6 +809,16 @@ export const defaultUploadLimits = {
     ".tar",
     ".zip",
   ],
+};
+
+export const skillFileUploadLimits = {
+  document: {
+    label: "Skill 文件",
+    maxBytes: 5 * 1024 * 1024,
+    mimeTypes: ["text/plain", "text/markdown", "text/x-markdown", "application/json", "application/octet-stream"],
+    extensions: [".txt", ".md", ".markdown", ".json"],
+  },
+  blockedExtensions: defaultUploadLimits.blockedExtensions,
 };
 
 function buildUploadId(file, options = {}) {
@@ -1592,6 +1603,18 @@ export const creatorApi = {
 
   listCanvasRuns(canvasProjectId, nodeKey) {
     return this.listCanvasNodeRuns(canvasProjectId, nodeKey);
+  },
+
+  exportCanvasVideo(canvasProjectId, input = {}, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/video-export`,
+      input,
+      {
+        action: "canvas.video.export",
+        idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
   },
 
   createCanvasGenerationBatch(canvasProjectId, input, options = {}) {
@@ -2815,6 +2838,52 @@ export const creatorApi = {
 
   deletePromptMarketplaceItem(itemId) {
     return fetchJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+  },
+
+  getSkills(input = {}) {
+    const params = new URLSearchParams();
+    if (input.category && input.category !== "all") params.set("category", input.category);
+    if (String(input.query ?? "").trim()) params.set("query", String(input.query).trim());
+    params.set("page", String(Math.max(1, Number(input.page) || 1)));
+    params.set("pageSize", String(Math.max(1, Math.min(50, Number(input.pageSize) || 20))));
+    const suffix = params.size ? `?${params.toString()}` : "";
+    return fetchJson(`/api/creator/skills${suffix}`, { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  getSkillLibrary() {
+    return fetchJson("/api/creator/skills/library", { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  getSkillFavorites() {
+    return fetchJson("/api/creator/skills/favorites", { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  getMySkills() {
+    return fetchJson("/api/creator/skills?scope=mine", { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  getSkillDetail(skillId) {
+    return fetchJson(`/api/creator/skills/${encodeURIComponent(skillId)}`, { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  createSkill(input) {
+    return postJson("/api/creator/skills", input);
+  },
+
+  addSkillToLibrary(skillId) {
+    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/library`, {});
+  },
+
+  addSkillToFavorites(skillId) {
+    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/favorite`, {});
+  },
+
+  removeSkillFromFavorites(skillId) {
+    return fetchJson(`/api/creator/skills/${encodeURIComponent(skillId)}/favorite`, { method: "DELETE" });
+  },
+
+  attachSkillFile(skillId, input) {
+    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/files`, input);
   },
 
   createAiStoryboardPreview(projectId, input, options = {}) {

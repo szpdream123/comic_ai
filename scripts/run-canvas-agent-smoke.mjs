@@ -73,12 +73,12 @@ try {
   if (submitOnly) {
     const submitted = await db.query(`
       SELECT agent.status,workflow.status AS workflow_status,task.status AS task_status,
-             count(DISTINCT wakeup.id)::integer AS wakeup_count,
+             count(DISTINCT outbox.id)::integer AS wakeup_count,
              count(DISTINCT request.id)::integer AS provider_request_count
       FROM canvas_agent_tasks agent
       JOIN workflows workflow ON workflow.id=agent.workflow_id
       JOIN tasks task ON task.id=agent.workflow_task_id
-      LEFT JOIN canvas_agent_wakeups wakeup ON wakeup.task_id=agent.id
+      LEFT JOIN canvas_agent_outbox outbox ON outbox.task_id=agent.id
       LEFT JOIN canvas_agent_steps step ON step.task_id=agent.id
       LEFT JOIN provider_requests request ON request.id=step.provider_request_id
       WHERE agent.id=$1 AND agent.canvas_id=$2
@@ -135,7 +135,7 @@ try {
            count(DISTINCT CASE WHEN provider.external_submission_started_at IS NOT NULL THEN provider.id END)::integer AS external_submission_count,
            count(DISTINCT step.credit_reservation_id)::integer AS credit_reservation_count,
            (SELECT count(*)::integer FROM credit_ledger_entries ledger
-            WHERE ledger.source_type='canvas_agent_text_round'
+            WHERE ledger.source_type IN ('canvas_agent_text_round', 'canvas_agent_text_task')
               AND ledger.metadata_json->>'agentTaskId'=task.id::text) AS billing_ledger_count
     FROM canvas_agent_tasks task
     LEFT JOIN canvas_agent_steps step ON step.task_id=task.id
@@ -259,12 +259,12 @@ async function waitForTerminalTask(taskId, cookie) {
 async function assertQueuedResumeState(taskId) {
   const resumed = await db.query(`
     SELECT agent.status,workflow.status AS workflow_status,task.status AS task_status,
-           count(DISTINCT wakeup.id)::integer AS wakeup_count,
+           count(DISTINCT outbox.id)::integer AS wakeup_count,
            count(DISTINCT provider.id)::integer AS provider_request_count
     FROM canvas_agent_tasks agent
     JOIN workflows workflow ON workflow.id=agent.workflow_id
     JOIN tasks task ON task.id=agent.workflow_task_id
-    LEFT JOIN canvas_agent_wakeups wakeup ON wakeup.task_id=agent.id
+    LEFT JOIN canvas_agent_outbox outbox ON outbox.task_id=agent.id
     LEFT JOIN canvas_agent_steps step ON step.task_id=agent.id
     LEFT JOIN provider_requests provider ON provider.id=step.provider_request_id
     WHERE agent.id=$1 AND agent.canvas_id=$2

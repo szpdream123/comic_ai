@@ -600,6 +600,17 @@ export async function runStorageRepairJob(
         )
         AND NOT EXISTS (
           SELECT 1
+          FROM skills skill
+          WHERE skill.cover_storage_object_id = o.id
+             OR skill.preview_storage_object_id = o.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM skill_files skill_file
+          WHERE skill_file.storage_object_id = o.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
           FROM creator_brand_kits brand_kit
           WHERE brand_kit.cover_storage_object_id = o.id
         )

@@ -218,6 +218,7 @@ export function renderCanvasVideoNodeBody(node = {}, options = {}) {
           <button type="button" data-action="toggle-canvas-video-play" data-node-id="${escapeAttr(nodeId)}" aria-label="${playing ? "暂停视频" : "播放视频"}" title="${playing ? "暂停视频" : "播放视频"}" aria-pressed="${playing}"><span aria-hidden="true">${playing ? "Ⅱ" : "▶"}</span></button>
           <button type="button" data-action="capture-canvas-video-frame" data-node-id="${escapeAttr(nodeId)}" aria-label="截取当前帧" title="截取当前帧"><span aria-hidden="true">▣</span></button>
           <button type="button" data-action="toggle-canvas-video-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="全屏查看" title="全屏查看" aria-pressed="${fullscreen.open}"><span aria-hidden="true">↗</span></button>
+          <button type="button" data-action="open-canvas-video-editor" data-node-id="${escapeAttr(nodeId)}" aria-label="打开视频剪辑器" title="打开视频剪辑器"><span aria-hidden="true">✂</span></button>
         </div>
       </div>`
     : `<div class="canvas-video-empty" role="status"><strong>暂无视频</strong></div>`;

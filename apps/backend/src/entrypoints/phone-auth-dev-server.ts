@@ -51,6 +51,7 @@ import {
   setOfficialPromptDefault,
   setUserPromptDefault,
 } from "../modules/prompt-marketplace/prompt-skill-default.service.ts";
+import { createSkillPlazaService, SkillPlazaError } from "../modules/skill-plaza/skill-plaza.service.ts";
 import {
   AiStoryboardWorkflowIntentError,
   createAiStoryboardPreviewService,
@@ -184,6 +185,7 @@ import {
   canvasErrorToStatus,
   CanvasConflictError,
   CanvasDocumentError,
+  completeCanvasNodeRun,
   createCanvasNodeRun,
   failCanvasNodeRun,
   findCanvasByCanvasProjectId,
@@ -195,6 +197,10 @@ import {
   saveCanvasNodePositionsByCanvasProjectId,
   selectCanvasNodeArtifact,
 } from "../modules/project/creator-canvas-record.service.ts";
+import {
+  composeVideoToMp4,
+  VideoCompositionError,
+} from "../modules/media/video-composition.service.ts";
 import {
   CanvasAudioTextInputError,
   isCanvasPlainTextTranscriptionRequest,
@@ -4086,6 +4092,17 @@ function getUploadExtension(fileName: unknown) {
 
 function resolveUploadLimitsForPurpose(purpose: unknown) {
   const normalizedPurpose = String(purpose ?? "").trim();
+  if (normalizedPurpose === "skill-files") {
+    return {
+      document: {
+        label: "Skill 文件",
+        maxBytes: 5 * 1024 * 1024,
+        mimeTypes: ["text/plain", "text/markdown", "text/x-markdown", "application/json", "application/octet-stream"],
+        extensions: [".txt", ".md", ".markdown", ".json"],
+      },
+      blockedExtensions: episodeUploadLimits.blockedExtensions,
+    };
+  }
   if (normalizedPurpose === "script-documents") return scriptDocumentUploadLimits;
   if (normalizedPurpose === "canvas-annotations") return canvasAnnotationUploadLimits;
   if (normalizedPurpose === "new-canvas/brand-font") return brandFontUploadLimits;
@@ -5349,6 +5366,7 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
       ? readEnumValues(modelConfig.parameterSchema.quality)
       : readEnumValues(modelConfig.parameterSchema.resolution);
   const supportedRatios = schemaRatios.length ? schemaRatios : defaultRatios;
+  const schemaResolutions = readEnumValues(modelConfig.parameterSchema.resolution);
   const supportedDurations = readEnumValues(modelConfig.parameterSchema.durationSec);
   const parameterSchema = Object.fromEntries(Object.entries(modelConfig.parameterSchema).filter(([, parameter]) => (
     parameter &&
@@ -5376,6 +5394,7 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
     supportedRatios: supportedRatios.length ? supportedRatios : ["16:9", "9:16"],
     supportedQuality: schemaQuality.length ? schemaQuality : ["1080p"],
+    supportedResolutions: schemaResolutions,
     supportedDurations,
     parameterSchema,
     defaultParams,
@@ -16439,6 +16458,99 @@ async function copyEpisodeExportSourceObjectToFile(input: {
   }
 }
 
+const VIDEO_EXPORT_MAX_INPUT_FILE_BYTES = 512 * 1024 * 1024;
+const VIDEO_EXPORT_MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
+
+async function downloadCanvasVideoExportSource(input: {
+  runtime: UploadSessionRuntime;
+  object: StorageObjectRecord;
+  destinationPath: string;
+  maxBytes: number;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}) {
+  if (typeof input.object.sizeBytes === "number" && input.object.sizeBytes > input.maxBytes) {
+    throw new VideoCompositionError("video_composition_input_file_limit_exceeded");
+  }
+  await mkdir(dirname(input.destinationPath), { recursive: true });
+  const signed = await input.runtime.adapter.createSignedReadUrl({
+    bucket: input.object.bucket,
+    objectKey: input.object.objectKey,
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+  });
+  const timeoutMs = Math.max(1_000, Math.min(10 * 60_000, Number(input.timeoutMs ?? 120_000)));
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await (input.fetchImpl ?? fetch)(signed.url, { signal: abortController.signal });
+  } catch (error) {
+    clearTimeout(timeout);
+    if (abortController.signal.aborted) {
+      throw new VideoCompositionError("canvas_video_export_source_timeout");
+    }
+    throw new VideoCompositionError("canvas_video_export_source_download_failed", error instanceof Error ? error.message : String(error));
+  }
+  if (!response.ok || !response.body) {
+    clearTimeout(timeout);
+    await response.body?.cancel().catch(() => undefined);
+    throw new VideoCompositionError("canvas_video_export_source_download_failed", `source download failed (${response.status})`);
+  }
+  let bytes = 0;
+  const limiter = new Transform({
+    transform(chunk, _encoding, callback) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.byteLength;
+      if (bytes > input.maxBytes) {
+        callback(new VideoCompositionError("video_composition_input_file_limit_exceeded"));
+        return;
+      }
+      callback(null, buffer);
+    },
+  });
+  try {
+    await pipeline(Readable.fromWeb(response.body as never), limiter, createWriteStream(input.destinationPath), { signal: abortController.signal });
+  } catch (error) {
+    await response.body.cancel().catch(() => undefined);
+    await rm(input.destinationPath, { force: true }).catch(() => undefined);
+    if (abortController.signal.aborted) {
+      throw new VideoCompositionError("canvas_video_export_source_timeout");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+  return bytes;
+}
+
+function canvasVideoExportExtension(objectKey: string, kind: "image" | "video" | "audio", contentType?: string | null) {
+  const extension = extname(objectKey).toLowerCase();
+  const allowed = kind === "image"
+    ? new Set([".jpeg", ".jpg", ".png", ".webp"])
+    : kind === "audio"
+      ? new Set([".aac", ".m4a", ".mp3", ".oga", ".ogg", ".wav", ".webm"])
+      : new Set([".m4v", ".mov", ".mp4", ".webm"]);
+  if (allowed.has(extension)) return extension;
+  const mimeExtension = ({
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "video/x-m4v": ".m4v",
+    "audio/aac": ".aac",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/webm": ".webm",
+  } as Record<string, string>)[String(contentType ?? "").toLowerCase()];
+  if (mimeExtension && allowed.has(mimeExtension)) return mimeExtension;
+  return kind === "image" ? ".jpg" : kind === "audio" ? ".wav" : ".mp4";
+}
+
 async function retryEpisodeExportStorageOperation<T>(operation: () => Promise<T>) {
   const retryAttempts = 3;
   const retryDelayMs = 1_000;
@@ -17606,6 +17718,7 @@ async function serveVendorFile(
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
   const servesWebVendorFile = [
     "prompt-editor.js",
+    "mediabunny.mjs",
     "transformers.webgpu.bundle.js",
     "watermark-removal-ort.bundle.js",
     "ort-wasm-simd-threaded.mjs",
@@ -18073,6 +18186,7 @@ function isSupportedAppShellPath(pathname: string) {
   }
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
   return normalizedPath === "/new-canvas" ||
+    normalizedPath === "/skills" ||
     normalizedPath === "/toolbox" ||
     /^\/projects?\/[^/]+(?:\/(?:overview|assets|episodes|stats))?$/.test(normalizedPath) ||
     /^\/projects?\/[^/]+\/episodes\/[^/]+$/.test(normalizedPath);
@@ -21843,6 +21957,85 @@ export function createPhoneAuthDevServer(
             }),
           },
         });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/skills") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 201, body: { data: await service.createOfficial({
+            name: String(body.name ?? body.title ?? ""),
+            summary: body.summary === undefined ? undefined : String(body.summary),
+            category: body.category,
+            detail: body.detail,
+            status: body.status,
+            files: body.files,
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/skills") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.listAdmin({
+            status: url.searchParams.get("status"),
+            query: url.searchParams.get("query"),
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
+      const adminSkillStatusMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)\/status$/);
+      const adminSkillMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)$/);
+      if (request.method === "PATCH" && adminSkillMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.storyboardPromptWrite] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.updateOfficial({
+            skillId: decodeURIComponent(adminSkillMatch[1]), name: String(body.name ?? body.title ?? ""), summary: body.summary, category: body.category, detail: body.detail, status: body.status, files: body.files,
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+      if (request.method === "PATCH" && adminSkillStatusMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.updateStatus({
+            skillId: decodeURIComponent(adminSkillStatusMatch[1]),
+            status: body.status,
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
       }
 
       if (request.method === "POST" && pathname === "/api/admin/prompt-marketplace/items") {
@@ -26244,6 +26437,75 @@ export function createPhoneAuthDevServer(
         }
       }
 
+      if (pathname === "/api/creator/skills" || pathname.startsWith("/api/creator/skills/")) {
+        const authenticated = await findAuthenticatedUser(db, request.headers.cookie, new Date(), authSessionCache, { includeCredit: false });
+        const service = createSkillPlazaService({ db });
+        try {
+          if (request.method === "GET" && pathname === "/api/creator/skills") {
+            if (url.searchParams.get("scope") === "mine") {
+              if (!authenticated) return writeJson(response, { status: 401, body: { error: { code: "unauthenticated", message: "请先登录" } } });
+              return writeJson(response, { status: 200, body: await service.listMine(authenticated.user.id) });
+            }
+            return writeJson(response, { status: 200, body: await service.listCatalog({
+              userId: authenticated?.user.id ?? null,
+              category: url.searchParams.get("category"),
+              query: url.searchParams.get("query"),
+              page: Number(url.searchParams.get("page") ?? 1),
+              pageSize: Number(url.searchParams.get("pageSize") ?? 20),
+            }) });
+          }
+          if (!authenticated) return writeJson(response, { status: 401, body: { error: { code: "unauthenticated", message: "请先登录" } } });
+          if (request.method === "GET" && pathname === "/api/creator/skills/library") {
+            return writeJson(response, { status: 200, body: await service.listLibrary(authenticated.user.id) });
+          }
+          if (request.method === "GET" && pathname === "/api/creator/skills/favorites") {
+            return writeJson(response, { status: 200, body: await service.listFavorites(authenticated.user.id) });
+          }
+          if (request.method === "POST" && pathname === "/api/creator/skills") {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, { status: 201, body: await service.create({
+              userId: authenticated.user.id,
+              name: String(body.name ?? body.title ?? ""),
+              summary: String(body.summary ?? ""),
+              category: body.category,
+              detail: body.detail,
+              coverStorageObjectId: body.coverStorageObjectId ? String(body.coverStorageObjectId) : null,
+              previewStorageObjectId: body.previewStorageObjectId ? String(body.previewStorageObjectId) : null,
+            }) });
+          }
+          const skillMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)$/);
+          if (request.method === "GET" && skillMatch) {
+            return writeJson(response, { status: 200, body: await service.getDetail({ skillId: decodeURIComponent(skillMatch[1]), userId: authenticated.user.id }) });
+          }
+          const addMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)\/library$/);
+          if (request.method === "POST" && addMatch) {
+            return writeJson(response, { status: 200, body: await service.addToLibrary(authenticated.user.id, decodeURIComponent(addMatch[1])) });
+          }
+          const favoriteMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)\/favorite$/);
+          if (request.method === "POST" && favoriteMatch) {
+            return writeJson(response, { status: 200, body: await service.addToFavorites(authenticated.user.id, decodeURIComponent(favoriteMatch[1])) });
+          }
+          if (request.method === "DELETE" && favoriteMatch) {
+            return writeJson(response, { status: 200, body: await service.removeFromFavorites(authenticated.user.id, decodeURIComponent(favoriteMatch[1])) });
+          }
+          const fileMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)\/files$/);
+          if (request.method === "POST" && fileMatch) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, { status: 201, body: await service.attachFile({
+              userId: authenticated.user.id,
+              skillId: decodeURIComponent(fileMatch[1]),
+              storageObjectId: String(body.storageObjectId ?? ""),
+              fileName: String(body.fileName ?? ""),
+              fileKind: body.fileKind == null ? undefined : String(body.fileKind),
+              sortOrder: Number(body.sortOrder ?? 0),
+            }) });
+          }
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
       if (request.method === "GET" && pathname === "/api/creator/storyboard-prompt/packages") {
         const service = createAdminStoryboardPromptService({ db });
         const compact = url.searchParams.get("compact") === "1";
@@ -26746,6 +27008,19 @@ export function createPhoneAuthDevServer(
           { includeCredit: false },
         );
         if (request.method === "GET" && storageObjectContentMatch) {
+          const publicSkillObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
+          const publicSkillObject = isUuid(publicSkillObjectId)
+            ? await queryOne<{ id: string }>(
+              db,
+              `SELECT object.id
+               FROM storage_objects object
+               WHERE object.id = $1 AND object.status = 'available' AND object.deleted_at IS NULL
+                 AND (EXISTS (SELECT 1 FROM skills skill WHERE skill.status = 'published' AND skill.visibility = 'public' AND (skill.cover_storage_object_id = object.id OR skill.preview_storage_object_id = object.id))
+                   OR EXISTS (SELECT 1 FROM skill_files file JOIN skills skill ON skill.id = file.skill_id WHERE file.storage_object_id = object.id AND skill.status = 'published' AND skill.visibility = 'public'))
+               LIMIT 1`,
+              [publicSkillObjectId],
+            )
+            : null;
           const adminRoute = await requireAdminRouteSession({
             db,
             cookieHeader: request.headers.cookie,
@@ -26761,7 +27036,7 @@ export function createPhoneAuthDevServer(
               && object.contentType.startsWith("video/")
               && isHomeRecommendationObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix }),
             );
-            if (!isAdminReadableHomeVideo && !authenticated) {
+            if (!isAdminReadableHomeVideo && !authenticated && !publicSkillObject) {
               return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
             }
             if (isAdminReadableHomeVideo && object) {
@@ -26789,6 +27064,38 @@ export function createPhoneAuthDevServer(
               response.statusCode = 307;
               response.setHeader("location", signed.url);
               response.setHeader("cache-control", "private, no-store");
+              response.setHeader("referrer-policy", "no-referrer");
+              response.end();
+              return;
+            }
+          }
+          if (publicSkillObject) {
+            const object = await findStorageObject(db, publicSkillObject.id);
+            if (object) {
+              const signed = await storageRuntime.adapter.createSignedReadUrl({
+                bucket: object.bucket,
+                objectKey: object.objectKey,
+                expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+                responseContentDisposition: "inline",
+              });
+              if (url.searchParams.get("proxy") === "1") {
+                const streamed = await streamStorageObjectContent({
+                  response,
+                  signedUrl: signed.url,
+                  relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                  range: typeof request.headers.range === "string" ? request.headers.range : null,
+                  contentType: object.contentType,
+                  download: false,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                });
+                if (!streamed) {
+                  return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+                }
+                return;
+              }
+              response.statusCode = 307;
+              response.setHeader("location", signed.url);
+              response.setHeader("cache-control", "public, max-age=300");
               response.setHeader("referrer-policy", "no-referrer");
               response.end();
               return;
@@ -29809,6 +30116,248 @@ export function createPhoneAuthDevServer(
             assetId: readString(url.searchParams.get("assetId")) || null,
             assetVersionId: readString(url.searchParams.get("assetVersionId")) || null,
           })));
+        }
+
+        const canvasVideoExportMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/video-export$/);
+        if (canvasVideoExportMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasVideoExportMatch[1] ?? "");
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeJson(response, envelopedError(400, "idempotency_key_required", "缺少幂等请求标识。"));
+          }
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          const cloudVideoExport = storageRuntime.mode === "cos" || storageRuntime.mode === "s3_compatible";
+          if (storageRuntime.mode !== "dev" && !cloudVideoExport) {
+            return writeJson(response, envelopedError(501, "canvas_video_export_storage_unavailable", "当前存储后端暂不支持服务端视频合成。"));
+          }
+          if (cloudVideoExport && typeof storageRuntime.adapter.putObject !== "function") {
+            return writeJson(response, envelopedError(501, "canvas_video_export_storage_unavailable", "当前存储后端不支持视频结果上传。"));
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const nodeKey = readString(body.nodeKey) || "video-composition";
+          const rawClips = Array.isArray(body.clips) ? body.clips : [];
+          if (!rawClips.length || rawClips.length > 32) {
+            return writeJson(response, envelopedError(400, "video_composition_clips_required", "至少需要一个视频片段。"));
+          }
+          const clips: Array<{
+            kind: "image" | "video";
+            sourcePath: string;
+            durationSeconds: number;
+            sourceIn?: number;
+            sourceOut?: number;
+            transitionIn?: { kind?: "none" | "dissolve" | "fade"; duration?: number };
+          }> = [];
+          const clipObjects: StorageObjectRecord[] = [];
+          const audioTracks: Array<{ storageObjectId: string; sourcePath: string; sourceIn?: number; sourceOut?: number; volume?: number; timelineIn?: number; fadeIn?: number; fadeOut?: number }> = [];
+          const audioObjects: StorageObjectRecord[] = [];
+          for (const rawClip of rawClips) {
+            const clip = readJsonRecord(rawClip);
+            const storageObjectId = readString(clip.storageObjectId);
+            if (!storageObjectId || !isUuid(storageObjectId)) {
+              return writeJson(response, envelopedError(400, "canvas_video_export_clip_invalid", "片段素材无效。"));
+            }
+            const object = await findStorageObject(db, storageObjectId);
+            if (!object || object.canvasProjectId !== canvasProjectId || object.bucket !== storageRuntime.bucket || object.status !== "available") {
+              return writeJson(response, envelopedError(404, "canvas_video_export_clip_not_found", "片段素材不存在。"));
+            }
+            const kind = object.contentType.startsWith("video/") ? "video" : object.contentType.startsWith("image/") ? "image" : null;
+            if (!kind) {
+              return writeJson(response, envelopedError(400, "canvas_video_export_clip_type_invalid", "仅支持图片或视频素材。"));
+            }
+            const sourcePath = cloudVideoExport ? "" : resolveLocalStorageObjectPath(object.bucket, object.objectKey);
+            const durationSeconds = Number(clip.durationSeconds ?? (kind === "image" ? 3 : 1));
+            const sourceIn = clip.sourceIn === undefined ? undefined : Number(clip.sourceIn);
+            const sourceOut = clip.sourceOut === undefined ? undefined : Number(clip.sourceOut);
+            const rawTransition = readJsonRecord(clip.transitionIn);
+            const transitionIn = clip.transitionIn === undefined
+              ? undefined
+              : {
+                  kind: readString(rawTransition.kind) as "none" | "dissolve" | "fade" | "" || "none",
+                  duration: rawTransition.duration === undefined ? undefined : Number(rawTransition.duration),
+            };
+            clips.push({ kind, sourcePath, durationSeconds, sourceIn, sourceOut, transitionIn });
+            clipObjects.push(object);
+          }
+          const rawAudioTracks = Array.isArray(body.audioTracks) ? body.audioTracks : body.audio === undefined ? [] : [body.audio];
+          if (rawAudioTracks.length > 8) {
+            return writeJson(response, envelopedError(400, "video_composition_audio_track_limit_exceeded", "音频轨数量超过限制。"));
+          }
+          for (const rawAudioValue of rawAudioTracks) {
+            const rawAudio = readJsonRecord(rawAudioValue);
+            const audioStorageObjectId = readString(rawAudio.storageObjectId);
+            if (!audioStorageObjectId) continue;
+            if (!isUuid(audioStorageObjectId)) return writeJson(response, envelopedError(400, "canvas_video_export_audio_invalid", "音频素材无效。"));
+            const audioObject = await findStorageObject(db, audioStorageObjectId);
+            if (!audioObject || audioObject.canvasProjectId !== canvasProjectId || audioObject.bucket !== storageRuntime.bucket || audioObject.status !== "available" || !audioObject.contentType.startsWith("audio/")) {
+              return writeJson(response, envelopedError(404, "canvas_video_export_audio_not_found", "音频素材不存在。"));
+            }
+            audioTracks.push({
+              storageObjectId: audioStorageObjectId,
+              sourcePath: cloudVideoExport ? "" : resolveLocalStorageObjectPath(audioObject.bucket, audioObject.objectKey),
+              ...(rawAudio.sourceIn === undefined ? {} : { sourceIn: Number(rawAudio.sourceIn) }),
+              ...(rawAudio.sourceOut === undefined ? {} : { sourceOut: Number(rawAudio.sourceOut) }),
+              ...(rawAudio.volume === undefined ? {} : { volume: Number(rawAudio.volume) }),
+              ...(rawAudio.timelineIn === undefined ? {} : { timelineIn: Number(rawAudio.timelineIn) }),
+              ...(rawAudio.fadeIn === undefined ? {} : { fadeIn: Number(rawAudio.fadeIn) }),
+              ...(rawAudio.fadeOut === undefined ? {} : { fadeOut: Number(rawAudio.fadeOut) }),
+            });
+            audioObjects.push(audioObject);
+          }
+          let tempRoot: string | null = null;
+          if (cloudVideoExport) {
+            const exportTempBase = resolve(uploadRoot, "tmp");
+            await mkdir(exportTempBase, { recursive: true });
+            tempRoot = await mkdtemp(join(exportTempBase, "canvas-video-export-"));
+          }
+          let activeRunId: string | null = null;
+          let activeOutputObjectId: string | null = null;
+          try {
+            const now = new Date();
+            const run = await createCanvasNodeRun(db, {
+              canvasProjectId,
+              nodeKey,
+              idempotencyKey,
+              mediaKind: "video",
+              status: "running",
+              userId: authenticated.user.id,
+              actorScope: canvasScope,
+              inputSnapshot: {
+                clipCount: clips.length,
+                source: "canvas-video-export",
+                clips: clips.map(({ sourcePath: _sourcePath, ...clip }) => clip),
+                ...(audioTracks.length ? { audioTracks: audioTracks.map(({ sourcePath: _sourcePath, ...track }) => track) } : {}),
+              },
+              now,
+            });
+            activeRunId = run.id;
+            if (run.reused) {
+              return writeJson(response, enveloped(run.status === "succeeded" ? 200 : 202, run));
+            }
+            if (cloudVideoExport && tempRoot) {
+              let totalDownloadedBytes = 0;
+              for (let index = 0; index < clips.length; index += 1) {
+                const sourceObject = clipObjects[index]!;
+                const extension = canvasVideoExportExtension(sourceObject.objectKey, clips[index]!.kind, sourceObject.contentType);
+                const sourcePath = join(tempRoot, `source-${index}${extension}`);
+                const downloadedBytes = await retryEpisodeExportStorageOperation(() => downloadCanvasVideoExportSource({
+                  runtime: storageRuntime,
+                  object: sourceObject,
+                  destinationPath: sourcePath,
+                  maxBytes: VIDEO_EXPORT_MAX_INPUT_FILE_BYTES,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                }));
+                totalDownloadedBytes += downloadedBytes;
+                if (totalDownloadedBytes > VIDEO_EXPORT_MAX_INPUT_BYTES) {
+                  throw new VideoCompositionError("video_composition_input_limit_exceeded");
+                }
+                clips[index]!.sourcePath = sourcePath;
+              }
+              for (let index = 0; index < audioTracks.length; index += 1) {
+                const sourceObject = audioObjects[index]!;
+                const sourcePath = join(tempRoot, `audio-${index}${canvasVideoExportExtension(sourceObject.objectKey, "audio", sourceObject.contentType)}`);
+                const downloadedBytes = await retryEpisodeExportStorageOperation(() => downloadCanvasVideoExportSource({
+                  runtime: storageRuntime,
+                  object: sourceObject,
+                  destinationPath: sourcePath,
+                  maxBytes: VIDEO_EXPORT_MAX_INPUT_FILE_BYTES,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                }));
+                totalDownloadedBytes += downloadedBytes;
+                if (totalDownloadedBytes > VIDEO_EXPORT_MAX_INPUT_BYTES) {
+                  throw new VideoCompositionError("video_composition_input_limit_exceeded");
+                }
+                audioTracks[index]!.sourcePath = sourcePath;
+              }
+            }
+            const outputObject = await createScopedStorageObject(db, {
+              userId: authenticated.user.id,
+              actorScope: canvasScope,
+              canvasProjectId,
+              bucket: storageRuntime.bucket,
+              objectName: `canvas-video-export-${run.id}.mp4`,
+              contentType: "video/mp4",
+              status: "pending_upload",
+              metadata: { canvasProjectId, nodeKey, runId: run.id, purpose: "new-canvas/video-composition" },
+              now,
+            });
+            activeOutputObjectId = outputObject.id;
+            const outputPath = cloudVideoExport && tempRoot
+              ? join(tempRoot, "output.mp4")
+              : resolveLocalStorageObjectPath(outputObject.bucket, outputObject.objectKey);
+            await mkdir(dirname(outputPath), { recursive: true });
+            const artifact = await composeVideoToMp4({
+              clips,
+              ...(audioTracks.length ? { audio: audioTracks.map(({ storageObjectId: _storageObjectId, ...track }) => track) } : {}),
+              outputPath,
+              width: Number(body.width ?? 1280),
+              height: Number(body.height ?? 720),
+              fps: Number(body.fps ?? 30),
+            }, {
+              allowedInputRoots: [cloudVideoExport && tempRoot ? tempRoot : resolve(uploadRoot, "storage", storageRuntime.bucket)],
+              allowedOutputRoot: cloudVideoExport && tempRoot ? tempRoot : resolve(uploadRoot, "storage", storageRuntime.bucket),
+              tempRoot: resolve(uploadRoot, "tmp"),
+            });
+            let uploadResult: { eTag?: string | null; versionId?: string | null } | undefined;
+            if (cloudVideoExport) {
+              uploadResult = await retryEpisodeExportStorageOperation(() => storageRuntime.adapter.putObject!({
+                bucket: outputObject.bucket,
+                objectKey: outputObject.objectKey,
+                body: createReadStream(outputPath),
+                contentType: "video/mp4",
+                contentLength: artifact.sizeBytes,
+                timeoutMs: 120_000,
+              }));
+            }
+            const available = await markStorageObjectAvailable(db, {
+              storageObjectId: outputObject.id,
+              sizeBytes: artifact.sizeBytes,
+              contentType: "video/mp4",
+              etag: uploadResult?.eTag ?? null,
+              versionId: uploadResult?.versionId ?? null,
+              metadata: { ...outputObject.metadata, artifact },
+              now: new Date(),
+            });
+            const canvasArtifact = await appendCanvasNodeArtifact(db, {
+              canvasProjectId,
+              nodeKey,
+              runId: run.id,
+              artifactKind: "video",
+              storageObjectId: outputObject.id,
+              url: `/api/storage/objects/${encodeURIComponent(outputObject.id)}/content?proxy=1`,
+              selected: true,
+              metadata: artifact as unknown as Record<string, unknown>,
+              userId: authenticated.user.id,
+              now: new Date(),
+            });
+            const completed = await completeCanvasNodeRun(db, {
+              runId: run.id,
+              outputSnapshot: { artifactId: canvasArtifact.id, storageObjectId: outputObject.id, durationSeconds: artifact.durationSeconds },
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, { run: completed, artifact: { ...artifact, storageObjectId: available?.id ?? outputObject.id, id: canvasArtifact.id } }));
+          } catch (error) {
+            if (activeOutputObjectId) {
+              await markStorageObjectFailed(db, { storageObjectId: activeOutputObjectId, status: "failed", now: new Date() }).catch(() => undefined);
+            }
+            if (activeRunId) {
+              await failCanvasNodeRun(db, {
+                runId: activeRunId,
+                failure: { code: error instanceof VideoCompositionError ? error.code : "video_composition_failed" },
+                now: new Date(),
+              }).catch(() => undefined);
+            }
+            if (error instanceof VideoCompositionError) {
+              return writeJson(response, envelopedError(400, error.code, "视频合成失败。"));
+            }
+            throw error;
+          } finally {
+            if (tempRoot) await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+          }
         }
 
         const canvasDerivationCollectionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/derivations$/);
@@ -34219,6 +34768,15 @@ export function createPhoneAuthDevServer(
                 OR LOWER(COALESCE(tags_json::text, '')) LIKE $${params.length}
               )`);
             }
+            const folderRows = await db.query<{ folder_name: string }>(
+              `SELECT DISTINCT folder_name
+                 FROM team_assets
+                WHERE admin_user_id = $1
+                  AND asset_status IN ('active', 'generating', 'failed')
+                  AND NULLIF(BTRIM(folder_name), '') IS NOT NULL
+                ORDER BY folder_name ASC`,
+              [actor.userId],
+            );
             const rows = await db.query<Record<string, unknown>>(
               `SELECT team_assets.*,
                       generation_task.id AS generation_task_id,
@@ -34266,7 +34824,7 @@ export function createPhoneAuthDevServer(
                   { id: "prop", label: "道具" },
                   { id: "voice", label: "音色" },
                 ],
-                folders: [],
+                folders: folderRows.rows.map((row) => row.folder_name),
                 assets: rows.rows.map(teamAssetRow),
                 entitlement: { hasTeamAssetLibrary: true, blockReason: null },
               },

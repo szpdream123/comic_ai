@@ -2,14 +2,14 @@
 
 Generated from `package-lock.json`. Run `npm run legal:generate` after dependency changes.
 
-The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri) at commit `87731295a121be601b1d4fa8616b0f2d1a38a3bb` (v0.6.7) under the upstream source-available license and the separately archived author authorization. See `docs/legal/ai-canvas-tauri-provenance.md`.
+The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri) at commit `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` (v0.9.2) under the upstream source-available license and the separately archived author authorization. See `docs/legal/ai-canvas-tauri-provenance.md`.
 
 | Package | Version | Declared license |
 | --- | --- | --- |
 | @antv/x6 | 3.1.7 | MIT |
 | @aws-sdk/checksums | 3.1000.18 | Apache-2.0 |
 | @aws-sdk/client-s3 | 3.1091.0 | Apache-2.0 |
-| @aws-sdk/core | 3.975.3 | Apache-2.0 |
+| @aws-sdk/core | 3.977.7 | Apache-2.0 |
 | @aws-sdk/credential-provider-env | 3.972.59 | Apache-2.0 |
 | @aws-sdk/credential-provider-http | 3.972.61 | Apache-2.0 |
 | @aws-sdk/credential-provider-ini | 3.973.4 | Apache-2.0 |
@@ -21,11 +21,11 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | @aws-sdk/lib-storage | 3.1091.0 | Apache-2.0 |
 | @aws-sdk/middleware-sdk-s3 | 3.972.64 | Apache-2.0 |
 | @aws-sdk/nested-clients | 3.997.33 | Apache-2.0 |
-| @aws-sdk/s3-request-presigner | 3.1054.0 | Apache-2.0 |
-| @aws-sdk/signature-v4-multi-region | 3.996.41 | Apache-2.0 |
+| @aws-sdk/s3-request-presigner | 3.1110.0 | Apache-2.0 |
+| @aws-sdk/signature-v4-multi-region | 3.996.44 | Apache-2.0 |
 | @aws-sdk/token-providers | 3.1088.0 | Apache-2.0 |
-| @aws-sdk/types | 3.974.2 | Apache-2.0 |
-| @aws-sdk/xml-builder | 3.972.36 | Apache-2.0 |
+| @aws-sdk/types | 3.974.3 | Apache-2.0 |
+| @aws-sdk/xml-builder | 3.972.38 | Apache-2.0 |
 | @aws/lambda-invoke-store | 0.3.0 | Apache-2.0 |
 | @electric-sql/pglite | 0.4.6 | Apache-2.0 |
 | @emnapi/runtime | 1.11.3 | MIT |
@@ -64,6 +64,9 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | @ffmpeg-installer/linux-x64 | 4.1.0 | GPLv3 |
 | @ffmpeg-installer/win32-ia32 | 4.1.0 | GPLv3 |
 | @ffmpeg-installer/win32-x64 | 4.1.0 | GPLv3 |
+| @ffmpeg/core | 0.12.10 | GPL-2.0-or-later |
+| @ffmpeg/ffmpeg | 0.12.15 | MIT |
+| @ffmpeg/types | 0.12.4 | MIT |
 | @ffprobe-installer/darwin-arm64 | 5.0.1 | LGPL-2.1 |
 | @ffprobe-installer/darwin-x64 | 5.1.0 | GPL-3.0 |
 | @ffprobe-installer/ffprobe | 2.1.2 | LGPL-2.1 |
@@ -80,37 +83,52 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | @huggingface/tokenizers | 0.1.3 | Apache-2.0 |
 | @huggingface/transformers | 4.2.0 | Apache-2.0 |
 | @img/colour | 1.1.0 | MIT |
-| @img/sharp-darwin-arm64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-darwin-x64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-libvips-darwin-arm64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-darwin-x64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-arm | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-arm64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-ppc64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-riscv64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-s390x | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linux-x64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linuxmusl-arm64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-libvips-linuxmusl-x64 | 1.2.4 | LGPL-3.0-or-later |
-| @img/sharp-linux-arm | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-arm64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-ppc64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-riscv64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-s390x | 0.34.5 | Apache-2.0 |
-| @img/sharp-linux-x64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linuxmusl-arm64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-linuxmusl-x64 | 0.34.5 | Apache-2.0 |
-| @img/sharp-wasm32 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later AND MIT |
-| @img/sharp-win32-arm64 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later |
-| @img/sharp-win32-ia32 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later |
-| @img/sharp-win32-x64 | 0.34.5 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-darwin-arm64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-darwin-x64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-freebsd-wasm32 | 0.35.3 | Apache-2.0 |
+| @img/sharp-libvips-darwin-arm64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-darwin-x64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-arm | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-arm64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-ppc64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-riscv64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-s390x | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-x64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linuxmusl-arm64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linuxmusl-x64 | 1.3.2 | LGPL-3.0-or-later |
+| @img/sharp-linux-arm | 0.35.3 | Apache-2.0 |
+| @img/sharp-linux-arm64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-linux-ppc64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-linux-riscv64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-linux-s390x | 0.35.3 | Apache-2.0 |
+| @img/sharp-linux-x64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-linuxmusl-arm64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-linuxmusl-x64 | 0.35.3 | Apache-2.0 |
+| @img/sharp-wasm32 | 0.35.3 | Apache-2.0 AND LGPL-3.0-or-later AND MIT |
+| @img/sharp-webcontainers-wasm32 | 0.35.3 | Apache-2.0 |
+| @img/sharp-win32-arm64 | 0.35.3 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-win32-ia32 | 0.35.3 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-win32-x64 | 0.35.3 | Apache-2.0 AND LGPL-3.0-or-later |
 | @ioredis/commands | 1.5.1 | MIT |
+| @mediapipe/tasks-vision | 0.10.17 | Apache-2.0 |
 | @msgpackr-extract/msgpackr-extract-darwin-arm64 | 3.0.4 | MIT |
 | @msgpackr-extract/msgpackr-extract-darwin-x64 | 3.0.4 | MIT |
 | @msgpackr-extract/msgpackr-extract-linux-arm | 3.0.4 | MIT |
 | @msgpackr-extract/msgpackr-extract-linux-arm64 | 3.0.4 | MIT |
 | @msgpackr-extract/msgpackr-extract-linux-x64 | 3.0.4 | MIT |
 | @msgpackr-extract/msgpackr-extract-win32-x64 | 3.0.4 | MIT |
+| @napi-rs/canvas | 0.1.100 | MIT |
+| @napi-rs/canvas-android-arm64 | 0.1.100 | MIT |
+| @napi-rs/canvas-darwin-arm64 | 0.1.100 | MIT |
+| @napi-rs/canvas-darwin-x64 | 0.1.100 | MIT |
+| @napi-rs/canvas-linux-arm-gnueabihf | 0.1.100 | MIT |
+| @napi-rs/canvas-linux-arm64-gnu | 0.1.100 | MIT |
+| @napi-rs/canvas-linux-arm64-musl | 0.1.100 | MIT |
+| @napi-rs/canvas-linux-riscv64-gnu | 0.1.100 | MIT |
+| @napi-rs/canvas-linux-x64-gnu | 0.1.100 | MIT |
+| @napi-rs/canvas-linux-x64-musl | 0.1.100 | MIT |
+| @napi-rs/canvas-win32-arm64-msvc | 0.1.100 | MIT |
+| @napi-rs/canvas-win32-x64-msvc | 0.1.100 | MIT |
 | @protobufjs/aspromise | 1.1.2 | BSD-3-Clause |
 | @protobufjs/base64 | 1.1.2 | BSD-3-Clause |
 | @protobufjs/codegen | 2.0.5 | BSD-3-Clause |
@@ -120,29 +138,29 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | @protobufjs/path | 1.1.2 | BSD-3-Clause |
 | @protobufjs/pool | 1.1.0 | BSD-3-Clause |
 | @protobufjs/utf8 | 1.1.2 | BSD-3-Clause |
-| @smithy/core | 3.29.6 | Apache-2.0 |
+| @smithy/core | 3.33.0 | Apache-2.0 |
 | @smithy/credential-provider-imds | 4.4.11 | Apache-2.0 |
 | @smithy/fetch-http-handler | 5.6.8 | Apache-2.0 |
 | @smithy/node-http-handler | 4.9.8 | Apache-2.0 |
-| @smithy/signature-v4 | 5.6.7 | Apache-2.0 |
-| @smithy/types | 4.16.1 | Apache-2.0 |
-| @tiptap/core | 3.28.0 | MIT |
-| @tiptap/extension-document | 3.28.0 | MIT |
-| @tiptap/extension-hard-break | 3.28.0 | MIT |
-| @tiptap/extension-mention | 3.28.0 | MIT |
-| @tiptap/extension-paragraph | 3.28.0 | MIT |
-| @tiptap/extension-text | 3.28.0 | MIT |
-| @tiptap/extensions | 3.28.0 | MIT |
-| @tiptap/pm | 3.28.0 | MIT |
-| @tiptap/suggestion | 3.28.0 | MIT |
+| @smithy/signature-v4 | 5.7.0 | Apache-2.0 |
+| @smithy/types | 4.17.0 | Apache-2.0 |
+| @tiptap/core | 3.31.3 | MIT |
+| @tiptap/extension-document | 3.31.3 | MIT |
+| @tiptap/extension-hard-break | 3.31.3 | MIT |
+| @tiptap/extension-mention | 3.31.3 | MIT |
+| @tiptap/extension-paragraph | 3.31.3 | MIT |
+| @tiptap/extension-text | 3.31.3 | MIT |
+| @tiptap/extensions | 3.31.3 | MIT |
+| @tiptap/pm | 3.31.3 | MIT |
+| @tiptap/suggestion | 3.31.3 | MIT |
 | @types/archiver | 7.0.0 | MIT |
 | @types/dom-mediacapture-transform | 0.1.12 | MIT |
 | @types/dom-webcodecs | 0.1.13 | MIT |
 | @types/node | 26.1.1 | MIT |
 | @types/readdir-glob | 1.1.5 | MIT |
-| @xmldom/xmldom | 0.8.13 | MIT |
+| @xmldom/xmldom | 0.8.15 | MIT |
 | abort-controller | 3.0.0 | MIT |
-| adm-zip | 0.5.18 | MIT |
+| adm-zip | 0.6.0 | MIT |
 | agent-base | 6.0.2 | MIT |
 | ansi-regex | 5.0.1 | MIT |
 | ansi-styles | 4.3.0 | MIT |
@@ -163,7 +181,7 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | bluebird | 3.4.7 | MIT |
 | boolean | 3.2.0 | MIT |
 | bowser | 2.14.1 | MIT |
-| brace-expansion | 5.0.8 | MIT |
+| brace-expansion | 5.0.9 | MIT |
 | buffer | 5.6.0 | MIT |
 | buffer | 6.0.3 | MIT |
 | buffer-crc32 | 1.0.0 | MIT |
@@ -280,6 +298,7 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | pako | 1.0.11 | (MIT AND Zlib) |
 | path-exists | 4.0.0 | MIT |
 | path-is-absolute | 1.0.1 | MIT |
+| pdfjs-dist | 5.4.54 | Apache-2.0 |
 | pg | 8.21.0 | MIT |
 | pg-cloudflare | 1.4.0 | MIT |
 | pg-connection-string | 2.13.0 | MIT |
@@ -308,12 +327,12 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | prosemirror-state | 1.4.4 | MIT |
 | prosemirror-tables | 1.8.5 | MIT |
 | prosemirror-transform | 1.12.0 | MIT |
-| prosemirror-view | 1.42.1 | MIT |
+| prosemirror-view | 1.42.3 | MIT |
 | protobufjs | 7.6.5 | BSD-3-Clause |
 | proxy-from-env | 2.1.0 | MIT |
 | qcloud-cos-sts | 3.1.3 | MIT |
 | qrcode | 1.5.4 | MIT |
-| qs | 6.15.2 | BSD-3-Clause |
+| qs | 6.16.0 | BSD-3-Clause |
 | react | 19.0.0 | MIT |
 | react-dom | 19.0.0 | MIT |
 | readable-stream | 2.3.8 | MIT |
@@ -336,12 +355,13 @@ The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github
 | safe-buffer | 5.2.1 | MIT |
 | scheduler | 0.25.0 | MIT |
 | semver | 7.8.0 | ISC |
+| semver | 7.8.5 | ISC |
 | semver-compare | 1.0.0 | MIT |
 | serialize-error | 7.0.1 | MIT |
 | set-blocking | 2.0.0 | ISC |
 | setimmediate | 1.0.5 | MIT |
-| sharp | 0.34.5 | Apache-2.0 |
-| side-channel | 1.1.0 | MIT |
+| sharp | 0.35.3 | Apache-2.0 |
+| side-channel | 1.1.1 | MIT |
 | side-channel-list | 1.0.1 | MIT |
 | side-channel-map | 1.0.1 | MIT |
 | side-channel-weakmap | 1.0.2 | MIT |

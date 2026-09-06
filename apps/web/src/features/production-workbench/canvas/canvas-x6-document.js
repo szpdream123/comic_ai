@@ -202,6 +202,8 @@ function canvasNodeKindLabel(node) {
     "ai-panorama": "全景预览",
     "ai-markdown": "AI Markdown",
     "ai-storyboard": "图片切分",
+    "ai-shotlist": "分镜表",
+    "canvas-note": "画布笔记",
     "ai-director": "导演台",
     "source-text": "文本源",
     "source-image": "图片源",

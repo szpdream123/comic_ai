@@ -19,10 +19,13 @@ import {
   renderCanvasStoryboardNodeBody,
   syncCanvasStoryboardGridAspectRatio,
 } from "../../new-canvas/special-media-nodes.js";
+import { renderCanvasShotlistNodeBody } from "./canvas-shotlist-node.js";
+import { bindCanvasImageLoadRetry } from "./canvas-image-load-retry.js";
 import {
   canvasDocumentFromX6Data,
   canvasDocumentToX6Data,
 } from "./canvas-x6-document.js";
+import { normalizeCanvasNotePoints, renderCanvasNoteNode, resizeCanvasNoteDataPoints } from "./canvas-note-node.js";
 
 const X6_VENDOR_SRC = "/vendor/@antv/x6/dist/x6.min.js";
 const X6_READY_KEY = "__comicAiX6Ready";
@@ -116,10 +119,10 @@ export function bindCanvasNativeNodeSelection(mount, workbench) {
     const nodeIndex = path.findIndex((candidate) => candidate?.classList?.contains?.("canvas-x6-special-node"));
     if (nodeIndex >= 0) {
       return path.slice(0, nodeIndex).some((candidate) =>
-        candidate?.matches?.("button, input, textarea, select, a, [role='application'], [data-canvas-text-output]"));
+        candidate?.matches?.("button, input, textarea, select, a, [role='application'], [data-canvas-text-output], [data-canvas-note-point-index]"));
     }
     const node = event.target?.closest?.(".canvas-x6-special-node");
-    const interactive = event.target?.closest?.("button, input, textarea, select, a, [role='application'], [data-canvas-text-output]");
+    const interactive = event.target?.closest?.("button, input, textarea, select, a, [role='application'], [data-canvas-text-output], [data-canvas-note-point-index]");
     return Boolean(node && interactive && node.contains?.(interactive));
   };
   const selectNode = (nodeId) => {
@@ -161,6 +164,21 @@ export function bindCanvasNativeNodeSelection(mount, workbench) {
   mount.addEventListener("comic-ai-canvas-node-select", (event) => {
     selectNode(String(event.detail?.nodeId ?? "").trim());
   });
+  mount.addEventListener("comic-ai-canvas-note-points-change", (event) => {
+    const nodeId = String(event.detail?.nodeId ?? "").trim();
+    const points = Array.isArray(event.detail?.points) ? event.detail.points : [];
+    const graph = workbench?.canvasGraph;
+    const cell = nodeId && graph?.getCellById?.(nodeId);
+    const data = cell?.getData?.() ?? {};
+    const canvasNode = data.canvasNode;
+    if (!cell || !canvasNode || canvasNode.type !== "canvas-note" || points.length < 2) return;
+    const noteData = canvasNode.data && typeof canvasNode.data === "object" ? canvasNode.data : {};
+    const nestedNote = noteData.note && typeof noteData.note === "object" ? noteData.note : null;
+    const nextData = nestedNote
+      ? { ...noteData, note: { ...nestedNote, points } }
+      : { ...noteData, points };
+    cell.setData?.({ ...data, canvasNode: { ...canvasNode, data: nextData } }, { overwrite: true });
+  }, true);
   mount.__comicAiCanvasNodeSelectionBound = true;
   return true;
 }
@@ -610,6 +628,7 @@ function createCanvasSpecialMediaX6Node(node = {}) {
   wrapper.innerHTML = renderCanvasSpecialMediaX6Node(node);
   const element = wrapper.firstElementChild;
   applyCanvasX6NodePresentation(element, node);
+  bindCanvasNotePointControls(element, node);
   element?.querySelectorAll?.("button, input, textarea, select, a, [contenteditable='true'], [role='application'], [data-canvas-text-output]").forEach((control) => {
     control.addEventListener("pointerdown", (event) => event.stopPropagation());
     control.addEventListener("mousedown", (event) => event.stopPropagation());
@@ -623,6 +642,11 @@ function createCanvasSpecialMediaX6Node(node = {}) {
       image.dataset.canvasImageFallbackUsed = "true";
       image.src = fallback;
     });
+  });
+  // COS 对象刚写入时可能短暂返回 404；在已有缩略图/原图回退之后，
+  // 对仍失败的远程图片做有限退避重试，避免把失败状态写回画布数据。
+  element?.querySelectorAll?.("img").forEach((image) => {
+    bindCanvasImageLoadRetry(image);
   });
   element?.querySelectorAll?.("[data-canvas-video-fallback-src]").forEach((video) => {
     video.addEventListener?.("error", () => {
@@ -706,6 +730,56 @@ function createCanvasSpecialMediaX6Node(node = {}) {
   return element ?? wrapper;
 }
 
+function bindCanvasNotePointControls(element, node = {}) {
+  const noteData = node?.data && typeof node.data === "object" ? node.data : {};
+  const note = noteData.note && typeof noteData.note === "object" ? noteData.note : noteData;
+  const noteKind = String(note?.noteKind ?? note?.kind ?? "").toLowerCase();
+  if (!element?.matches?.(".is-canvas-note") || !["arrow", "line", "freehand"].includes(noteKind)) return false;
+  const svg = element.querySelector?.("[data-canvas-note-point-controls]");
+  const handles = svg?.querySelectorAll?.("[data-canvas-note-point-index]") ?? [];
+  if (!svg || !handles.length) return false;
+  const width = Math.max(80, Number(node?.size?.width) || 320);
+  const height = Math.max(64, Number(node?.size?.height) || 220);
+  const points = note?.points;
+  const sourcePoints = normalizeCanvasNotePoints(points, width, height);
+  handles.forEach((handle) => {
+    handle.setAttribute("aria-hidden", "false");
+    handle.setAttribute("tabindex", "0");
+    const startDrag = (event) => {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      const index = Number(handle.dataset?.canvasNotePointIndex);
+      if (!Number.isInteger(index) || !sourcePoints[index]) return;
+      const ownerDocument = element.ownerDocument ?? document;
+      const move = (moveEvent) => {
+        const rect = svg.getBoundingClientRect?.();
+        if (!rect || !Number(rect.width) || !Number(rect.height)) return;
+        const x = Math.max(0, Math.min(width, (Number(moveEvent.clientX) - rect.left) * width / rect.width));
+        const y = Math.max(0, Math.min(height, (Number(moveEvent.clientY) - rect.top) * height / rect.height));
+        handle.setAttribute("cx", String(Number(x.toFixed(3))));
+        handle.setAttribute("cy", String(Number(y.toFixed(3))));
+      };
+      const end = () => {
+        ownerDocument.removeEventListener("pointermove", move);
+        ownerDocument.removeEventListener("pointerup", end);
+        ownerDocument.removeEventListener("pointercancel", end);
+        const nextPoints = [...sourcePoints];
+        nextPoints[index] = { x: Number(handle.getAttribute("cx")), y: Number(handle.getAttribute("cy")) };
+        element.dispatchEvent(new CustomEvent("comic-ai-canvas-note-points-change", {
+          bubbles: true,
+          composed: true,
+          detail: { nodeId: String(node?.id ?? ""), points: nextPoints },
+        }));
+      };
+      ownerDocument.addEventListener("pointermove", move);
+      ownerDocument.addEventListener("pointerup", end, { once: true });
+      ownerDocument.addEventListener("pointercancel", end, { once: true });
+    };
+    handle.addEventListener("pointerdown", startDrag);
+  });
+  return true;
+}
+
 function applyCanvasX6NodePresentation(element, node = {}) {
   if (!element) return;
   const status = String(node?.data?.status ?? "ready").trim().toLowerCase() || "ready";
@@ -782,8 +856,9 @@ export function resolveCanvasStoryboardCutReference(node = {}) {
 function renderCanvasSpecialMediaX6Node(node = {}) {
   const requestedType = String(node?.type ?? "");
   const specialType = [
-    "ai-animation", "ai-storyboard", "ai-director", "group", "upload", "video", "ai-video", "source-image", "source-video", "audio", "ai-audio", "source-audio",
+    "ai-animation", "ai-storyboard", "ai-shotlist", "ai-director", "group", "upload", "video", "ai-video", "source-image", "source-video", "audio", "ai-audio", "source-audio", "canvas-note",
   ].includes(requestedType) ? requestedType : requestedType === "ai-panorama" ? "ai-panorama" : "generic";
+  if (specialType === "canvas-note") return renderCanvasNoteNode(node);
   if (specialType === "generic") return renderCanvasGenericX6Node(node);
   const type = specialType;
   const frameAnalysis = isCanvasFrameAnalysisNode(node);
@@ -791,6 +866,8 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
   const configuredTitle = String(node?.data?.title ?? "").trim();
   const replacementTitle = frameAnalysis
     ? "逐帧拉片"
+    : type === "ai-shotlist"
+    ? "分镜表"
     : type === "ai-storyboard"
     ? "图片切分"
     : type === "ai-director" ? "导演台"
@@ -812,7 +889,9 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
     group: "节点分组",
     "ai-panorama": "全景预览",
   })[type];
-  const body = type === "ai-animation"
+  const body = type === "ai-shotlist"
+    ? renderCanvasShotlistNodeBody(node)
+    : type === "ai-animation"
     ? renderCanvasAnimationNodeBody(node)
     : type === "ai-storyboard"
       ? frameAnalysis ? renderCanvasFrameAnalysisNodeBody(node) : renderCanvasStoryboardNodeBody(node)
@@ -832,6 +911,7 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
   const badge = frameAnalysis ? "ANALYSIS" : ({
     "ai-animation": "SPRITE",
     "ai-storyboard": "STORYBOARD",
+    "ai-shotlist": "SHOTLIST",
     "ai-director": "DIRECTOR",
     upload: "UPLOAD",
     video: "VIDEO",
@@ -1274,7 +1354,7 @@ function renderCanvasX6GenerationState(node = {}, status = "") {
 }
 
 function isCanvasX6GenerationNode(type) {
-  return ["send", "source-image", "upload", "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard"].includes(String(type ?? ""));
+  return ["send", "source-image", "upload", "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard", "ai-shotlist"].includes(String(type ?? ""));
 }
 
 function canvasX6GenerationStatusLabel(status, fallback) {
@@ -1327,7 +1407,7 @@ function canvasGenericNodeLabel(type) {
   return ({
     "ai-text": "AI 文本", "ai-image": "AI 图片", "ai-audio": "AI 音频", "ai-markdown": "AI Markdown",
     "source-text": "文本源", "source-image": "图片源", upload: "上传", text: "文本", image: "图片结果",
-    markdown: "Markdown", comment: "评论", script: "脚本节点", send: "生成节点", shape: "形状",
+    markdown: "Markdown", comment: "评论", "canvas-note": "画布笔记", script: "脚本节点", send: "生成节点", shape: "形状",
   })[String(type ?? "")] ?? "画布节点";
 }
 
@@ -2123,7 +2203,14 @@ function wireGraphSync(graph, workbench, mount) {
     workbench.canvasPendingPositionNodeIds = positionNodeIds;
     scheduleGraphCommit({ clearToast: true });
   });
-  graph.on("node:resized", () => {
+  graph.on("node:resized", ({ node } = {}) => {
+    const data = node?.getData?.() ?? {};
+    const canvasNode = data.canvasNode;
+    const size = node?.getSize?.() ?? {};
+    const resized = resizeCanvasNoteDataPoints(canvasNode, size.width, size.height);
+    if (resized !== canvasNode) {
+      node.setData?.({ ...data, canvasNode: resized }, { overwrite: true, silent: true });
+    }
     positionCanvasSelectionActionToolbar(graph, mount);
     positionCanvasNodeActionToolbar(graph, mount);
     sync({ clearToast: true });
@@ -2492,11 +2579,19 @@ export function mountCanvasGraphEditorOverlay(graph, nodeId, editorHtml) {
   const size = parent.getSize?.() ?? { width: 360, height: 170 };
   const position = parent.getPosition?.() ?? { x: 0, y: 0 };
   const editorSize = { width: 600, height: 220 };
+  const parentData = parent.getData?.()?.canvasNode?.data ?? {};
+  const verticalOffset = parentData.output
+    || parentData.imageUrl
+    || parentData.thumbnailUrl
+    || parentData.videoUrl
+    || parentData.audioUrl
+    ? 12
+    : -20;
   graph.addNode({
     id: CANVAS_EDITOR_OVERLAY_ID,
     shape: "comic-ai-canvas-editor-overlay",
     x: position.x + (size.width - editorSize.width) / 2,
-    y: position.y + size.height,
+    y: position.y + size.height + verticalOffset,
     width: editorSize.width,
     height: editorSize.height,
     zIndex: 1002,
@@ -2522,7 +2617,15 @@ function syncCanvasGraphEditorOverlay(graph, node) {
   const size = node.getSize?.() ?? { width: 360, height: 170 };
   const position = node.getPosition?.() ?? { x: 0, y: 0 };
   const editorSize = editor.getSize?.() ?? { width: 600, height: 220 };
-  editor.position?.(position.x + (size.width - editorSize.width) / 2, position.y + size.height);
+  const parentData = node.getData?.()?.canvasNode?.data ?? {};
+  const verticalOffset = parentData.output
+    || parentData.imageUrl
+    || parentData.thumbnailUrl
+    || parentData.videoUrl
+    || parentData.audioUrl
+    ? 12
+    : -20;
+  editor.position?.(position.x + (size.width - editorSize.width) / 2, position.y + size.height + verticalOffset);
   return true;
 }
 

@@ -7,7 +7,7 @@ Before release, the archive record must identify:
 - author/licensor identity and the licensed upstream repository;
 - releasing legal entity and authorized products;
 - commercial use, modification, deployment and distribution scope;
-- covered version or commit, currently `87731295a121be601b1d4fa8616b0f2d1a38a3bb` (v0.6.7);
+- covered version or commit, currently `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` (v0.9.2);
 - territory, duration, termination and renewal terms;
 - attribution, notice and source-disclosure requirements;
 - whether sublicensing, hosted service delivery and customer access are permitted;

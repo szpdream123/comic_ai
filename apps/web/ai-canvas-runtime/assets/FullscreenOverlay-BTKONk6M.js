@@ -1,0 +1,172 @@
+import { o as e, t } from "./react-Dfufv8pq.js";
+import { t as n } from "./react-dom-BhFnNZvF.js";
+import { t as r } from "./jsx-runtime-BAkIPmuO.js";
+import { a as i, r as a } from "./ViewportImage-txaOn4PW.js";
+import { a as o } from "./assetFormat-UuOoHpLo.js";
+//#region src/components/shared/FullscreenOverlay.tsx
+var s = /* @__PURE__ */ e(t(), 1), c = n(), l = r(), u = {
+	hidden: { opacity: 0 },
+	visible: {
+		opacity: 1,
+		transition: {
+			duration: 1,
+			ease: o
+		}
+	}
+}, d = {
+	hidden: { opacity: 1 },
+	visible: { opacity: 1 }
+}, f = {
+	hidden: {
+		opacity: 0,
+		scale: .96,
+		y: 18
+	},
+	visible: {
+		opacity: 1,
+		scale: 1,
+		y: 0,
+		transition: {
+			duration: 1,
+			ease: o
+		}
+	},
+	exit: {
+		opacity: 0,
+		scale: .985,
+		y: 10,
+		transition: {
+			duration: 1,
+			ease: o
+		}
+	}
+};
+function p({ isOpen: e, onClose: t, title: n = "", children: r, panelWidth: p = "min(90vw, 900px)", className: m = "", hideHeader: h = !1, hidePanel: g = !1, bodyClassName: _ = "", headerContent: v, unmountOnClose: y = !1 }) {
+	let b = (0, s.useCallback)((e) => {
+		e.key === "Escape" && t();
+	}, [t]);
+	(0, s.useEffect)(() => {
+		if (e) return window.addEventListener("keyup", b, !0), () => window.removeEventListener("keyup", b, !0);
+	}, [e, b]);
+	let x = e ? /* @__PURE__ */ (0, l.jsx)(a.div, {
+		"data-tauri-drag-region": !0,
+		className: `fullscreen-overlay${g ? " fullscreen-overlay--transparent" : ""} ${m}`,
+		variants: g ? d : u,
+		initial: "hidden",
+		animate: "visible",
+		exit: "hidden",
+		transition: {
+			duration: 1,
+			ease: o
+		},
+		onClick: g ? void 0 : t,
+		children: g ? /* @__PURE__ */ (0, l.jsxs)(l.Fragment, { children: [/* @__PURE__ */ (0, l.jsx)(a.button, {
+			className: "fullscreen-close fullscreen-close--absolute",
+			onClick: t,
+			"aria-label": "关闭",
+			whileHover: { scale: 1.1 },
+			whileTap: { scale: .9 },
+			children: /* @__PURE__ */ (0, l.jsxs)("svg", {
+				viewBox: "0 0 24 24",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "2",
+				width: "20",
+				height: "20",
+				children: [/* @__PURE__ */ (0, l.jsx)("line", {
+					x1: "18",
+					y1: "6",
+					x2: "6",
+					y2: "18"
+				}), /* @__PURE__ */ (0, l.jsx)("line", {
+					x1: "6",
+					y1: "6",
+					x2: "18",
+					y2: "18"
+				})]
+			})
+		}), r] }) : /* @__PURE__ */ (0, l.jsxs)(a.div, {
+			className: "fullscreen-panel",
+			style: { width: p },
+			variants: f,
+			initial: "hidden",
+			animate: "visible",
+			exit: "exit",
+			onClick: (e) => e.stopPropagation(),
+			children: [
+				!h && /* @__PURE__ */ (0, l.jsxs)("div", {
+					className: "fullscreen-header",
+					children: [
+						/* @__PURE__ */ (0, l.jsx)("span", {
+							className: "fullscreen-title",
+							children: n
+						}),
+						v && /* @__PURE__ */ (0, l.jsx)("div", {
+							className: "fullscreen-header-extra",
+							children: v
+						}),
+						/* @__PURE__ */ (0, l.jsx)(a.button, {
+							className: "fullscreen-close",
+							onClick: t,
+							"aria-label": "关闭",
+							whileHover: { scale: 1.1 },
+							whileTap: { scale: .9 },
+							children: /* @__PURE__ */ (0, l.jsxs)("svg", {
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2",
+								width: "20",
+								height: "20",
+								children: [/* @__PURE__ */ (0, l.jsx)("line", {
+									x1: "18",
+									y1: "6",
+									x2: "6",
+									y2: "18"
+								}), /* @__PURE__ */ (0, l.jsx)("line", {
+									x1: "6",
+									y1: "6",
+									x2: "18",
+									y2: "18"
+								})]
+							})
+						})
+					]
+				}),
+				h && /* @__PURE__ */ (0, l.jsx)(a.button, {
+					className: "fullscreen-close fullscreen-close--absolute",
+					onClick: t,
+					"aria-label": "关闭",
+					whileHover: { scale: 1.1 },
+					whileTap: { scale: .9 },
+					children: /* @__PURE__ */ (0, l.jsxs)("svg", {
+						viewBox: "0 0 24 24",
+						fill: "none",
+						stroke: "currentColor",
+						strokeWidth: "2",
+						width: "20",
+						height: "20",
+						children: [/* @__PURE__ */ (0, l.jsx)("line", {
+							x1: "18",
+							y1: "6",
+							x2: "6",
+							y2: "18"
+						}), /* @__PURE__ */ (0, l.jsx)("line", {
+							x1: "6",
+							y1: "6",
+							x2: "18",
+							y2: "18"
+						})]
+					})
+				}),
+				/* @__PURE__ */ (0, l.jsx)("div", {
+					className: `fullscreen-body${_ ? ` ${_}` : ""}`,
+					children: r
+				})
+			]
+		})
+	}) : null;
+	return (0, c.createPortal)(g || y ? x : /* @__PURE__ */ (0, l.jsx)(i, { children: x }), document.body);
+}
+//#endregion
+export { p as t };

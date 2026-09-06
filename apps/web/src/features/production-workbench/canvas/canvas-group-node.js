@@ -22,6 +22,7 @@ const RUNNABLE_NODE_TYPES = new Set([
   "ai-panorama",
   "ai-markdown",
   "ai-storyboard",
+  "ai-shotlist",
 ]);
 
 function text(value) {

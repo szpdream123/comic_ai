@@ -19,16 +19,41 @@ import ffprobeInstaller from "@ffprobe-installer/ffprobe";
 
 const IMAGE_EXTENSIONS = new Set([".jpeg", ".jpg", ".png", ".webp"]);
 const VIDEO_EXTENSIONS = new Set([".m4v", ".mov", ".mp4", ".webm"]);
+const AUDIO_EXTENSIONS = new Set([".aac", ".m4a", ".mp3", ".oga", ".ogg", ".wav", ".webm"]);
 
 export interface VideoCompositionClip {
   kind: "image" | "video";
   sourcePath: string;
   durationSeconds: number;
+  /** Optional source trim range. When omitted, durationSeconds is used as-is. */
+  sourceIn?: number;
+  sourceOut?: number;
+  /** Transition metadata is preserved for callers; browser export currently renders it. */
+  transitionIn?: {
+    kind?: "none" | "dissolve" | "fade";
+    duration?: number;
+  };
+}
+
+export interface VideoCompositionAudio {
+  sourcePath: string;
+  /** Optional source trim range. The resulting audio is aligned to the video duration. */
+  sourceIn?: number;
+  sourceOut?: number;
+  /** Linear gain, constrained to a practical range to avoid accidental clipping. */
+  volume?: number;
+  /** Timeline offset in seconds. The track starts after this offset. */
+  timelineIn?: number;
+  /** Optional fade durations in seconds. */
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 export interface VideoCompositionPlan {
   clips: VideoCompositionClip[];
   outputPath: string;
+  /** Legacy single-track input or the production multi-track form. */
+  audio?: VideoCompositionAudio | VideoCompositionAudio[];
   width?: number;
   height?: number;
   fps?: number;
@@ -59,7 +84,7 @@ export interface VideoCompositionArtifact {
   contentType: "video/mp4";
   formatName: string;
   videoCodec: string;
-  audioIncluded: false;
+  audioIncluded: boolean;
   clipCount: number;
   durationSeconds: number;
   width: number;
@@ -71,6 +96,7 @@ export interface VideoCompositionArtifact {
 interface NormalizedPlan {
   clips: VideoCompositionClip[];
   outputPath: string;
+  audio?: VideoCompositionAudio[];
   width: number;
   height: number;
   fps: number;
@@ -146,23 +172,94 @@ export function validateVideoCompositionPlan(
     if (!allowedExtensions.has(extension)) {
       throw new VideoCompositionError("video_composition_source_type_invalid");
     }
-    const durationSeconds = Number(clip.durationSeconds);
+    const sourceIn = clip.sourceIn === undefined ? 0 : Number(clip.sourceIn);
+    const sourceOut = clip.sourceOut === undefined ? undefined : Number(clip.sourceOut);
+    if (!Number.isFinite(sourceIn) || sourceIn < 0) {
+      throw new VideoCompositionError("video_composition_source_in_invalid");
+    }
+    if (sourceOut !== undefined && (!Number.isFinite(sourceOut) || sourceOut <= sourceIn)) {
+      throw new VideoCompositionError("video_composition_source_out_invalid");
+    }
+    const durationSeconds = sourceOut === undefined
+      ? Number(clip.durationSeconds)
+      : sourceOut - sourceIn;
     if (!Number.isFinite(durationSeconds) || durationSeconds < 0.1 || durationSeconds > limits.maxClipDurationSeconds) {
       throw new VideoCompositionError("video_composition_clip_duration_invalid");
+    }
+    const transitionKind = clip.transitionIn?.kind ?? "none";
+    if (!["none", "dissolve", "fade"].includes(transitionKind)) {
+      throw new VideoCompositionError("video_composition_transition_invalid");
+    }
+    const transitionDuration = Number(clip.transitionIn?.duration ?? 0);
+    if (!Number.isFinite(transitionDuration) || transitionDuration < 0 || transitionDuration > durationSeconds) {
+      throw new VideoCompositionError("video_composition_transition_duration_invalid");
     }
     return {
       kind: clip.kind,
       sourcePath: resolve(clip.sourcePath),
       durationSeconds: roundSeconds(durationSeconds),
+      sourceIn: roundSeconds(sourceIn),
+      sourceOut: roundSeconds(sourceIn + durationSeconds),
+      transitionIn: { kind: transitionKind, duration: roundSeconds(transitionDuration) },
     };
   });
-  const durationSeconds = roundSeconds(clips.reduce((total, clip) => total + clip.durationSeconds, 0));
+  const transitionOverlap = clips.slice(1).reduce((total, clip) => total + (clip.transitionIn?.duration ?? 0), 0);
+  const durationSeconds = roundSeconds(clips.reduce((total, clip) => total + clip.durationSeconds, 0) - transitionOverlap);
   if (durationSeconds > limits.maxDurationSeconds) {
     throw new VideoCompositionError("video_composition_duration_limit_exceeded");
   }
+  const rawAudioTracks = input.audio === undefined
+    ? []
+    : Array.isArray(input.audio) ? input.audio : [input.audio];
+  if (rawAudioTracks.length > 8) {
+    throw new VideoCompositionError("video_composition_audio_track_limit_exceeded");
+  }
+  const audio = rawAudioTracks.map((track) => {
+    if (!track || !isSafeAbsolutePath(track.sourcePath)) {
+      throw new VideoCompositionError("video_composition_audio_source_path_invalid");
+    }
+    if (!AUDIO_EXTENSIONS.has(extname(track.sourcePath).toLowerCase())) {
+      throw new VideoCompositionError("video_composition_audio_source_type_invalid");
+    }
+    const sourceIn = track.sourceIn === undefined ? 0 : Number(track.sourceIn);
+    const sourceOut = track.sourceOut === undefined ? undefined : Number(track.sourceOut);
+    if (!Number.isFinite(sourceIn) || sourceIn < 0) {
+      throw new VideoCompositionError("video_composition_audio_source_in_invalid");
+    }
+    if (sourceOut !== undefined && (!Number.isFinite(sourceOut) || sourceOut <= sourceIn)) {
+      throw new VideoCompositionError("video_composition_audio_source_out_invalid");
+    }
+    const volume = track.volume === undefined ? 1 : Number(track.volume);
+    if (!Number.isFinite(volume) || volume < 0 || volume > 4) {
+      throw new VideoCompositionError("video_composition_audio_volume_invalid");
+    }
+    const timelineIn = track.timelineIn === undefined ? 0 : Number(track.timelineIn);
+    if (!Number.isFinite(timelineIn) || timelineIn < 0 || timelineIn >= durationSeconds) {
+      throw new VideoCompositionError("video_composition_audio_timeline_in_invalid");
+    }
+    const sourceDuration = sourceOut === undefined ? durationSeconds : sourceOut - sourceIn;
+    const fadeIn = track.fadeIn === undefined ? 0 : Number(track.fadeIn);
+    const fadeOut = track.fadeOut === undefined ? 0 : Number(track.fadeOut);
+    if (!Number.isFinite(fadeIn) || fadeIn < 0 || fadeIn > sourceDuration) {
+      throw new VideoCompositionError("video_composition_audio_fade_in_invalid");
+    }
+    if (!Number.isFinite(fadeOut) || fadeOut < 0 || fadeOut > sourceDuration) {
+      throw new VideoCompositionError("video_composition_audio_fade_out_invalid");
+    }
+    return {
+      sourcePath: resolve(track.sourcePath),
+      sourceIn: roundSeconds(sourceIn),
+      sourceOut: sourceOut === undefined ? undefined : roundSeconds(sourceOut),
+      volume: roundSeconds(volume),
+      timelineIn: roundSeconds(timelineIn),
+      fadeIn: roundSeconds(fadeIn),
+      fadeOut: roundSeconds(fadeOut),
+    };
+  });
   return {
     clips,
     outputPath: resolve(input.outputPath),
+    ...(audio.length ? { audio } : {}),
     width,
     height,
     fps,
@@ -210,6 +307,25 @@ export async function composeVideoToMp4(
     }
     clips.push({ ...clip, sourcePath });
   }
+  const audio = [];
+  for (const track of plan.audio ?? []) {
+    const sourcePath = await realpath(track.sourcePath).catch(() => {
+      throw new VideoCompositionError("video_composition_audio_source_missing");
+    });
+    if (!inputRoots.some((root) => pathIsInside(root, sourcePath))) {
+      throw new VideoCompositionError("video_composition_audio_source_outside_allowed_roots");
+    }
+    const sourceStats = await stat(sourcePath);
+    if (!sourceStats.isFile()) throw new VideoCompositionError("video_composition_audio_source_not_file");
+    if (sourceStats.size > limits.maxInputFileBytes) {
+      throw new VideoCompositionError("video_composition_input_file_limit_exceeded");
+    }
+    totalInputBytes += sourceStats.size;
+    if (totalInputBytes > limits.maxInputBytes) {
+      throw new VideoCompositionError("video_composition_input_limit_exceeded");
+    }
+    audio.push({ ...track, sourcePath });
+  }
 
   const tempBase = resolve(options.tempRoot ?? tmpdir());
   await mkdir(tempBase, { recursive: true });
@@ -218,7 +334,7 @@ export async function composeVideoToMp4(
   const publishStage = join(outputRoot, `.video-compose-${randomUUID()}.mp4`);
   let stageCreated = false;
   try {
-    const args = buildFfmpegArguments({ ...plan, clips }, workOutput, limits.maxOutputBytes);
+    const args = buildFfmpegArguments({ ...plan, clips, ...(audio.length ? { audio } : {}) }, workOutput, limits.maxOutputBytes);
     await runMediaProcess(ffmpegPath, args, {
       timeoutMs: limits.timeoutMs,
       maxProcessOutputBytes: limits.maxProcessOutputBytes,
@@ -232,6 +348,7 @@ export async function composeVideoToMp4(
       expectedWidth: plan.width,
       expectedHeight: plan.height,
       expectedFps: plan.fps,
+      expectedAudio: Boolean(audio.length),
       maxOutputBytes: limits.maxOutputBytes,
       timeoutMs: Math.min(limits.timeoutMs, 30_000),
       maxProcessOutputBytes: limits.maxProcessOutputBytes,
@@ -248,7 +365,7 @@ export async function composeVideoToMp4(
       ...artifact,
       outputPath,
       contentType: "video/mp4",
-      audioIncluded: false,
+      audioIncluded: Boolean(audio.length),
       clipCount: clips.length,
     };
   } finally {
@@ -260,10 +377,18 @@ export async function composeVideoToMp4(
 function buildFfmpegArguments(plan: NormalizedPlan, outputPath: string, maxOutputBytes: number) {
   const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-max_alloc", String(256 * 1024 * 1024)];
   for (const clip of plan.clips) {
+    if (clip.kind === "video" && (clip.sourceIn ?? 0) > 0) {
+      args.push("-ss", String(clip.sourceIn));
+    }
     if (clip.kind === "image") {
       args.push("-loop", "1", "-framerate", String(plan.fps));
     }
     args.push("-protocol_whitelist", "file,pipe,crypto,data", "-i", clip.sourcePath);
+  }
+  const audioInputIndex = plan.clips.length;
+  for (const track of plan.audio ?? []) {
+    if ((track.sourceIn ?? 0) > 0) args.push("-ss", String(track.sourceIn));
+    args.push("-protocol_whitelist", "file,pipe,crypto,data", "-i", track.sourcePath);
   }
   const filters = plan.clips.map((clip, index) => (
     `[${index}:v:0]scale=${plan.width}:${plan.height}:force_original_aspect_ratio=decrease,` +
@@ -271,17 +396,79 @@ function buildFfmpegArguments(plan: NormalizedPlan, outputPath: string, maxOutpu
     `setsar=1,fps=${plan.fps},tpad=stop_mode=clone:stop_duration=${clip.durationSeconds},` +
     `trim=duration=${clip.durationSeconds},setpts=PTS-STARTPTS[v${index}]`
   ));
-  filters.push(`${plan.clips.map((_, index) => `[v${index}]`).join("")}concat=n=${plan.clips.length}:v=1:a=0[outv]`);
+  const hasTransitions = plan.clips.slice(1).some((clip) => Number(clip.transitionIn?.duration ?? 0) > 0);
+  if (!hasTransitions) {
+    filters.push(`${plan.clips.map((_, index) => `[v${index}]`).join("")}concat=n=${plan.clips.length}:v=1:a=0[outv]`);
+  } else {
+    const sequence: string[] = [];
+    for (let index = 0; index < plan.clips.length; index += 1) {
+      const clip = plan.clips[index]!;
+      const incoming = index > 0 ? Math.min(clip.durationSeconds, Number(clip.transitionIn?.duration ?? 0)) : 0;
+      const outgoing = index < plan.clips.length - 1
+        ? Math.min(clip.durationSeconds, Number(plan.clips[index + 1]!.transitionIn?.duration ?? 0))
+        : 0;
+      const bodyDuration = clip.durationSeconds - incoming - outgoing;
+      if (index > 0 && incoming > 0) {
+        const previous = plan.clips[index - 1]!;
+        const currentHead = `transition${index}Current`;
+        const transition = `transition${index}`;
+        filters.push(`[v${index}]trim=duration=${incoming},setpts=PTS-STARTPTS[${currentHead}]`);
+        if (clip.transitionIn?.kind === "fade") {
+          filters.push(`[${currentHead}]fade=t=in:st=0:d=${incoming}:color=black[${transition}]`);
+        } else {
+          const previousTail = `transition${index}Previous`;
+          const progress = `T/${incoming}`;
+          filters.push(`[v${index - 1}]trim=start=${previous.durationSeconds - incoming}:duration=${incoming},setpts=PTS-STARTPTS[${previousTail}]`);
+          filters.push(`[${previousTail}][${currentHead}]blend=all_expr=A*(1-${progress})+B*(${progress}):shortest=1[${transition}]`);
+        }
+        sequence.push(`[${transition}]`);
+      }
+      if (bodyDuration > 0) {
+        const body = `body${index}`;
+        filters.push(`[v${index}]trim=start=${incoming}:duration=${bodyDuration},setpts=PTS-STARTPTS[${body}]`);
+        sequence.push(`[${body}]`);
+      }
+    }
+    filters.push(`${sequence.join("")}concat=n=${sequence.length}:v=1:a=0,trim=duration=${plan.durationSeconds},setpts=PTS-STARTPTS[outv]`);
+  }
+  if (plan.audio?.length) {
+    const audioLabels = [];
+    for (const [index, track] of plan.audio.entries()) {
+      const audioDuration = track.sourceOut === undefined
+        ? plan.durationSeconds
+        : Math.min(plan.durationSeconds, Math.max(0.1, track.sourceOut - (track.sourceIn ?? 0)));
+      const timelineIn = Number(track.timelineIn ?? 0);
+      const filtersForTrack = [
+        `aresample=async=1:first_pts=0`,
+        `atrim=duration=${audioDuration}`,
+        "asetpts=PTS-STARTPTS",
+      ];
+      if ((track.fadeIn ?? 0) > 0) filtersForTrack.push(`afade=t=in:st=0:d=${track.fadeIn}`);
+      if ((track.fadeOut ?? 0) > 0) filtersForTrack.push(`afade=t=out:st=${Math.max(0, audioDuration - Number(track.fadeOut))}:d=${track.fadeOut}`);
+      if ((track.volume ?? 1) !== 1) filtersForTrack.push(`volume=${track.volume ?? 1}`);
+      if (timelineIn > 0) filtersForTrack.push(`adelay=${Math.round(timelineIn * 1000)}|${Math.round(timelineIn * 1000)}`);
+      filtersForTrack.push("apad", `atrim=duration=${plan.durationSeconds}`);
+      const label = `audio${index}`;
+      filters.push(`[${audioInputIndex + index}:a:0]${filtersForTrack.join(",")}[${label}]`);
+      audioLabels.push(`[${label}]`);
+    }
+    if (audioLabels.length === 1) {
+      filters.push(`${audioLabels[0]}anull[outa]`);
+    } else {
+      filters.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0,atrim=duration=${plan.durationSeconds},asetpts=PTS-STARTPTS[outa]`);
+    }
+  }
   args.push(
     "-filter_complex", filters.join(";"),
     "-filter_complex_threads", "2",
     "-map", "[outv]",
-    "-an",
+    ...(plan.audio?.length ? ["-map", "[outa]"] : ["-an"]),
     "-c:v", "libx264",
     "-preset", "veryfast",
     "-threads", "2",
     "-pix_fmt", "yuv420p",
     "-r", String(plan.fps),
+    ...(plan.audio?.length ? ["-c:a", "aac", "-b:a", "192k", "-shortest"] : []),
     "-movflags", "+faststart",
     "-fs", String(maxOutputBytes),
     "-y",
@@ -298,6 +485,7 @@ async function verifyMp4Artifact(
     expectedWidth: number;
     expectedHeight: number;
     expectedFps: number;
+    expectedAudio: boolean;
     maxOutputBytes: number;
     timeoutMs: number;
     maxProcessOutputBytes: number;
@@ -337,12 +525,19 @@ async function verifyMp4Artifact(
     throw new VideoCompositionError("video_composition_probe_invalid");
   }
   const video = parsed.streams?.find((stream) => stream.codec_type === "video");
+  const audio = parsed.streams?.find((stream) => stream.codec_type === "audio");
   const formatName = String(parsed.format?.format_name ?? "");
   const durationSeconds = Number(parsed.format?.duration);
   const sizeBytes = Number(parsed.format?.size ?? outputStats.size);
   const fps = parseFrameRate(video?.r_frame_rate);
   if (!formatName.split(",").includes("mp4")) throw new VideoCompositionError("video_composition_output_not_mp4");
   if (!video || video.codec_name !== "h264") throw new VideoCompositionError("video_composition_video_codec_invalid");
+  if (input.expectedAudio && (!audio || audio.codec_name !== "aac")) {
+    throw new VideoCompositionError("video_composition_audio_codec_invalid");
+  }
+  if (!input.expectedAudio && audio) {
+    throw new VideoCompositionError("video_composition_unexpected_audio");
+  }
   if (video.width !== input.expectedWidth || video.height !== input.expectedHeight) {
     throw new VideoCompositionError("video_composition_dimensions_invalid");
   }

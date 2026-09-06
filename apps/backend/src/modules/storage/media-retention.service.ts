@@ -72,6 +72,8 @@ const RETENTION_SOURCE_CTE = `
         OR EXISTS (SELECT 1 FROM projects project WHERE project.cover_storage_object_id = so.id)
         OR EXISTS (SELECT 1 FROM scripts script WHERE script.cover_storage_object_id = so.id)
         OR EXISTS (SELECT 1 FROM prompts prompt WHERE prompt.cover_storage_object_id = so.id)
+        OR EXISTS (SELECT 1 FROM skills skill WHERE skill.cover_storage_object_id = so.id OR skill.preview_storage_object_id = so.id)
+        OR EXISTS (SELECT 1 FROM skill_files skill_file WHERE skill_file.storage_object_id = so.id)
         OR EXISTS (SELECT 1 FROM creator_brand_kits kit WHERE kit.cover_storage_object_id = so.id)
         OR EXISTS (SELECT 1 FROM creator_brand_kit_assets kit_asset WHERE kit_asset.storage_object_id = so.id)
         OR LOWER(COALESCE(pur.source_action, '')) LIKE 'admin_%'

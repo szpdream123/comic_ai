@@ -363,6 +363,10 @@
       "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/NodeId" }],
       "get": { "operationId": "listCanvasNodeRuns", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "403": { "$ref": "#/components/responses/Error" } } }
     },
+    "/api/canvas/{canvasId}/video-export": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "post": { "operationId": "exportCanvasVideo", "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "202": { "$ref": "#/components/responses/CanvasRuntime" }, "400": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } } }
+    },
     "/api/canvas/{canvasId}/artifacts/{artifactId}/select": {
       "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/ArtifactId" }],
       "post": { "operationId": "selectCanvasArtifact", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "404": { "$ref": "#/components/responses/Error" } } }

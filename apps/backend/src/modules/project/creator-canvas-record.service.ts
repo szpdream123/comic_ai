@@ -9,9 +9,6 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
   CanvasValidationError,
-  validateCanvasDocumentEnvelope,
-  validateCanvasDocumentGraph,
-  validateCanvasDocumentProtocol,
 } from "./creator-canvas-validation.ts";
 
 export class CanvasConflictError extends Error {
@@ -391,7 +388,6 @@ export async function getCanvasRevision(
   }), {
     canvasProjectId: canvas.canvasProjectId,
   });
-  validateCanvasDocumentGraph(document);
   return {
     ...serializeCanvasRevisionMetadata(revision),
     document,
@@ -478,15 +474,12 @@ export async function saveCanvasByCanvasProjectId(
     throw new CanvasConflictError(canvas.server_revision, server?.document ?? null);
   }
 
-  validateCanvasDocumentEnvelope(input.document);
   const document = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(input.document, {
     canvasProjectId: canvas.id,
     now: input.now.toISOString(),
   }), {
     canvasProjectId: canvas.id,
   });
-  validateCanvasDocumentProtocol(document);
-  validateCanvasDocumentGraph(document);
 
   const currentDocument = await findCurrentCanvasDocument(db, canvas.id, canvas.server_revision);
   if (currentDocument?.content_hash === hashCanvasDocument(document)) {
@@ -1881,6 +1874,7 @@ export function normalizeCanvasDocument(
     : [];
   const createdAt = typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : input.now;
   return {
+    ...raw,
     version: Number(raw.version ?? 2) || 2,
     canvasProjectId: String(raw.canvasProjectId ?? input.canvasProjectId),
     viewport: normalizeViewport(raw.viewport),
@@ -1913,6 +1907,7 @@ function normalizeCanvasNode(value: unknown): CanvasNode | null {
   }
   const data = raw.data && typeof raw.data === "object" ? raw.data as Record<string, unknown> : {};
   return {
+    ...raw,
     id,
     type: String(raw.type ?? "output").trim() || "output",
     position: normalizePoint(raw.position),
@@ -1928,14 +1923,15 @@ function normalizeCanvasEdge(value: unknown): CanvasEdge | null {
   }
   const raw = value as Record<string, unknown>;
   const id = String(raw.id ?? "").trim();
-  const sourceNodeId = String(raw.sourceNodeId ?? "").trim();
-  const sourcePortId = String(raw.sourcePortId ?? "").trim();
-  const targetNodeId = String(raw.targetNodeId ?? "").trim();
-  const targetPortId = String(raw.targetPortId ?? "").trim();
+  const sourceNodeId = String(raw.sourceNodeId ?? raw.source ?? "").trim();
+  const sourcePortId = String(raw.sourcePortId ?? raw.sourceHandle ?? "").trim();
+  const targetNodeId = String(raw.targetNodeId ?? raw.target ?? "").trim();
+  const targetPortId = String(raw.targetPortId ?? raw.targetHandle ?? "").trim();
   if (!id || !sourceNodeId || !sourcePortId || !targetNodeId || !targetPortId) {
     return null;
   }
   return {
+    ...raw,
     id,
     kind: normalizeCanvasEdgeKind(raw),
     sourceNodeId,

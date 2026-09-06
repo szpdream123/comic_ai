@@ -76,7 +76,7 @@
     {
       "type": "library",
       "name": "@aws-sdk/core",
-      "version": "3.975.3",
+      "version": "3.977.7",
       "licenses": [
         {
           "license": {
@@ -84,7 +84,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40aws-sdk%2Fcore@3.975.3",
+      "purl": "pkg:npm/%40aws-sdk%2Fcore@3.977.7",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -304,7 +304,7 @@
     {
       "type": "library",
       "name": "@aws-sdk/s3-request-presigner",
-      "version": "3.1054.0",
+      "version": "3.1110.0",
       "licenses": [
         {
           "license": {
@@ -312,7 +312,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40aws-sdk%2Fs3-request-presigner@3.1054.0",
+      "purl": "pkg:npm/%40aws-sdk%2Fs3-request-presigner@3.1110.0",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -323,7 +323,7 @@
     {
       "type": "library",
       "name": "@aws-sdk/signature-v4-multi-region",
-      "version": "3.996.41",
+      "version": "3.996.44",
       "licenses": [
         {
           "license": {
@@ -331,7 +331,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40aws-sdk%2Fsignature-v4-multi-region@3.996.41",
+      "purl": "pkg:npm/%40aws-sdk%2Fsignature-v4-multi-region@3.996.44",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -361,7 +361,7 @@
     {
       "type": "library",
       "name": "@aws-sdk/types",
-      "version": "3.974.2",
+      "version": "3.974.3",
       "licenses": [
         {
           "license": {
@@ -369,7 +369,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40aws-sdk%2Ftypes@3.974.2",
+      "purl": "pkg:npm/%40aws-sdk%2Ftypes@3.974.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -380,7 +380,7 @@
     {
       "type": "library",
       "name": "@aws-sdk/xml-builder",
-      "version": "3.972.36",
+      "version": "3.972.38",
       "licenses": [
         {
           "license": {
@@ -388,7 +388,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40aws-sdk%2Fxml-builder@3.972.36",
+      "purl": "pkg:npm/%40aws-sdk%2Fxml-builder@3.972.38",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1120,6 +1120,63 @@
     },
     {
       "type": "library",
+      "name": "@ffmpeg/core",
+      "version": "0.12.10",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-2.0-or-later"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg%2Fcore@0.12.10",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg/core"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg/ffmpeg",
+      "version": "0.12.15",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg%2Fffmpeg@0.12.15",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg/ffmpeg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg/types",
+      "version": "0.12.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg%2Ftypes@0.12.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg/types"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "@ffprobe-installer/darwin-arm64",
       "version": "5.0.1",
       "licenses": [
@@ -1425,7 +1482,7 @@
     {
       "type": "library",
       "name": "@img/sharp-darwin-arm64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1433,7 +1490,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-darwin-arm64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-darwin-arm64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1444,7 +1501,7 @@
     {
       "type": "library",
       "name": "@img/sharp-darwin-x64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1452,7 +1509,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-darwin-x64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-darwin-x64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1462,8 +1519,27 @@
     },
     {
       "type": "library",
+      "name": "@img/sharp-freebsd-wasm32",
+      "version": "0.35.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40img%2Fsharp-freebsd-wasm32@0.35.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@img/sharp-freebsd-wasm32"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "@img/sharp-libvips-darwin-arm64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1471,7 +1547,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-darwin-arm64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-darwin-arm64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1482,7 +1558,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-darwin-x64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1490,7 +1566,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-darwin-x64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-darwin-x64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1501,7 +1577,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linux-arm",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1509,7 +1585,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-arm@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-arm@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1520,7 +1596,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linux-arm64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1528,7 +1604,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-arm64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-arm64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1539,7 +1615,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linux-ppc64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1547,7 +1623,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-ppc64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-ppc64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1558,7 +1634,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linux-riscv64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1566,7 +1642,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-riscv64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-riscv64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1577,7 +1653,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linux-s390x",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1585,7 +1661,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-s390x@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-s390x@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1596,7 +1672,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linux-x64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1604,7 +1680,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-x64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linux-x64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1615,7 +1691,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linuxmusl-arm64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1623,7 +1699,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linuxmusl-arm64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linuxmusl-arm64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1634,7 +1710,7 @@
     {
       "type": "library",
       "name": "@img/sharp-libvips-linuxmusl-x64",
-      "version": "1.2.4",
+      "version": "1.3.2",
       "licenses": [
         {
           "license": {
@@ -1642,7 +1718,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-libvips-linuxmusl-x64@1.2.4",
+      "purl": "pkg:npm/%40img%2Fsharp-libvips-linuxmusl-x64@1.3.2",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1653,7 +1729,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linux-arm",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1661,7 +1737,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linux-arm@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linux-arm@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1672,7 +1748,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linux-arm64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1680,7 +1756,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linux-arm64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linux-arm64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1691,7 +1767,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linux-ppc64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1699,7 +1775,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linux-ppc64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linux-ppc64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1710,7 +1786,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linux-riscv64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1718,7 +1794,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linux-riscv64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linux-riscv64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1729,7 +1805,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linux-s390x",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1737,7 +1813,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linux-s390x@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linux-s390x@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1748,7 +1824,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linux-x64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1756,7 +1832,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linux-x64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linux-x64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1767,7 +1843,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linuxmusl-arm64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1775,7 +1851,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linuxmusl-arm64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linuxmusl-arm64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1786,7 +1862,7 @@
     {
       "type": "library",
       "name": "@img/sharp-linuxmusl-x64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1794,7 +1870,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-linuxmusl-x64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-linuxmusl-x64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1805,7 +1881,7 @@
     {
       "type": "library",
       "name": "@img/sharp-wasm32",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1813,7 +1889,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-wasm32@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-wasm32@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1823,8 +1899,27 @@
     },
     {
       "type": "library",
+      "name": "@img/sharp-webcontainers-wasm32",
+      "version": "0.35.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40img%2Fsharp-webcontainers-wasm32@0.35.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@img/sharp-webcontainers-wasm32"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "@img/sharp-win32-arm64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1832,7 +1927,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-win32-arm64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-win32-arm64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1843,7 +1938,7 @@
     {
       "type": "library",
       "name": "@img/sharp-win32-ia32",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1851,7 +1946,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-win32-ia32@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-win32-ia32@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1862,7 +1957,7 @@
     {
       "type": "library",
       "name": "@img/sharp-win32-x64",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -1870,7 +1965,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40img%2Fsharp-win32-x64@0.34.5",
+      "purl": "pkg:npm/%40img%2Fsharp-win32-x64@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -1894,6 +1989,25 @@
         {
           "name": "comic-ai:lockPath",
           "value": "node_modules/@ioredis/commands"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@mediapipe/tasks-vision",
+      "version": "0.10.17",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40mediapipe%2Ftasks-vision@0.10.17",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@mediapipe/tasks-vision"
         }
       ]
     },
@@ -2008,6 +2122,234 @@
         {
           "name": "comic-ai:lockPath",
           "value": "node_modules/@msgpackr-extract/msgpackr-extract-win32-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-android-arm64",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-android-arm64@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-android-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-darwin-arm64",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-darwin-arm64@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-darwin-x64",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-darwin-x64@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-linux-arm-gnueabihf",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-linux-arm-gnueabihf@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-linux-arm-gnueabihf"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-linux-arm64-gnu",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-linux-arm64-gnu@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-linux-arm64-gnu"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-linux-arm64-musl",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-linux-arm64-musl@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-linux-arm64-musl"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-linux-riscv64-gnu",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-linux-riscv64-gnu@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-linux-riscv64-gnu"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-linux-x64-gnu",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-linux-x64-gnu@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-linux-x64-gnu"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-linux-x64-musl",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-linux-x64-musl@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-linux-x64-musl"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-win32-arm64-msvc",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-win32-arm64-msvc@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-win32-arm64-msvc"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/canvas-win32-x64-msvc",
+      "version": "0.1.100",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40napi-rs%2Fcanvas-win32-x64-msvc@0.1.100",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@napi-rs/canvas-win32-x64-msvc"
         }
       ]
     },
@@ -2185,7 +2527,7 @@
     {
       "type": "library",
       "name": "@smithy/core",
-      "version": "3.29.6",
+      "version": "3.33.0",
       "licenses": [
         {
           "license": {
@@ -2193,7 +2535,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40smithy%2Fcore@3.29.6",
+      "purl": "pkg:npm/%40smithy%2Fcore@3.33.0",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2261,7 +2603,7 @@
     {
       "type": "library",
       "name": "@smithy/signature-v4",
-      "version": "5.6.7",
+      "version": "5.7.0",
       "licenses": [
         {
           "license": {
@@ -2269,7 +2611,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40smithy%2Fsignature-v4@5.6.7",
+      "purl": "pkg:npm/%40smithy%2Fsignature-v4@5.7.0",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2280,7 +2622,7 @@
     {
       "type": "library",
       "name": "@smithy/types",
-      "version": "4.16.1",
+      "version": "4.17.0",
       "licenses": [
         {
           "license": {
@@ -2288,7 +2630,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40smithy%2Ftypes@4.16.1",
+      "purl": "pkg:npm/%40smithy%2Ftypes@4.17.0",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2299,7 +2641,7 @@
     {
       "type": "library",
       "name": "@tiptap/core",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2307,7 +2649,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fcore@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fcore@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2318,7 +2660,7 @@
     {
       "type": "library",
       "name": "@tiptap/extension-document",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2326,7 +2668,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fextension-document@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fextension-document@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2337,7 +2679,7 @@
     {
       "type": "library",
       "name": "@tiptap/extension-hard-break",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2345,7 +2687,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fextension-hard-break@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fextension-hard-break@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2356,7 +2698,7 @@
     {
       "type": "library",
       "name": "@tiptap/extension-mention",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2364,7 +2706,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fextension-mention@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fextension-mention@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2375,7 +2717,7 @@
     {
       "type": "library",
       "name": "@tiptap/extension-paragraph",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2383,7 +2725,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fextension-paragraph@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fextension-paragraph@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2394,7 +2736,7 @@
     {
       "type": "library",
       "name": "@tiptap/extension-text",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2402,7 +2744,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fextension-text@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fextension-text@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2413,7 +2755,7 @@
     {
       "type": "library",
       "name": "@tiptap/extensions",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2421,7 +2763,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fextensions@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fextensions@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2432,7 +2774,7 @@
     {
       "type": "library",
       "name": "@tiptap/pm",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2440,7 +2782,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fpm@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fpm@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2451,7 +2793,7 @@
     {
       "type": "library",
       "name": "@tiptap/suggestion",
-      "version": "3.28.0",
+      "version": "3.31.3",
       "licenses": [
         {
           "license": {
@@ -2459,7 +2801,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40tiptap%2Fsuggestion@3.28.0",
+      "purl": "pkg:npm/%40tiptap%2Fsuggestion@3.31.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2565,7 +2907,7 @@
     {
       "type": "library",
       "name": "@xmldom/xmldom",
-      "version": "0.8.13",
+      "version": "0.8.15",
       "licenses": [
         {
           "license": {
@@ -2573,7 +2915,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40xmldom%2Fxmldom@0.8.13",
+      "purl": "pkg:npm/%40xmldom%2Fxmldom@0.8.15",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -2603,7 +2945,7 @@
     {
       "type": "library",
       "name": "adm-zip",
-      "version": "0.5.18",
+      "version": "0.6.0",
       "licenses": [
         {
           "license": {
@@ -2611,7 +2953,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/adm-zip@0.5.18",
+      "purl": "pkg:npm/adm-zip@0.6.0",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -3002,7 +3344,7 @@
     {
       "type": "library",
       "name": "brace-expansion",
-      "version": "5.0.8",
+      "version": "5.0.9",
       "licenses": [
         {
           "license": {
@@ -3010,7 +3352,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/brace-expansion@5.0.8",
+      "purl": "pkg:npm/brace-expansion@5.0.9",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -5224,6 +5566,25 @@
     },
     {
       "type": "library",
+      "name": "pdfjs-dist",
+      "version": "5.4.54",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pdfjs-dist@5.4.54",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pdfjs-dist"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "pg",
       "version": "8.21.0",
       "licenses": [
@@ -5757,7 +6118,7 @@
     {
       "type": "library",
       "name": "prosemirror-view",
-      "version": "1.42.1",
+      "version": "1.42.3",
       "licenses": [
         {
           "license": {
@@ -5765,7 +6126,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/prosemirror-view@1.42.1",
+      "purl": "pkg:npm/prosemirror-view@1.42.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -5852,7 +6213,7 @@
     {
       "type": "library",
       "name": "qs",
-      "version": "6.15.2",
+      "version": "6.16.0",
       "licenses": [
         {
           "license": {
@@ -5860,7 +6221,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/qs@6.15.2",
+      "purl": "pkg:npm/qs@6.16.0",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -6288,6 +6649,25 @@
     },
     {
       "type": "library",
+      "name": "semver",
+      "version": "7.8.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/semver@7.8.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/sharp/node_modules/semver"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "semver-compare",
       "version": "1.0.0",
       "licenses": [
@@ -6365,7 +6745,7 @@
     {
       "type": "library",
       "name": "sharp",
-      "version": "0.34.5",
+      "version": "0.35.3",
       "licenses": [
         {
           "license": {
@@ -6373,7 +6753,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/sharp@0.34.5",
+      "purl": "pkg:npm/sharp@0.35.3",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -6384,7 +6764,7 @@
     {
       "type": "library",
       "name": "side-channel",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "licenses": [
         {
           "license": {
@@ -6392,7 +6772,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/side-channel@1.1.0",
+      "purl": "pkg:npm/side-channel@1.1.1",
       "properties": [
         {
           "name": "comic-ai:lockPath",
@@ -7258,7 +7638,7 @@
     {
       "type": "application",
       "name": "AI-Canvas-tauri",
-      "version": "87731295a121be601b1d4fa8616b0f2d1a38a3bb",
+      "version": "236be2f0aec59b3ec0b623bcf563e65fb223d7f4",
       "licenses": [
         {
           "license": {
