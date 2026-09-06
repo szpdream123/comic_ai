@@ -797,6 +797,18 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20261028-add-globalaiopc-video-30-10-10.sql",
       sql: await readFile(join(rootDir, ...GLOBALAIOPC_VIDEO_30_10_10_RELATIVE_PATH), "utf8"),
     },
+    {
+      name: "20261031-generation-queue-fallback-shards.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261031-generation-queue-fallback-shards.sql"), "utf8"),
+    },
+    {
+      name: "20261101-retire-drained-generation-queue-shards.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261101-retire-drained-generation-queue-shards.sql"), "utf8"),
+    },
+    {
+      name: "20261102-agent-execution-isolation.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261102-agent-execution-isolation.sql"), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

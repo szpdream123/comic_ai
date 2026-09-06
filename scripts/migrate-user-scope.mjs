@@ -167,6 +167,7 @@ const migrations = [
   ["20261028-add-globalaiopc-video-30-10-10.sql", "packages/db/migrations/20261028-add-globalaiopc-video-30-10-10.sql"],
   ["20261031-generation-queue-fallback-shards.sql", "packages/db/migrations/20261031-generation-queue-fallback-shards.sql"],
   ["20261101-retire-drained-generation-queue-shards.sql", "packages/db/migrations/20261101-retire-drained-generation-queue-shards.sql"],
+  ["20261102-agent-execution-isolation.sql", "packages/db/migrations/20261102-agent-execution-isolation.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -239,6 +240,7 @@ const runtimeSafeMigrationNames = new Set([
   "20261028-add-globalaiopc-video-30-10-10.sql",
   "20261031-generation-queue-fallback-shards.sql",
   "20261101-retire-drained-generation-queue-shards.sql",
+  "20261102-agent-execution-isolation.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([

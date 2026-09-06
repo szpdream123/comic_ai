@@ -1,0 +1,438 @@
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer {
+  min-height: 21rem;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  overflow: visible;
+  position: relative;
+}
+
+/* Conversation composer: writing first, one quiet row of expandable controls. */
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-media-workspace { display: flex; flex-direction: column; }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-media-timeline-wrap { flex: 0 0 auto; margin-top: clamp(32px, 10vh, 100px); }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-timeline { padding: 16px 24px; }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-creation-welcome { display: flex; flex-direction: column; align-items: center; gap: 12px; height: auto; min-height: 0; padding: 0; }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-creation-welcome > span,
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-creation-welcome > div { display: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-creation-welcome h2 { margin: 0; font-size: 28px; font-weight: 600; color: var(--new-canvas-foreground); }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-creation-welcome p { font-size: 14px; line-height: 1.6; color: var(--new-canvas-muted); }
+.new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form] {
+  width: calc(100% - 48px);
+  max-width: 1120px;
+  min-height: 220px;
+  height: max(220px, var(--canvas-agent-media-composer-height));
+  margin: 12px auto 22px;
+  padding: 24px;
+  border: 1px solid var(--new-canvas-control-border);
+  border-radius: 26px;
+  background: var(--new-canvas-background);
+  box-shadow: 0 8px 32px #00000014;
+}
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-media-composer-resize { position: absolute; left: 0; width: 100%; height: 12px; top: 0; opacity: 0; transition: opacity .15s; }
+.new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form]:has(> .canvas-agent-submission-note),
+.new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form]:has(> .canvas-agent-error) { min-height: 280px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer:hover .canvas-agent-media-composer-resize,
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer:focus-within .canvas-agent-media-composer-resize { opacity: .55; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea.has-inline-attachments { grid-template-columns: 72px minmax(0, 1fr); grid-template-rows: minmax(96px, 1fr); align-items: start; gap: 22px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-media-prompt-editor { grid-column: 2; min-height: 96px; width: 100%; box-shadow: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .inline-upload-tray:not(:has(.episode-replica-ref-card)) { min-height: 90px; max-height: 90px; height: 90px; overflow: visible; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .inline-upload-tray:not(:has(.episode-replica-ref-card)) .episode-replica-upload-card { width: 64px; min-width: 64px; height: 82px; min-height: 82px; border: 0; border-radius: 8px; background: var(--new-canvas-control); transform: rotate(-7deg); color: var(--new-canvas-muted); }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-upload-card strong { display: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-upload-card > span { font-size: 28px; font-weight: 400; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer textarea.home-agent-rich-editor,
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-prompt-editor-content { font-size: 16px; font-weight: 400; line-height: 1.8; padding: 0; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-prompt-editor-content p { font-weight: 400; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config { flex-wrap: nowrap; gap: 8px; padding: 0; margin: 10px 0 0; border: 0; position: relative; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config .canvas-agent-free-mode-picker { display: block; width: auto; border: 0; padding: 0; background: none; position: relative; }
+.new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout .canvas-agent-event[data-event-role="user"] > div { background: transparent !important; border: 0 !important; box-shadow: none !important; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 40px; min-height: 40px; padding: 0 12px; border: 1px solid var(--new-canvas-control-border); border-radius: 10px; color: var(--new-canvas-foreground); background: transparent; font: inherit; font-size: 14px; font-weight: 400; white-space: nowrap; cursor: pointer; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-kind-trigger { color: var(--new-canvas-accent-color); }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool:hover { background: var(--new-canvas-control); }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-free-skills { flex-wrap: nowrap; margin: 0; position: static; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-free-skills > button:not(.canvas-agent-skill-library-trigger) { display: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-selected-skill { max-width: 150px; white-space: nowrap; font-size: 12px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-media-submit-group { flex-shrink: 0; gap: 12px; margin-left: auto; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-context-usage { opacity: .5; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize { position: relative; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel,
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-kind-options { position: absolute; bottom: calc(100% + 12px); left: 0; z-index: 100; padding: 18px; border: 1px solid var(--new-canvas-control-border); border-radius: 16px; background: var(--new-canvas-panel); color: var(--new-canvas-foreground); box-shadow: 0 12px 40px #0004; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel { width: 380px; max-height: min(420px, 40dvh); box-sizing: border-box; overflow: auto; display: grid; gap: 18px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel[hidden],
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-kind-options[hidden] { display: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel header { display: flex; align-items: center; justify-content: space-between; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel header button { border: 0; background: none; color: var(--new-canvas-muted); cursor: pointer; font-size: 22px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel .canvas-agent-visible-models { display: grid; margin: 0; gap: 8px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel .home-agent-model-picker { width: 100%; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel .home-agent-model-trigger { justify-content: flex-start; border-color: var(--new-canvas-control-border); min-height: 40px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel .home-agent-model-menu,
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel .canvas-agent-permission-menu { position: static; width: 100%; max-width: 100%; margin-top: 8px; box-shadow: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel .canvas-agent-style-picker { margin: 0; justify-content: space-between; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select { display: grid; gap: 9px; margin: 4px 0; min-width: 0; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-label { font-size: 12px; font-weight: 500; color: var(--new-canvas-muted); }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-control { display: block; position: relative; min-width: 0; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-control select { appearance: none; display: block; width: 100%; max-width: 100%; height: 44px; box-sizing: border-box; padding: 0 40px 0 14px; border: 1px solid var(--new-canvas-control-border); border-radius: 10px; background: var(--new-canvas-control); color: var(--new-canvas-foreground); font: inherit; font-size: 13px; font-weight: 400; text-overflow: ellipsis; cursor: pointer; color-scheme: var(--new-canvas-color-scheme); }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-control svg { position: absolute; top: 12px; right: 12px; width: 20px; height: 20px; fill: none; stroke: var(--new-canvas-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-control select:hover { border-color: var(--new-canvas-control-hover-border); background: var(--new-canvas-control-hover); }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-control select:focus-visible { outline: 2px solid var(--new-canvas-accent-color); outline-offset: 2px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-style-select-control select:disabled { opacity: .5; cursor: not-allowed; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--new-canvas-muted); }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-kind-options { width: 160px; display: grid; gap: 4px; padding: 8px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-kind-options button { padding: 10px; text-align: left; justify-content: flex-start; height: 38px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-skill-library { left: 0; width: min(560px, 100%); max-height: min(420px, 40dvh); }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer:has(.episode-replica-ref-card) { height: auto; min-height: 300px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea:has(.episode-replica-ref-card) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(96px, 1fr); }
+.new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea:has(.episode-replica-ref-card) .canvas-agent-media-prompt-editor { grid-column: 1; }
+@media (max-width: 760px) {
+  .new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form] { width: calc(100% - 20px); padding: 18px 14px; margin: 10px auto; min-height: 224px; height: max(224px, var(--canvas-agent-media-composer-height)); border-radius: 22px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea.has-inline-attachments { grid-template-columns: 40px minmax(0, 1fr); gap: 14px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .inline-upload-tray:not(:has(.episode-replica-ref-card)) .episode-replica-upload-card { width: 36px; min-width: 36px; height: 52px; min-height: 52px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool { padding: 0 8px; height: 36px; min-height: 36px; gap: 4px; font-size: 12px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool svg { display: none; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config { gap: 5px; flex-wrap: nowrap; justify-content: flex-start; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config .canvas-agent-free-mode-picker { margin: 0; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-context-usage { display: none; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-selected-skill { position: absolute; bottom: calc(100% + 6px); left: 54px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize { position: static; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel { width: 100%; max-width: calc(100vw - 40px); box-sizing: border-box; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-send-button { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer:has(.episode-replica-ref-card) {
+  min-height: 29rem;
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer:has(.canvas-agent-submission-note) { min-height: 28rem; }
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer > .canvas-agent-media-composer-content {
+  margin-bottom: 8px;
+  overflow: visible;
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer .episode-replica-textarea.has-inline-attachments { overflow: visible; }
+.canvas-agent-panel.is-media-only .canvas-agent-creation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 0 0 auto; margin-bottom: 10px; }
+.canvas-agent-panel.is-media-only .canvas-agent-style-picker { display: flex; align-items: center; gap: 8px; color: var(--new-canvas-muted); font-size: 12px; margin-left: auto; }
+.canvas-agent-panel.is-media-only .canvas-agent-style-picker select { max-width: 150px; padding: 7px 10px; border: 1px solid var(--new-canvas-control-border); border-radius: 6px; color: var(--new-canvas-foreground); background: var(--new-canvas-panel); font: inherit; }
+.canvas-agent-panel.is-media-only .canvas-agent-text-actions { display: flex; gap: 4px; }
+.canvas-agent-panel.is-media-only .canvas-agent-text-actions button { display: grid; place-items: center; width: 32px; height: 32px; padding: 6px; border: 0; border-radius: 7px; color: var(--new-canvas-muted); background: transparent; cursor: pointer; }
+.canvas-agent-panel.is-media-only .canvas-agent-text-actions svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.canvas-agent-panel.is-media-only .canvas-agent-message-footer { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.canvas-agent-panel.is-media-only .canvas-agent-message-footer .canvas-agent-message-time { margin: 0; }
+.canvas-agent-panel.is-media-only [data-event-role="user"] .canvas-agent-message-footer { justify-content: flex-end; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-event[data-event-role="user"] > div { padding: 0; border: 0 !important; background: transparent !important; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-event[data-event-role="user"] .canvas-agent-event-title { display: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-event[data-event-role="user"] p { margin: 0; padding: 16px 18px; border-radius: 18px 18px 4px 18px; background: var(--new-canvas-control); line-height: 1.75; }
+.canvas-agent-panel.is-media-only .canvas-agent-text-actions button:hover,
+.canvas-agent-panel.is-media-only .canvas-agent-text-actions button:focus-visible { color: var(--new-canvas-foreground); background: var(--new-canvas-control-active); border-color: var(--new-canvas-accent-color); }
+.canvas-agent-panel.is-media-only .canvas-agent-visible-models { display: flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; margin-bottom: 10px; }
+.canvas-agent-panel.is-media-only .canvas-agent-visible-models > .home-agent-model-picker { position: relative; flex: 1 1 160px; min-width: 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-model-hint { flex: 0 0 100%; color: var(--new-canvas-muted); font-size: 11px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-trigger { width: 100%; min-width: 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-menu { bottom: calc(100% + 8px); top: auto; max-width: min(560px, 80vw); max-height: 42dvh; overflow-y: auto; z-index: 90; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-creation-toolbar .canvas-agent-free-mode-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); width: 260px; margin: 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-disclosure { position: relative; color: var(--new-canvas-muted); font-size: 12px; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-disclosure summary { cursor: pointer; padding: 9px; list-style: none; }
+.canvas-agent-panel.is-media-only .canvas-agent-bottom-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 0; border-top: 1px solid var(--new-canvas-control-border); }
+.canvas-agent-panel.is-media-only .canvas-agent-bottom-options .canvas-agent-visible-models { flex: 1 1 440px; margin: 0; gap: 6px; }
+.canvas-agent-panel.is-media-only .canvas-agent-bottom-options .canvas-agent-creation-toolbar { margin: 0; gap: 8px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-trigger { background: transparent; border-color: transparent; min-height: 32px; padding: 0 8px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-trigger:hover { background: var(--new-canvas-control-active); }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-generation-config .canvas-agent-free-mode-picker { width: 220px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; flex-shrink: 0; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-generation-config { gap: 12px; flex-wrap: wrap; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer .episode-replica-textarea.has-inline-attachments { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(96px, 1fr); gap: 10px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer .canvas-agent-free-skills { margin: 0; align-self: center; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-prompt-editor { grid-column: 1 / -1; min-height: 96px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer textarea.home-agent-rich-editor { min-height: 96px; padding: 6px 2px; border: 0; outline: none; background: transparent; line-height: 1.7; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-prompt-editor:focus-within { box-shadow: inset 0 -1px var(--new-canvas-accent-color); }
+.new-canvas-root .canvas-agent-panel.is-media-only .episode-replica-textarea:has(.episode-replica-ref-card) .inline-upload-tray { grid-column: 1 / -1; }
+.canvas-agent-panel.is-media-only .canvas-agent-style-picker select:focus-visible,
+.canvas-agent-panel.is-media-only .canvas-agent-text-actions button:focus-visible { outline: 2px solid var(--new-canvas-accent-color); outline-offset: 2px; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-popover,
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library { position: absolute; z-index: 80; bottom: calc(100% + 12px); padding: 18px; border: 1px solid var(--new-canvas-control-border); border-radius: 14px; background: var(--new-canvas-panel); color: var(--new-canvas-foreground); box-shadow: 0 18px 60px #0006; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-popover { right: 0; width: min(360px, calc(100vw - 64px)); display: grid; gap: 10px; max-height: min(440px, 32dvh); overflow-y: auto; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-popover .home-agent-model-menu { position: static; width: 100%; margin: 8px 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-popover .home-agent-model-trigger { width: 100%; }
+.canvas-agent-panel.is-media-only .canvas-agent-config-popover p { color: var(--new-canvas-muted); font-size: 12px; line-height: 1.6; margin: 4px 0 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-parameter-fields { display: flex; flex-wrap: wrap; gap: 10px; border: 0; padding: 8px 0; margin: 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-parameter-fields legend { color: var(--new-canvas-muted); }
+.canvas-agent-panel.is-media-only .canvas-agent-parameter-fields label { display: grid; flex: 1; gap: 6px; }
+.canvas-agent-panel.is-media-only .canvas-agent-parameter-fields select,
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library input { background: var(--new-canvas-control); color: var(--new-canvas-foreground); border: 1px solid var(--new-canvas-control-border); border-radius: 7px; padding: 9px; font: inherit; }
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills { position: relative; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library { left: 0; width: min(580px, 100%); box-sizing: border-box; display: flex; flex-direction: column; max-height: min(460px, 40dvh); overflow: hidden; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library header { display: flex; flex: 0 0 auto; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library header strong { font-size: 16px; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library header small { display: block; color: var(--new-canvas-muted); margin-top: 5px; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-library input { width: 100%; box-sizing: border-box; flex: 0 0 auto; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results { min-height: 0; max-height: min(340px, 40dvh); overflow-y: auto; overscroll-behavior: contain; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results h4 { margin: 16px 0 8px; color: var(--new-canvas-muted); font-size: 12px; font-weight: 500; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results section > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results button { display: grid; text-align: left; gap: 7px; padding: 12px; border-radius: 8px; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results button strong { color: var(--new-canvas-foreground); font-size: 14px; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results button span { line-height: 1.5; }
+.canvas-agent-panel.is-media-only .canvas-agent-skill-results button small { color: var(--new-canvas-accent-color); }
+.canvas-agent-panel.is-media-only .canvas-agent-selected-skill { display: inline-flex; gap: 8px; align-items: center; padding-left: 10px; border-radius: 6px; background: var(--new-canvas-control-active); }
+.canvas-agent-panel.is-media-only .canvas-agent-submission-note { flex: 0 0 auto; margin: 0 0 8px; color: var(--new-canvas-muted); font-size: 12px; line-height: 1.5; }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-card { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 20px; padding: 20px; border: 1px solid var(--new-canvas-control-border); border-radius: 14px; background: var(--new-canvas-surface); }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-preview { display: grid; place-items: center; min-height: 120px; border-radius: 9px; background: var(--new-canvas-control); color: var(--new-canvas-accent-color); font-size: 30px; }
+.canvas-agent-panel.is-media-only .is-generating .canvas-agent-generation-preview span { animation: free-agent-breathe 1.8s ease-in-out infinite; }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-detail { display: grid; align-content: center; gap: 7px; min-width: 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-detail strong { font-size: 16px; color: var(--new-canvas-foreground); }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-detail > span,
+.canvas-agent-panel.is-media-only .canvas-agent-generation-detail > small,
+.canvas-agent-panel.is-media-only .canvas-agent-generation-detail p { color: var(--new-canvas-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; margin: 0; }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-stages { display: flex; gap: 10px; color: var(--new-canvas-muted); font-size: 11px; margin-top: 7px; }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-stages .active { color: var(--new-canvas-accent-color); }
+.canvas-agent-panel.is-media-only .canvas-agent-generation-stages i { font-style: normal; opacity: .5; }
+.canvas-agent-panel.is-media-only .canvas-agent-media-actions { flex-wrap: wrap; gap: 7px; }
+.canvas-agent-panel.is-media-only .canvas-agent-creation-welcome { max-width: 640px; margin: auto; text-align: center; }
+.canvas-agent-panel.is-media-only .canvas-agent-creation-welcome h2 { font-size: 24px; margin: 0 0 12px; }
+.canvas-agent-panel.is-media-only .canvas-agent-creation-welcome p { color: var(--new-canvas-muted); line-height: 1.7; }
+.canvas-agent-panel.is-media-only .canvas-agent-creation-welcome button { padding: 12px; border-radius: 8px; border: 1px solid var(--new-canvas-control-border); background: var(--new-canvas-control); color: var(--new-canvas-foreground); cursor: pointer; margin: 5px; }
+@keyframes free-agent-breathe { 0%, 100% { opacity: .35; transform: scale(.92); } 50% { opacity: 1; transform: scale(1.08); } }
+@media (prefers-reduced-motion: reduce) { .canvas-agent-panel.is-media-only .is-generating .canvas-agent-generation-preview span { animation: none; } }
+@media (max-width: 760px) {
+  .new-canvas-root .canvas-agent-panel.is-media-only form[data-free-generation-form] { min-height: 28rem; }
+  .canvas-agent-panel.is-media-only .canvas-agent-bottom-options { gap: 4px; }
+  .canvas-agent-panel.is-media-only .canvas-agent-bottom-options .canvas-agent-creation-toolbar { width: 100%; justify-content: flex-start; }
+  .canvas-agent-panel.is-media-only .canvas-agent-bottom-options .canvas-agent-style-picker { margin-left: 0; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-generation-config .canvas-agent-free-mode-picker { width: 180px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-generation-permission > span { display: none; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-generation-permission .canvas-agent-permission-trigger { min-width: 0; }
+  .canvas-agent-panel.is-media-only .canvas-agent-visible-models > .home-agent-model-picker { flex-basis: 0; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-trigger { padding: 0 6px; }
+  .canvas-agent-panel.is-media-only .canvas-agent-visible-models .home-agent-model-menu { position: fixed; left: 12px; right: 12px; bottom: 90px; width: auto; max-width: none; }
+  .canvas-agent-panel.is-media-only .canvas-agent-skill-library { max-height: 24dvh; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer:has(.canvas-agent-submission-note) { min-height: 32rem; }
+  .canvas-agent-panel.is-media-only .canvas-agent-creation-toolbar { flex-wrap: wrap; gap: 4px; }
+  .canvas-agent-panel.is-media-only .canvas-agent-config-disclosure { margin-left: auto; }
+  .canvas-agent-panel.is-media-only .canvas-agent-generation-card { grid-template-columns: 60px minmax(0, 1fr); padding: 12px; gap: 12px; }
+  .canvas-agent-panel.is-media-only .canvas-agent-generation-preview { min-height: 80px; }
+  .canvas-agent-panel.is-media-only .canvas-agent-skill-results section > div { grid-template-columns: 1fr; }
+}
+
+/* An empty attachment tray must not consume the space reserved for writing. */
+.new-canvas-root .canvas-agent-panel.is-media-only .inline-upload-tray:not(:has(.episode-replica-ref-card)) {
+  flex: 0 0 36px;
+  min-height: 36px;
+  max-height: 36px;
+  padding: 0;
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .inline-upload-tray:not(:has(.episode-replica-ref-card)) .episode-replica-upload-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-free-skills {
+  flex: 0 0 auto;
+  margin: 4px 0 8px;
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-prompt-editor {
+  min-height: 6rem;
+}
+
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-prompt-editor .episode-prompt-editor-content,
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer textarea.home-agent-rich-editor {
+  min-height: 100%;
+  padding: 8px 4px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  width: min(13rem, calc(100vw - 3rem));
+  margin: 0 0 6px auto;
+  padding: 4px;
+  border: 1px solid var(--new-canvas-control-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--new-canvas-panel) 92%, transparent);
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker button,
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills button,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card button {
+  min-height: 28px;
+  border: 1px solid var(--new-canvas-control-border);
+  border-radius: 5px;
+  color: var(--new-canvas-muted);
+  background: var(--new-canvas-control);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker button.active,
+.canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker button:hover,
+.canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker button:focus-visible,
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills button:hover,
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills button:focus-visible,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card button:hover,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card button:focus-visible {
+  border-color: var(--new-canvas-accent-color);
+  color: var(--new-canvas-control-text);
+  background: var(--new-canvas-control-active);
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker button:disabled,
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills button:disabled,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills > span {
+  color: var(--new-canvas-muted);
+  font-size: 12px;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-free-skills button {
+  padding: 0 8px;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--new-canvas-control-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--new-canvas-surface) 90%, var(--new-canvas-accent-soft));
+  color: var(--new-canvas-foreground);
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card header,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card footer,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.question > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card header > span,
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card small {
+  color: var(--new-canvas-muted);
+  font-size: 12px;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card p {
+  margin: 0;
+  color: var(--new-canvas-foreground);
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.plan ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.plan li {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  color: var(--new-canvas-muted);
+  font-size: 12px;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.plan li i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--new-canvas-muted);
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.plan li[data-plan-step-status="running"] i {
+  background: #72cbed;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.plan li[data-plan-step-status="completed"] i {
+  background: #75c995;
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-card.question {
+  border-color: color-mix(in srgb, var(--new-canvas-accent-color) 45%, var(--new-canvas-control-border));
+}
+
+.canvas-agent-panel.is-media-only .canvas-agent-creative-document-markdown {
+  max-height: 16rem;
+  overflow: auto;
+  color: var(--new-canvas-foreground);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+@media (max-width: 760px) {
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer {
+    min-height: 26rem;
+  }
+
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer:has(.episode-replica-ref-card) {
+    min-height: 30rem;
+  }
+
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-workspace {
+    grid-template-rows: auto minmax(6rem, 1fr) auto auto;
+    overflow-y: auto;
+  }
+
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-timeline-wrap {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-model-float {
+    position: static;
+    z-index: auto;
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+    margin: 0;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--new-canvas-control-border);
+    background: var(--new-canvas-background);
+  }
+
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker {
+    width: 100%;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-model-float .home-agent-model-trigger {
+    padding: 0 6px;
+  }
+
+  .canvas-agent-panel.is-media-only .canvas-agent-free-mode-picker {
+    width: min(100%, 14rem);
+  }
+}

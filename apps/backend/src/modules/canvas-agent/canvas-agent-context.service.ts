@@ -48,6 +48,8 @@ export class CanvasAgentContextService {
       [input.conversationId, input.canvasId, input.actor.ownerUserId, input.actor.actorTeamMemberId ?? null],
     );
     if (!conversation) throw new Error("canvas_agent_conversation_not_found");
+    const creative = mediaGenerationOnly && readRecord(conversation.summary_json).creative
+      ? { creative: readRecord(readRecord(conversation.summary_json).creative) } : {};
     let summary = mediaGenerationOnly ? {} : readRecord(conversation.summary_json);
     const throughSequence = Math.max(0, Number(summary.throughSequence ?? 0));
     const maxMessages = this.deps.maxMessages ?? 80;
@@ -107,7 +109,7 @@ export class CanvasAgentContextService {
       expiresAt: grant.expiresAt,
     }));
     let context = mediaGenerationOnly
-      ? { fileGrants, messages }
+      ? { ...creative, fileGrants, messages }
       : { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     const serialized = JSON.stringify(context);
     const maxChars = this.deps.maxSerializedChars ?? 400_000;
@@ -167,7 +169,7 @@ export class CanvasAgentContextService {
       );
     }
     context = mediaGenerationOnly
-      ? { fileGrants, messages }
+      ? { ...creative, fileGrants, messages }
       : { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     return {
       ...context,

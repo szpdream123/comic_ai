@@ -43283,6 +43283,21 @@ button.asset-generator-task-preview:focus-visible {
   min-height: 0;
 }
 
+.workbench-main.home-mode .home-hero.has-free-generation .hero-title {
+  font-size: clamp(1.4rem, 2vw, 2rem);
+  margin-bottom: 0;
+}
+
+.workbench-main.home-mode .home-hero.has-free-generation .hero-subtitle {
+  margin-top: .4rem;
+  font-size: .85rem;
+}
+
+.workbench-main.home-mode .home-hero.has-free-generation .home-creation-mode-switch,
+.workbench-main.home-mode .home-hero.has-free-generation .home-free-generation-dialog {
+  margin-top: .8rem;
+}
+
 .home-free-generation-dialog .new-canvas-workbench-host {
   height: 100%;
 }
@@ -48275,5 +48290,35 @@ button.asset-generator-task-preview:focus-visible {
 
   .workbench-rail.persistent .rail-label {
     font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .production-workbench:has(.home-hero.has-free-generation) {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .production-workbench:has(.home-hero.has-free-generation) > .workbench-main.home-mode {
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
+  }
+
+  .production-workbench:has(.home-hero.has-free-generation) .workbench-main.home-mode > .seo-home-scroll {
+    min-height: 0;
+    height: 100%;
+  }
+
+  .workbench-main.home-mode .home-hero.has-free-generation .hero-title,
+  .workbench-main.home-mode .home-hero.has-free-generation .hero-subtitle { display: none; }
+
+  .workbench-main.home-mode .home-hero.has-free-generation .home-creation-mode-switch button {
+    min-height: 42px;
+    padding: 8px 4px;
+    font-size: 12px;
+    white-space: nowrap;
   }
 }

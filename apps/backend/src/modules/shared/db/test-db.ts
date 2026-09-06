@@ -4,6 +4,7 @@ import { Pool } from "pg";
 
 import { applySqlMigrations } from "./migrations.ts";
 import { createPostgresDatabase } from "./dev-db.ts";
+import { agentExecutionDatabaseUrl } from "./agent-execution-scope.ts";
 import type { DevDatabase } from "./dev-db.ts";
 import type { SqlDatabase } from "./sql.ts";
 
@@ -23,7 +24,7 @@ export async function createMigratedTestDb(): Promise<TestDatabase> {
 export async function createEmptyTestDb(): Promise<TestDatabase> {
   const connectionString = requiredTestDatabaseUrl();
   const schemaName = `test_${randomUUID().replaceAll("-", "_")}`;
-  const pool = new Pool({ connectionString });
+  const pool = new Pool({ connectionString: agentExecutionDatabaseUrl(connectionString, process.env) });
 
   try {
     await pool.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);

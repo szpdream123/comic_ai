@@ -73,6 +73,7 @@ export async function claimOutboxEventsForDispatch(
           ELSE NULL
         END
           AND task_filter.input_snapshot_json->>'workerEnvironment' = $${taskEnvironmentParam}
+          AND canvas_agent_scope_allowed(task_filter.input_snapshot_json)
       )`
     : "";
   const taskEnvironmentEventWhere = input.taskEnvironment
@@ -84,6 +85,7 @@ export async function claimOutboxEventsForDispatch(
           ELSE NULL
         END
           AND task_filter.input_snapshot_json->>'workerEnvironment' = $${taskEnvironmentParam}
+          AND canvas_agent_scope_allowed(task_filter.input_snapshot_json)
       )`
     : "";
   const queryParams = eventTypes?.length
@@ -238,7 +240,7 @@ async function claimFairOutboxEventsForDispatch(
                 OR (event.status = 'processing' AND event.updated_at < $2)
               )
               AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
-              ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
+              ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8 AND canvas_agent_scope_allowed(task_filter.input_snapshot_json))" : ""}
             GROUP BY COALESCE(event.user_id::text, 'anonymous')
           ),
           candidates AS (
@@ -272,7 +274,7 @@ async function claimFairOutboxEventsForDispatch(
                     OR (event.status = 'processing' AND event.updated_at < $2)
                   )
                   AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
-                  ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
+                  ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8 AND canvas_agent_scope_allowed(task_filter.input_snapshot_json))" : ""}
                   AND COALESCE(event.user_id::text, 'anonymous') = main.main_key
                 GROUP BY child_key
                 ORDER BY
@@ -302,7 +304,7 @@ async function claimFairOutboxEventsForDispatch(
                       OR (event.status = 'processing' AND event.updated_at < $2)
                     )
                     AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
-                    ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
+                    ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8 AND canvas_agent_scope_allowed(task_filter.input_snapshot_json))" : ""}
                     AND COALESCE(event.user_id::text, 'anonymous') = main.main_key
                     AND COALESCE(
                       NULLIF(event.payload_json->>'teamMemberId', ''),
@@ -335,7 +337,7 @@ async function claimFairOutboxEventsForDispatch(
                     OR (event.status = 'processing' AND event.updated_at < $2)
                   )
                   AND ($3::text[] IS NULL OR event.event_type = ANY($3::text[]))
-                  ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8)" : ""}
+                  ${input.taskEnvironment ? "AND EXISTS (SELECT 1 FROM tasks task_filter WHERE task_filter.id = CASE WHEN event.payload_json->>'taskId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN (event.payload_json->>'taskId')::uuid ELSE NULL END AND task_filter.input_snapshot_json->>'workerEnvironment' = $8 AND canvas_agent_scope_allowed(task_filter.input_snapshot_json))" : ""}
                   AND COALESCE(event.user_id::text, 'anonymous') = main.main_key
                   AND NOT EXISTS (SELECT 1 FROM first_candidates first WHERE first.id = event.id)
                 ORDER BY event.available_at ASC, event.created_at ASC, event.id ASC

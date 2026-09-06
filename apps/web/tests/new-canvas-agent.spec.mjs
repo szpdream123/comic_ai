@@ -119,6 +119,8 @@ test("free generation sends text model switching requests to the current text mo
       canvasAgent: {
         promptDraft: "帮我将模型切换成 GPT",
         modelCode: "deepseek",
+        modelsStatus: "ready",
+        models: [{ modelCode: "deepseek", modelLabel: "DeepSeek" }],
         generationModelsStatus: "ready",
         generationModels: [{ modelCode: "image-model", modelLabel: "Image", mediaType: "image" }],
       },
@@ -264,6 +266,7 @@ test("free generation stops showing a waiting state as soon as every media task 
     canvasAgent: {
       taskId: "task-waiting",
       status: "waiting_external",
+      generationKind: "video",
       events: [{ id: "generation-waiting", sequence: 1, eventType: "task.waiting_external", event: {} }],
       messages: [{
         id: "generation-message",
@@ -712,8 +715,8 @@ test("media-only Agent renders a standalone conversation workspace with history 
   assert.match(html, /canvas-agent-media-conversation-row active[\s\S]*?data-conversation-id="free-conversation"[^>]*aria-current="page"/);
   assert.doesNotMatch(html, /data-conversation-id="free-conversation"[^>]*disabled/);
   assert.match(html, /aria-label="生成记录"/);
-  assert.match(html, /class="home-agent-composer canvas-agent-media-composer"/);
-  assert.match(html, /--canvas-agent-media-composer-height: 272px/);
+  assert.match(html, /class="home-agent-composer canvas-agent-media-composer is-focus-composer"/);
+  assert.match(html, /--canvas-agent-media-composer-height: 224px/);
   assert.match(html, /data-agent-media-composer-resize[^>]*aria-label="拖动调整输入框高度"/);
   assert.match(html, /class="home-agent-composer-content canvas-agent-media-composer-content"/);
   assert.match(html, /class="home-agent-composer-footer canvas-agent-generation-config"/);
@@ -721,7 +724,9 @@ test("media-only Agent renders a standalone conversation workspace with history 
   assert.doesNotMatch(html, /episode-replica-generate-label/);
   assert.doesNotMatch(html, /canvas-agent-generation-config[\s\S]*?<span>\d+<\/span>/);
   assert.match(html, /data-agent-action="toggle-free-generation-menu"/);
-  assert.match(html, /class="canvas-agent-media-model-float"/);
+  assert.match(html, /class="canvas-agent-customize-panel"[^>]*hidden/);
+  assert.match(html, /data-agent-action="toggle-composer-settings"/);
+  assert.doesNotMatch(html, /class="canvas-agent-media-model-float"/);
   assert.match(html, /class="canvas-agent-current-model"/);
   assert.match(html, /当前 · 暂无文本模型/);
   assert.match(html, /图片 · 未配置/);
@@ -742,7 +747,7 @@ test("media-only Agent renders a standalone conversation workspace with history 
   assert.match(css, /\.canvas-agent-media-composer \.episode-replica-textarea\.has-inline-attachments\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden;/);
   assert.match(css, /@media \(min-width: 761px\) \{[\s\S]*?\.canvas-agent-panel\.is-media-only\s*\{[\s\S]*?width:\s*min\(1568px, calc\(100% - 48px\)\);/);
   assert.doesNotMatch(html, /data-field="generationKind"/);
-  assert.doesNotMatch(html, /class="home-agent-composer-footer canvas-agent-generation-config"[\s\S]*home-agent-model-picker/);
+  assert.match(html, /class="canvas-agent-customize-panel"[^>]*hidden[\s\S]*home-agent-model-picker/);
   assert.doesNotMatch(html, /canvas-agent-generation-model"[^>]*>\s*<select|canvas-agent-generation-parameters/);
   assert.doesNotMatch(html, /episode-replica-video-settings-trigger/);
   assert.doesNotMatch(html, /class="canvas-agent-generation-kinds"|class="canvas-agent-mode-picker"|审核批准/);
@@ -949,6 +954,7 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   assert.match(html, /图片 · Image Pro/);
   assert.match(html, /视频 · Video Pro/);
   assert.match(html, /音频 · Audio Pro/);
+  await controller.handleAction({ dataset: { agentAction: "select-free-generation-kind", value: "video" } });
   await controller.handleAction({ dataset: { agentAction: "select-free-generation-model", modelKind: "video", modelId: "video-fast" } });
   assert.equal(workbench.ui.canvasAgent.generationModelCodes.video, "video-fast");
   html = renderCanvasAgentPanel(workbench.ui);
@@ -974,6 +980,7 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   assert.equal(workbench.ui.canvasAgent.modelCode, "agent-text-fast");
   assert.match(renderCanvasAgentPanel(workbench.ui), /当前 · Agent text Fast/);
 
+  await controller.handleAction({ dataset: { agentAction: "select-free-generation-kind", value: "audio" } });
   workbench.ui.canvasAgent.promptDraft = "生成温暖的开场旁白";
   await controller.handleAction({ dataset: { agentAction: "send" } });
 
@@ -1090,7 +1097,7 @@ test("media-only Agent retains generation approval for user confirmation", async
     ui: {
       selectedCanvasProjectId: "canvas-free-generation-approval",
       canvasAgentCapabilityProfile: "media_generation_only",
-      canvasAgent: {},
+      canvasAgent: { generationKind: "image" },
     },
     api: {
       async listFreeGenerationModels() {
@@ -3163,7 +3170,7 @@ test("media-only Agent reuses the storyboard attachment tray above its shared ri
     },
   });
 
-  assert.match(html, /class="home-agent-composer canvas-agent-media-composer"/);
+  assert.match(html, /class="home-agent-composer canvas-agent-media-composer is-focus-composer"/);
   assert.match(html, /episode-replica-ref-strip inline-upload-tray/);
   assert.match(html, /episode-replica-upload-card combined uploadable/);
   assert.match(html, /data-agent-action="remove-agent-attachment"/);
@@ -3398,7 +3405,7 @@ test("media-only Agent uploads references and submits with the selected generati
     ui: {
       selectedCanvasProjectId: "canvas-free-generation-upload",
       canvasAgentCapabilityProfile: "media_generation_only",
-      canvasAgent: {},
+      canvasAgent: { generationKind: "image" },
     },
     api: {
       async listFreeGenerationModels() {
@@ -3528,7 +3535,7 @@ test("media-only Agent creates and titles a conversation from its first message,
   const workbench = {
     ui: {
       canvasAgentCapabilityProfile: "media_generation_only",
-      canvasAgent: {},
+      canvasAgent: { generationKind: "image" },
     },
     api: {
       async listFreeGenerationModels() {

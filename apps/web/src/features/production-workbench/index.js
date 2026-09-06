@@ -3589,6 +3589,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     },
   };
   const initialRouteToken = readWorkbenchRouteToken(window.location);
+  // The first mounted controller captures its API surface before refresh runs.
+  if (initialRouteToken === "free-generation") prepareFreeGenerationSurface(workbench);
   installWorkbenchToastQueue(workbench);
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
   syncWorkbenchDisplayCreditBalance(workbench, session);

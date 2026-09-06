@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Free conversation Agent fixture</title>
+    <link rel="stylesheet" href="/src/features/production-workbench/production-workbench.css" />
+    <link rel="stylesheet" href="/src/features/new-canvas/new-canvas.css" />
+    <style>html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; } #fixture-root { height: 100vh; }</style>
+  </head>
+  <body>
+    <main class="new-canvas-root" id="fixture-root"><div class="new-canvas-layout is-agent-only" id="fixture-layout"></div></main>
+    <script type="module">
+      import { createCanvasAgentController, normalizeAgentMessage, renderCanvasAgentPanel } from "/src/features/new-canvas/canvas-agent-panel.js";
+
+      const messages = [
+        normalizeAgentMessage({ id: "fixture-user-text", role: "user", content: { text: "人物角色你帮我设定，风格为真人写实风格。" } }),
+        normalizeAgentMessage({
+          id: "fixture-plan",
+          role: "tool",
+          content: { toolId: "creative.plan", output: { creative: {
+            type: "plan", title: "短片创作计划", goal: "先确定角色，再完成系列图与视频。",
+            constraints: "保持温暖水彩风格", steps: [
+              { id: "character", title: "角色设定", status: "completed" },
+              { id: "images", title: "系列图片", status: "running" },
+              { id: "video", title: "图片转视频", status: "pending" },
+            ],
+          } } },
+        }),
+        normalizeAgentMessage({
+          id: "fixture-document",
+          role: "tool",
+          content: { toolId: "creative.document", output: { creative: {
+            type: "document", documentId: "outline-1", title: "第一集大纲", version: 2,
+            content: "# 黄昏车站\n\n主角在雨后车站遇见旧友，并决定踏上新的旅程。",
+          } } },
+        }),
+        normalizeAgentMessage({
+          id: "fixture-question",
+          taskId: "fixture-task",
+          role: "tool",
+          content: { toolId: "creative.ask", output: { creative: {
+            type: "question", id: "visual-style", question: "希望采用哪种画风？", options: ["水彩", "赛博朋克", "电影写实"],
+          } } },
+        }),
+      ];
+      const ui = {
+        canvasAgentCapabilityProfile: "media_generation_only",
+        canvasAgent: {
+          taskId: "fixture-task", status: "paused", generationKind: "agent", messages,
+          conversationId: "fixture-conversation", modelCode: "text-pro", modelsStatus: "ready",
+          models: [{ modelCode: "text-pro", modelLabel: "创作助手" }],
+          generationModelsStatus: "ready",
+          generationModels: [
+            { modelCode: "image-pro", modelLabel: "图片 Pro", mediaType: "image", enabled: true },
+            { modelCode: "video-pro", modelLabel: "视频 Pro", mediaType: "video", enabled: true },
+            { modelCode: "wan3.0-r2v", modelLabel: "Wan3.0（秒计费）", mediaType: "video", enabled: true },
+            { modelCode: "audio-pro", modelLabel: "音频 Pro", mediaType: "audio", enabled: true },
+          ],
+          generationModelCodes: { image: "image-pro", video: "video-pro", audio: "audio-pro" },
+          projectVisualStyles: [
+            { id: "fixture-anime", code: "anime_2d", label: "二次元", instruction: "二次元动漫风格，精致线稿，大眼角色，干净上色，柔和高光，日系动画质感" },
+            { id: "fixture-portrait", code: "portrait_photography", label: "人像摄影", instruction: "真实人像摄影风格，皮肤质感自然，表情细腻，浅景深背景虚化，柔和棚拍光，画面清晰高级" },
+            { id: "fixture-oil", code: "oil_painting", label: "油画", instruction: "古典油画风格，厚重笔触，布面纹理，色彩层次丰富，明暗柔和，画面具有艺术馆质感" },
+          ],
+        },
+      };
+      const surface = document.querySelector("#fixture-layout");
+      const scenario = new URLSearchParams(location.search).get("scenario");
+      if (scenario === "progress") {
+        ui.canvasAgent.status = "waiting_external";
+        ui.canvasAgent.messages = ["image", "video"].map((kind, index) => ({ id: `media-${kind}`, taskId: "fixture-task", role: "tool", generationTaskId: `generation-${kind}`, media: { taskId: `generation-${kind}`, kind, status: index ? "polling" : "queued", model: `${kind} Pro`, submittedAt: new Date(Date.now() - (index ? 90000 : 12000)).toISOString(), progressStage: index ? "provider_rendering" : "task_created" } }));
+      } else if (scenario === "empty") { ui.canvasAgent.messages = []; ui.canvasAgent.status = "idle"; ui.canvasAgent.taskId = ""; }
+      ui.canvasAgent.generationModels[1].parameterSchema = { duration: { type: "integer", label: "时长（秒）", enum: [5, 10] }, aspectRatio: { type: "string", enum: ["16:9", "9:16"] } };
+      ui.canvasAgent.generationModels[1].defaultParams = { duration: 5, aspectRatio: "16:9" };
+      surface.innerHTML = renderCanvasAgentPanel(ui);
+      // Browser fixture: record controls locally; never call a model or application API.
+      window.fixtureControls = [];
+      const controller = createCanvasAgentController({
+        surface, capabilityProfile: "media_generation_only",
+        workbench: { ui, api: {
+          async controlFreeGenerationTask(taskId, action, input) {
+            window.fixtureControls.push({ taskId, action, input });
+            return { result: { status: action === "resume" ? "queued" : "paused" } };
+          },
+        } },
+      });
+      surface.addEventListener("click", event => {
+        const button = event.target.closest("[data-agent-action]");
+        if (button && !button.disabled) void controller.handleAction(button);
+      });
+      surface.addEventListener("input", event => controller.handleInput(event.target));
+      surface.addEventListener("keydown", event => controller.handleKeydown(event, event.target));
+      window.addEventListener("pagehide", () => controller.dispose());
+    </script>
+  </body>
+</html>

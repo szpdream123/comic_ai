@@ -1033,12 +1033,14 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (mediaComposerResizeHandle && event.button === 0) {
           const composer = mediaComposerResizeHandle.closest?.(".canvas-agent-media-composer");
           const composerHeight = Number(workbench.ui.canvasAgent?.mediaComposerHeight);
+          const composerStyle = composer ? globalThis.getComputedStyle?.(composer) : null;
           mediaComposerResize = {
             pointerId: event.pointerId,
             startY: Number(event.clientY ?? 0),
-            startHeight: Number.isFinite(composerHeight)
+            startHeight: Number.parseFloat(composerStyle?.height) || (Number.isFinite(composerHeight)
               ? composerHeight
-              : Math.round(composer?.getBoundingClientRect?.().height ?? 272),
+              : Math.round(composer?.getBoundingClientRect?.().height ?? 272)),
+            minHeight: Math.max(176, Number.parseFloat(composerStyle?.minHeight) || 0),
             handle: mediaComposerResizeHandle,
             composer,
           };
@@ -1137,7 +1139,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           const nextHeight = Math.min(
             560,
             Math.max(
-              176,
+              mediaComposerResize.minHeight,
               Math.round(mediaComposerResize.startHeight + mediaComposerResize.startY - Number(event.clientY ?? 0)),
             ),
           );
