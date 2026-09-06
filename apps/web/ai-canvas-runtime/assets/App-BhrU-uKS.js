@@ -494,7 +494,7 @@ function Gr() {
 						type: "button",
 						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
 						onClick: () => {
-							g(!1), window.location.href = "/";
+							g(!1), y && void y();
 						},
 						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:home", className: "h-3.5 w-3.5" }), "回到主页"]
 					}),
@@ -502,7 +502,7 @@ function Gr() {
 						type: "button",
 						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
 						onClick: () => {
-							g(!1), window.location.hash = "#new-canvas";
+							g(!1), C && void C();
 						},
 						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:layout-grid", className: "h-3.5 w-3.5" }), "全部项目"]
 					}),
