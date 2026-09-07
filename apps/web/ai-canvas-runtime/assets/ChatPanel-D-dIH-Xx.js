@@ -2923,7 +2923,7 @@ function rn({ assistantModelId: e, onAssistantModelChange: t, mediaModels: n, me
 		nodes: me.length,
 		assets: xe.length,
 		models: W.length
-	}, J = we[E] > 0 ? E : Wt.find((e) => we[e] > 0) ?? E, nodeItems = (0, K.useMemo)(() => J === "nodes" ? me : [], [me, J]), Ee = (0, K.useMemo)(() => J === "assets" ? Ce : [], [J, Ce]), De = (0, K.useMemo)(() => J === "models" ? be : [], [be, J]), Oe = (0, K.useMemo)(() => {
+	}, J = E, nodeItems = (0, K.useMemo)(() => J === "nodes" ? me : [], [me, J]), Ee = (0, K.useMemo)(() => J === "assets" ? Ce : [], [J, Ce]), De = (0, K.useMemo)(() => J === "models" ? be : [], [be, J]), Oe = (0, K.useMemo)(() => {
 		let e = { "general-models": !0 };
 		for (let t of U) e[t.groupId] = e[t.groupId] || !!a[t.value];
 		return e;
@@ -3262,24 +3262,25 @@ function rn({ assistantModelId: e, onAssistantModelChange: t, mediaModels: n, me
 									}), e.options.map((e) => {
 										let t = Ie.get(e.id) ?? 0;
 										return /* @__PURE__ */ (0, q.jsxs)("button", {
-											id: `chat-skill-suggestion-${t}`,
-											type: "button",
-											role: "option",
+										id: `chat-skill-suggestion-${t}`,
+										type: "button",
+										role: "option",
+										"data-skill-name": e.name,
 											"aria-selected": t === Z,
 											onMouseEnter: () => H(t),
 											onClick: () => Fe(e.id, e.name),
 											title: e.description,
 											className: `flex min-h-9 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[11px] text-canvas-text transition-colors ${t === Z ? "bg-canvas-hover ring-1 ring-inset ring-indigo-400/25" : "hover:bg-canvas-hover"}`,
-											children: [/* @__PURE__ */ (0, q.jsx)(B, {
-												icon: e.sourceKind === "agent-package" ? "lucide:bot" : "mdi:puzzle-outline",
-												width: "16"
-											}), /* @__PURE__ */ (0, q.jsxs)("span", {
-												className: "min-w-0 flex-1",
-												children: [/* @__PURE__ */ (0, q.jsx)("span", {
-													className: "block truncate",
-													children: e.name
-												}), /* @__PURE__ */ (0, q.jsx)("span", {
-													className: "block truncate text-[10px] text-canvas-text-muted",
+										children: [/* @__PURE__ */ (0, q.jsx)(B, {
+											icon: e.sourceKind === "agent-package" ? "lucide:bot" : "mdi:puzzle-outline",
+											width: "16"
+										}), /* @__PURE__ */ (0, q.jsxs)("span", {
+											className: "chat-skill-option-copy min-w-0 flex-1",
+											children: [/* @__PURE__ */ (0, q.jsx)("span", {
+												className: "chat-skill-option-name block truncate",
+												children: e.name
+										}), /* @__PURE__ */ (0, q.jsx)("span", {
+												className: "chat-skill-option-description block truncate text-[10px] text-canvas-text-muted",
 													children: e.description
 												})]
 											})]

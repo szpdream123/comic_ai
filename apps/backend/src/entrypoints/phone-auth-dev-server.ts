@@ -28625,6 +28625,118 @@ export function createPhoneAuthDevServer(
             models: await listAvailableCanvasAgentModels(db),
           }));
         }
+        const canvasAssistantCompletionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/assistant\/chat\/completions$/);
+        if (request.method === "POST" && canvasAssistantCompletionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasAssistantCompletionMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const modelCode = readString(body.model);
+          const messages = Array.isArray(body.messages) ? body.messages : [];
+          if (!modelCode || messages.length === 0) {
+            return writeJson(response, envelopedError(400, "assistant_completion_input_invalid", "model and messages are required"));
+          }
+          const model = await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(modelCode);
+          const wantsStream = body.stream !== false;
+          const gatewayInput = {
+            model: model.id,
+            messages: messages as TextGatewayChatCompletionRequest["messages"],
+            ...(Array.isArray(body.tools) ? { tools: body.tools as TextGatewayChatCompletionRequest["tools"] } : {}),
+            ...(body.tool_choice !== undefined ? { toolChoice: body.tool_choice as TextGatewayChatCompletionRequest["tool_choice"] } : {}),
+            canvasProjectId,
+            createdByUserId: canvasScope.ownerUserId,
+            payloadSummary: "canvas assistant completion",
+            requestKeyPrefix: "canvas-assistant",
+          };
+          if (canvasTextChatGateway.streamCompletions) {
+            const streamResult = await canvasTextChatGateway.streamCompletions(gatewayInput);
+            if (!wantsStream) {
+              let content = "";
+              const toolCalls = new Map<number, { id: string; type: "function"; function: { name: string; arguments: string } }>();
+              for await (const chunk of streamResult.stream) {
+                for (const choice of chunk.choices ?? []) {
+                  const delta = choice.delta?.content;
+                  if (typeof delta === "string") content += delta;
+                  for (const toolCall of choice.delta?.tool_calls ?? []) {
+                    const index = toolCall.index ?? 0;
+                    const current = toolCalls.get(index) ?? {
+                      id: toolCall.id ?? `tool-${index}`,
+                      type: "function" as const,
+                      function: { name: "", arguments: "" },
+                    };
+                    if (toolCall.id) current.id = toolCall.id;
+                    if (toolCall.function?.name) current.function.name += toolCall.function.name;
+                    if (toolCall.function?.arguments) current.function.arguments += toolCall.function.arguments;
+                    toolCalls.set(index, current);
+                  }
+                }
+              }
+              const completed = await streamResult.completed;
+              if (completed.status !== "succeeded") {
+                return writeJson(response, envelopedError(502, "assistant_provider_error", completed.failureCode));
+              }
+              return writeJson(response, {
+                status: 200,
+                body: {
+                  id: `canvas-assistant-${Date.now().toString(36)}`,
+                  model: model.id,
+                  choices: [{
+                    index: 0,
+                    message: {
+                      role: "assistant",
+                      content,
+                      ...(toolCalls.size ? { tool_calls: [...toolCalls.values()] } : {}),
+                    },
+                    finish_reason: toolCalls.size ? "tool_calls" : "stop",
+                  }],
+                  ...(completed.usage ? { usage: completed.usage } : {}),
+                },
+              });
+            }
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/event-stream; charset=utf-8");
+            response.setHeader("cache-control", "no-cache, no-transform");
+            response.setHeader("connection", "keep-alive");
+            response.flushHeaders?.();
+            try {
+              for await (const chunk of streamResult.stream) writeSseData(response, chunk);
+              const completed = await streamResult.completed;
+              if (completed.status !== "succeeded") throw new Error(completed.failureCode || "assistant_provider_error");
+              response.write("data: [DONE]\n\n");
+            } finally {
+              if (!response.writableEnded) response.end();
+            }
+            return;
+          }
+          if (!wantsStream) {
+            const content = await canvasTextChatGateway.completeJson(gatewayInput);
+            return writeJson(response, {
+              status: 200,
+              body: { id: `canvas-assistant-${Date.now().toString(36)}`, model: model.id, choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }] },
+            });
+          }
+          response.statusCode = 200;
+          response.setHeader("content-type", "text/event-stream; charset=utf-8");
+          response.setHeader("cache-control", "no-cache, no-transform");
+          response.setHeader("connection", "keep-alive");
+          response.flushHeaders?.();
+          try {
+            if (canvasTextChatGateway.streamJson) {
+              for await (const delta of canvasTextChatGateway.streamJson(gatewayInput)) {
+                writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: { role: "assistant", content: delta }, finish_reason: null }] });
+              }
+            }
+            writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+            response.write("data: [DONE]\n\n");
+          } finally {
+            if (!response.writableEnded) response.end();
+          }
+          return;
+        }
         if (canvasAgentConversationMatch) {
           const canvasProjectId = decodeURIComponent(canvasAgentConversationMatch[1] ?? "");
           const canvasScope = await authorizeCanvasActor(db, {

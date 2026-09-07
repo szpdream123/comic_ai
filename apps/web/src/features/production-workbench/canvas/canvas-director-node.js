@@ -47,6 +47,18 @@ export function canvasDirectorCaptureUrl(capture = {}) {
     : "";
 }
 
+function directorCaptureMediaPatch(directorCaptures) {
+  const captures = Array.isArray(directorCaptures) ? directorCaptures : [];
+  const latestVideo = [...captures].reverse().find((capture) => capture.artifactKind === "video");
+  return {
+    directorCaptureUrls: captures
+      .filter((capture) => capture.artifactKind !== "video")
+      .map(canvasDirectorCaptureUrl)
+      .filter(Boolean),
+    videoUrl: latestVideo ? canvasDirectorCaptureUrl(latestVideo) : null,
+  };
+}
+
 export function updateCanvasDirectorCaptureDocument(document, nodeId, capture) {
   const normalizedNodeId = text(nodeId);
   const normalizedCapture = normalizeCanvasDirectorCapture(capture);
@@ -68,6 +80,7 @@ export function updateCanvasDirectorCaptureDocument(document, nodeId, capture) {
       data: {
         ...(node.data ?? {}),
         directorCaptures,
+        ...directorCaptureMediaPatch(directorCaptures),
         artifactId: normalizedCapture.artifactId,
         assetId: normalizedCapture.assetId,
         assetVersionId: normalizedCapture.assetVersionId,
@@ -101,6 +114,7 @@ export function removeCanvasDirectorCaptureDocument(document, nodeId, artifactId
       data: {
         ...(node.data ?? {}),
         directorCaptures,
+        ...directorCaptureMediaPatch(directorCaptures),
         artifactId: current?.artifactId ?? null,
         assetId: current?.assetId ?? null,
         assetVersionId: current?.assetVersionId ?? null,

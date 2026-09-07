@@ -2428,9 +2428,9 @@ var Fs = {
 	"node.a11yDescription.ariaLiveMessage": ({ direction: e, x: t, y: n }) => `Moved selected node ${e}. New position, x: ${t}, y: ${n}`,
 	"edge.a11yDescription.default": "Press enter or space to select an edge. You can then press delete to remove it or escape to cancel.",
 	"controls.ariaLabel": "Control Panel",
-	"controls.zoomIn.ariaLabel": "Zoom In",
-	"controls.zoomOut.ariaLabel": "Zoom Out",
-	"controls.fitView.ariaLabel": "Fit View",
+	"controls.zoomIn.ariaLabel": "放大",
+	"controls.zoomOut.ariaLabel": "缩小",
+	"controls.fitView.ariaLabel": "自适应画布",
 	"controls.interactive.ariaLabel": "Toggle Interactivity",
 	"minimap.ariaLabel": "Mini Map",
 	"handle.ariaLabel": "Handle"
@@ -7396,7 +7396,7 @@ function tm({ style: e, showZoom: t = !0, showFitView: n = !0, showInteractive: 
 					y(), a?.();
 				},
 				className: "react-flow__controls-zoomin",
-				title: v["controls.zoomIn.ariaLabel"],
+				"data-tooltip": v["controls.zoomIn.ariaLabel"],
 				"aria-label": v["controls.zoomIn.ariaLabel"],
 				disabled: _,
 				children: (0, U.jsx)(Jp, {})
@@ -7405,7 +7405,7 @@ function tm({ style: e, showZoom: t = !0, showFitView: n = !0, showInteractive: 
 					b(), o?.();
 				},
 				className: "react-flow__controls-zoomout",
-				title: v["controls.zoomOut.ariaLabel"],
+				"data-tooltip": v["controls.zoomOut.ariaLabel"],
 				"aria-label": v["controls.zoomOut.ariaLabel"],
 				disabled: g,
 				children: (0, U.jsx)(Yp, {})
@@ -7415,7 +7415,7 @@ function tm({ style: e, showZoom: t = !0, showFitView: n = !0, showInteractive: 
 				onClick: () => {
 					x(i), s?.();
 				},
-				title: v["controls.fitView.ariaLabel"],
+				"data-tooltip": v["controls.fitView.ariaLabel"],
 				"aria-label": v["controls.fitView.ariaLabel"],
 				children: (0, U.jsx)(Xp, {})
 			}),
@@ -18805,19 +18805,16 @@ var Uk = (e, t) => ({
 			try {
 				let r = ++Tk, i = () => r === Tk;
 				if (await Ok(), !i()) return;
-				let a = t().currentProjectId;
-				if (a) {
-					let e = Mk(t());
+				let a = t(), d = a.currentProjectId;
+				if (d) {
+					let e = Mk(a);
 					t().captureCurrentProjectSnapshot({
 						allowProjectChange: !0,
 						persistRecord: e
 					});
-					let n = await t().saveCurrentProject();
-					if (!i()) return;
-					if (n !== a) {
-						t().showToast("当前项目保存失败，已取消新建项目", "error");
-						return;
-					}
+					e && Pk(a, e).catch((e) => {
+						console.warn("[创建项目] 后台保存当前项目失败:", e), t().showToast("当前画布后台保存失败，请手动保存", "error");
+					});
 				}
 				let o = Lm(), s;
 				if (n) s = n;
@@ -18840,18 +18837,15 @@ var Uk = (e, t) => ({
 					scenes: [],
 					props: []
 				};
-				try {
-					await jk({
-						...l,
-						nodes: [],
-						edges: [],
-						groups: [],
-						dramaAssets: u
-					});
-				} catch (e) {
-					console.warn("[创建项目] 保存失败:", e), i() && t().showToast("新项目创建失败，已保留当前项目", "error");
-					return;
-				}
+				jk({
+					...l,
+					nodes: [],
+					edges: [],
+					groups: [],
+					dramaAssets: u
+				}).catch((e) => {
+					console.warn("[创建项目] 后台保存新项目失败:", e), t().showToast("新画布保存失败，请稍后手动保存", "error");
+				});
 				return Ne(o, c), i() ? (e((e) => ({
 					projects: [...e.projects, l],
 					currentProjectId: l.id,

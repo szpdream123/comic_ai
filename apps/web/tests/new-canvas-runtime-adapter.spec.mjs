@@ -409,6 +409,8 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /createAiCanvasRuntimeConfigBridge/);
   assert.match(appSource, /createAiCanvasRuntimeCatalogBridge/);
   assert.match(appSource, /const catalogBridge = createAiCanvasRuntimeCatalogBridge\(runtimeStore, context\)/);
+  assert.match(appSource, /backendBaseUrl[\s\S]*?\/api\/canvas\//);
+  assert.match(appSource, /protocol: "backend", baseUrl: backendBaseUrl/);
   assert.match(appSource, /const unsubscribe = store\.subscribe\?\.\(\(nextState, previousState\) =>/);
   assert.match(appSource, /modelCatalog: context\.modelCatalog \?\? context\.models/);
   assert.match(appSource, /config\.canvasBackground === canvasBackground/);
@@ -419,7 +421,9 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /isStandaloneHost/);
   assert.match(appSource, /height: \$\{isStandaloneHost \? "100dvh" : "100%"\} !important/);
   assert.match(appSource, /min-height: \$\{isStandaloneHost \? "100dvh" : "0"\} !important/);
-  assert.match(appSource, /\.ai-canvas-standalone-mount \[data-new-canvas-light-dom-root\][\s\S]*?width: 100% !important;[\s\S]*?height: 100% !important;[\s\S]*?zoom: calc\(1 \/ var\(--app-ui-scale, 1\)\)/);
+  assert.match(appSource, /\.ai-canvas-standalone-mount > \[data-new-canvas-light-dom-root\][\s\S]*?width: 100% !important;[\s\S]*?height: 100% !important;[\s\S]*?zoom: calc\(1 \/ var\(--app-ui-scale, 1\)\)/);
+  assert.match(appSource, /\.ai-canvas-standalone-mount > \[data-new-canvas-light-dom-root\] > \[data-new-canvas-style-gate\][\s\S]*?\.ai-canvas-standalone-mount \.new-canvas-loading-skeleton[\s\S]*?height: 100% !important;[\s\S]*?min-height: 100% !important;/);
+  assert.match(appSource, /html:has\(\.ai-canvas-standalone-mount\)[\s\S]*?body\.workbench-body:has\(\.ai-canvas-standalone-mount\)[\s\S]*?position: static !important;[\s\S]*?inset: auto !important;[\s\S]*?background: var\(--theme-app-background, #08111b\) !important;/);
   assert.match(appSource, /embedded: context\.embedded !== false/);
   assert.match(appSource, /createAiCanvasRuntimeHostProjectGuard/);
   assert.match(appSource, /setChatPanelDetached\?\.\(false\)/);

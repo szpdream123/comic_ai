@@ -169,6 +169,11 @@ test("Director host writeback chains upload, Artifact append, stable node patch,
       calls.push(["save", this.ui.canvasDocument]);
       return { canvasProjectId: "canvas-director", serverRevision: 8 };
     },
+    newCanvasInstance: {
+      async update(input) {
+        calls.push(["runtime-update", input]);
+      },
+    },
   };
 
   const result = await appendCanvasDirectorCapture(workbench, originalDocument.nodes[0], file, {
@@ -176,7 +181,7 @@ test("Director host writeback chains upload, Artifact append, stable node patch,
     media: "reference-video",
   });
 
-  assert.deepEqual(calls.map(([name]) => name), ["upload", "append", "update", "save"]);
+  assert.deepEqual(calls.map(([name]) => name), ["upload", "append", "update", "save", "runtime-update"]);
   assert.equal(calls[0][2].category, "canvas-director-capture");
   assert.equal(calls[1][3].directorDeskKey, "desk-1");
   assert.equal(calls[1][3].storageObjectId, "storage-video-1");
@@ -190,8 +195,13 @@ test("Director host writeback chains upload, Artifact append, stable node patch,
   assert.equal(result.node.data.artifactId, "artifact-video-1");
   assert.equal(result.node.data.storageObjectId, "storage-video-1");
   assert.equal(result.node.data.assetVersionId, null);
+  assert.deepEqual(result.node.data.directorCaptureUrls, []);
+  assert.equal(result.node.data.videoUrl, "/api/storage/objects/storage-video-1/content?proxy=1");
   assert.equal(workbench.ui.canvasDocumentsByProject["canvas-director"], result.document);
   assert.equal(originalDocument.nodes[0].data.artifactId, undefined);
+  assert.equal(calls[4][1].document, result.document);
+  assert.equal(calls[4][1].nodeId, "director-node");
+  assert.equal(calls[4][1].hostDocumentSync, false);
 });
 
 test("director desk creation requires an active professional membership", async () => {

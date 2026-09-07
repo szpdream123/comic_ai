@@ -3,7 +3,7 @@ import { t as n } from "./react-dom-BhFnNZvF.js";
 import { t as r } from "./jsx-runtime-BAkIPmuO.js";
 import { n as i, t as a } from "./LazyLoadBoundary-nRnF0yH-.js";
 import { a as o } from "./i18n-on3r1DCI.js";
-import { $t as s, Ai as c, Bi as l, C as u, Ci as d, D as f, Di as p, E as m, Ei as h, F as g, Fi as _, Gi as v, Hi as y, I as b, Ii as x, Ki as S, Kt as C, L as w, Li as T, M as E, Mi as D, Mt as O, Ni as k, Oi as A, Pi as j, R as M, Ri as N, Sn as P, Ti as F, Tr as I, Ui as L, Ut as R, Vi as z, Vt as B, Wi as V, _i as H, ai as U, an as ee, bi as te, ci as ne, cn as re, di as ie, fi as W, gi as ae, ii as oe, ji as se, jt as ce, ki as le, li as ue, mt as de, oi as fe, pi as pe, pr as me, si as G, t as K, ui as he, w as ge, wi as _e, wr as ve, xi as ye, zi as be } from "./useAppStore-BH-MdRLu.js";
+import { $t as s, Ai as c, Bi as l, C as u, Ci as d, D as f, Di as p, E as m, Ei as h, F as g, Fi as _, Gi as v, Hi as y, I as b, Ii as x, Ki as S, Kt as C, L as w, Li as T, Mi as D, Mt as O, Ni as k, Oi as A, Pi as j, R as M, Ri as N, Sn as P, Ti as F, Tr as I, Ui as L, Ut as R, Vi as z, Vt as B, Wi as V, _i as H, ai as U, an as ee, bi as te, ci as ne, cn as re, di as ie, fi as W, gi as ae, ii as oe, ji as se, jt as ce, ki as le, li as ue, mt as de, oi as fe, pi as pe, pr as me, si as G, t as K, ui as he, w as ge, wi as _e, wr as ve, xi as ye, zi as be } from "./useAppStore-BH-MdRLu.js";
 import { _ as xe, a as Se, b as Ce, c as we, d as Te, f as Ee, g as De, i as Oe, l as ke, m as Ae, n as je, o as Me, p as Ne, r as Pe, s as Fe, t as Ie, u as Le, v as Re, y as ze } from "./shotlist-DkMSyocu.js";
 import { a as Be, i as Ve } from "./core-D3lATfku.js";
 import { i as He } from "./dist-js-Cjy7VdJu.js";
@@ -354,16 +354,28 @@ function Gr() {
 	}))), a = K((e) => {
 		let t = e.projects.find((t) => t.id === e.currentProjectId);
 		return t?.parentId ? e.projects.find((e) => e.id === t.parentId)?.name ?? "" : "";
-	}), { projects: s, currentProjectId: c, switchProject: l, deleteProject: u, duplicateProject: d, exportProject: f, openHome: y, openProjects: C } = K(gn((e) => ({
+	}), { projects: s, currentProjectId: c, switchProject: l, deleteProject: u, duplicateProject: d, exportProject: f, renameProject: A, openHome: y, openProjects: C } = K(gn((e) => ({
 		projects: e.projects,
 		currentProjectId: e.currentProjectId,
 		switchProject: e.switchProject,
 		deleteProject: e.deleteProject,
 		duplicateProject: e.duplicateProject,
 		exportProject: e.exportProject,
+		renameProject: e.renameProject,
 		openHome: e.openHome,
 		openProjects: e.openProjects
+	}))), { helpOpen: E, setHelpOpen: D } = K(gn((e) => ({
+		helpOpen: e.helpOpen,
+		setHelpOpen: e.setHelpOpen
 	}))), [p, m] = (0, Q.useState)(!1), [h, g] = (0, Q.useState)(!1), [_, v] = (0, Q.useState)(!1);
+	(0, Q.useEffect)(() => {
+		let e = (e) => {
+			let t = e.target;
+			t?.closest?.(".app-header-brand, .app-brand-menu") || g(!1);
+			t?.closest?.(".app-header-project-switch, .app-canvas-project-menu, .app-canvas-project-actions-menu") || (m(!1), v(!1));
+		};
+		return document.addEventListener("pointerdown", e, !0), () => document.removeEventListener("pointerdown", e, !0);
+	}, []);
 	let b = s.find((e) => e.id === c) ?? null;
 	let x = (e) => {
 		m(!1), g(!1), v(!1), l && void l(e);
@@ -378,14 +390,20 @@ function Gr() {
 	let T = (e) => {
 		m(!1), g(!1), v(!1), f && void f(e);
 	};
+	let M = (e) => {
+		m(!1), g(!1), v(!1);
+		let t = new URL(window.location.href);
+		t.searchParams.set("canvasProjectId", e), window.open?.(t.toString(), "_blank", "noopener");
+	};
+	let N = typeof _ == "string" ? s.find((e) => e.id === _) ?? null : null;
 	return /* @__PURE__ */ (0, Z.jsxs)("header", {
 		"data-tauri-drag-region": !0,
-		className: `app-header absolute top-2 z-40 flex items-center gap-1 px-2 py-2
+		className: `app-header absolute top-2 z-40 flex items-center
                   bg-canvas-surface/60 backdrop-blur-xl border border-canvas-border rounded-[14px]
                   shadow-lg shadow-black/30 select-none ${Ur && Wr ? "right-2" : "left-2"}`,
 		children: [
 			/* @__PURE__ */ (0, Z.jsxs)("div", {
-				className: "app-brand flex items-center gap-2 pr-1 cursor-pointer",
+				className: "app-brand app-header-brand flex items-center gap-2 pr-1 cursor-pointer",
 				onClick: () => g((e) => !e),
 				role: "button",
 				tabIndex: 0,
@@ -484,52 +502,54 @@ function Gr() {
 				}), /* @__PURE__ */ (0, Z.jsx)("span", {
 					className: "text-[11px] font-semibold text-canvas-text/90",
 					children: "灵曦AI"
+				}), /* @__PURE__ */ (0, Z.jsx)(X, {
+					icon: "lucide:chevron-down",
+					className: "h-3 w-3 text-canvas-text-muted"
 				})]
 			}),
-			h ? /* @__PURE__ */ (0, Z.jsxs)("div", {
-				className: "absolute left-2 top-[calc(100%+6px)] z-[80] min-w-[150px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
+				h ? /* @__PURE__ */ (0, Z.jsxs)("div", {
+				className: "app-brand-menu absolute left-2 top-[calc(100%+6px)] z-[80] min-w-[150px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
 				role: "menu",
 				children: [
 					/* @__PURE__ */ (0, Z.jsx)("button", {
 						type: "button",
-						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+					className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
 						onClick: () => {
 							g(!1), y && void y();
 						},
-						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:home", className: "h-3.5 w-3.5" }), "回到主页"]
+					children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:home", className: "h-3.5 w-3.5" }), "回到主页"]
 					}),
 					/* @__PURE__ */ (0, Z.jsx)("button", {
 						type: "button",
-						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+					className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
 						onClick: () => {
 							g(!1), C && void C();
 						},
-						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:layout-grid", className: "h-3.5 w-3.5" }), "全部项目"]
+					children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:layout-grid", className: "h-3.5 w-3.5" }), "全部项目"]
 					}),
 					/* @__PURE__ */ (0, Z.jsx)("button", {
 						type: "button",
-						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+					className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
 						onClick: () => {
 							g(!1), r && void r();
 						},
-						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:folder-plus", className: "h-3.5 w-3.5" }), "创建新项目"]
-					}),
-					b ? /* @__PURE__ */ (0, Z.jsx)("button", {
+					children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:folder-plus", className: "h-3.5 w-3.5" }), "创建新项目"]
+				}),
+				b ? /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)("div", {
+					className: "my-1 h-px bg-canvas-border"
+				}), /* @__PURE__ */ (0, Z.jsx)("button", {
 						type: "button",
-						className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-red-300 hover:bg-red-500/10",
+					className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-red-300 hover:bg-red-500/10",
 						onClick: () => S(b.id),
-						children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:trash-2", className: "h-3.5 w-3.5" }), "删除项目"]
-					}) : null
+					children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:trash-2", className: "h-3.5 w-3.5" }), "删除项目"]
+					})] }) : null
 				]
 			}) : null,
-			/* @__PURE__ */ (0, Z.jsx)("div", { className: "w-px h-4 bg-[var(--separator-color)] mx-0.5" }),
+			/* @__PURE__ */ (0, Z.jsx)("div", { className: "app-header-divider" }),
 			a && /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)("span", {
-				className: "max-w-[110px] truncate pl-2 text-[11px] text-canvas-text-secondary/70",
+				className: "app-header-parent-name",
 				children: a
-			}), /* @__PURE__ */ (0, Z.jsx)("span", {
-				className: "text-[11px] text-canvas-text-muted",
-				children: "-"
-			})] }),
+			}), /* @__PURE__ */ (0, Z.jsx)("div", { className: "app-header-divider" })] }),
 			/* @__PURE__ */ (0, Z.jsx)("div", {
 				contentEditable: !0,
 				suppressContentEditableWarning: !0,
@@ -540,7 +560,7 @@ function Gr() {
 				onKeyDown: (e) => {
 					e.key === "Enter" && (e.preventDefault(), e.target.blur());
 				},
-				className: `text-[11px] text-canvas-text-secondary/80 ${a ? "pl-1 pr-2" : "px-2"} py-0.5 rounded-md
+				className: `app-header-canvas-name text-[11px] text-canvas-text-secondary/80 ${a ? "pl-1 pr-2" : "px-2"} py-0.5 rounded-md
                    hover:bg-canvas-hover outline-none cursor-text min-w-[50px] max-w-[140px] truncate
                    focus:text-canvas-text/90 transition-colors`,
 				children: t
@@ -549,78 +569,111 @@ function Gr() {
 				type: "button",
 				"aria-label": "切换项目",
 				"aria-expanded": p,
+				disabled: i,
 				onClick: (e) => {
 					e.stopPropagation(), m((e) => !e), g(!1), v(!1);
 				},
-				className: "grid h-6 w-6 place-items-center rounded-md text-canvas-text-muted hover:bg-canvas-hover hover:text-canvas-text",
+				className: "app-header-project-switch grid h-6 w-6 place-items-center rounded-md text-canvas-text-muted hover:bg-canvas-hover hover:text-canvas-text",
 				children: /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:chevron-down", className: "h-3.5 w-3.5" })
 			}),
 			p ? /* @__PURE__ */ (0, Z.jsx)("div", {
-				className: "absolute left-24 top-[calc(100%+6px)] z-[80] min-w-[190px] max-w-[260px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
+				className: "app-canvas-project-menu",
 				role: "menu",
-				children: s.length === 0 ? /* @__PURE__ */ (0, Z.jsx)("div", {
-					className: "px-2.5 py-2 text-xs text-canvas-text-muted",
-					children: "暂无项目"
-				}) : s.map((e) => /* @__PURE__ */ (0, Z.jsx)("button", {
-					type: "button",
-					className: `flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs ${e.id === c ? "bg-indigo-500/15 text-canvas-text" : "text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text"}`,
-					onClick: () => x(e.id),
-					children: [/* @__PURE__ */ (0, Z.jsx)("span", { className: "min-w-0 truncate", children: e.name }), e.id === c ? /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:check", className: "h-3.5 w-3.5 shrink-0 text-indigo-400" }) : null]
-				}, e.id))
+				children: [/* @__PURE__ */ (0, Z.jsxs)("div", {
+					className: "app-canvas-project-menu-title",
+					children: [/* @__PURE__ */ (0, Z.jsx)("span", { children: i ? "正在新建画布" : "画布" }), /* @__PURE__ */ (0, Z.jsx)("button", {
+						type: "button",
+						"aria-label": e(i ? "正在新建画布" : "新建画布"),
+						disabled: i,
+						className: "app-canvas-project-create",
+						onClick: async () => {
+							g(!1), v(!1);
+							let e = await r?.();
+							e && m(!1);
+						},
+						children: i ? /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:loader-circle", className: "h-5 w-5 animate-spin" }) : /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:plus", className: "h-5 w-5" })
+					})]
+				}), /* @__PURE__ */ (0, Z.jsx)("div", {
+					className: "app-canvas-project-list",
+					children: s.length === 0 ? /* @__PURE__ */ (0, Z.jsx)("div", {
+						className: "app-canvas-project-empty",
+						children: "暂无画布"
+					}) : s.map((e) => /* @__PURE__ */ (0, Z.jsxs)("div", {
+						className: `app-canvas-project-row ${e.id === c ? "is-current" : ""}`,
+						children: [/* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							className: "app-canvas-project-select",
+							disabled: i,
+							onClick: () => x(e.id),
+							children: [/* @__PURE__ */ (0, Z.jsx)("span", { className: "min-w-0 truncate", children: e.name }), e.id === c ? /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:check", className: "app-canvas-project-check" }) : null]
+						}), /* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							"aria-label": `画布操作：${e.name}`,
+							className: "app-canvas-project-more",
+							disabled: i,
+							onClick: (t) => {
+								t.stopPropagation(), v((t) => t === e.id ? !1 : e.id), g(!1);
+							},
+							children: /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:more-horizontal", className: "h-5 w-5" })
+						})]
+					}, e.id))
+				})]
 			}) : null,
-			b ? /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, {
-				children: [/* @__PURE__ */ (0, Z.jsx)(J.button, {
-					type: "button",
-					"aria-label": "项目操作",
-					"aria-expanded": _,
-					onClick: (e) => {
-						e.stopPropagation(), v((e) => !e), m(!1), g(!1);
-					},
-					className: "grid h-6 w-6 place-items-center rounded-md text-canvas-text-muted hover:bg-canvas-hover hover:text-canvas-text",
-					children: /* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:more-horizontal", className: "h-3.5 w-3.5" })
-				}),
-				_ ? /* @__PURE__ */ (0, Z.jsxs)("div", {
-					className: "absolute left-[180px] top-[calc(100%+6px)] z-[80] min-w-[150px] rounded-lg border border-canvas-border bg-canvas-surface/95 p-1 shadow-xl shadow-black/30 backdrop-blur-xl",
+			/* @__PURE__ */ (0, Z.jsx)("div", { className: "app-header-divider" }),
+			/* @__PURE__ */ (0, Z.jsxs)("button", {
+				type: "button",
+				className: `app-header-help${E ? " is-active" : ""}`,
+				"aria-label": "使用帮助",
+				"aria-expanded": E,
+				onClick: () => D(!E),
+				children: [/* @__PURE__ */ (0, Z.jsx)(X, {
+					icon: "mdi:book-open-page-variant-outline",
+					width: "18",
+					height: "18",
+					"aria-hidden": "true"
+				}), "使用帮助"]
+			}),
+			N ? /* @__PURE__ */ (0, Z.jsxs)("div", {
+					className: "app-canvas-project-actions-menu",
 					role: "menu",
 					children: [
 						/* @__PURE__ */ (0, Z.jsx)("button", {
 							type: "button",
-							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
+							className: "app-canvas-project-action",
+							onClick: () => M(N.id),
+							children: "在新窗口打开"
+						}),
+						/* @__PURE__ */ (0, Z.jsx)("button", {
+							type: "button",
+							className: "app-canvas-project-action",
 							onClick: () => {
 								v(!1);
-								let e = window.prompt?.("项目名称", t);
-								e?.trim() && n(e.trim());
+								let e = window.prompt?.("画布名称", N.name);
+								e?.trim() && A && void A(N.id, e.trim());
 							},
-							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:pencil", className: "h-3.5 w-3.5" }), "重命名项目"]
+							children: "重命名画布"
 						}),
 						/* @__PURE__ */ (0, Z.jsx)("button", {
 							type: "button",
-							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
-							onClick: () => w(b.id),
-							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:copy", className: "h-3.5 w-3.5" }), "复制项目"]
+							className: "app-canvas-project-action",
+							onClick: () => w(N.id),
+							children: "复制画布"
 						}),
 						/* @__PURE__ */ (0, Z.jsx)("button", {
 							type: "button",
-							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-canvas-text-secondary hover:bg-canvas-hover hover:text-canvas-text",
-							onClick: () => T(b.id),
-							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:download", className: "h-3.5 w-3.5" }), "导出项目"]
-						}),
-						/* @__PURE__ */ (0, Z.jsx)("button", {
-							type: "button",
-							className: "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-red-300 hover:bg-red-500/10",
-							onClick: () => S(b.id),
-							children: [/* @__PURE__ */ (0, Z.jsx)(X, { icon: "lucide:trash-2", className: "h-3.5 w-3.5" }), "删除项目"]
+							className: "app-canvas-project-action is-danger",
+							onClick: () => S(N.id),
+							children: "删除画布"
 						})
 					]
-				}) : null]
-			}) : null,
-			/* @__PURE__ */ (0, Z.jsx)("div", { className: "w-px h-4 bg-[var(--separator-color)] mx-0.5" }),
+				}) : null,
+			/* @__PURE__ */ (0, Z.jsx)("div", { className: "app-header-create-divider" }),
 			/* @__PURE__ */ (0, Z.jsx)(J.button, {
 				type: "button",
 				"aria-label": e(i ? "正在新建画布" : "新建画布"),
 				onClick: () => void r(),
 				disabled: i,
-				className: "w-7 h-7 rounded-lg hover:bg-canvas-hover flex items-center justify-center\n                   text-canvas-text-secondary hover:text-canvas-text disabled:cursor-not-allowed disabled:opacity-50",
+				className: "app-header-create-canvas w-7 h-7 rounded-lg hover:bg-canvas-hover flex items-center justify-center\n                   text-canvas-text-secondary hover:text-canvas-text disabled:cursor-not-allowed disabled:opacity-50",
 				"data-tooltip": e(i ? "正在新建画布" : "新建画布"),
 				whileHover: i ? void 0 : { scale: 1.1 },
 				whileTap: i ? void 0 : { scale: .92 },
@@ -4309,39 +4362,8 @@ function Xi({ isOpen: e, onClose: t }) {
 	});
 }
 //#endregion
-//#region src/utils/styleGuideWindow.ts
-var Zi = "style-guide", Qi = "index.html?view=style-guide";
-async function $i() {
-	if (typeof window > "u" || !("__TAURI__" in window)) {
-		window.open(Qi, "_blank", "noopener");
-		return;
-	}
-	try {
-		let { WebviewWindow: e } = await import("./webviewWindow-DrkgzeEA.js"), t = await e.getByLabel(Zi);
-		if (t) {
-			await t.show().catch(() => {}), await t.unminimize().catch(() => {}), await t.setFocus().catch(() => {});
-			return;
-		}
-		new e(Zi, {
-			url: Qi,
-			title: "样式预览 · UI Kit",
-			width: 1180,
-			height: 820,
-			minWidth: 720,
-			minHeight: 480,
-			center: !0,
-			resizable: !0,
-			decorations: !1,
-			transparent: !0,
-			shadow: !1
-		}).once("tauri://error", (e) => console.error("[styleGuideWindow] 创建窗口失败:", e));
-	} catch (e) {
-		console.warn("[styleGuideWindow] 打开样式预览窗口失败:", e);
-	}
-}
-//#endregion
 //#region src/components/Sidebar.tsx
-var ea = (0, Q.lazy)(() => import("./HelpCenterDialog-C0H96YZn.js")), ta = 4, na = 1200, ra = [
+var ea = (0, Q.lazy)(() => import("./HelpCenterDialog-C0H96YZn.js")), ra = [
 	{
 		type: "ai-text",
 		label: "生成文本",
@@ -4654,33 +4676,8 @@ function oa() {
 		setSettingsOpen: e.setSettingsOpen,
 		helpOpen: e.helpOpen,
 		setHelpOpen: e.setHelpOpen
-	}))), l = (0, Q.useRef)(null), [u, d] = (0, Q.useState)(!1), f = (0, Q.useRef)(0), p = (0, Q.useRef)(null), [m, h] = (0, Q.useState)("0.1.0"), [g, _] = (0, Q.useState)("idle"), [v, y] = (0, Q.useState)(""), [b, x] = (0, Q.useState)(""), S = async () => {
-		_("checking"), y("");
-		try {
-			let t = await Hi();
-			t.available ? (_("available"), x(t.version), y(e("发现新版本 v{version}", { version: t.version }))) : (_("no-update"), y(e("已是最新版本")));
-		} catch {
-			_("error"), y(e("检查失败，请稍后重试"));
-		}
-	}, C = async () => {
-		_("updating"), y(e("正在下载更新...")), await Ui() || (_("error"), y(e("下载失败，请稍后重试")));
-	};
-	(0, Q.useEffect)(() => {
-		E().then(h).catch(() => {});
-	}, []);
-	let w = (0, Q.useCallback)(() => {
-		let t = f.current + 1;
-		if (f.current = t, p.current && clearTimeout(p.current), t >= ta) {
-			f.current = 0, p.current = null, d(!1), $i(), K.getState().showToast(e("已打开样式预览窗口"));
-			return;
-		}
-		p.current = setTimeout(() => {
-			f.current = 0, p.current = null;
-		}, na);
-	}, [e]);
-	return (0, Q.useEffect)(() => () => {
-		p.current && clearTimeout(p.current);
-	}, []), (0, Q.useEffect)(() => {
+	}))), l = (0, Q.useRef)(null);
+	return (0, Q.useEffect)(() => {
 		if (!t) return;
 		let e = (e) => {
 			let t = document.getElementById("btn-user-gear");
@@ -4751,40 +4748,6 @@ function oa() {
 						height: "16",
 						"aria-hidden": "true"
 					}), e("帮助")]
-				}),
-				/* @__PURE__ */ (0, Z.jsxs)(Y, {
-					type: "button",
-					className: "avatar-menu-item",
-					onClick: () => {
-						d(!0), n();
-					},
-					children: [/* @__PURE__ */ (0, Z.jsxs)("svg", {
-						width: "15",
-						height: "15",
-						viewBox: "0 0 24 24",
-						fill: "none",
-						stroke: "currentColor",
-						strokeWidth: "2",
-						children: [
-							/* @__PURE__ */ (0, Z.jsx)("circle", {
-								cx: "12",
-								cy: "12",
-								r: "10"
-							}),
-							/* @__PURE__ */ (0, Z.jsx)("line", {
-								x1: "12",
-								y1: "16",
-								x2: "12",
-								y2: "12"
-							}),
-							/* @__PURE__ */ (0, Z.jsx)("line", {
-								x1: "12",
-								y1: "8",
-								x2: "12.01",
-								y2: "8"
-							})
-						]
-					}), e("关于")]
 				})
 			]
 		}) }),
@@ -4795,178 +4758,6 @@ function oa() {
 				children: /* @__PURE__ */ (0, Z.jsx)(ea, { onClose: () => c(!1) })
 			})
 		}) : null,
-		(0, ni.createPortal)(/* @__PURE__ */ (0, Z.jsx)(Rt, {
-			isOpen: u,
-			onClose: () => d(!1),
-			ariaLabel: e("关于 AI Canvas"),
-			className: "w-[420px] max-h-[85vh] overflow-y-auto",
-			children: /* @__PURE__ */ (0, Z.jsxs)("div", {
-				className: "p-3 space-y-3",
-				children: [
-					/* @__PURE__ */ (0, Z.jsxs)("div", {
-						className: "flex items-center gap-4",
-						children: [/* @__PURE__ */ (0, Z.jsx)("button", {
-							type: "button",
-							onClick: w,
-							className: "flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-indigo-500/20 transition-transform active:scale-95",
-							"aria-label": e("AI Canvas"),
-							children: /* @__PURE__ */ (0, Z.jsx)("img", {
-								src: "/icons.svg",
-								alt: ""
-							})
-						}), /* @__PURE__ */ (0, Z.jsxs)("div", { children: [
-							/* @__PURE__ */ (0, Z.jsx)("h2", {
-								className: "text-lg font-semibold text-canvas-text",
-								children: "AI Canvas"
-							}),
-							/* @__PURE__ */ (0, Z.jsxs)("p", {
-								className: "text-xs text-canvas-text-secondary",
-								children: [
-									"v",
-									m,
-									" · ",
-									e("开发预览版")
-								]
-							}),
-							/* @__PURE__ */ (0, Z.jsx)("button", {
-								onClick: g === "available" ? C : S,
-								disabled: g === "checking" || g === "updating",
-								className: "mt-1 inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 disabled:text-canvas-text-muted transition-colors",
-								children: g === "checking" ? /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)(X, {
-									icon: "svg-spinners:90-ring",
-									width: "12",
-									height: "12"
-								}), e("检查中...")] }) : g === "updating" ? /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)(X, {
-									icon: "svg-spinners:90-ring",
-									width: "12",
-									height: "12"
-								}), e("下载中...")] }) : g === "no-update" && v ? v : g === "available" ? e("发现 v{version}，点击更新", { version: b }) : g === "error" ? v : e("检查更新")
-							})
-						] })]
-					}),
-					/* @__PURE__ */ (0, Z.jsx)("p", {
-						className: "text-sm text-canvas-text-secondary leading-relaxed",
-						children: e("AI Canvas 是一个智能多媒体创意画布，通过可视化节点编排的方式，调用多种 AI 模型来生成文本、图像、视频和音频内容。支持多厂商模型接入、ComfyUI 工作流、本地文件管理与实时协作。")
-					}),
-					/* @__PURE__ */ (0, Z.jsxs)("div", {
-						className: "space-y-2",
-						children: [/* @__PURE__ */ (0, Z.jsx)("h3", {
-							className: "text-xs font-semibold uppercase text-canvas-text-muted",
-							children: e("核心能力")
-						}), /* @__PURE__ */ (0, Z.jsx)("div", {
-							className: "grid grid-cols-2 gap-2",
-							children: [
-								{
-									label: "AI 文本生成",
-									color: "bg-indigo-500/20 text-indigo-400"
-								},
-								{
-									label: "AI 图像生成",
-									color: "bg-green-500/20 text-green-400"
-								},
-								{
-									label: "AI 视频生成",
-									color: "bg-blue-500/20 text-blue-400"
-								},
-								{
-									label: "AI 音频生成",
-									color: "bg-orange-500/20 text-orange-400"
-								},
-								{
-									label: "ComfyUI 工作流",
-									color: "bg-purple-500/20 text-purple-400"
-								},
-								{
-									label: "节点分组管理",
-									color: "bg-cyan-500/20 text-cyan-400"
-								},
-								{
-									label: "画布无限缩放",
-									color: "bg-pink-500/20 text-pink-400"
-								},
-								{
-									label: "本地文件读写",
-									color: "bg-yellow-500/20 text-yellow-400"
-								}
-							].map(({ label: t, color: n }) => /* @__PURE__ */ (0, Z.jsx)("span", {
-								className: `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium ${n}`,
-								children: e(t)
-							}, t))
-						})]
-					}),
-					/* @__PURE__ */ (0, Z.jsx)("div", { className: "border-t border-canvas-border" }),
-					/* @__PURE__ */ (0, Z.jsxs)("div", {
-						className: "space-y-2",
-						children: [/* @__PURE__ */ (0, Z.jsx)("h3", {
-							className: "text-xs font-semibold uppercase text-canvas-text-muted",
-							children: e("技术栈")
-						}), /* @__PURE__ */ (0, Z.jsx)("div", {
-							className: "flex flex-wrap gap-1.5",
-							children: [
-								"Tauri 2",
-								"React 19",
-								"React Flow 12",
-								"TypeScript",
-								"Zustand 5",
-								"Tailwind CSS 3",
-								"Vite 8"
-							].map((e) => /* @__PURE__ */ (0, Z.jsx)("span", {
-								className: "px-2.5 py-1 rounded-md bg-canvas-hover text-xs text-canvas-text-secondary",
-								children: e
-							}, e))
-						})]
-					}),
-					/* @__PURE__ */ (0, Z.jsxs)("div", {
-						className: "space-y-2",
-						children: [/* @__PURE__ */ (0, Z.jsx)("h3", {
-							className: "text-xs font-semibold uppercase text-canvas-text-muted",
-							children: e("社区")
-						}), /* @__PURE__ */ (0, Z.jsxs)("div", {
-							className: "flex flex-col gap-2",
-							children: [/* @__PURE__ */ (0, Z.jsxs)("a", {
-								href: "https://github.com/Tenney95/AI-Canvas-tauri",
-								target: "_blank",
-								rel: "noopener noreferrer",
-								className: "inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-canvas-hover hover:bg-canvas-border transition-colors text-xs text-canvas-text-secondary hover:text-canvas-text",
-								children: [/* @__PURE__ */ (0, Z.jsx)("svg", {
-									width: "14",
-									height: "14",
-									viewBox: "0 0 24 24",
-									fill: "currentColor",
-									children: /* @__PURE__ */ (0, Z.jsx)("path", { d: "M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" })
-								}), "GitHub"]
-							}), /* @__PURE__ */ (0, Z.jsxs)("button", {
-								type: "button",
-								onClick: () => {
-									navigator.clipboard?.writeText("873354155").catch(() => {}), K.getState().showToast(e("已复制 QQ 群号：873354155"));
-								},
-								className: "inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-canvas-hover hover:bg-canvas-border transition-colors text-xs text-canvas-text-secondary hover:text-canvas-text text-left cursor-pointer",
-								"data-tooltip": e("点击复制 QQ 群号"),
-								children: [/* @__PURE__ */ (0, Z.jsx)("svg", {
-									width: "14",
-									height: "14",
-									viewBox: "0 0 24 24",
-									fill: "currentColor",
-									children: /* @__PURE__ */ (0, Z.jsx)("path", { d: "M21.395 15.035a39.548 39.548 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a38.97 38.97 0 0 0-.802 2.264c-1.021 3.283-1.045 4.643-1.045 4.643 0 1.706 1.036 2.841 2.439 2.841.808 0 1.258-.387 1.85-.92.228-.206.463-.372.708-.498.449-.23 1.022-.405 1.719-.479 1.087-.116 3.274-.464 5.223-.464h.001c1.949 0 4.136.348 5.223.464.697.074 1.27.249 1.719.479.245.126.48.292.708.498.592.533 1.042.92 1.85.92 1.403 0 2.439-1.135 2.439-2.841 0 0-.025-1.361-1.046-4.643z" })
-								}), e("QQ 群：873354155")]
-							})]
-						})]
-					}),
-					/* @__PURE__ */ (0, Z.jsxs)("div", {
-						className: "pt-2 flex items-center justify-between border-t border-canvas-border",
-						children: [/* @__PURE__ */ (0, Z.jsx)("span", {
-							className: "text-[11px] text-canvas-text-muted",
-							children: "© 2026 AI Canvas Team"
-						}), /* @__PURE__ */ (0, Z.jsx)(Y, {
-							type: "button",
-							className: "px-3 py-1.5 text-xs font-medium text-canvas-text bg-canvas-hover hover:bg-canvas-border rounded-lg transition-colors",
-							onClick: () => d(!1),
-							children: e("知道了")
-						})]
-					})
-				]
-			})
-		}), document.body)
 	] });
 }
 function sa() {
@@ -13127,7 +12918,11 @@ function Dl({ showGrid: e, smoothLine: t, onToggleGrid: n, onToggleLine: r }) {
 				})
 			}),
 			/* @__PURE__ */ (0, Z.jsx)("div", { className: "w-px h-4 bg-[var(--separator-color)] mx-0.5" }),
-			/* @__PURE__ */ (0, Z.jsx)(El, {})
+			/* @__PURE__ */ (0, Z.jsx)(El, {}),
+			/* @__PURE__ */ (0, Z.jsx)(le, {
+				className: "canvas-controls horizontal !bg-transparent !border-0 !shadow-none !rounded-none overflow-hidden",
+				showInteractive: !1
+			})
 		]
 	});
 }
@@ -14044,7 +13839,7 @@ function ou() {
 			className: "flex flex-col items-center gap-4 opacity-50",
 			children: [
 				/* @__PURE__ */ (0, Z.jsx)("img", {
-					src: "/favicon.svg",
+					src: "/assets/brand/lingxi-ai-favicon.png",
 					alt: "",
 					"aria-hidden": "true",
 					draggable: !1,
@@ -16955,10 +16750,6 @@ function tf() {
 							style: Yd,
 							className: "!bottom-12 !right-1 max-[900px]:!bottom-28"
 						}), /* @__PURE__ */ (0, Z.jsx)(Vl, {})] }),
-						/* @__PURE__ */ (0, Z.jsx)(le, {
-							className: "canvas-controls !bg-canvas-card !border-canvas-border !shadow-lg !rounded-xl overflow-hidden",
-							showInteractive: !1
-						}),
 						/* @__PURE__ */ (0, Z.jsx)(k, {
 							position: "top-right",
 							className: "canvas-history-slot",
@@ -16967,39 +16758,41 @@ function tf() {
 						b && /* @__PURE__ */ (0, Z.jsx)(k, {
 							position: "bottom-left",
 							className: "canvas-drawing-toolbar-slot canvas-drawing-ui",
-							children: /* @__PURE__ */ (0, Z.jsx)(jl, {
-								activeTool: ue,
-								imageReady: !!me,
-								interactionMode: g === "classic" ? "classic" : "default",
-								onToggleInteractionMode: w,
-								onSelectTool: de
-							})
-						}),
-						pe && /* @__PURE__ */ (0, Z.jsx)(k, {
-							position: "top-left",
-							className: "canvas-note-style-panel-slot canvas-drawing-ui",
-							children: /* @__PURE__ */ (0, Z.jsx)(Ll, {
-								note: pe,
-								selected: !!fe,
-								onPatch: (e) => {
-									he(e);
-								},
-								onTransientPatch: (e) => {
-									he(e, !0);
-								},
-								onBeginChange: ge,
-								onEndChange: _e,
-								onDuplicate: () => {
-									ve();
-								},
-								onDelete: () => {
-									ye();
-								},
-								onMoveLayer: (e) => {
-									xe(e);
-								},
-								onCrop: Se
-							}, fe?.id ?? ue)
+							children: /* @__PURE__ */ (0, Z.jsx)("div", { className: "canvas-drawing-toolbar-wrap", children: [
+								/* @__PURE__ */ (0, Z.jsx)(jl, {
+									activeTool: ue,
+									imageReady: !!me,
+									interactionMode: g === "classic" ? "classic" : "default",
+									onToggleInteractionMode: w,
+									onSelectTool: de
+								}),
+								pe && /* @__PURE__ */ (0, Z.jsx)("div", {
+									className: `canvas-note-style-panel-anchor is-tool-${ue}`,
+									style: { "--canvas-note-tool-index": Math.max(0, kl.findIndex((tool) => tool.id === ue) + 1) },
+									children: /* @__PURE__ */ (0, Z.jsx)(Ll, {
+										note: pe,
+										selected: !!fe,
+										onPatch: (e) => {
+											he(e);
+										},
+										onTransientPatch: (e) => {
+											he(e, !0);
+										},
+										onBeginChange: ge,
+										onEndChange: _e,
+										onDuplicate: () => {
+											ve();
+										},
+										onDelete: () => {
+											ye();
+										},
+										onMoveLayer: (e) => {
+											xe(e);
+										},
+										onCrop: Se
+									}, fe?.id ?? ue)
+								})
+							] })
 						}),
 						/* @__PURE__ */ (0, Z.jsx)(k, {
 							position: "bottom-right",

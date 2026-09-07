@@ -242,6 +242,16 @@ export async function appendCanvasDirectorCapture(workbench, activeNode, file, m
     if (!saved) throw new Error("canvas_director_capture_save_failed");
   }
   refreshCanvasWorkflowNode(workbench, nodeKey);
+  if (typeof workbench.newCanvasInstance?.update === "function") {
+    await workbench.newCanvasInstance.update({
+      document: nextDocument,
+      nodeOnly: true,
+      nodeId: nodeKey,
+      hostDocumentSync: false,
+    });
+  } else {
+    await workbench.refreshCanvasSurface?.();
+  }
   return {
     capture,
     node: nextDocument.nodes.find((item) => item.id === nodeKey) ?? activeNode,

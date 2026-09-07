@@ -19,7 +19,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-04";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -117,6 +117,10 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
   const originalConfig = originalState?.config;
   const originalSkills = originalState?.userSkills;
   const backendProviderId = "comic-ai-backend";
+  const backendProjectId = String(context.currentProjectId ?? context.canvasProjectId ?? "").trim();
+  const backendBaseUrl = backendProjectId && typeof location !== "undefined"
+    ? `${location.origin}/api/canvas/${encodeURIComponent(backendProjectId)}/assistant`
+    : "";
   const sanitizeCatalogValue = (value) => {
     if (Array.isArray(value)) return value.map(sanitizeCatalogValue);
     if (!value || typeof value !== "object") return value;
@@ -129,6 +133,8 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       const code = String(model?.modelCode ?? model?.model_code ?? model?.modelId ?? model?.model_id ?? model?.code ?? model?.id ?? "").trim();
       if (!code) return null;
       const category = String(model?.category ?? model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "text").trim().toLowerCase();
+      const modelLabel = String(model?.modelLabel ?? model?.model_label ?? model?.displayName ?? model?.display_name ?? model?.displayModelName ?? model?.modelName ?? model?.model_name ?? model?.name ?? model?.label ?? "").trim();
+      const modelName = String(model?.displayName ?? model?.display_name ?? model?.displayModelName ?? model?.modelName ?? model?.model_name ?? model?.name ?? model?.label ?? code).trim() || code;
       const schema = model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
         ? model.parameterSchema
         : {};
@@ -143,7 +149,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       const defaults = model?.defaultParams && typeof model.defaultParams === "object" && !Array.isArray(model.defaultParams) ? model.defaultParams : {};
       return {
         id: `comic-ai/${category}/${code}`,
-        name: String(model?.modelLabel ?? model?.modelName ?? model?.model_name ?? model?.name ?? model?.label ?? code).trim() || code,
+        name: ["文本", "图片", "视频", "音频", "模型"].includes(modelLabel) ? modelName : (modelLabel || modelName),
         modelId: code,
         category: ["image", "video", "audio", "text"].includes(category) ? category : "text",
         providerConfigId: backendProviderId,
@@ -174,7 +180,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       if (!id) return null;
       return {
         id,
-        name: String(skill?.name ?? skill?.title ?? "未命名 Skill").trim() || "未命名 Skill",
+        name: String(skill?.name ?? skill?.title ?? skill?.displayName ?? skill?.display_name ?? skill?.skillName ?? "未命名 Skill").trim() || "未命名 Skill",
         description: String(skill?.description ?? skill?.summary ?? "").trim(),
         summary: String(skill?.summary ?? skill?.description ?? "").trim(),
         category: String(skill?.category ?? "general").trim() || "general",
@@ -195,7 +201,9 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       ? state.config.generalModels.filter((model) => model?.source !== "comic-ai-backend")
       : [];
     const providers = { ...(state?.config?.providers ?? {}) };
-    if (modelCatalog.length) providers[backendProviderId] = { name: "Comic AI 后端", protocol: "backend" };
+    if (modelCatalog.length && backendBaseUrl) {
+      providers[backendProviderId] = { name: "Comic AI 后端", protocol: "backend", baseUrl: backendBaseUrl };
+    }
     try {
       store.setState({
         config: {
@@ -525,6 +533,7 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       throw new Error("ai_canvas_runtime_store_unavailable");
     }
     const originalActions = new Map();
+    const addedActions = new Set();
     const actionHandlers = {
       switchProject: typeof context.onSwitchProject === "function"
         ? async (projectId, ...args) => {
@@ -557,19 +566,28 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       if (next.currentProjectId !== undefined) {
         currentProjectId = String(next.currentProjectId ?? "").trim();
       }
-      const projects = projectCatalog;
-      const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0];
       const state = store.getState();
+      const existingProjects = Array.isArray(state.projects) ? state.projects : [];
+      const projects = projectCatalog.map((project) => {
+        const existing = existingProjects.find((item) => item?.id === project.id);
+        const settings = project.settings ?? existing?.settings;
+        return settings && typeof settings === "object"
+          ? { ...project, settings }
+          : project;
+      });
+      const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0];
       const resolvedCurrentProjectId = currentProject?.id ?? currentProjectId ?? state.currentProjectId ?? null;
       const patch = {
         projects,
         currentProjectId: resolvedCurrentProjectId,
         projectName: currentProject?.name ?? state.projectName ?? "",
+        switchingProjectName: null,
         ...(next.document !== undefined ? { projectLoadStatus: "ready" } : {}),
       };
       if (
         state.currentProjectId === patch.currentProjectId
         && state.projectName === patch.projectName
+        && state.switchingProjectName === null
         && Array.isArray(state.projects)
         && state.projects.length === projects.length
         && state.projects.every((project, index) => project.id === projects[index].id && project.name === projects[index].name)
@@ -587,6 +605,7 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
     for (const [name, handler] of Object.entries(actionHandlers)) {
       if (typeof handler !== "function") continue;
       if (typeof originalState[name] === "function") originalActions.set(name, originalState[name]);
+      else addedActions.add(name);
       store.setState({
         [name]: async (...args) => handler(...args),
       });
@@ -612,7 +631,11 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       },
       dispose() {
         unsubscribe?.();
-        if (originalActions.size) store.setState(Object.fromEntries(originalActions));
+        if (originalActions.size || addedActions.size) {
+          const restored = Object.fromEntries(originalActions);
+          for (const name of addedActions) restored[name] = undefined;
+          store.setState(restored);
+        }
       },
     };
   } catch (error) {
@@ -687,7 +710,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css";
+      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-04";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -703,9 +726,6 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           width: 100% !important;
           height: 100% !important;
           min-height: 0 !important;
-        }
-        .new-canvas-root .canvas-controls {
-          display: none !important;
         }
         .app-header {
           gap: 4px !important;
@@ -753,6 +773,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           width: 24px !important;
           height: 24px !important;
         }
+        .new-canvas-root .sidebar-floating {
+          transition: none !important;
+        }
         .new-canvas-root .app-shell:has(.chat-panel) .sidebar-floating {
           right: calc(var(--chat-panel-width, 600px) + 24px) !important;
         }
@@ -775,6 +798,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         .sidebar-floating .sidebar-btn-v3 svg {
           width: 24px !important;
           height: 24px !important;
+        }
+        .new-canvas-root .sidebar-floating {
+          transition: none !important;
         }
         .app-shell:has(.chat-panel) .sidebar-floating {
           right: calc(var(--chat-panel-width, 600px) + 24px) !important;
@@ -813,6 +839,24 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           width: auto !important;
           font-size: 14px !important;
         }
+        .new-canvas-root .footer-toolbar .canvas-controls {
+          position: static !important;
+          inset: auto !important;
+          margin: 0 !important;
+          transform: none !important;
+          display: flex !important;
+          flex-direction: row !important;
+          background: transparent !important;
+          border: 0 !important;
+          border-radius: 0 !important;
+          box-shadow: none !important;
+        }
+        .new-canvas-root .footer-toolbar .react-flow__panel:has(> .canvas-controls) {
+          position: static !important;
+          inset: auto !important;
+          margin: 0 !important;
+          transform: none !important;
+        }
         .new-canvas-root .canvas-drawing-toolbar {
           gap: 6px !important;
           padding: 6px !important;
@@ -830,10 +874,30 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           left: 50% !important;
           bottom: 12px !important;
           transform: translateX(-50%) !important;
+          width: max-content !important;
+          height: auto !important;
+          margin: 0 !important;
         }
-        .new-canvas-root .canvas-zoom-slot {
+        .new-canvas-root .canvas-drawing-toolbar-wrap {
+          position: relative !important;
+          display: flex !important;
+          align-items: center !important;
+        }
+        .new-canvas-root .canvas-note-style-panel-anchor {
+          position: absolute !important;
+          left: calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px) !important;
+          right: auto !important;
+          bottom: calc(100% + 10px) !important;
+          transform: translateX(-50%) !important;
+          z-index: 41 !important;
+          pointer-events: auto !important;
+        }
+        .new-canvas-root .canvas-zoom-slot,
+        .new-canvas-root .react-flow__panel.bottom.right:has(> .footer-toolbar) {
           left: 12px !important;
+          right: auto !important;
           bottom: 12px !important;
+          transform: none !important;
         }
         .new-canvas-root .app-shell {
           --chat-panel-width: 600px;
@@ -878,9 +942,6 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           height: 100% !important;
           min-height: 0 !important;
         }
-        .new-canvas-root .canvas-controls {
-          display: none !important;
-        }
         .app-header {
           gap: 4px !important;
           padding: 10px !important;
@@ -926,6 +987,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         .new-canvas-root .sidebar-floating .sidebar-btn-v3 svg {
           width: 24px !important;
           height: 24px !important;
+        }
+        .new-canvas-root .sidebar-floating {
+          transition: none !important;
         }
         .new-canvas-root .app-shell:has(.chat-panel) .sidebar-floating {
           right: calc(var(--chat-panel-width, 600px) + 24px) !important;
@@ -987,6 +1051,24 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           width: auto !important;
           font-size: 14px !important;
         }
+        .new-canvas-root .footer-toolbar .canvas-controls {
+          position: static !important;
+          inset: auto !important;
+          margin: 0 !important;
+          transform: none !important;
+          display: flex !important;
+          flex-direction: row !important;
+          background: transparent !important;
+          border: 0 !important;
+          border-radius: 0 !important;
+          box-shadow: none !important;
+        }
+        .new-canvas-root .footer-toolbar .react-flow__panel:has(> .canvas-controls) {
+          position: static !important;
+          inset: auto !important;
+          margin: 0 !important;
+          transform: none !important;
+        }
         .new-canvas-root .canvas-drawing-toolbar {
           gap: 6px !important;
           padding: 6px !important;
@@ -1004,10 +1086,30 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           left: 50% !important;
           bottom: 12px !important;
           transform: translateX(-50%) !important;
+          width: max-content !important;
+          height: auto !important;
+          margin: 0 !important;
         }
-        .new-canvas-root .canvas-zoom-slot {
+        .new-canvas-root .canvas-drawing-toolbar-wrap {
+          position: relative !important;
+          display: flex !important;
+          align-items: center !important;
+        }
+        .new-canvas-root .canvas-note-style-panel-anchor {
+          position: absolute !important;
+          left: calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px) !important;
+          right: auto !important;
+          bottom: calc(100% + 10px) !important;
+          transform: translateX(-50%) !important;
+          z-index: 41 !important;
+          pointer-events: auto !important;
+        }
+        .new-canvas-root .canvas-zoom-slot,
+        .new-canvas-root .react-flow__panel.bottom.right:has(> .footer-toolbar) {
           left: 12px !important;
+          right: auto !important;
           bottom: 12px !important;
+          transform: none !important;
         }
         .new-canvas-root .app-shell {
           --chat-panel-width: 600px;
@@ -1048,10 +1150,22 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           .ai-canvas-standalone-mount {
             height: calc(100dvh / var(--app-ui-scale, 1)) !important;
           }
-          .ai-canvas-standalone-mount [data-new-canvas-light-dom-root] {
+          .ai-canvas-standalone-mount > [data-new-canvas-light-dom-root] {
             width: 100% !important;
             height: 100% !important;
+            min-height: 100% !important;
             zoom: calc(1 / var(--app-ui-scale, 1));
+          }
+          .ai-canvas-standalone-mount > [data-new-canvas-light-dom-root] > .new-canvas-root {
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 100% !important;
+          }
+          .ai-canvas-standalone-mount > [data-new-canvas-light-dom-root] > [data-new-canvas-style-gate],
+          .ai-canvas-standalone-mount .new-canvas-loading-skeleton {
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 100% !important;
           }
           .app-tooltip {
             zoom: calc(1 / var(--app-ui-scale, 1));
@@ -1059,6 +1173,19 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
       `;
       layoutStyle.textContent += `
+        html:has(.ai-canvas-standalone-mount),
+        body.workbench-body:has(.ai-canvas-standalone-mount) {
+          position: static !important;
+          inset: auto !important;
+          background: var(--theme-app-background, #08111b) !important;
+        }
+        body.workbench-body:has(.ai-canvas-standalone-mount)::after {
+          opacity: 0 !important;
+        }
+        .ai-canvas-standalone-mount .app-shell--glass-frame::before,
+        .ai-canvas-standalone-mount .app-shell--glass-frame::after {
+          opacity: 0 !important;
+        }
         .ai-canvas-standalone-mount [aria-label="AI Canvas 正在启动"] {
           display: none !important;
         }
@@ -1102,6 +1229,8 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       onDuplicateProject: context.onDuplicateProject,
       onExportProject: context.onExportProject,
       onImportProject: context.onImportProject,
+      onOpenHome: context.onOpenHome,
+      onOpenProjects: context.onOpenProjects,
       onDirectorDeskOpen: context.onDirectorDeskOpen,
       onDirectorDeskSyncFrame: context.onDirectorDeskSyncFrame,
       onDirectorDeskExportVideo: context.onDirectorDeskExportVideo,

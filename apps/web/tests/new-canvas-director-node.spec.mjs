@@ -51,6 +51,12 @@ test("updates Director node current identifiers and retains the latest twelve ca
   assert.equal(node.data.artifactId, "artifact-12");
   assert.equal(node.data.assetVersionId, "version-12");
   assert.equal(node.data.status, "success");
+  assert.equal(node.data.directorCaptureUrls.length, 12);
+  assert.equal(
+    node.data.directorCaptureUrls.at(-1),
+    "/api/storage/objects/storage-12/content?proxy=1",
+  );
+  assert.equal(node.data.videoUrl, null);
   assert.deepEqual(canvasDirectorRecentCaptures(node, 4).map((item) => item.artifactId), [
     "artifact-9",
     "artifact-10",
@@ -91,6 +97,10 @@ test("removes a Director capture and recalculates current stable identifiers", (
   assert.equal(withPreviousCurrent.nodes[0].data.assetId, "asset-1");
   assert.equal(withPreviousCurrent.nodes[0].data.assetVersionId, "version-1");
   assert.equal(withPreviousCurrent.nodes[0].data.mediaKind, "image");
+  assert.deepEqual(withPreviousCurrent.nodes[0].data.directorCaptureUrls, [
+    "/api/storage/objects/storage-1/content?proxy=1",
+  ]);
+  assert.equal(withPreviousCurrent.nodes[0].data.videoUrl, null);
 
   const empty = removeCanvasDirectorCaptureDocument(withPreviousCurrent, "director-1", "artifact-1");
   assert.deepEqual(empty.nodes[0].data.directorCaptures, []);
@@ -99,6 +109,8 @@ test("removes a Director capture and recalculates current stable identifiers", (
   assert.equal(empty.nodes[0].data.assetId, null);
   assert.equal(empty.nodes[0].data.assetVersionId, null);
   assert.equal(empty.nodes[0].data.mediaKind, null);
+  assert.deepEqual(empty.nodes[0].data.directorCaptureUrls, []);
+  assert.equal(empty.nodes[0].data.videoUrl, null);
   assert.equal(removeCanvasDirectorCaptureDocument(document, "director-1", "missing"), document);
 });
 
@@ -134,6 +146,16 @@ test("renders the Director node actions and recent stable previews", () => {
   assert.match(singleVideoHtml, /class="canvas-director-capture-grid" data-capture-count="1"/);
   assert.match(css, /\.canvas-director-capture-grid\[data-capture-count="1"\] \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);[\s\S]*?grid-template-rows: minmax\(0, 1fr\);/);
   assert.match(css, /\.canvas-director-capture-grid :where\(img, video\) \{[\s\S]*?width: 100%;[\s\S]*?height: 100%;[\s\S]*?object-fit: cover;/);
+});
+
+test("runtime Director node renders the persisted reference video", () => {
+  const runtimeNode = readFileSync(
+    new URL("../ai-canvas-runtime/assets/DirectorDeskNode-DaZvhFp1.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(runtimeNode, /videoSource = typeof t\.videoUrl == "string" \? t\.videoUrl\.trim\(\) : ""/);
+  assert.match(runtimeNode, /videoSource \? \/\* @__PURE__ \*\/ \(0, D\.jsx\)\("video"/);
+  assert.match(runtimeNode, /src: videoSource,[\s\S]*?controls: !0,[\s\S]*?preload: "metadata"/);
 });
 
 function createDirectorDeleteWorkbench(document, saveStandaloneCanvas) {

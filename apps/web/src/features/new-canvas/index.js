@@ -143,7 +143,18 @@ function appendStyles(root, styleHrefs) {
   criticalStyle.dataset.newCanvasCriticalStyle = "true";
   criticalStyle.textContent = `
     :host { display: block; min-height: 100%; background: #08111b; }
+    [data-new-canvas-light-dom-root] {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+    }
     .new-canvas-root { visibility: hidden !important; }
+    [data-new-canvas-light-dom-root] > .new-canvas-root {
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+    }
     :host(.is-agent-only),
     :host(.is-agent-only) .new-canvas-root { visibility: visible !important; background: transparent !important; }
     [data-new-canvas-style-gate] { display: block; min-height: calc(100dvh - 6rem); background: #08111b; }

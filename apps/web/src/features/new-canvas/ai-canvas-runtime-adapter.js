@@ -51,6 +51,8 @@ export function normalizeAiCanvasRuntimeModel(model = {}, category = "text") {
   const capabilities = model.capabilities && typeof model.capabilities === "object"
     ? { ...model.capabilities }
     : {};
+  const modelLabel = String(model.modelLabel ?? model.model_label ?? model.displayName ?? model.display_name ?? model.displayModelName ?? model.modelName ?? model.model_name ?? model.name ?? model.label ?? "").trim();
+  const modelName = String(model.displayName ?? model.display_name ?? model.displayModelName ?? model.modelName ?? model.model_name ?? model.name ?? model.label ?? modelCode).trim() || modelCode;
   const mediaType = String(model.mediaType ?? model.media_type ?? model.mediaKind ?? category).trim().toLowerCase();
   const schema = model.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
     ? model.parameterSchema
@@ -75,7 +77,7 @@ export function normalizeAiCanvasRuntimeModel(model = {}, category = "text") {
     : undefined;
   return {
     modelCode,
-    modelLabel: String(model.modelLabel ?? model.modelName ?? model.model_name ?? model.name ?? model.label ?? modelCode).trim() || modelCode,
+    modelLabel: ["文本", "图片", "视频", "音频", "模型"].includes(modelLabel) ? modelName : (modelLabel || modelName),
     category: ["image", "video", "audio", "text"].includes(mediaType) ? mediaType : category,
     capabilities: sanitizeRuntimeCatalogValue(capabilities),
     supportedRatios: Array.isArray(model.supportedRatios) ? model.supportedRatios.map((value) => String(value).trim()).filter(Boolean) : undefined,
@@ -101,7 +103,7 @@ export function normalizeAiCanvasRuntimeSkill(skill = {}) {
   if (!id) return null;
   return {
     id,
-    name: String(skill.name ?? skill.title ?? "未命名 Skill").trim() || "未命名 Skill",
+    name: String(skill.name ?? skill.title ?? skill.displayName ?? skill.display_name ?? skill.skillName ?? "未命名 Skill").trim() || "未命名 Skill",
     description: String(skill.description ?? skill.summary ?? "").trim(),
     summary: String(skill.summary ?? skill.description ?? "").trim(),
     category: String(skill.category ?? "general").trim() || "general",
@@ -114,6 +116,16 @@ export function normalizeAiCanvasRuntimeSkill(skill = {}) {
 }
 
 async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, dependencies) {
+  const rowsFromPayload = (payload, keys) => {
+    if (Array.isArray(payload)) return payload;
+    for (const source of [payload, payload?.data]) {
+      if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+      for (const key of keys) {
+        if (Array.isArray(source[key])) return source[key];
+      }
+    }
+    return [];
+  };
   const modelCatalog = context.modelCatalog ?? context.models ?? dependencies.modelCatalog;
   const skillCatalog = context.skillCatalog ?? context.skills ?? dependencies.skillCatalog;
   const modelsPromise = modelCatalog !== undefined
@@ -134,14 +146,14 @@ async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, depe
       : Promise.resolve([]);
   const [modelsPayload, generationPayload, skillsPayload] = await Promise.allSettled([modelsPromise, generationPromise, skillsPromise]);
   const modelRows = modelsPayload.status === "fulfilled"
-    ? Array.isArray(modelsPayload.value?.models) ? modelsPayload.value.models : Array.isArray(modelsPayload.value) ? modelsPayload.value : []
+    ? rowsFromPayload(modelsPayload.value, ["models", "items"])
     : [];
   const skillRows = skillsPayload.status === "fulfilled"
-    ? Array.isArray(skillsPayload.value?.items) ? skillsPayload.value.items : Array.isArray(skillsPayload.value?.skills) ? skillsPayload.value.skills : Array.isArray(skillsPayload.value) ? skillsPayload.value : []
+    ? rowsFromPayload(skillsPayload.value, ["items", "skills"])
     : [];
   const generationRows = generationPayload.status === "fulfilled"
     ? generationPayload.value.flatMap(({ mediaType, payload }) => (
-      Array.isArray(payload?.models) ? payload.models.map((model) => ({ ...model, mediaType: model?.mediaType ?? mediaType })) : []
+      rowsFromPayload(payload, ["models", "items"]).map((model) => ({ ...model, mediaType: model?.mediaType ?? mediaType }))
     ))
     : [];
   return {

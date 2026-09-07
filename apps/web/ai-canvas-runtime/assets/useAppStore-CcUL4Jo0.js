@@ -2428,9 +2428,9 @@ var Is = {
 	"node.a11yDescription.ariaLiveMessage": ({ direction: e, x: t, y: n }) => `Moved selected node ${e}. New position, x: ${t}, y: ${n}`,
 	"edge.a11yDescription.default": "Press enter or space to select an edge. You can then press delete to remove it or escape to cancel.",
 	"controls.ariaLabel": "Control Panel",
-	"controls.zoomIn.ariaLabel": "Zoom In",
-	"controls.zoomOut.ariaLabel": "Zoom Out",
-	"controls.fitView.ariaLabel": "Fit View",
+	"controls.zoomIn.ariaLabel": "放大",
+	"controls.zoomOut.ariaLabel": "缩小",
+	"controls.fitView.ariaLabel": "自适应画布",
 	"controls.interactive.ariaLabel": "Toggle Interactivity",
 	"minimap.ariaLabel": "Mini Map",
 	"handle.ariaLabel": "Handle"
@@ -7396,7 +7396,7 @@ function nm({ style: e, showZoom: t = !0, showFitView: n = !0, showInteractive: 
 					y(), a?.();
 				},
 				className: "react-flow__controls-zoomin",
-				title: v["controls.zoomIn.ariaLabel"],
+				"data-tooltip": v["controls.zoomIn.ariaLabel"],
 				"aria-label": v["controls.zoomIn.ariaLabel"],
 				disabled: _,
 				children: (0, U.jsx)(Yp, {})
@@ -7405,7 +7405,7 @@ function nm({ style: e, showZoom: t = !0, showFitView: n = !0, showInteractive: 
 					b(), o?.();
 				},
 				className: "react-flow__controls-zoomout",
-				title: v["controls.zoomOut.ariaLabel"],
+				"data-tooltip": v["controls.zoomOut.ariaLabel"],
 				"aria-label": v["controls.zoomOut.ariaLabel"],
 				disabled: g,
 				children: (0, U.jsx)(Xp, {})
@@ -7415,7 +7415,7 @@ function nm({ style: e, showZoom: t = !0, showFitView: n = !0, showInteractive: 
 				onClick: () => {
 					x(i), s?.();
 				},
-				title: v["controls.fitView.ariaLabel"],
+				"data-tooltip": v["controls.fitView.ariaLabel"],
 				"aria-label": v["controls.fitView.ariaLabel"],
 				children: (0, U.jsx)(Zp, {})
 			}),

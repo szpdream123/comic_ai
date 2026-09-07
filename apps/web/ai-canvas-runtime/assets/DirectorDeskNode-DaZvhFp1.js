@@ -280,7 +280,7 @@ function O({ id: e, data: t, selected: n }) {
 		e,
 		V,
 		A
-	]), Q = B.supported && B.descriptor.capabilities.open, pe = B.supported && B.descriptor.capabilities.exportFrame, me = B.supported && B.descriptor.capabilities.exportVideo, $ = V === "blender" || N;
+	]), Q = B.supported && B.descriptor.capabilities.open, pe = B.supported && B.descriptor.capabilities.exportFrame, me = B.supported && B.descriptor.capabilities.exportVideo, $ = V === "blender" || N, videoSource = typeof t.videoUrl == "string" ? t.videoUrl.trim() : "";
 	return /* @__PURE__ */ (0, D.jsx)(D.Fragment, { children: /* @__PURE__ */ (0, D.jsxs)("div", {
 		className: "node-wrapper relative",
 		style: { width: K },
@@ -325,7 +325,14 @@ function O({ id: e, data: t, selected: n }) {
 									}, e.kind))]
 								})
 							}),
-							W.length > 0 ? /* @__PURE__ */ (0, D.jsx)("div", {
+							videoSource ? /* @__PURE__ */ (0, D.jsx)("video", {
+								src: videoSource,
+								controls: !0,
+								playsInline: !0,
+								preload: "metadata",
+								className: "director-capture-video h-full w-full rounded-md object-contain bg-black",
+								"aria-label": "导演台参考视频"
+							}) : W.length > 0 ? /* @__PURE__ */ (0, D.jsx)("div", {
 								className: "director-capture-grid",
 								"data-capture-count": G.length,
 								children: G.map((e, t) => /* @__PURE__ */ (0, D.jsx)("img", {
@@ -400,7 +407,7 @@ function O({ id: e, data: t, selected: n }) {
 							}),
 							/* @__PURE__ */ (0, D.jsx)("span", {
 								className: "director-node-meta",
-								children: L || U || (W.length > 0 ? `${W.length} 张参考图` : "未同步截图")
+								children: L || U || (videoSource ? "已导出参考视频" : W.length > 0 ? `${W.length} 张参考图` : "未同步截图")
 							})
 						]
 					}),

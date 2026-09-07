@@ -21,6 +21,18 @@ export type TextGatewayChatCompletionRequest = {
   stream: true;
   temperature?: number;
   max_tokens?: number;
+  tools?: Array<{
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }>;
+  tool_choice?: "auto" | "none" | "required" | {
+    type: "function";
+    function: { name: string };
+  };
   response_format?: Record<string, unknown>;
   stream_options?: { include_usage?: boolean };
   thinking?: { type: "enabled" | "disabled" };

@@ -5,6 +5,7 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
+import type { TextGatewayChatStreamResult } from "../model-gateway/text-model-gateway.service.ts";
 import { isRetrySafeTransientDatabasePersistenceError } from "../shared/db/dev-db.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
@@ -45,6 +46,8 @@ export interface TextChatGatewayLike {
     model: string;
     prompt?: string;
     messages?: TextGatewayChatCompletionRequest["messages"];
+    tools?: TextGatewayChatCompletionRequest["tools"];
+    toolChoice?: TextGatewayChatCompletionRequest["tool_choice"];
     projectId?: string | null;
     canvasProjectId?: string | null;
     createdByUserId?: string | null;
@@ -77,6 +80,8 @@ export interface TextChatGatewayLike {
     model: string;
     prompt?: string;
     messages?: TextGatewayChatCompletionRequest["messages"];
+    tools?: TextGatewayChatCompletionRequest["tools"];
+    toolChoice?: TextGatewayChatCompletionRequest["tool_choice"];
     projectId?: string | null;
     canvasProjectId?: string | null;
     createdByUserId?: string | null;
@@ -87,6 +92,22 @@ export interface TextChatGatewayLike {
     maxResponseChars?: number;
     signal?: AbortSignal;
   }): AsyncIterable<string>;
+  streamCompletions?(input: {
+    model: string;
+    prompt?: string;
+    messages?: TextGatewayChatCompletionRequest["messages"];
+    tools?: TextGatewayChatCompletionRequest["tools"];
+    toolChoice?: TextGatewayChatCompletionRequest["tool_choice"];
+    projectId?: string | null;
+    canvasProjectId?: string | null;
+    createdByUserId?: string | null;
+    responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+    payloadSummary?: string;
+    requestKeyPrefix?: string;
+    maxResponseChars?: number;
+    signal?: AbortSignal;
+  }): Promise<TextGatewayChatStreamResult>;
 }
 
 export interface AiStoryboardPreviewInput {
@@ -450,6 +471,8 @@ export function createTextModelChatGateway(deps: {
     model: string;
     prompt?: string;
     messages?: TextGatewayChatCompletionRequest["messages"];
+    tools?: TextGatewayChatCompletionRequest["tools"];
+    toolChoice?: TextGatewayChatCompletionRequest["tool_choice"];
     projectId?: string | null;
     canvasProjectId?: string | null;
     createdByUserId?: string | null;
@@ -468,6 +491,8 @@ export function createTextModelChatGateway(deps: {
       stream: true,
       temperature: 0.2,
       messages,
+      ...(input.tools ? { tools: input.tools } : {}),
+      ...(input.toolChoice ? { tool_choice: input.toolChoice } : {}),
       ...(deps.disableThinking ? { thinking: { type: "disabled" as const } } : {}),
       ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
       ...(input.responseFormat === "json_object" ? { response_format: { type: "json_object" as const } } : {}),
@@ -489,6 +514,7 @@ export function createTextModelChatGateway(deps: {
   }
 
   return {
+    streamCompletions: createStream,
     async completeJson(input) {
       let content = "";
       for await (const delta of this.streamJson(input)) {

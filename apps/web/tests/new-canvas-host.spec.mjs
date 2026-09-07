@@ -1582,15 +1582,22 @@ test("new Canvas injects the outer project catalog and delegates runtime project
   const projectBridge = appSource.match(/async function createAiCanvasRuntimeProjectBridge[\s\S]*?\n\}\n\nfunction mountStandaloneAiCanvasRuntime/)?.[0] ?? "";
   assert.doesNotMatch(projectBridge, /if \(!projectCatalog\.length\)/);
   assert.doesNotMatch(projectBridge, /const projects = projectCatalog;\s*if \(!projects\.length\) return;/);
+  assert.match(projectBridge, /const existingProjects = Array\.isArray\(state\.projects\) \? state\.projects : \[\]/);
+  assert.match(projectBridge, /const settings = project\.settings \?\? existing\?\.settings/);
   assert.match(projectBridge, /const resolvedCurrentProjectId = currentProject\?\.id \?\? currentProjectId \?\? state\.currentProjectId \?\? null/);
+  assert.match(projectBridge, /switchingProjectName: null/);
+  assert.match(projectBridge, /state\.switchingProjectName === null/);
   assert.match(appSource, /setProjectName: typeof context\.onRenameProject === "function"/);
   assert.match(appSource, /context\.onRenameProject\(currentProjectId, targetName\)/);
   assert.match(appSource, /onSwitchProject: context\.onSwitchProject/);
   assert.match(appSource, /onRenameProject: context\.onRenameProject/);
   assert.match(appSource, /\.new-canvas-root \.app-shell \{[\s\S]*?--chat-panel-width: 600px;/);
   assert.match(appSource, /\.new-canvas-root \.app-shell:has\(\.chat-panel\) \.sidebar-floating \{[\s\S]*?right: calc\(var\(--chat-panel-width, 600px\) \+ 24px\) !important;/);
+  assert.match(appSource, /\.new-canvas-root \.sidebar-floating \{[\s\S]*?transition: none !important;/);
   assert.match(appSource, /\.new-canvas-root \.chat-panel \{[\s\S]*?top: 12px !important;[\s\S]*?width: var\(--chat-panel-width, min\(600px, calc\(100vw - 24px\)\)\) !important;/);
   assert.doesNotMatch(appSource, /\.new-canvas-root \.chat-panel \{[\s\S]*?top: 72px !important;/);
+  assert.match(appSource, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)::after \{[\s\S]*?opacity: 0 !important;/);
+  assert.match(appSource, /\.ai-canvas-standalone-mount \.app-shell--glass-frame::before,[\s\S]*?\.app-shell--glass-frame::after \{[\s\S]*?opacity: 0 !important;/);
 });
 
 test("canvas startup reapplies the latest document after a pending shadow mount completes", () => {

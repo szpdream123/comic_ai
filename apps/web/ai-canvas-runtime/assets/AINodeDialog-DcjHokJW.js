@@ -295,7 +295,7 @@ function ke({ purpose: e, voice: t = "alloy", format: n = "wav", speed: r = 1, m
 }
 var Ae = (0, G.memo)(ke), J = n(), je = "__skills__";
 function Me({ nodeType: e, currentPrompt: t, anchorEl: n, userPresets: r, userSkills: i, onSelect: a, onRunAdvancedPreset: o, onSelectSkill: s, onUploadSkill: c, onManageSkills: l, onClose: u, onManagePresets: f }) {
-	let p = (0, G.useMemo)(() => i.filter(d), [i]), [m, h] = (0, G.useState)(null), [g, _] = (0, G.useState)(null), [v, y] = (0, G.useState)({
+	let p = (0, G.useMemo)(() => i.filter(d), [i]), [m, h] = (0, G.useState)(null), [g, _] = (0, G.useState)(null), [q, Q] = (0, G.useState)(0), [v, y] = (0, G.useState)({
 		left: 0,
 		top: 0,
 		direction: "right"
@@ -322,9 +322,18 @@ function Me({ nodeType: e, currentPrompt: t, anchorEl: n, userPresets: r, userSk
 			left: 0,
 			top: 0
 		};
-		let e = n.getBoundingClientRect(), t = Math.min(16 + E * 48 + 8, 400);
+		let e = n.getBoundingClientRect(), t = q > 0 ? q : Math.min(16 + E * 48 + 8, 400);
 		return fe(e.left + e.width / 2 - 268 / 2, e.top - t - 8, 268, t);
-	}, [n, E]), O = S.find((e) => e.id === m), k = m === je, A = (0, G.useCallback)((e) => {
+	}, [n, E, q]);
+	(0, G.useLayoutEffect)(() => {
+		if (!n || !b.current) return;
+		let e = requestAnimationFrame(() => {
+			let t = b.current?.getBoundingClientRect().height;
+			t && Math.abs(t - q) > 1 && Q(t);
+		});
+		return () => cancelAnimationFrame(e);
+	}, [n, q, E]);
+	let O = S.find((e) => e.id === m), k = m === je, A = (0, G.useCallback)((e) => {
 		b.current && y(me(b.current.getBoundingClientRect(), 268, e * 48 + 16));
 	}, []), j = (0, G.useCallback)((e) => {
 		e.children && A(e.children.length);

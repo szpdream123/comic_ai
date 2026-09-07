@@ -1770,6 +1770,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.match(routeHtml, /<body class="workbench-body public-seo-page">/);
         assert.doesNotMatch(routeHtml, /public-seo-session-pending/);
         assert.match(pendingRouteHtml, /<body class="workbench-body public-seo-page public-seo-session-pending">/);
+        assert.match(pendingRouteHtml, /body\.public-seo-session-pending \.public-seo-content[\s\S]*?display:\s*none\s*!important/);
         assert.match(routeHtml, /<section class="public-seo-content"/);
         assert.match(routeHtml, new RegExp(`<h1[^>]*>${heading}<\\/h1>`));
         assert.match(routeHtml, new RegExp(`<h2>${ctaTitle}<\\/h2>`));
