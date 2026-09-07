@@ -476,10 +476,13 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
   }
   let projectCatalog = normalizeAiCanvasRuntimeProjects(context.projectCatalog);
   let currentProjectId = String(context.currentProjectId ?? context.canvasProjectId ?? "").trim();
-  let document = normalizeAiCanvasRuntimeDocument(
-    context.document ?? context.canvasDocument,
-    currentProjectId,
-  );
+  let hasDocument = context.document !== undefined || context.canvasDocument !== undefined;
+  let document = hasDocument
+    ? normalizeAiCanvasRuntimeDocument(
+        context.document ?? context.canvasDocument,
+        currentProjectId,
+      )
+    : null;
   const originalState = store.getState();
   const originalMethods = new Map();
   const methodNames = [
@@ -511,6 +514,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       currentProjectId = String(next.currentProjectId ?? "").trim();
     }
     if (next.document !== undefined || next.canvasDocument !== undefined) {
+      hasDocument = true;
       document = normalizeAiCanvasRuntimeDocument(
         next.document ?? next.canvasDocument,
         currentProjectId,
@@ -522,11 +526,13 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       ...(projects.length ? { projects } : {}),
       currentProjectId: currentProject?.id ?? currentProjectId ?? null,
       projectName: currentProject?.name ?? "",
-      projectLoadStatus: "ready",
+      ...(hasDocument ? { projectLoadStatus: "ready" } : {}),
     };
-    patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
-    patch.edges = Array.isArray(document.edges) ? cloneValue(document.edges) : [];
-    patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
+    if (hasDocument) {
+      patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
+      patch.edges = Array.isArray(document.edges) ? cloneValue(document.edges) : [];
+      patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
+    }
     store.setState(patch);
   };
   const readRuntimeDocument = () => {
@@ -711,12 +717,25 @@ function isVisibleAiCanvasRuntimeConversation(conversation) {
   return !!conversation && conversation.archived !== true && conversation.deletedAt == null;
 }
 
+const AI_CANVAS_CHAT_OPEN_STORAGE_KEY = "ai-canvas.chat.open";
+
+function shouldOpenAiCanvasRuntimeAssistant() {
+  try {
+    return localStorage.getItem(AI_CANVAS_CHAT_OPEN_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
 async function ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context = {}) {
   const initialState = runtimeStore?.getState?.();
-  // New Canvas always opens with the embedded assistant conversation view.
+  // New Canvas opens the embedded assistant by default, but preserves the
+  // user's explicit close/open preference across page entries.
   // Clear a stale detached-window flag left by a previous runtime session.
   initialState?.setChatPanelDetached?.(false);
-  initialState?.openChat?.();
+  if (shouldOpenAiCanvasRuntimeAssistant()) {
+    initialState?.openChat?.();
+  }
 
   const currentProjectId = String(
     initialState?.currentProjectId ?? context.currentProjectId ?? context.canvasProjectId ?? "",
@@ -1264,10 +1283,14 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       api: context.api ?? context.creatorApi,
       modelCatalog: context.modelCatalog ?? context.models,
       skillCatalog: context.skillCatalog ?? context.skills,
-      document: normalizeAiCanvasRuntimeDocument(
-        context.document ?? context.canvasDocument,
-        context.currentProjectId ?? context.canvasProjectId,
-      ),
+      ...(context.document !== undefined || context.canvasDocument !== undefined
+        ? {
+            document: normalizeAiCanvasRuntimeDocument(
+              context.document ?? context.canvasDocument,
+              context.currentProjectId ?? context.canvasProjectId,
+            ),
+          }
+        : {}),
       view: null,
       embedded: context.embedded !== false,
       theme: normalizeAiCanvasTheme(context.theme),
