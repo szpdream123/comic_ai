@@ -509,7 +509,7 @@ function renderMediaOnlyAgentPanel({
           <footer class="home-agent-composer-footer canvas-agent-generation-config" aria-label="${escapeAttr(FREE_CONVERSATION_MODES.find((kind) => kind.id === generationKind)?.label ?? "生成配置")}">
             ${renderFreeConversationModePicker(agent, busy)}
             <div class="canvas-agent-customize">
-              <button type="button" class="canvas-agent-composer-tool canvas-agent-settings-trigger" data-agent-action="toggle-composer-settings" aria-expanded="${Boolean(agent.composerSettingsOpen)}" aria-label="自定义模型、风格与参数" title="${escapeAttr(`选择模型与参数${selectedStyle && generationKind !== "audio" ? ` · 默认风格：${selectedStyle.label}` : ""}`)}" ${busy ? "disabled" : ""}>${renderComposerToolIcon("settings")}<span>${escapeHtml(selectedStyle && generationKind !== "audio" ? selectedStyle.label : "自定义")}</span></button>
+              <button type="button" class="canvas-agent-composer-tool canvas-agent-settings-trigger" data-agent-action="toggle-composer-settings" aria-expanded="${Boolean(agent.composerSettingsOpen)}" aria-label="自定义模型、风格与参数" title="${escapeAttr(`选择模型与参数${selectedStyle && generationKind !== "audio" ? ` · 默认风格：${selectedStyle.label}` : ""}`)}" ${busy ? "disabled" : ""}>${renderComposerToolIcon("settings")}<span>自定义</span></button>
               <section class="canvas-agent-customize-panel" role="dialog" aria-label="自定义生成设置" ${agent.composerSettingsOpen ? "" : "hidden"}>
                 <header><strong>创作设置</strong><button type="button" data-agent-action="toggle-composer-settings" aria-label="关闭生成设置">×</button></header>
                 <div class="canvas-agent-visible-models" role="group" aria-label="默认生成模型">${renderFreeGenerationModelPickers(agent, agent.generationModelsStatus === "loading")}</div>
@@ -982,6 +982,29 @@ export function createCanvasAgentController({
     agent.rewindConfirmOpen = false;
     agent.modeMenuOpen = false;
   }
+  // Free conversation has no canvas session. Keep explicit choices per signed-in actor.
+  const modelPreferencesKey = () => {
+    const user = workbench.session?.user;
+    if (!mediaOnly || workbench.session?.authenticated === false || !user?.id) return "";
+    return "lingxi:free-generation:models:v1:" + JSON.stringify([user.id, user.actorType ?? "user", user.teamMember?.id ?? ""]);
+  };
+  const readModelPreferences = () => {
+    try {
+      const key = modelPreferencesKey();
+      const storage = globalThis.window?.localStorage ?? globalThis.localStorage;
+      const saved = key ? JSON.parse(storage?.getItem(key) ?? "null") : null;
+      return Object.fromEntries(FREE_GENERATION_KINDS.flatMap(({ id }) =>
+        typeof saved?.[id] === "string" && saved[id].trim() ? [[id, saved[id].trim()]] : []));
+    } catch { return {}; }
+  };
+  const saveModelPreference = (kind, modelCode) => {
+    try {
+      const key = modelPreferencesKey();
+      if (!key) return;
+      const storage = globalThis.window?.localStorage ?? globalThis.localStorage;
+      storage?.setItem(key, JSON.stringify({ ...readModelPreferences(), [kind]: modelCode }));
+    } catch { /* Storage restrictions must not prevent selecting or sending a model. */ }
+  };
   const shouldStartNewFreeGenerationTask = () => (
     mediaOnly
     && agent.status === "waiting_external"
@@ -1866,6 +1889,7 @@ export function createCanvasAgentController({
       }
       agent.generationModels = [...byCode.values()];
       agent.generationModelsStatus = "ready";
+      const savedModels = readModelPreferences();
       for (const kind of FREE_GENERATION_KINDS) {
         const models = listFreeGenerationModels(agent, kind.id);
         const configuredDefault = String(
@@ -1873,11 +1897,14 @@ export function createCanvasAgentController({
             kind.id === "image" ? "defaultImageModelCode" : kind.id === "video" ? "defaultVideoModelCode" : "defaultAudioModelCode"
           ] ?? "",
         ).trim();
-        const selected = models.find((model) => model.modelCode === String(agent.generationModelCodes?.[kind.id] ?? "").trim())
+        const selected = models.find((model) => model.modelCode === String(agent.generationModelCodes?.[kind.id] ?? savedModels[kind.id] ?? "").trim())
           ?? models.find((model) => model.modelCode === configuredDefault)
           ?? models[0]
           ?? null;
         agent.generationModelCodes[kind.id] = selected?.modelCode ?? "";
+        if (selected && selected.modelCode === savedModels[kind.id]) {
+          agent.selectedModelOverrides[kind.id] = selected.modelCode;
+        }
         if (selected) {
           agent.generationParameters[kind.id] = resolveFreeGenerationParameterValues(agent, kind.id, selected);
         }
@@ -2090,6 +2117,7 @@ export function createCanvasAgentController({
         if (!model) return true;
         agent.generationModelCodes[kind] = model.modelCode;
         agent.selectedModelOverrides[kind] = model.modelCode;
+        saveModelPreference(kind, model.modelCode);
         agent.generationParameters[kind] = { ...(model.defaultParams ?? {}) };
         syncPanel();
         return true;
@@ -2444,6 +2472,7 @@ export function createCanvasAgentController({
         if (!model) return true;
         agent.generationModelCodes[kind] = model.modelCode;
         agent.selectedModelOverrides[kind] = model.modelCode;
+        saveModelPreference(kind, model.modelCode);
         agent.generationParameters[kind] = { ...(model.defaultParams ?? {}) };
         agent.generationMenuOpen = "";
         syncPanel();
@@ -3311,13 +3340,19 @@ function syncAgentTimelineEntries(currentTimeline, nextTimeline) {
   for (const entry of currentEntries) {
     if (!nextIds.has(entry.dataset.agentTimelineEntry)) entry.remove();
   }
-  for (const nextEntry of nextEntries) {
-    const currentEntry = currentById.get(nextEntry.dataset.agentTimelineEntry);
-    if (!currentEntry || !currentEntry.isConnected) {
-      currentTimeline.append(nextEntry.cloneNode(true));
-    } else if (currentEntry.outerHTML !== nextEntry.outerHTML) {
-      currentEntry.replaceWith(nextEntry.cloneNode(true));
+  const container = currentTimeline.querySelector?.(".canvas-agent-media-feed") ?? currentTimeline;
+  for (const [index, nextEntry] of nextEntries.entries()) {
+    let entry = currentById.get(nextEntry.dataset.agentTimelineEntry);
+    if (!entry || !entry.isConnected) {
+      entry = nextEntry.cloneNode(true);
+    } else if (entry.outerHTML !== nextEntry.outerHTML) {
+      const updated = nextEntry.cloneNode(true);
+      entry.replaceWith(updated);
+      entry = updated;
     }
+    // Restore chronological position without replacing unchanged media elements.
+    const anchor = container.children[index] ?? null;
+    if (anchor !== entry) container.insertBefore(entry, anchor);
   }
   return true;
 }
