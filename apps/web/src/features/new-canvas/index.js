@@ -60,7 +60,7 @@ import { installCanvasSelectEnhancer } from "./canvas-ui-controls.js";
 
 const DEFAULT_STYLE_HREFS = [
   "/src/features/production-workbench/production-workbench.css",
-  "/src/features/new-canvas/new-canvas.css?v=20260906-3",
+  "/src/features/new-canvas/new-canvas.css?v=20260907-1",
 ];
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
 export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-storyboard-cell";
@@ -588,6 +588,24 @@ function createProductionCanvasAdapter(dependencies = {}) {
         applyCanvasGraphViewportPreferences(graph, nextDocument.viewport);
         return true;
       };
+      const applyBackgroundGridPreference = () => {
+        const canvasDocument = workbench.ui?.canvasDocument;
+        if (!canvasDocument) return false;
+        const nextDocument = {
+          ...canvasDocument,
+          viewport: {
+            ...(canvasDocument.viewport ?? {}),
+            showBackgroundGrid: canvasDocument.viewport?.showBackgroundGrid !== true,
+          },
+        };
+        workbench.ui.canvasDocument = nextDocument;
+        sourceWorkbench?.updateCanvasDocument?.(nextDocument);
+        if (sourceWorkbench?.ui && sourceWorkbench.ui !== workbench.ui) {
+          sourceWorkbench.ui.canvasDocument = nextDocument;
+        }
+        applyCanvasGraphViewportPreferences(graph, nextDocument.viewport);
+        return true;
+      };
       const applyCanvasArrangement = () => {
         const canvasDocument = workbench.ui?.canvasDocument;
         const visibleNodeCount = canvasDocument?.nodes?.filter?.((node) => !node?.data?.hiddenByCharacterId).length ?? 0;
@@ -781,6 +799,17 @@ function createProductionCanvasAdapter(dependencies = {}) {
               const snapEnabled = workbench.ui.canvasDocument?.viewport?.snapEnabled === true;
               actionTarget.classList?.toggle?.("active", snapEnabled);
               actionTarget.setAttribute?.("aria-label", snapEnabled ? "关闭网格吸附" : "开启网格吸附");
+              void renderControls();
+            }
+            return;
+          }
+          if (action === "toggle-canvas-background-grid") {
+            event.preventDefault?.();
+            event.stopPropagation();
+            if (applyBackgroundGridPreference()) {
+              const showBackgroundGrid = workbench.ui.canvasDocument?.viewport?.showBackgroundGrid === true;
+              actionTarget.classList?.toggle?.("active", showBackgroundGrid);
+              actionTarget.setAttribute?.("aria-label", showBackgroundGrid ? "隐藏背景网格" : "显示背景网格");
               void renderControls();
             }
             return;

@@ -4322,7 +4322,10 @@ async function Da(e) {
 			apiKey: r.apiKey || "",
 			baseUrl: i,
 			protocol: t,
-			variables: e.variables,
+			variables: {
+				...e.variables,
+				...(e.nodeId ? { nodeId: e.nodeId } : {})
+			},
 			signal: o
 		});
 		if (n.urls) return n.urls;

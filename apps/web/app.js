@@ -19,7 +19,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-04";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-13";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -128,6 +128,43 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       .filter(([key]) => !/(?:api[_-]?key|token|secret|password|credential)/iu.test(key))
       .map(([key, nested]) => [key, sanitizeCatalogValue(nested)]));
   };
+  const createBackendMediaExecutionProfile = (mediaKind) => ({
+    preset: "custom",
+    protocol: {
+      version: 2,
+      mode: "async",
+      auth: { type: "none" },
+      submit: {
+        method: "POST",
+        path: mediaKind === "video" ? "/videos/generations" : "/images/generations",
+        bodyEncoding: "json",
+        body: {
+          model: "{{model}}",
+          prompt: "{{prompt}}",
+          canvasNodeId: "{{nodeId}}",
+        },
+      },
+      response: {
+        type: "json",
+        taskIdPath: "data.0.task_id",
+      },
+      poll: {
+        method: "GET",
+        path: "/tasks/{{submit.data.0.task_id}}",
+        response: {
+          statusPath: "data.status",
+          successValues: ["completed"],
+          failureValues: ["failed", "canceled", "manual_review_required"],
+          result: {
+            urlPath: mediaKind === "video" ? "data.result.videos.*.url" : "data.result.images.*.url",
+          },
+          errorPath: "data.error",
+        },
+        intervalMs: 2_000,
+        maxDurationMs: 30 * 60 * 1_000,
+      },
+    },
+  });
   const normalizeModels = (models) => (Array.isArray(models) ? models : [])
     .map((model) => {
       const code = String(model?.modelCode ?? model?.model_code ?? model?.modelId ?? model?.model_id ?? model?.code ?? model?.id ?? "").trim();
@@ -153,6 +190,9 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
         modelId: code,
         category: ["image", "video", "audio", "text"].includes(category) ? category : "text",
         providerConfigId: backendProviderId,
+        executionProfile: category === "image" || category === "video"
+          ? createBackendMediaExecutionProfile(category)
+          : undefined,
         inputModalities: Array.isArray(model?.inputModalities) ? model.inputModalities : undefined,
         capabilities: model?.capabilities && typeof model.capabilities === "object" ? sanitizeCatalogValue(model.capabilities) : {},
         supportedRatios: Array.isArray(model?.supportedRatios) ? model.supportedRatios.map(String).filter(Boolean) : undefined,
@@ -201,6 +241,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       ? state.config.generalModels.filter((model) => model?.source !== "comic-ai-backend")
       : [];
     const providers = { ...(state?.config?.providers ?? {}) };
+    const defaultTextModelId = modelCatalog.find((model) => model.category === "text")?.id;
     if (modelCatalog.length && backendBaseUrl) {
       providers[backendProviderId] = { name: "Comic AI 后端", protocol: "backend", baseUrl: backendBaseUrl };
     }
@@ -210,6 +251,11 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
           ...(state?.config ?? {}),
           providers,
           generalModels: [...modelCatalog, ...existingModels],
+          // Chat rendering can show the first model before a persisted
+          // assistant selection exists; execution requires that selection.
+          ...(!state?.config?.assistantModelId && defaultTextModelId
+            ? { assistantModelId: `general/${defaultTextModelId}` }
+            : {}),
         },
         userSkills: skillCatalog,
       });
@@ -497,7 +543,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     const nextDocument = readRuntimeDocument();
     document = nextDocument;
     if (typeof context.onDocumentChange === "function") {
-      await context.onDocumentChange(nextDocument);
+      await context.onDocumentChange(nextDocument, { scheduleSave: true, immediateSave: true });
     }
     return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
   };
@@ -526,6 +572,11 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
   let projectCatalog = normalizeAiCanvasRuntimeProjects(context.projectCatalog);
   let currentProjectId = String(context.currentProjectId ?? "").trim();
   try {
+    // Some lazily loaded runtime chunks read process.env during evaluation.
+    // Browser hosts do not provide Node's process global, so initialize the
+    // compatibility shim before the first runtime import (the mount path is
+    // reached later and cannot protect this bridge import).
+    globalThis.process ??= { env: { NODE_ENV: "production" } };
     aiCanvasRuntimeStorePromise ??= aiCanvasRuntimePromise ?? import("/ai-canvas-runtime/runtime.js");
     const storeModule = await aiCanvasRuntimeStorePromise;
     const store = storeModule?.useAppStore ?? storeModule?.t;
@@ -710,7 +761,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-04";
+      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-13";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -1234,7 +1285,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       onDirectorDeskOpen: context.onDirectorDeskOpen,
       onDirectorDeskSyncFrame: context.onDirectorDeskSyncFrame,
       onDirectorDeskExportVideo: context.onDirectorDeskExportVideo,
-      onDocumentChange: (document) => context.syncDocument?.(document, { scheduleSave: true }),
+      onDocumentChange: (document, metadata = {}) => context.syncDocument?.(document, metadata),
     };
     const hostProjectGuard = createAiCanvasRuntimeHostProjectGuard(runtimeStore, runtimeContext);
     const runtimeWindow = surface?.ownerDocument?.defaultView ?? globalThis;

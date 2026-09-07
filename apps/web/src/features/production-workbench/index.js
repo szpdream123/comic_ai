@@ -10462,6 +10462,9 @@ async function syncNewCanvasMount(workbench) {
                   skipEquality: true,
                 });
               }
+              if (metadata.immediateSave === true && typeof workbench.saveCanvasNow === "function") {
+                await workbench.saveCanvasNow();
+              }
               return document;
             },
           }

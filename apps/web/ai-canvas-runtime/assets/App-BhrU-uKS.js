@@ -2836,6 +2836,10 @@ function ki() {
 		deleteProject: e.deleteProject,
 		showToast: e.showToast
 	}))), [f, p] = (0, Q.useState)(null), [m, h] = (0, Q.useState)(!1), [g, _] = (0, Q.useState)(!1), v = (0, Q.useRef)(null), [y, b] = (0, Q.useState)(null), [x, S] = (0, Q.useState)(null), [C, w] = (0, Q.useState)(null), [T, E] = (0, Q.useState)(""), [D, O] = (0, Q.useState)(null), k = n ? ie(t, n) : null, A = t.find((e) => e.id === k) ?? null, j = (0, Q.useMemo)(() => k ? ne(t, k) : [], [t, k]), M = t.find((e) => e.id === n) ?? null, N = A?.series?.originalWork, P = A?.series?.script ?? "";
+	(0, Q.useEffect)(() => {
+		let e = () => h(!0);
+		return window.addEventListener("ai-canvas-open-series-rail", e), () => window.removeEventListener("ai-canvas-open-series-rail", e);
+	}, []);
 	if (!n || !A) return null;
 	let F = r === "ready", I = async (e, t) => {
 		if (!f) {
@@ -2867,7 +2871,7 @@ function ki() {
 	};
 	return /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [
 		/* @__PURE__ */ (0, Z.jsxs)("div", {
-			className: "group/series pointer-events-none fixed right-0 top-1/2 z-[150] flex h-[min(70vh,560px)]\n                   w-6 -translate-y-1/2 items-center justify-end",
+			className: "group/series pointer-events-none fixed inset-0 z-[260] grid place-items-center p-4",
 			children: [/* @__PURE__ */ (0, Z.jsx)("button", {
 				type: "button",
 				"aria-label": e("展开剧集栏（双击打开项目资产）"),
@@ -2880,18 +2884,30 @@ function ki() {
 				onDoubleClick: () => {
 					v.current &&= (clearTimeout(v.current), null), _(!0);
 				},
-				className: `pointer-events-auto absolute right-2.5 h-20 w-[3px] rounded-full
-                     bg-canvas-text-muted transition-all duration-150
-                     ${m ? "opacity-0 scale-100" : "opacity-40 hover:opacity-70 hover:scale-[1.2]"}`
-			}), /* @__PURE__ */ (0, Z.jsxs)("aside", {
+				className: "hidden"
+			}), m ? /* @__PURE__ */ (0, Z.jsx)("button", {
+				type: "button",
+				className: "pointer-events-auto absolute inset-0",
+				style: {
+					background: "rgba(15, 23, 42, 0.08)",
+					backdropFilter: "blur(1px)"
+				},
+				"aria-label": e("收起剧集栏"),
+				onClick: () => h(!1)
+			}) : null, /* @__PURE__ */ (0, Z.jsxs)("aside", {
 				"aria-label": e("剧集"),
 				"aria-hidden": !m,
-				className: `glass-bevel glass-bevel--panel absolute right-2.5 top-1/2 flex max-h-full
-                     w-[min(360px,calc(100vw-32px))] -translate-y-1/2 flex-col overflow-hidden
+				role: "dialog",
+				"aria-modal": m,
+				style: {
+					width: "min(1040px, calc(100vw - 96px))"
+				},
+				className: `glass-bevel glass-bevel--panel relative z-10 flex h-[min(88vh,860px)]
+                     flex-col overflow-hidden
                      rounded-[14px] border border-[var(--glass-ring)] bg-[var(--glass-bg)]
                      text-canvas-text shadow-2xl shadow-black/40 backdrop-blur-2xl
                      transition-[transform,opacity] duration-200 ease-out will-change-transform
-                     motion-reduce:transition-opacity ${m ? "pointer-events-auto translate-x-0 opacity-100" : "pointer-events-none translate-x-[calc(100%+1.5rem)] opacity-0"}`,
+                     motion-reduce:transition-opacity ${m ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none translate-y-0 opacity-0"}`,
 				children: [/* @__PURE__ */ (0, Z.jsxs)("header", {
 					className: "flex shrink-0 items-center gap-2 border-b border-border-subtle p-2",
 					children: [
@@ -4892,6 +4908,21 @@ function ca() {
 			/* @__PURE__ */ (0, Z.jsx)("div", {
 				className: "sidebar-logo-wrap",
 				children: /* @__PURE__ */ (0, Z.jsx)(sa, {})
+			}),
+			/* @__PURE__ */ (0, Z.jsx)("button", {
+				type: "button",
+				className: "sidebar-btn-v3",
+				"data-tooltip": e("展开剧集栏"),
+				"aria-label": e("展开剧集栏"),
+				onClick: () => {
+					window.dispatchEvent(new Event("ai-canvas-open-series-rail"));
+				},
+				children: /* @__PURE__ */ (0, Z.jsx)(X, {
+					icon: "lucide:clapperboard",
+					width: "20",
+					height: "20",
+					"aria-hidden": "true"
+				})
 			}),
 			/* @__PURE__ */ (0, Z.jsxs)("button", {
 				type: "button",
@@ -12545,11 +12576,6 @@ function _l({ visible: e, position: t, hoverMenu: n, menuRef: r, submenuRef: i, 
 					children: "▶"
 				})]
 			}),
-			/* @__PURE__ */ (0, Z.jsx)("div", {
-				className: "menu-row",
-				onClick: f,
-				children: /* @__PURE__ */ (0, Z.jsx)("span", { children: b("创建文件夹") })
-			}),
 			/* @__PURE__ */ (0, Z.jsx)("div", { className: "menu-sep" }),
 			g && /* @__PURE__ */ (0, Z.jsxs)("div", {
 				className: "menu-row menu-row-split",
@@ -12587,12 +12613,6 @@ function _l({ visible: e, position: t, hoverMenu: n, menuRef: r, submenuRef: i, 
 					className: "menu-kbd",
 					children: ol.redo
 				})]
-			}),
-			/* @__PURE__ */ (0, Z.jsx)("div", { className: "menu-sep" }),
-			/* @__PURE__ */ (0, Z.jsx)("div", {
-				className: "menu-row",
-				onClick: _,
-				children: /* @__PURE__ */ (0, Z.jsx)("span", { children: b("打开项目文件夹") })
 			}),
 			g && /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)("div", { className: "menu-sep" }), /* @__PURE__ */ (0, Z.jsxs)("div", {
 				className: "menu-row menu-row-split menu-row-danger",

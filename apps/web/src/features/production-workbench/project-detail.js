@@ -9990,6 +9990,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           <button type="button" class="canvas-view-tool is-wide ${sidebarCollapsed ? "" : "active"}" data-action="toggle-canvas-sidebar" aria-label="${sidebarCollapsed ? "展开资产管理" : "收起资产管理"}" title="资产管理" aria-expanded="${!sidebarCollapsed}" aria-controls="canvas-sidebar-panel">${renderCanvasIcon("panel")}<span>资产管理</span></button>
           <button type="button" class="canvas-view-tool" data-action="arrange-canvas-nodes" aria-label="整理画布" title="整理画布（Alt+Shift+F）">${renderCanvasIcon("grid")}</button>
           <button type="button" class="canvas-view-tool ${ui.canvasMinimapHidden === true ? "" : "active"}" data-action="toggle-canvas-minimap" aria-label="${ui.canvasMinimapHidden === true ? "显示画布小地图" : "隐藏画布小地图"}" title="画布小地图">${renderCanvasIcon("map")}</button>
+          <button type="button" class="canvas-view-tool ${canvasDocument?.viewport?.showBackgroundGrid === true ? "active" : ""}" data-action="toggle-canvas-background-grid" data-viewport-patch="toggle-background-grid" aria-label="${canvasDocument?.viewport?.showBackgroundGrid === true ? "隐藏背景网格" : "显示背景网格"}" title="背景网格">${renderCanvasIcon("dots")}</button>
           <button type="button" class="canvas-view-tool ${canvasEdgesHidden ? "" : "active"}" data-action="toggle-canvas-edges" aria-label="${canvasEdgesHidden ? "显示节点连线" : "隐藏节点连线"}" title="${canvasEdgesHidden ? "显示节点连线" : "隐藏节点连线"}">${renderCanvasIcon("connections")}</button>
           <button type="button" class="canvas-view-tool ${canvasSnapEnabled ? "active" : ""}" data-action="toggle-canvas-snap" data-viewport-patch="toggle-snap" aria-label="${canvasSnapEnabled ? "关闭网格吸附" : "开启网格吸附"}" title="网格吸附">${renderCanvasIcon("magnet")}</button>
           <button type="button" class="${canvasEdgeStyle === "orthogonal" ? "active" : ""}" data-action="set-canvas-edge-style" data-edge-style="${canvasEdgeStyle === "orthogonal" ? "curve" : "orthogonal"}" aria-label="${canvasEdgeStyle === "orthogonal" ? "切换为曲线连线" : "切换为直角连线"}" title="${canvasEdgeStyle === "orthogonal" ? "连线类型：直角 → 曲线" : "连线类型：曲线 → 直角"}">${renderCanvasIcon("edge")}</button>
@@ -12132,6 +12133,7 @@ function renderCanvasIcon(icon) {
     connections: '<circle cx="6" cy="7" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="12" cy="17" r="2" /><path d="m7.8 8 3 7M16.2 8l-3 7M8 7h8" />',
     copy: '<rect x="8" y="8" width="10" height="10" rx="1.6" /><path d="M6 15.5H5.8A1.8 1.8 0 0 1 4 13.7V5.8A1.8 1.8 0 0 1 5.8 4h7.9A1.8 1.8 0 0 1 15.5 5.8V6" />',
     cursor: '<path d="M7 4.5 18.5 12 13 13.2l-2.4 5.1L7 4.5Z" />',
+    dots: '<circle cx="6" cy="6" r="1" /><circle cx="12" cy="6" r="1" /><circle cx="18" cy="6" r="1" /><circle cx="6" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="18" cy="12" r="1" /><circle cx="6" cy="18" r="1" /><circle cx="12" cy="18" r="1" /><circle cx="18" cy="18" r="1" />',
     download: '<path d="M12 4.5v10" /><path d="m7.5 10 4.5 4.5 4.5-4.5" /><path d="M5 19.5h14" />',
     distribute: '<path d="M5 5v14M12 8v8M19 5v14" /><path d="M3 12h4M10 12h4M17 12h4" />',
     edge: '<path d="M4 18h5V6h6v12h5" /><path d="m17 15 3 3-3 3" />',

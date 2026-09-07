@@ -5757,10 +5757,6 @@ var bn = [
 		label: "ComfyUI"
 	},
 	{
-		id: "shortcuts",
-		label: "快捷键"
-	},
-	{
 		id: "plugins",
 		label: "插件"
 	},

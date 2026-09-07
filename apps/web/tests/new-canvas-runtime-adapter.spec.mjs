@@ -170,6 +170,33 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
   await handle.dispose();
 });
 
+test("AI Canvas runtime seeds a default assistant selection from the backend text catalog", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const catalogBridge = appSource.slice(
+    appSource.indexOf("function createAiCanvasRuntimeCatalogBridge"),
+    appSource.indexOf("function createAiCanvasRuntimeScaleBridge"),
+  );
+  assert.match(catalogBridge, /const defaultTextModelId = modelCatalog\.find\(\(model\) => model\.category === "text"\)\?\.id;/);
+  assert.match(catalogBridge, /!state\?\.config\?\.assistantModelId && defaultTextModelId[\s\S]*?assistantModelId: `general\/\$\{defaultTextModelId\}`/);
+});
+
+test("AI Canvas backend media models declare task polling instead of a synchronous URL response", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const catalogBridge = appSource.slice(
+    appSource.indexOf("function createAiCanvasRuntimeCatalogBridge"),
+    appSource.indexOf("function createAiCanvasRuntimeScaleBridge"),
+  );
+  assert.match(catalogBridge, /const createBackendMediaExecutionProfile =/);
+  assert.match(catalogBridge, /mode: "async"/);
+  assert.match(catalogBridge, /auth: \{ type: "none" \}/);
+  assert.match(catalogBridge, /taskIdPath: "data\.0\.task_id"/);
+  assert.match(catalogBridge, /path: "\/tasks\/\{\{submit\.data\.0\.task_id\}\}"/);
+  assert.match(catalogBridge, /statusPath: "data\.status"/);
+  assert.match(catalogBridge, /data\.result\.images\.\*\.url/);
+  assert.match(catalogBridge, /data\.result\.videos\.\*\.url/);
+  assert.match(catalogBridge, /executionProfile: category === "image" \|\| category === "video"/);
+});
+
 test("AI Canvas adapter preserves backend media parameter schemas and defaults", async () => {
   const model = normalizeAiCanvasRuntimeModel({
     modelCode: "image-2-discount",
@@ -384,6 +411,14 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
     new URL("../ai-canvas-runtime/assets/ChatPanel-D-dIH-Xx.js", import.meta.url),
     "utf8",
   );
+  const mediaProtocolSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/useTooltipAutoPlacement-D1FArkVS.js", import.meta.url),
+    "utf8",
+  );
+  const conversationExecutionSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/conversationExecutionController-D8HECszZ.js", import.meta.url),
+    "utf8",
+  );
   const modelSelectorSource = readFileSync(
     new URL("../ai-canvas-runtime/assets/ModelSelector-BPW0Bkh4.js", import.meta.url),
     "utf8",
@@ -410,6 +445,12 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /createAiCanvasRuntimeCatalogBridge/);
   assert.match(appSource, /const catalogBridge = createAiCanvasRuntimeCatalogBridge\(runtimeStore, context\)/);
   assert.match(appSource, /backendBaseUrl[\s\S]*?\/api\/canvas\//);
+  assert.match(appSource, /canvasNodeId: "\{\{nodeId\}\}"/);
+  assert.match(mediaProtocolSource, /variables: \{[\s\S]*\.\.\.e\.variables,[\s\S]*e\.nodeId \? \{ nodeId: e\.nodeId \} : \{\}/);
+  assert.match(conversationExecutionSource, /async function _r\(e, t, n, nodeId\)/);
+  assert.match(conversationExecutionSource, /await _r\(i, e\.projectId, e\.signal, o\)/);
+  assert.match(conversationExecutionSource, /o && await C\.getState\(\)\.saveCurrentProjectSilent\?\.\(\)/);
+  assert.match(appSource, /onDocumentChange: \(document, metadata = \{\}\) => context\.syncDocument\?\.\(document, metadata\)/);
   assert.match(appSource, /protocol: "backend", baseUrl: backendBaseUrl/);
   assert.match(appSource, /const unsubscribe = store\.subscribe\?\.\(\(nextState, previousState\) =>/);
   assert.match(appSource, /modelCatalog: context\.modelCatalog \?\? context\.models/);
@@ -484,6 +525,17 @@ test("project task center opens after the runtime click dispatch completes", () 
   assert.match(listener, /event\.preventDefault\(\);/);
   assert.match(listener, /event\.preventDefault\(\);[\s\S]*?globalThis\.setTimeout\?\.\(\(\) => \{/);
   assert.match(listener, /globalThis\.setTimeout\?\.\(\(\) => \{[\s\S]*?context\.onOpenTaskCenter\(\)/);
+});
+
+test("canvas assistant media binds generated tasks to the requested node", () => {
+  const backendSource = readFileSync(
+    new URL("../../backend/src/entrypoints/phone-auth-dev-server.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(backendSource, /const canvasNodeId = readString\(body\.canvasNodeId \?\? body\.nodeKey\)/);
+  assert.match(backendSource, /createCanvasNodeRun\(db, \{[\s\S]*?nodeKey: canvasNodeId,[\s\S]*?mediaKind: kind/);
+  assert.match(backendSource, /targetId: canvasNodeId \?\? canvasProjectId/);
+  assert.match(backendSource, /markCanvasNodeRunQueued\(db, \{[\s\S]*?runId: nodeRun\.id,[\s\S]*?taskId: generatedTaskId/);
 });
 
 test("standalone Canvas context menu omits local folder actions", () => {

@@ -2704,16 +2704,41 @@ function applyCanvasEdgeVisibility(edge, visible) {
 export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   if (!graph) return false;
   const snapEnabled = viewport.snapEnabled === true;
-  if (graph.__comicAiCanvasSnapEnabled === snapEnabled) return true;
-  if (graph.options?.snapline) graph.options.snapline.enabled = snapEnabled;
-  graph.setGridSize?.(snapEnabled ? CANVAS_GRID_SIZE : 1);
-  if (graph.options?.connecting) {
-    graph.options.connecting.snap = { radius: CANVAS_CONNECTION_SNAP_RADIUS, anchor: "center" };
+  const showBackgroundGrid = viewport.showBackgroundGrid === true;
+
+  // Apply snap preferences
+  if (graph.__comicAiCanvasSnapEnabled !== snapEnabled) {
+    if (graph.options?.snapline) graph.options.snapline.enabled = snapEnabled;
+    graph.setGridSize?.(snapEnabled ? CANVAS_GRID_SIZE : 1);
+    if (graph.options?.connecting) {
+      graph.options.connecting.snap = { radius: CANVAS_CONNECTION_SNAP_RADIUS, anchor: "center" };
+    }
+    const snapline = graph.getPlugin?.("snapline");
+    if (snapEnabled) snapline?.enable?.();
+    else snapline?.disable?.();
+    graph.__comicAiCanvasSnapEnabled = snapEnabled;
   }
-  const snapline = graph.getPlugin?.("snapline");
-  if (snapEnabled) snapline?.enable?.();
-  else snapline?.disable?.();
-  graph.__comicAiCanvasSnapEnabled = snapEnabled;
+
+  // Apply background grid visibility
+  if (graph.__comicAiCanvasBackgroundGridVisible !== showBackgroundGrid) {
+    graph.drawBackground?.({ color: "transparent" });
+    graph.drawGrid?.({
+      type: "dot",
+      args: {
+        color: "rgba(129, 146, 152, 0.18)",
+        thickness: 1,
+      },
+    });
+    if (graph.options?.grid) {
+      graph.options.grid.visible = showBackgroundGrid;
+    }
+    graph.showGrid?.();
+    if (!showBackgroundGrid) {
+      graph.hideGrid?.();
+    }
+    graph.__comicAiCanvasBackgroundGridVisible = showBackgroundGrid;
+  }
+
   return true;
 }
 

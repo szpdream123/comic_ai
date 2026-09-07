@@ -79,6 +79,32 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /__canvasDirectorHandled/);
 });
 
+test("AI Canvas initializes the browser process shim before the runtime bridge import", () => {
+  const source = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const bridgeBlock = source.slice(
+    source.indexOf("async function createAiCanvasRuntimeProjectBridge"),
+    source.indexOf("function resolveAiCanvasRuntimeConversationProjectId"),
+  );
+  assert.match(bridgeBlock, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?import\("\/ai-canvas-runtime\/runtime\.js"\)/);
+});
+
+test("canvas grid toggle does not leave the off-white theme texture visible", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(source, /\.canvas-bg-off-white::after\s*\{[\s\S]*display:\s*none\s*!important/);
+});
+
+test("AI node dialog declares runtime models before using the model fallback", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url), "utf8");
+  const dialogStart = source.indexOf("function pt() {");
+  const dialogBody = source.slice(dialogStart, source.indexOf("//#endregion", dialogStart));
+  const declaration = dialogBody.indexOf("runtimeModels = g((e) => e.config.generalModels)");
+  const firstUse = dialogBody.search(/runtimeModels\?\./);
+  assert.ok(dialogStart >= 0);
+  assert.ok(declaration >= 0);
+  assert.ok(firstUse >= 0);
+  assert.ok(declaration < firstUse);
+});
+
 test("new-canvas clears X6 cells and listeners before disposing a graph", () => {
   const calls = [];
   assert.equal(disposeCanvasGraph({
@@ -1561,6 +1587,7 @@ test("new Canvas forwards the injected runtime bridge, creator API, document, an
   assert.match(mountSync, /adapter: aiCanvasRuntimeAdapter/);
   assert.match(mountSync, /syncDocument: async \(document, metadata = \{\}\)/);
   assert.match(mountSync, /workbench\.updateCanvasDocument\(document/);
+  assert.match(mountSync, /metadata\.immediateSave === true[\s\S]*?await workbench\.saveCanvasNow\(\)/);
 });
 
 test("new Canvas injects the outer project catalog and delegates runtime project actions", () => {

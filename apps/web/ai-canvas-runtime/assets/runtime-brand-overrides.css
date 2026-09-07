@@ -967,3 +967,139 @@
     padding: 18px 16px !important;
   }
 }
+.new-canvas-root .avatar-wrap {
+  display: none !important;
+}
+
+.new-canvas-root .sidebar-sep-v3 {
+  display: none !important;
+}
+
+/* Enlarge the shortcut-command manager to match the reference dialog scale. */
+.preset-modal--manager {
+  width: min(1220px, calc(100vw - 80px)) !important;
+  max-height: min(88vh, 980px) !important;
+}
+
+.preset-modal--manager .preset-manager-title-row {
+  padding: 16px 22px !important;
+}
+
+.preset-modal--manager .preset-modal-title {
+  font-size: 24px !important;
+}
+
+.preset-modal--manager .preset-modal-desc {
+  font-size: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-tabs {
+  gap: 6px !important;
+  padding: 0 22px !important;
+}
+
+.preset-modal--manager .preset-manager-tab {
+  gap: 10px !important;
+  padding: 10px 16px !important;
+  font-size: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-tab-icon {
+  transform: scale(1.25);
+}
+
+.preset-modal--manager .preset-manager-sidebar {
+  width: 300px !important;
+  gap: 12px !important;
+  padding: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-new-btn {
+  border-radius: 9px !important;
+  padding: 11px 16px !important;
+  font-size: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-list {
+  gap: 6px !important;
+}
+
+.preset-modal--manager .preset-manager-list-item {
+  gap: 12px !important;
+  padding: 10px 12px !important;
+}
+
+.preset-modal--manager .preset-manager-list-thumb {
+  width: 48px !important;
+  height: 48px !important;
+}
+
+.preset-modal--manager .preset-manager-list-thumb-plus {
+  font-size: 22px !important;
+}
+
+.preset-modal--manager .preset-manager-list-title {
+  font-size: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-list-desc {
+  font-size: 14px !important;
+}
+
+.preset-modal--manager .preset-manager-detail-pane {
+  padding: 16px 20px !important;
+}
+
+.preset-modal--manager .preset-manager-detail {
+  gap: 20px !important;
+}
+
+.preset-modal--manager .preset-manager-label,
+.preset-modal--manager .preset-manager-section-title {
+  font-size: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-input,
+.preset-modal--manager .preset-manager-editor,
+.preset-modal--manager .preset-manager-editor-placeholder {
+  font-size: 16px !important;
+}
+
+.preset-modal--manager .preset-manager-input {
+  padding: 10px 14px !important;
+}
+
+.preset-modal--manager .preset-manager-editor-wrap,
+.preset-modal--manager .preset-manager-editor {
+  min-height: 240px !important;
+}
+
+.preset-modal--manager .preset-modal-actions {
+  padding: 16px 22px !important;
+}
+
+.preset-modal--manager .preset-manager-trigger-mode,
+.preset-modal--manager .preset-modal-btn-primary,
+.preset-modal--manager .preset-modal-btn-secondary {
+  padding: 10px 18px !important;
+  font-size: 16px !important;
+}
+
+/* Keep the asset manager modal compact enough to leave the canvas visible. */
+.assets-panel {
+  width: 70vw !important;
+  height: 70vh !important;
+}
+
+@media (max-width: 760px) {
+  .assets-panel {
+    width: calc(100vw - 32px) !important;
+    height: calc(100vh - 32px) !important;
+  }
+}
+
+/* The canvas toolbar controls the React Flow grid; do not leave a second
+   theme texture visible when the grid is toggled off. */
+.canvas-bg-off-white::after {
+  display: none !important;
+}

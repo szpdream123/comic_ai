@@ -289,8 +289,8 @@ var _ = [
 			},
 			{
 				title: "在鼠标位置创建节点",
-				description: "按 1-7 创建文本、图像、视频、音频、全景、动画和 3D 导演台节点；按 Alt + 1-5 创建文本、图像、视频、音频和 Markdown 源节点。",
-				shortcut: "1-7 / Alt + 1-5"
+				description: "按 1-6 创建文本、图像、视频、音频、全景和动画节点；按 Alt + 1-5 创建文本、图像、视频、音频和 Markdown 源节点。",
+				shortcut: "1-6 / Alt + 1-5"
 			},
 			{
 				title: "复制、粘贴与删除",
@@ -306,6 +306,11 @@ var _ = [
 				title: "定位与资源搜索",
 				description: "F 适配全部画布内容，M 切换小地图，Esc 关闭当前弹窗或菜单。Alt + Space 或 Ctrl + Shift + Space 可打开资源搜索窗口。",
 				shortcut: "F / M / Esc"
+			},
+			{
+				title: "显示或隐藏吉祥物",
+				description: "使用快捷键切换画布中的吉祥物显示状态。",
+				shortcut: "Ctrl/⌘ + Shift + M"
 			}
 		]
 	},
@@ -865,16 +870,6 @@ function b({ onClose: e }) {
 								}, e.title))
 							}),
 							t === "generation" ? /* @__PURE__ */ (0, d.jsx)(g, {}) : null,
-							/* @__PURE__ */ (0, d.jsxs)("div", {
-								className: "mt-5 flex items-start gap-2 border-t border-canvas-border pt-4 text-xs leading-5 text-canvas-text-muted",
-								children: [/* @__PURE__ */ (0, d.jsx)(c, {
-									icon: "mdi:keyboard-outline",
-									width: "16",
-									height: "16",
-									className: "mt-0.5 shrink-0",
-									"aria-hidden": "true"
-								}), /* @__PURE__ */ (0, d.jsx)("p", { children: "完整快捷键可在“设置 > 快捷键”中查看；按 Esc 可随时关闭当前弹窗或菜单。" })]
-							})
 						]
 					})
 				})]

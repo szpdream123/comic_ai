@@ -8740,9 +8740,21 @@ async function fg(e) {
 }
 //#endregion
 //#region src/store/store.chat.ts
-var pg = 0, mg = 500, hg = "ai-canvas.chat.active-conversation", gg = /* @__PURE__ */ new Map();
+var pg = 0, mg = 500, hg = "ai-canvas.chat.active-conversation", chatOpenStorageKey = "ai-canvas.chat.open", gg = /* @__PURE__ */ new Map();
 function _g(e) {
 	return `${hg}:${e}`;
+}
+function readPersistedChatOpen() {
+	try {
+		return globalThis.localStorage?.getItem(chatOpenStorageKey) !== "false";
+	} catch {
+		return !0;
+	}
+}
+function persistChatOpen(e) {
+	try {
+		globalThis.localStorage?.setItem(chatOpenStorageKey, e ? "true" : "false");
+	} catch {}
 }
 function vg(e) {
 	try {
@@ -8805,7 +8817,7 @@ function Og(e, t) {
 	gg.set(e, n);
 }
 var kg = (e, t) => ({
-	chatOpen: !1,
+	chatOpen: readPersistedChatOpen(),
 	chatPanelDetached: !1,
 	chatComposerDraft: null,
 	chatComposerLiveDraft: "",
@@ -8817,15 +8829,15 @@ var kg = (e, t) => ({
 	operationLogs: [],
 	canvasRevision: pg,
 	globalCanvasRevision: pg,
-	openChat: () => e({
+	openChat: () => (persistChatOpen(!0), e({
 		chatOpen: !0,
 		settingsOpen: !1,
 		assetsPanelOpen: !1,
 		characterLibraryOpen: !1,
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1
-	}),
-	openChatWithDraft: (t) => e({
+	})),
+	openChatWithDraft: (t) => (persistChatOpen(!0), e({
 		chatOpen: !0,
 		chatPanelDetached: !1,
 		chatComposerDraft: t,
@@ -8834,18 +8846,18 @@ var kg = (e, t) => ({
 		characterLibraryOpen: !1,
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1
-	}),
+	})),
 	clearChatComposerDraft: () => e({ chatComposerDraft: null }),
-	closeChat: () => e({ chatOpen: !1 }),
-	toggleChat: () => e((e) => e.chatOpen ? { chatOpen: !1 } : {
+	closeChat: () => (persistChatOpen(!1), e({ chatOpen: !1 })),
+	toggleChat: () => e((e) => e.chatOpen ? (persistChatOpen(!1), { chatOpen: !1 }) : (persistChatOpen(!0), {
 		chatOpen: !0,
 		settingsOpen: !1,
 		assetsPanelOpen: !1,
 		characterLibraryOpen: !1,
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1
-	}),
-	setChatPanelDetached: (t) => e({ chatPanelDetached: t }),
+	})),
+	setChatPanelDetached: (t) => e((e) => (persistChatOpen(t || e.chatOpen), { chatPanelDetached: t })),
 	setChatComposerLiveDraft: (t) => e({ chatComposerLiveDraft: t }),
 	setConversations: (t) => e({ conversations: t }),
 	addConversation: (t) => {
@@ -13637,7 +13649,7 @@ var _S = (e, t) => ({
 	pendingPresetAction: null,
 	reversePromptRequest: null,
 	comfyNodeProgress: {},
-	setSettingsOpen: (t, n) => e(t ? {
+	setSettingsOpen: (t, n) => e(t ? (persistChatOpen(!1), {
 		settingsOpen: !0,
 		settingsInitialTab: n ?? null,
 		assetsPanelOpen: !1,
@@ -13646,13 +13658,13 @@ var _S = (e, t) => ({
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1,
 		chatOpen: !1
-	} : {
+	}) : {
 		settingsOpen: !1,
 		settingsInitialTab: null,
 		pendingApiKeyConnectionId: null
 	}),
 	setSettingsInitialTab: (t) => e({ settingsInitialTab: t }),
-	openApiKeySettings: (t) => e({
+	openApiKeySettings: (t) => (persistChatOpen(!1), e({
 		settingsOpen: !0,
 		settingsInitialTab: "api",
 		pendingApiKeyConnectionId: t ?? null,
@@ -13661,7 +13673,7 @@ var _S = (e, t) => ({
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1,
 		chatOpen: !1
-	}),
+	})),
 	setPendingApiKeyConnectionId: (t) => e({ pendingApiKeyConnectionId: t }),
 	showNodeMenu: (t) => e({
 		nodeMenuVisible: !0,
@@ -13693,7 +13705,7 @@ var _S = (e, t) => ({
 		dialogPosition: null,
 		pendingPresetAction: null
 	}),
-	setAssetsPanelOpen: (t) => e(t ? {
+	setAssetsPanelOpen: (t) => e(t ? (persistChatOpen(!1), {
 		settingsOpen: !1,
 		assetsPanelOpen: !0,
 		characterLibraryOpen: !1,
@@ -13701,11 +13713,11 @@ var _S = (e, t) => ({
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1,
 		chatOpen: !1
-	} : {
+	}) : {
 		assetsPanelOpen: !1,
 		dramaAssetsPanelOpen: !1
 	}),
-	setCharacterLibraryOpen: (t) => e(t ? {
+	setCharacterLibraryOpen: (t) => e(t ? (persistChatOpen(!1), {
 		settingsOpen: !1,
 		assetsPanelOpen: !1,
 		characterLibraryOpen: !0,
@@ -13713,19 +13725,19 @@ var _S = (e, t) => ({
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1,
 		chatOpen: !1
-	} : {
+	}) : {
 		characterLibraryOpen: !1,
 		characterActionLibraryOpen: !1
 	}),
-	setCharacterActionLibraryOpen: (t) => e(t ? {
+	setCharacterActionLibraryOpen: (t) => e(t ? (persistChatOpen(!1), {
 		settingsOpen: !1,
 		assetsPanelOpen: !1,
 		historyPanelOpen: !1,
 		dramaAssetsPanelOpen: !1,
 		chatOpen: !1,
 		characterActionLibraryOpen: !0
-	} : { characterActionLibraryOpen: !1 }),
-	setHistoryPanelOpen: (t) => e(t ? {
+	}) : { characterActionLibraryOpen: !1 }),
+	setHistoryPanelOpen: (t) => e(t ? (persistChatOpen(!1), {
 		settingsOpen: !1,
 		assetsPanelOpen: !1,
 		characterLibraryOpen: !1,
@@ -13733,7 +13745,7 @@ var _S = (e, t) => ({
 		historyPanelOpen: !0,
 		dramaAssetsPanelOpen: !1,
 		chatOpen: !1
-	} : { historyPanelOpen: !1 }),
+	}) : { historyPanelOpen: !1 }),
 	toggleMinimap: () => e((e) => ({ minimapVisible: !e.minimapVisible })),
 	requestDirectorDeskRuntime: (t, n = !0) => e((e) => {
 		let r = t.trim();
@@ -14294,7 +14306,7 @@ var lC = (e, t) => ({
 	comfyUIUrl: "http://127.0.0.1:8188",
 	comfyUIPath: "",
 	generalModels: [],
-	mascotVisible: !1,
+	mascotVisible: !0,
 	interactionMode: "default",
 	nodeToolbarMode: "icons",
 	nodeLabelVisible: !0,
@@ -20017,14 +20029,14 @@ var UA = (e, t) => ({
 	globalCharacters: [],
 	globalCharactersLoading: !1,
 	dramaAssetsPanelOpen: !1,
-	setDramaAssetsPanelOpen: (t) => e(t ? {
+	setDramaAssetsPanelOpen: (t) => e(t ? (persistChatOpen(!1), {
 		dramaAssetsPanelOpen: !0,
 		assetsPanelOpen: !0,
 		characterLibraryOpen: !1,
 		historyPanelOpen: !1,
 		settingsOpen: !1,
 		chatOpen: !1
-	} : { dramaAssetsPanelOpen: !1 }),
+	}) : { dramaAssetsPanelOpen: !1 }),
 	markDramaAssetsViewed: () => {
 		e((e) => ({ dramaAssets: {
 			...e.dramaAssets,

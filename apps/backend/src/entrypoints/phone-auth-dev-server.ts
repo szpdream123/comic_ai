@@ -28626,6 +28626,135 @@ export function createPhoneAuthDevServer(
           }));
         }
         const canvasAssistantCompletionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/assistant\/chat\/completions$/);
+        const canvasAssistantMediaGenerationMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/assistant\/(images|videos)\/generations$|^\/api\/canvas\/([^/]+)\/assistant\/tasks\/([^/]+)$/);
+        if (canvasAssistantMediaGenerationMatch) {
+          const isTaskRoute = Boolean(canvasAssistantMediaGenerationMatch[4]);
+          const canvasProjectId = decodeURIComponent(canvasAssistantMediaGenerationMatch[1] ?? canvasAssistantMediaGenerationMatch[3] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: isTaskRoute || request.method === "GET" ? "view" : "run",
+            now: new Date(),
+          });
+          const taskId = canvasAssistantMediaGenerationMatch[4]
+            ? decodeURIComponent(canvasAssistantMediaGenerationMatch[4])
+            : "";
+          if (isTaskRoute && request.method !== "GET") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          if (request.method === "GET" && taskId) {
+            const task = await readGenerationTaskResponseForSession(db, {
+              taskId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              now: new Date(),
+            });
+            if (!task) return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+            const taskStatus = task.status === "succeeded" ? "completed" : task.status;
+            const taskResult = task.result as Record<string, unknown> | null;
+            const mediaUrl = readString(taskResult?.imageUrl ?? taskResult?.videoUrl ?? taskResult?.sourceUrl);
+            const mediaKey = task.kind === "video" ? "videos" : "images";
+            return writeJson(response, enveloped(200, {
+              status: taskStatus,
+              result: mediaUrl ? { [mediaKey]: [{ url: mediaUrl }] } : undefined,
+              error: task.failure?.displayMessage,
+            }));
+          }
+          if (request.method !== "POST") return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const kind = canvasAssistantMediaGenerationMatch[2] === "videos" ? "video" : "image";
+          const model = readString(body.model);
+          const prompt = readString(body.prompt);
+          if (!model || !prompt) return writeJson(response, envelopedError(400, "image_generation_input_invalid", "model and prompt are required"));
+          const canvasNodeId = readString(body.canvasNodeId ?? body.nodeKey);
+          if (canvasNodeId) {
+            const node = await queryOne<{ node_key: string }>(db, `
+              SELECT node_key
+              FROM creator_canvas_nodes
+              WHERE canvas_project_id = $1
+                AND node_key = $2
+                AND deleted_at IS NULL
+              LIMIT 1
+            `, [canvasProjectId, canvasNodeId]);
+            if (!node) return writeJson(response, envelopedError(404, "canvas_node_not_found", "canvas node not found"));
+          }
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            capability: capabilities.generationStart,
+            now: new Date(),
+          });
+          const idempotencyKey = request.headers["idempotency-key"]?.toString() || randomUUID();
+          const nodeRun = canvasNodeId
+            ? await createCanvasNodeRun(db, {
+                canvasProjectId,
+                nodeKey: canvasNodeId,
+                idempotencyKey,
+                status: "created",
+                mediaKind: kind,
+                modelCode: model,
+                targetType: "canvas",
+                targetId: canvasNodeId,
+                inputSnapshot: {
+                  model,
+                  prompt,
+                  canvasProjectId,
+                  nodeKey: canvasNodeId,
+                  parameters: body,
+                },
+                userId: authenticated.user.id,
+                actorScope: canvasScope,
+                now: new Date(),
+              })
+            : null;
+          const parameters = { ...body };
+          delete parameters.model;
+          delete parameters.prompt;
+          delete parameters.canvasNodeId;
+          delete parameters.nodeKey;
+          const result = await createGenerationTask(db, {
+            kind,
+            episodeId: null,
+            body: {
+              model,
+              prompt,
+              targetType: "canvas",
+              targetId: canvasNodeId ?? canvasProjectId,
+              canvasProjectId,
+              parameters,
+            },
+            idempotencyKey,
+            authenticated,
+            context: {
+              actor,
+              project: null,
+              canvasProjectId,
+              canvasActorScope: canvasScope,
+              userId: authenticated.user.id,
+            },
+            runtime: storageRuntime,
+            env: runtimeEnv,
+            fetchImpl: options.fetchImpl,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+            request,
+          });
+          if (!result.body) return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          const generatedTaskId = readString((result.body as Record<string, unknown> | null)?.taskId);
+          if (!generatedTaskId) return writeJson(response, envelopedError(502, "image_generation_task_missing", "生成任务创建失败"));
+          if (nodeRun) {
+            await markCanvasNodeRunQueued(db, {
+              runId: nodeRun.id,
+              canvasProjectId,
+              taskId: generatedTaskId,
+              now: new Date(),
+            });
+          }
+          return writeJson(response, enveloped(result.status, [{ task_id: generatedTaskId }]));
+        }
         if (request.method === "POST" && canvasAssistantCompletionMatch) {
           const canvasProjectId = decodeURIComponent(canvasAssistantCompletionMatch[1] ?? "");
           const canvasScope = await authorizeCanvasActor(db, {

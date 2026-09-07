@@ -571,7 +571,7 @@ async function gr(e, t, r) {
 		prompt: r
 	});
 }
-async function _r(e, t, n) {
+async function _r(e, t, n, nodeId) {
 	k(n);
 	let r = fr(e.prompt);
 	if (!r) throw Error("媒体生成提示词不能为空");
@@ -594,7 +594,8 @@ async function _r(e, t, n) {
 			provider: c.provider,
 			imageSize: o?.generation?.imageSize || "2K",
 			aspectRatio: o?.generation?.imageAspectRatio || "1:1",
-			workflowId: c.workflowId
+			workflowId: c.workflowId,
+			nodeId
 		}, n);
 		k(n);
 		let a = await hr(i.url, t, e.kind, l);
@@ -625,7 +626,8 @@ async function _r(e, t, n) {
 			seedanceResolution: u,
 			seedanceDuration: d,
 			videoResolution: i ? void 0 : Ze(u),
-			workflowId: c.workflowId
+			workflowId: c.workflowId,
+			nodeId
 		}, n);
 		k(n);
 		let p = await hr(f.url, t, e.kind, l);
@@ -3267,8 +3269,9 @@ function Gi() {
 				canvasError: void 0
 			});
 			try {
+				o && await C.getState().saveCurrentProjectSilent?.();
 				C.getState().updateMessage(r, { mediaStatus: "generating" });
-				let t = await _r(i, e.projectId, e.signal);
+				let t = await _r(i, e.projectId, e.signal, o);
 				if (e.signal.aborted) throw new DOMException("请求已取消", "AbortError");
 				let n = C.getState(), a = s ? Ri(s, t) : o ? n.settleMediaPlaceholder(o, t) : !1;
 				n.updateMessage(r, {

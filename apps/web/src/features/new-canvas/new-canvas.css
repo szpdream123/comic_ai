@@ -2031,6 +2031,21 @@
   overflow: auto;
 }
 
+/* Keep the character library readable inside the desktop app UI scale. */
+@media (min-width: 761px) {
+  .canvas-character-library-backdrop {
+    display: grid;
+    place-items: center;
+  }
+
+  .canvas-character-library {
+    width: min(1280px, calc(100% - 32px));
+    height: min(820px, calc(100% - 32px));
+    transform: scale(1.1);
+    transform-origin: center;
+  }
+}
+
 .canvas-config-library-drawer > header,
 .canvas-config-versions,
 .canvas-config-create,

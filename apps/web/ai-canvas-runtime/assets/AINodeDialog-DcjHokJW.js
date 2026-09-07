@@ -3268,7 +3268,7 @@ function pt() {
 		showToast: e.showToast,
 		workflows: e.workflows,
 		currentProjectId: e.currentProjectId
-	}))), C = g((e) => e.activeNodeId ? e.nodes.find((t) => t.id === e.activeNodeId) : void 0), w = g((e) => e.config.performanceMode === !0), T = C?.data, E = T?.type, k = (0, G.useRef)(null), A = (0, G.useRef)(null), j = (0, G.useRef)(/* @__PURE__ */ new Set()), [M, N] = (0, G.useState)(!1);
+	}))), C = g((e) => e.activeNodeId ? e.nodes.find((t) => t.id === e.activeNodeId) : void 0), w = g((e) => e.config.performanceMode === !0), T = C?.data, E = T?.type, k = (0, G.useRef)(null), A = (0, G.useRef)(null), j = (0, G.useRef)(/* @__PURE__ */ new Set()), runtimeModels = g((e) => e.config.generalModels), [M, N] = (0, G.useState)(!1);
 	(0, G.useLayoutEffect)(() => {
 		let e = k.current, n = A.current;
 		if (!e || !t || M) return;
@@ -3389,6 +3389,14 @@ function pt() {
 			settings: m,
 			customStyles: i.customStyles
 		}), C = xe(s.cameraSettings), w = C && (E === "ai-image" || E === "ai-video") ? `${b}\n\nCamera settings: ${C}.` : b, T = s?.model, k = s?.provider, A = s?.label ?? "";
+		if (!T && typeof localStorage < "u") try {
+			let e = JSON.parse(localStorage.getItem("canvas-model-prefs") || "{}"), t = e[E] || (E === "ai-panorama" || E === "ai-animation" ? e["ai-image"] : void 0);
+			t && (T = String(t).trim() || void 0);
+		} catch {}
+		if (T && !k) {
+			let e = String(T), t = e.indexOf("/");
+			k = t > 0 ? e.slice(0, t) : runtimeModels?.some((t) => t.id === e || t.modelId === e) ? "general" : void 0;
+		}
 		if (!T || !k) {
 			v(e("请先在底部模型选择器中选择一个模型"), "error");
 			return;
@@ -3751,7 +3759,8 @@ function pt() {
 		d,
 		_,
 		v,
-		e
+		e,
+		runtimeModels
 	]), se = (0, G.useCallback)(async () => {
 		if (!t || j.current.has(t)) return;
 		let n = t;
@@ -3795,11 +3804,12 @@ function pt() {
 		l,
 		_
 	]), de = (0, G.useCallback)((e) => {
+		let r = String(e.value ?? ""), n = e.provider || (r.indexOf("/") > 0 ? r.slice(0, r.indexOf("/")) : runtimeModels?.some((e) => e.id === r || e.modelId === r) ? "general" : void 0);
 		l(t, {
 			model: e.value,
-			provider: e.provider,
+			provider: n,
 			audioPurpose: e.audioPurpose,
-			...E === "ai-video" && e.provider === "general" ? {
+			...E === "ai-video" && n === "general" ? {
 				videoResolution: void 0,
 				videoFps: void 0,
 				videoFrames: void 0,
@@ -3808,12 +3818,13 @@ function pt() {
 				seedanceDuration: void 0,
 				generateAudio: void 0
 			} : {},
-			...e.provider === "dreamina" ? { batchCount: 1 } : {}
+			...n === "dreamina" ? { batchCount: 1 } : {}
 		});
 	}, [
 		t,
 		E,
-		l
+		l,
+		runtimeModels
 	]), fe = (0, G.useCallback)((e) => {
 		l(t, {
 			workflowId: e,
