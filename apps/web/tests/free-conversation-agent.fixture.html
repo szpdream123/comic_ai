@@ -71,6 +71,19 @@
         ui.canvasAgent.status = "waiting_external";
         ui.canvasAgent.messages = ["image", "video"].map((kind, index) => ({ id: `media-${kind}`, taskId: "fixture-task", role: "tool", generationTaskId: `generation-${kind}`, media: { taskId: `generation-${kind}`, kind, status: index ? "polling" : "queued", model: `${kind} Pro`, submittedAt: new Date(Date.now() - (index ? 90000 : 12000)).toISOString(), progressStage: index ? "provider_rendering" : "task_created" } }));
       } else if (scenario === "empty") { ui.canvasAgent.messages = []; ui.canvasAgent.status = "idle"; ui.canvasAgent.taskId = ""; }
+      if (scenario === "conversations") {
+        ui.canvasAgent.conversationId = "fixture-a";
+        ui.canvasAgent.status = "succeeded";
+        ui.canvasAgent.taskId = "";
+        ui.canvasAgent.conversations = [{ id: "fixture-a", title: "角色设计" }, { id: "fixture-b", title: "校园短片" }];
+      }
+      if (scenario === "long-prompt" || scenario === "long-prompt-attachments") {
+        ui.canvasAgent.promptDraft = Array.from({ length: 60 }, (_, index) => `第${index + 1}幕：雨夜，主角撑伞走过校园长廊，镜头缓缓推进。保留人物、对白与场景细节。`).join("\n");
+        if (scenario === "long-prompt-attachments") ui.canvasAgent.promptAttachments = [{
+          id: "fixture-reference", name: "参考图片", mediaType: "image", mimeType: "image/png",
+          url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' fill='%23999'/%3E%3C/svg%3E",
+        }];
+      }
       ui.canvasAgent.generationModels[1].parameterSchema = { duration: { type: "integer", label: "时长（秒）", enum: [5, 10] }, aspectRatio: { type: "string", enum: ["16:9", "9:16"] } };
       ui.canvasAgent.generationModels[1].defaultParams = { duration: 5, aspectRatio: "16:9" };
       surface.innerHTML = renderCanvasAgentPanel(ui);
@@ -79,6 +92,9 @@
       const controller = createCanvasAgentController({
         surface, capabilityProfile: "media_generation_only",
         workbench: { ui, api: {
+          async listFreeGenerationMessages(id) {
+            return { messages: [{ id: `${id}-message`, role: "user", content: { text: id === "fixture-a" ? "为我的故事设计一个角色" : "制作一段校园短片" } }] };
+          },
           async controlFreeGenerationTask(taskId, action, input) {
             window.fixtureControls.push({ taskId, action, input });
             return { result: { status: action === "resume" ? "queued" : "paused" } };
@@ -86,11 +102,14 @@
         } },
       });
       surface.addEventListener("click", event => {
+        if (controller.handleClick(event.target)) return;
         const button = event.target.closest("[data-agent-action]");
         if (button && !button.disabled) void controller.handleAction(button);
       });
       surface.addEventListener("input", event => controller.handleInput(event.target));
       surface.addEventListener("keydown", event => controller.handleKeydown(event, event.target));
+      if (new URLSearchParams(location.search).get("editor") === "rich") await controller.syncPromptEditor();
+      window.fixtureRefresh = () => controller.syncPanel({ liveOnly: true });
       window.addEventListener("pagehide", () => controller.dispose());
     </script>
   </body>

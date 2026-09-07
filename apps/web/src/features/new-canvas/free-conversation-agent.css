@@ -7,6 +7,13 @@
 }
 
 /* Conversation composer: writing first, one quiet row of expandable controls. */
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-settings-trigger span { max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-composer-stop { display: inline-flex; align-items: center; gap: 5px; padding: 8px 10px; border: 1px solid var(--new-canvas-control-border); border-radius: 9px; background: transparent; color: var(--new-canvas-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-composer-stop svg { width: 13px; height: 13px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-composer-stop:hover { color: var(--new-canvas-foreground); background: var(--new-canvas-control); }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-composer-stop:focus-visible { outline: 2px solid var(--new-canvas-accent-color); outline-offset: 3px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-send-hint { font-size: 11px; color: var(--new-canvas-muted); white-space: nowrap; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-model-load-error { display: grid; gap: 8px; font-size: 12px; color: var(--new-canvas-muted); }
 .new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-media-workspace { display: flex; flex-direction: column; }
 .new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-media-timeline-wrap { flex: 0 0 auto; margin-top: clamp(32px, 10vh, 100px); }
 .new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout.timeline-empty .canvas-agent-timeline { padding: 16px 24px; }
@@ -18,6 +25,7 @@
 .new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form] {
   width: calc(100% - 48px);
   max-width: 1120px;
+  min-width: 0;
   min-height: 220px;
   height: max(220px, var(--canvas-agent-media-composer-height));
   margin: 12px auto 22px;
@@ -41,6 +49,15 @@
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer textarea.home-agent-rich-editor,
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-prompt-editor-content { font-size: 16px; font-weight: 400; line-height: 1.8; padding: 0; }
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-prompt-editor-content p { font-weight: 400; }
+/* Bound the writing area, not the popovers in the composer footer. */
+.new-canvas-root .canvas-agent-panel.is-media-only form.canvas-agent-media-composer.is-focus-composer[data-free-generation-form]:has(.episode-replica-ref-card) { min-height: 320px; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .episode-replica-textarea.has-inline-attachments { grid-template-columns: 72px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; height: 100%; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .canvas-agent-media-prompt-editor { grid-row: 1; align-self: stretch; min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-gutter: stable; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .episode-prompt-editor-content { min-height: 100%; overflow-wrap: anywhere; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer textarea.home-agent-rich-editor { display: block; width: 100%; height: 100%; min-height: 0; box-sizing: border-box; overflow-y: auto; resize: none; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .episode-replica-textarea:has(.episode-replica-ref-card) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .episode-replica-textarea:has(.episode-replica-ref-card) .canvas-agent-media-prompt-editor { grid-row: 2; }
+.new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .canvas-agent-generation-config { flex: 0 0 auto; }
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config { flex-wrap: nowrap; gap: 8px; padding: 0; margin: 10px 0 0; border: 0; position: relative; }
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config .canvas-agent-free-mode-picker { display: block; width: auto; border: 0; padding: 0; background: none; position: relative; }
 .new-canvas-root .canvas-agent-panel.is-media-only.is-focus-layout .canvas-agent-event[data-event-role="user"] > div { background: transparent !important; border: 0 !important; box-shadow: none !important; }
@@ -83,8 +100,14 @@
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea:has(.episode-replica-ref-card) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(96px, 1fr); }
 .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea:has(.episode-replica-ref-card) .canvas-agent-media-prompt-editor { grid-column: 1; }
 @media (max-width: 760px) {
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-settings-trigger span { max-width: 72px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-mode-suffix { display: none; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-media-submit-group { gap: 6px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-send-hint, .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-composer-stop span { display: none; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-stop { width: 32px; min-width: 32px; height: 36px; min-height: 36px; padding: 0; justify-content: center; flex-shrink: 0; }
   .new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form] { width: calc(100% - 20px); padding: 18px 14px; margin: 10px auto; min-height: 224px; height: max(224px, var(--canvas-agent-media-composer-height)); border-radius: 22px; }
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .episode-replica-textarea.has-inline-attachments { grid-template-columns: 40px minmax(0, 1fr); gap: 14px; }
+  .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer.is-focus-composer .episode-replica-textarea.has-inline-attachments:not(:has(.episode-replica-ref-card)) { grid-template-columns: 40px minmax(0, 1fr); }
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .inline-upload-tray:not(:has(.episode-replica-ref-card)) .episode-replica-upload-card { width: 36px; min-width: 36px; height: 52px; min-height: 52px; }
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool { padding: 0 8px; height: 36px; min-height: 36px; gap: 4px; font-size: 12px; }
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-composer-tool svg { display: none; }
@@ -95,6 +118,11 @@
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize { position: static; }
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-customize-panel { width: 100%; max-width: calc(100vw - 40px); box-sizing: border-box; }
   .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-send-button { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
+}
+
+@media (max-width: 420px) {
+  .new-canvas-root .canvas-agent-panel.is-media-only .is-focus-composer .canvas-agent-generation-config { flex-wrap: wrap; }
+  .new-canvas-root .canvas-agent-panel.is-media-only form.is-focus-composer[data-free-generation-form] { min-height: 280px; }
 }
 
 .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer:has(.episode-replica-ref-card) {

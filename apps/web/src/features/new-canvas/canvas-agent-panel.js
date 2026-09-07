@@ -451,17 +451,19 @@ function renderMediaOnlyAgentPanel({
   const generationUnavailable = agentGeneration
     ? !hasSelectedFreeConversationTextModel(agent)
     : agent.generationModelsStatus !== "ready" || !selectedGenerationModel;
-  const promptAction = active && agentGeneration && agent.status === "waiting_external"
+  const answeringQuestion = agent.status === "paused" && hasPendingCreativeQuestion(agent.messages);
+  const selectedStyle = freeVisualStyles(agent).find(style => style.id === agent.visualStyleId);
+  const promptAction = active && agentGeneration
     ? "interject-prompt"
     : active ? "stop" : "send";
-  const promptActionLabel = promptAction === "stop" ? "停止生成" : promptAction === "interject-prompt" ? "发送补充要求" : "发送生成指令";
+  const promptActionLabel = answeringQuestion ? "发送回答并继续" : promptAction === "stop" ? "停止生成" : promptAction === "interject-prompt" ? "发送补充要求" : "发送生成指令";
   return `
     <aside class="canvas-agent-panel is-media-only is-focus-layout${agent.conversationId ? " has-conversation" : ""}${timelineEmpty ? " timeline-empty" : ""}" data-canvas-agent-panel aria-label="自由生成">
       <nav class="canvas-agent-media-sidebar" aria-label="创作会话">
         <header class="canvas-agent-media-sidebar-head">
           <strong>开启创作</strong>
         </header>
-        <button type="button" class="canvas-agent-media-new" data-agent-action="new-conversation" aria-label="新对话">
+        <button type="button" class="canvas-agent-media-new" data-agent-action="new-conversation" aria-label="新对话" ${busy || agent.attachmentUploading ? "disabled" : ""}>
           ${renderAgentHeaderIcon("new")}
           <span>新对话</span>
         </button>
@@ -502,13 +504,16 @@ function renderMediaOnlyAgentPanel({
             </div>
           </div>
           ${agent.status === "waiting_external" ? '<p class="canvas-agent-submission-note">当前媒体已提交，补充要求将用于后续处理；重新生成会再次计费。</p>' : ""}
+          ${answeringQuestion ? '<p class="canvas-agent-submission-note">选择上方选项，或在这里填写你的想法，发送后继续创作。</p>' : ""}
+          ${agent.attachmentUploading ? '<p class="canvas-agent-submission-note" role="status">素材正在上传，完成后即可发送。</p>' : ""}
           <footer class="home-agent-composer-footer canvas-agent-generation-config" aria-label="${escapeAttr(FREE_CONVERSATION_MODES.find((kind) => kind.id === generationKind)?.label ?? "生成配置")}">
             ${renderFreeConversationModePicker(agent, busy)}
             <div class="canvas-agent-customize">
-              <button type="button" class="canvas-agent-composer-tool" data-agent-action="toggle-composer-settings" aria-expanded="${Boolean(agent.composerSettingsOpen)}" aria-label="自定义模型、风格与参数" title="选择图片、视频模型、风格和生成参数" ${busy ? "disabled" : ""}>${renderComposerToolIcon("settings")}<span>自定义</span></button>
+              <button type="button" class="canvas-agent-composer-tool canvas-agent-settings-trigger" data-agent-action="toggle-composer-settings" aria-expanded="${Boolean(agent.composerSettingsOpen)}" aria-label="自定义模型、风格与参数" title="${escapeAttr(`选择模型与参数${selectedStyle && generationKind !== "audio" ? ` · 默认风格：${selectedStyle.label}` : ""}`)}" ${busy ? "disabled" : ""}>${renderComposerToolIcon("settings")}<span>${escapeHtml(selectedStyle && generationKind !== "audio" ? selectedStyle.label : "自定义")}</span></button>
               <section class="canvas-agent-customize-panel" role="dialog" aria-label="自定义生成设置" ${agent.composerSettingsOpen ? "" : "hidden"}>
                 <header><strong>创作设置</strong><button type="button" data-agent-action="toggle-composer-settings" aria-label="关闭生成设置">×</button></header>
                 <div class="canvas-agent-visible-models" role="group" aria-label="默认生成模型">${renderFreeGenerationModelPickers(agent, agent.generationModelsStatus === "loading")}</div>
+                ${agent.generationModelsError ? `<div class="canvas-agent-model-load-error" role="status"><span>${escapeHtml(agent.generationModelsError)}</span><button type="button" data-agent-action="reload-generation-models" ${agent.generationModelsStatus === "loading" ? "disabled" : ""}>重新加载模型</button></div>` : ""}
                 ${renderFreeVisualStylePicker(agent, busy)}
                 ${agent.visualStylesError ? `<small class="canvas-agent-model-hint" role="status">${escapeHtml(agent.visualStylesError)}</small>` : ""}
                 ${renderFreeConversationParameters(agent)}
@@ -518,8 +523,9 @@ function renderMediaOnlyAgentPanel({
             </div>
             ${renderFreeConversationSkills(busy, agent)}
             <div class="home-agent-submit-group canvas-agent-media-submit-group">
+              ${active && agentGeneration ? `<button class="canvas-agent-composer-stop" type="button" data-agent-action="stop" aria-label="停止 Agent 任务" title="停止后续执行，已提交的媒体任务可能仍会完成" ${busy ? "disabled" : ""}>${renderAgentComposerActionIcon(true)}<span>停止</span></button>` : '<small class="canvas-agent-send-hint">Shift + Enter 换行</small>'}
               ${renderAgentContextUsage(agent)}
-              <button class="canvas-agent-send-button${promptAction === "stop" ? " is-running" : ""}" type="button" data-agent-action="${promptAction}" aria-label="${promptActionLabel}" title="${promptActionLabel}" aria-busy="${promptAction === "stop"}" ${busy || (!active && generationUnavailable) ? "disabled" : ""}>${renderAgentComposerActionIcon(promptAction === "stop")}</button>
+              <button class="canvas-agent-send-button${promptAction === "stop" ? " is-running" : ""}" type="button" data-agent-action="${promptAction}" aria-label="${promptActionLabel}" title="${promptActionLabel}" aria-busy="${promptAction === "stop"}" ${busy || conversationArchived || (promptAction !== "stop" && agent.attachmentUploading) || (!active && !answeringQuestion && generationUnavailable) ? "disabled" : ""}>${renderAgentComposerActionIcon(promptAction === "stop")}</button>
             </div>
           </footer>
           ${agent.error ? `<p class="canvas-agent-error" role="alert">${escapeHtml(sanitizeMediaOnlyAgentCopy(agent.error))}</p>` : ""}
@@ -565,7 +571,7 @@ function renderFreeConversationModePicker(agent, disabled) {
   const open = agent.generationMenuOpen === "free-generation:kind";
   const label = selected === "agent" ? "Agent 模式" : FREE_CONVERSATION_MODES.find(mode => mode.id === selected)?.label;
   return `<div class="canvas-agent-free-mode-picker" role="group" aria-label="创作方式">
-    <button type="button" class="canvas-agent-composer-tool canvas-agent-kind-trigger" data-agent-action="toggle-free-generation-menu" data-field="kind" aria-expanded="${open}" aria-haspopup="listbox" aria-label="选择创作模式" ${disabled ? "disabled" : ""}>${renderComposerToolIcon("agent")}<span>${escapeHtml(label)}</span><span aria-hidden="true">⌄</span></button>
+    <button type="button" class="canvas-agent-composer-tool canvas-agent-kind-trigger" data-agent-action="toggle-free-generation-menu" data-field="kind" aria-expanded="${open}" aria-haspopup="listbox" aria-label="选择创作模式" ${disabled ? "disabled" : ""}>${renderComposerToolIcon("agent")}<span>${selected === "agent" ? 'Agent<span class="canvas-agent-mode-suffix"> 模式</span>' : escapeHtml(label)}</span><span aria-hidden="true">⌄</span></button>
     <div class="canvas-agent-kind-options" role="listbox" aria-label="创作模式" ${open ? "" : "hidden"}>
     ${FREE_CONVERSATION_MODES.map((mode) => `<button type="button" class="${mode.id === selected ? "active" : ""}" data-agent-action="select-free-generation-kind" data-value="${escapeAttr(mode.id)}" aria-pressed="${mode.id === selected}" title="${escapeAttr(mode.description)}" ${disabled ? "disabled" : ""}>${escapeHtml(mode.label)}</button>`).join("")}
     </div>
@@ -751,7 +757,7 @@ function renderAgentMediaConversationList(agent) {
               <span aria-hidden="true">${renderAgentHeaderIcon("history")}</span>
               <input class="canvas-agent-media-conversation-title-input" type="text" data-agent-field="conversationTitle" data-conversation-id="${escapeAttr(conversation.id)}" value="${escapeAttr(agent.titleDraft || conversation.title || "新会话")}" maxlength="10" aria-label="会话名称" />
             </div>`
-            : `<button type="button" class="canvas-agent-media-conversation-item" data-agent-action="select-agent-conversation" data-conversation-id="${escapeAttr(conversation.id)}" title="${escapeAttr(conversation.title || "未命名会话")}" ${current ? 'aria-current="page"' : ""}>
+            : `<button type="button" class="canvas-agent-media-conversation-item" data-agent-action="select-agent-conversation" data-conversation-id="${escapeAttr(conversation.id)}" title="${escapeAttr(conversation.title || "未命名会话")}" ${agent.busyAction || agent.attachmentUploading ? "disabled" : ""} ${current ? 'aria-current="page"' : ""}>
               <span aria-hidden="true">${renderAgentHeaderIcon("history")}</span>
               <strong data-agent-conversation-title data-conversation-id="${escapeAttr(conversation.id)}" title="双击修改会话名称">${escapeHtml(conversation.title || "未命名会话")}</strong>
             </button>`}
@@ -1089,9 +1095,10 @@ export function createCanvasAgentController({
             }
           }
         },
-        onChange({ prompt }) {
+        onChange({ prompt, initial }) {
           agent.promptDraft = String(prompt ?? "");
-          if (mediaOnly && agent.promptDraft.trim() === "/" && !agent.skillLibraryOpen) {
+          // Restoring the editor after closing a popover is not a new slash command.
+          if (!initial && mediaOnly && agent.promptDraft.trim() === "/" && !agent.skillLibraryOpen) {
             agent.skillLibraryOpen = true;
             agent.skillQuery = "";
             queueMicrotask(() => { syncPanel(); surface.querySelector?.('[data-agent-field="skillQuery"]')?.focus?.(); });
@@ -1228,6 +1235,25 @@ export function createCanvasAgentController({
     ? String(agent.conversationId ?? "")
     : "";
   const conversationCache = new Map();
+  let conversationLoadGeneration = 0;
+  const captureComposerDraft = () => structuredClone({
+    promptDraft: agent.promptDraft, promptAttachments: agent.promptAttachments,
+    promptCreativeDocumentId: agent.promptCreativeDocumentId, selectedSkillId: agent.selectedSkillId,
+    selectedModelOverrides: agent.selectedModelOverrides, promptPreferredModels: agent.promptPreferredModels,
+    generationKind: agent.generationKind, generationModelCodes: agent.generationModelCodes,
+    generationParameters: agent.generationParameters, visualStyleId: agent.visualStyleId,
+    visualStylePending: agent.visualStylePending, interjectionDraft: agent.interjectionDraft,
+  });
+  const restoreComposerDraft = (draft) => {
+    Object.assign(agent, {
+      promptDraft: "", promptAttachments: [], promptCreativeDocumentId: "", selectedSkillId: "",
+      selectedModelOverrides: {}, promptPreferredModels: {}, visualStyleId: "anime",
+      visualStylePending: false, interjectionDraft: "",
+      ...(draft ? structuredClone(draft) : {}),
+      promptMention: null, promptNodeReferences: [], skillLibraryOpen: false, skillQuery: "",
+      composerSettingsOpen: false, generationMenuOpen: "", generationPermissionMenuOpen: false,
+    });
+  };
   let disposed = false;
   const refreshedCanvasEventKeys = new Set();
   const canvasRefreshRetryTimers = new Set();
@@ -1367,11 +1393,14 @@ export function createCanvasAgentController({
     const canvasId = mediaOnly ? "free-generation" : String(workbench.ui?.selectedCanvasProjectId ?? "");
     if (!canvasId || typeof agentApi.listEvents !== "function") return;
     pollInFlight = true;
+    const loadGeneration = conversationLoadGeneration;
+    const taskId = agent.taskId;
     try {
       const payload = await agentApi.listEvents(canvasId, agent.taskId, {
         after: agent.sequence,
         limit: 200,
       });
+      if (disposed || taskId !== agent.taskId || loadGeneration !== conversationLoadGeneration) return;
       const events = Array.isArray(payload?.events) ? payload.events : [];
       let panelChanged = false;
       if (events.length) {
@@ -1380,6 +1409,7 @@ export function createCanvasAgentController({
         agent.error = "";
         panelChanged = true;
         const refreshedCreativeMessages = await refreshCreativeConversationMessages(events);
+        if (disposed || taskId !== agent.taskId || loadGeneration !== conversationLoadGeneration) return;
         if (TERMINAL_STATUSES.has(agent.status) && !refreshedCreativeMessages) await refreshConversationMessages(agent.conversationId);
       }
       if (mediaOnly && agent.status === "waiting_external") {
@@ -1387,11 +1417,13 @@ export function createCanvasAgentController({
         if (!(agent.messages ?? []).some(message => message.taskId === agent.taskId && message.generationTaskId)) {
           await refreshConversationMessages(agent.conversationId);
         }
+        if (disposed || taskId !== agent.taskId || loadGeneration !== conversationLoadGeneration) return;
         await hydrateMediaMessages();
         panelChanged = panelChanged || previousMediaState !== mediaMessageStateSignature(agent.messages);
       }
       if (panelChanged) syncPanel({ liveOnly: mediaOnly });
     } catch (error) {
+      if (disposed || taskId !== agent.taskId || loadGeneration !== conversationLoadGeneration) return;
       agent.error = friendlyAgentError(error);
       syncPanel({ liveOnly: mediaOnly });
     } finally {
@@ -1414,6 +1446,7 @@ export function createCanvasAgentController({
 
   const hydrateMediaMessages = async () => {
     const conversationId = agent.conversationId;
+    const loadGeneration = conversationLoadGeneration;
     agent.messages = collapseAgentGenerationMessages(agent.messages);
     const taskIds = [...new Set((agent.messages ?? []).map((message) => message.generationTaskId).filter(Boolean))];
     if (!taskIds.length) return agent.messages;
@@ -1428,7 +1461,7 @@ export function createCanvasAgentController({
     } catch {
       return agent.messages;
     }
-    if (disposed || agent.conversationId !== conversationId) return agent.messages;
+    if (disposed || agent.conversationId !== conversationId || loadGeneration !== conversationLoadGeneration) return agent.messages;
     const byTaskId = new Map(items.map((task) => [String(task?.taskId ?? task?.id ?? ""), normalizeAgentMediaTask(task)]));
     agent.messages = agent.messages.map((message) => {
       const media = byTaskId.get(message.generationTaskId) ?? message.media ?? null;
@@ -1442,10 +1475,11 @@ export function createCanvasAgentController({
   };
 
   const refreshConversationMessages = async (conversationId) => {
+    const loadGeneration = conversationLoadGeneration;
     const canvasId = mediaOnly ? "free-generation" : String(workbench.ui?.selectedCanvasProjectId ?? "");
     if (!canvasId || !conversationId || typeof agentApi.listMessages !== "function") return agent.messages;
     const payload = await agentApi.listMessages(canvasId, conversationId, { limit: 200 });
-    if (agent.conversationId !== conversationId) return agent.messages;
+    if (disposed || agent.conversationId !== conversationId || loadGeneration !== conversationLoadGeneration) return agent.messages;
     const rows = Array.isArray(payload?.messages) ? payload.messages : [];
     agent.messages = rows.map(normalizeAgentMessage).filter((message) => message.text || message.generationTaskId || message.creative).slice(-200);
     await hydrateMediaMessages();
@@ -1474,8 +1508,10 @@ export function createCanvasAgentController({
       events: [...agent.events],
       sequence: agent.sequence,
       messages: [...agent.messages],
+      messagesStatus: agent.messagesStatus,
       fileGrants: [...agent.fileGrants],
       fileGrantsStatus: agent.fileGrantsStatus,
+      ...(mediaOnly ? { composerDraft: captureComposerDraft() } : {}),
     });
   };
 
@@ -1495,11 +1531,12 @@ export function createCanvasAgentController({
   };
 
   const loadTaskEvents = async (canvasId, taskId) => {
+    const loadGeneration = conversationLoadGeneration;
     if (!canvasId || !taskId || typeof agentApi.listEvents !== "function") return [];
     try {
       const payload = await agentApi.listEvents(canvasId, taskId, { after: 0, limit: 1000 });
       const events = Array.isArray(payload?.events) ? payload.events : [];
-      if (agent.taskId === taskId) {
+      if (!disposed && agent.taskId === taskId && loadGeneration === conversationLoadGeneration) {
         reduceCanvasAgentEvents(agent, events);
         syncPanel();
       }
@@ -1511,10 +1548,17 @@ export function createCanvasAgentController({
   };
 
   const loadMessages = async (conversationId) => {
+    const loadGeneration = ++conversationLoadGeneration;
     stopPolling();
+    if (mediaOnly) restoreComposerDraft(conversationCache.get(conversationId)?.composerDraft);
     const conversation = (agent.conversations ?? []).find((item) => String(item.id) === conversationId);
-    const cachedConversationIsStable = !conversation?.taskId || TERMINAL_STATUSES.has(String(conversation.taskStatus ?? ""));
-    if (cachedConversationIsStable && restoreCachedConversation(conversationId)) {
+    const cached = conversationCache.get(conversationId);
+    // The sidebar may still describe the previous run after a new message was sent.
+    const cachedTaskIsActive = cached?.taskId && !TERMINAL_STATUSES.has(String(cached.status ?? ""));
+    const taskId = cachedTaskIsActive ? cached.taskId : conversation?.taskId || cached?.taskId;
+    const taskStatus = cachedTaskIsActive ? cached.status : conversation?.taskId ? conversation.taskStatus : cached?.status;
+    const cachedConversationIsStable = !taskId || TERMINAL_STATUSES.has(String(taskStatus ?? ""));
+    if (cachedConversationIsStable && cached?.messagesStatus === "ready" && restoreCachedConversation(conversationId)) {
       syncPanel();
       return agent.messages;
     }
@@ -1530,12 +1574,12 @@ export function createCanvasAgentController({
       messages: [],
       sequence: 0,
       messagesStatus: conversationId ? "loading" : "idle",
-      promptAttachments: [],
-      promptCreativeDocumentId: "",
-      selectedSkillId: "",
-      selectedModelOverrides: {},
-      visualStyleId: "anime",
-      visualStylePending: false,
+      promptAttachments: mediaOnly ? agent.promptAttachments : [],
+      promptCreativeDocumentId: mediaOnly ? agent.promptCreativeDocumentId : "",
+      selectedSkillId: mediaOnly ? agent.selectedSkillId : "",
+      selectedModelOverrides: mediaOnly ? agent.selectedModelOverrides : {},
+      visualStyleId: mediaOnly ? agent.visualStyleId : "anime",
+      visualStylePending: mediaOnly ? agent.visualStylePending : false,
       composerSettingsOpen: false,
       error: "",
     });
@@ -1550,10 +1594,10 @@ export function createCanvasAgentController({
     }
     try {
       await refreshConversationMessages(conversationId);
-      cacheConversation(conversationId);
-      if (conversation?.taskId) {
-        agent.taskId = String(conversation.taskId);
-        agent.status = String(conversation.taskStatus ?? "queued");
+      if (disposed || agent.conversationId !== conversationId || loadGeneration !== conversationLoadGeneration) return [];
+      if (taskId) {
+        agent.taskId = String(taskId);
+        agent.status = String(taskStatus ?? "queued");
         if (TERMINAL_STATUSES.has(agent.status)) {
           // Terminal task history is useful for the timeline, but must not delay the conversation render.
           void loadTaskEvents(canvasId, agent.taskId);
@@ -1563,8 +1607,9 @@ export function createCanvasAgentController({
         }
       }
       agent.messagesStatus = "ready";
+      cacheConversation(conversationId);
     } catch (error) {
-      if (agent.conversationId !== conversationId) return [];
+      if (disposed || agent.conversationId !== conversationId || loadGeneration !== conversationLoadGeneration) return [];
       agent.messagesStatus = "unavailable";
       agent.error = friendlyAgentError(error);
     }
@@ -1797,7 +1842,7 @@ export function createCanvasAgentController({
 
   const loadGenerationModels = async () => {
     if (!mediaOnly || disposed || agent.generationModelsStatus === "loading") return agent.generationModels;
-    if (agent.generationModelsStatus === "ready") return agent.generationModels;
+    if (agent.generationModelsStatus === "ready" && !agent.generationModelsError) return agent.generationModels;
     if (typeof workbench.api?.listGlobalGenerationConfig !== "function") {
       agent.generationModels = [];
       agent.generationModelsStatus = "unavailable";
@@ -1974,6 +2019,21 @@ export function createCanvasAgentController({
     loadMemories,
     loadTaskCenter,
     handleClick(target) {
+      // Dismiss floating panels without swallowing the next toolbar action.
+      if (mediaOnly && !target?.closest?.("[data-agent-action]")) {
+        const closeSkills = agent.skillLibraryOpen && !target?.closest?.(".canvas-agent-free-skills");
+        const closeSettings = agent.composerSettingsOpen && !target?.closest?.(".canvas-agent-customize");
+        if (closeSkills || closeSettings) {
+          if (closeSkills) agent.skillLibraryOpen = false;
+          if (closeSettings) { agent.composerSettingsOpen = false; agent.generationMenuOpen = ""; agent.generationPermissionMenuOpen = false; }
+          // Keep the editor and caret intact when the user clicks back into the draft.
+          surface.querySelector?.(".canvas-agent-skill-library")?.remove?.();
+          const settingsPanel = surface.querySelector?.(".canvas-agent-customize-panel");
+          if (closeSettings && settingsPanel) settingsPanel.hidden = true;
+          if (closeSkills) surface.querySelector?.('[data-agent-action="toggle-skill-library"]')?.setAttribute?.("aria-expanded", "false");
+          if (closeSettings) surface.querySelector?.('[data-agent-action="toggle-composer-settings"]')?.setAttribute?.("aria-expanded", "false");
+        }
+      }
       if (
         agent.promptMention?.open
         && !target?.closest?.(".canvas-agent-mention-menu, [data-agent-field=\"promptDraft\"]")
@@ -2091,6 +2151,16 @@ export function createCanvasAgentController({
       return true;
     },
     handleKeydown(event, target) {
+      if (event.isComposing) return false;
+      if (event.key === "Escape" && mediaOnly && agent.generationMenuOpen && agent.generationMenuOpen !== "free-generation:kind") {
+        event.preventDefault();
+        const trigger = surface.querySelector?.('.home-agent-model-trigger[aria-expanded="true"]');
+        const field = trigger?.dataset?.field;
+        agent.generationMenuOpen = "";
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.(field ? `[data-field="${field}"]` : '[data-agent-action="toggle-composer-settings"]')?.focus?.());
+        return true;
+      }
       if (event.key === "Escape" && mediaOnly && (agent.composerSettingsOpen || agent.generationMenuOpen === "free-generation:kind")) {
         event.preventDefault();
         const settings = agent.composerSettingsOpen;
@@ -2158,6 +2228,7 @@ export function createCanvasAgentController({
       return true;
     },
     handleDoubleClick(target) {
+      if (mediaOnly && (agent.busyAction || agent.attachmentUploading)) return false;
       const conversationTarget = target?.closest?.("[data-agent-conversation-title]")
         ?? target?.closest?.("[data-agent-action=\"select-agent-conversation\"]");
       const targetConversationId = String(conversationTarget?.dataset?.conversationId ?? "");
@@ -2358,6 +2429,10 @@ export function createCanvasAgentController({
         queueMicrotask(() => surface.querySelector?.(agent.composerSettingsOpen ? '.canvas-agent-customize-panel button' : '[data-agent-action="toggle-composer-settings"]')?.focus?.());
         return true;
       }
+      if (action === "reload-generation-models" && mediaOnly) {
+        await loadGenerationModels();
+        return true;
+      }
       if (action === "select-free-generation-model") {
         const kind = normalizeFreeGenerationKind(target.dataset.modelKind ?? agent.generationKind);
         const modelCode = String(target.dataset.modelId ?? "").trim();
@@ -2495,6 +2570,7 @@ export function createCanvasAgentController({
         return true;
       }
       if (action === "select-agent-conversation") {
+        if (mediaOnly && (agent.busyAction || agent.attachmentUploading)) return true;
         const conversationId = String(target.dataset.conversationId ?? "");
         if (!conversationId || conversationId === String(agent.conversationId ?? "")) return true;
         agent.historyOpen = false;
@@ -2704,6 +2780,9 @@ export function createCanvasAgentController({
         return true;
       }
       if (action === "new-conversation") {
+        if (mediaOnly && (agent.busyAction || agent.attachmentUploading)) return true;
+        if (mediaOnly) { cacheConversation(); restoreComposerDraft(); }
+        conversationLoadGeneration += 1;
         stopPolling();
         Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], promptAttachments: [], promptCreativeDocumentId: "", sequence: 0, error: "", panelView: "timeline", panelOpen: true, historyOpen: false, titleEditing: false, titleEditingConversationId: "", titleDraft: "", mediaPreview: null });
         persistCanvasAgentUiState(workbench.ui, agent);
@@ -2832,6 +2911,7 @@ export function createCanvasAgentController({
         return true;
       }
       if (action === "send") {
+        if (mediaOnly && agent.attachmentUploading) { agent.error = "素材上传中，请稍候再发送。"; syncPanel(); return true; }
         if (shouldAnswerCreativeQuestion()) {
           return this.handleAction({ dataset: {
             agentAction: "answer-creative-question",
@@ -3005,6 +3085,7 @@ export function createCanvasAgentController({
         return true;
       }
       if (action === "interject" || action === "interject-prompt") {
+        if (mediaOnly && agent.attachmentUploading) { agent.error = "素材上传中，请稍候再发送。"; syncPanel(); return true; }
         if (action === "interject-prompt" && shouldAnswerCreativeQuestion()) {
           return this.handleAction({ dataset: {
             agentAction: "answer-creative-question",
@@ -3076,7 +3157,7 @@ export function createCanvasAgentController({
             interjection: true,
             nodeReferences: messageNodeReferences,
             attachments: agent.promptAttachments.map(serializeAgentAttachment),
-          }].slice(-20);
+          }].slice(mediaOnly ? -200 : -20);
           if (fromPrompt) {
             agent.promptDraft = "";
             agent.selectedSkillId = "";

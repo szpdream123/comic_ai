@@ -2,6 +2,45 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createCanvasAgentController, renderCanvasAgentPanel } from "../src/features/new-canvas/canvas-agent-panel.js";
 
+test("closing slash skill picker stays closed when the rich editor restores its draft", async () => {
+  const ui = { canvasAgentCapabilityProfile: "media_generation_only", canvasAgent: {} };
+  let editorOptions;
+  let editorHost;
+  const newHost = () => ({ dataset: {}, isConnected: true, ownerDocument: {}, querySelector: () => null });
+  editorHost = newHost();
+  const controller = createCanvasAgentController({
+    surface: { querySelector: selector => selector === "[data-agent-prompt-editor]" ? editorHost : null },
+    workbench: { ui },
+    loadPromptEditorModule: async () => ({ mountPromptEditor(_host, options) {
+      editorOptions = options;
+      options.onChange({ prompt: options.prompt, initial: true });
+      return { destroy() {} };
+    } }),
+  });
+  try {
+    await controller.syncPromptEditor();
+    editorOptions.onChange({ prompt: "/", initial: false });
+    assert.equal(ui.canvasAgent.skillLibraryOpen, true);
+    await controller.handleAction({ dataset: { agentAction: "toggle-skill-library" } });
+    assert.equal(ui.canvasAgent.skillLibraryOpen, false);
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      editorHost = newHost();
+      await controller.syncPromptEditor();
+      assert.equal(ui.canvasAgent.skillLibraryOpen, false, "restoring the slash draft must not reopen the picker");
+      assert.equal(ui.canvasAgent.promptDraft, "/");
+    }
+    await controller.handleAction({ dataset: { agentAction: "toggle-skill-library" } });
+    assert.equal(ui.canvasAgent.skillLibraryOpen, true);
+    controller.handleKeydown({ key: "Escape", preventDefault() {} }, {});
+    editorHost = newHost();
+    await controller.syncPromptEditor();
+    assert.equal(ui.canvasAgent.skillLibraryOpen, false);
+    editorOptions.onChange({ prompt: "", initial: false });
+    editorOptions.onChange({ prompt: "/", initial: false });
+    assert.equal(ui.canvasAgent.skillLibraryOpen, true, "a newly typed slash still opens the picker");
+  } finally { controller.dispose(); }
+});
+
 test("skill library filters workflows and selects a skill without sending or destroying the draft", async () => {
   const ui = { canvasAgentCapabilityProfile: "media_generation_only", canvasAgent: { promptDraft: "雨后的校园" } };
   const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench: { ui } });

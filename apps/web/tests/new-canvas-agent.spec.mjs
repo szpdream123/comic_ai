@@ -780,7 +780,8 @@ test("media-only Agent reuses the canvas arrow and stop button states", () => {
   });
 
   assert.match(idleHtml, /<button class="canvas-agent-send-button"[^>]*data-agent-action="send"[^>]*><svg[\s\S]*?<path d="M12 20V4"/);
-  assert.match(runningHtml, /<button class="canvas-agent-send-button is-running"[^>]*data-agent-action="stop"[^>]*><svg[\s\S]*?<rect x="6" y="6" width="12" height="12"/);
+  assert.match(runningHtml, /<button class="canvas-agent-composer-stop"[^>]*data-agent-action="stop"[^>]*><svg[\s\S]*?<rect x="6" y="6" width="12" height="12"/);
+  assert.match(runningHtml, /canvas-agent-send-button[^>]*data-agent-action="interject-prompt"/);
   assert.doesNotMatch(runningHtml, /episode-replica-generate-label/);
 });
 

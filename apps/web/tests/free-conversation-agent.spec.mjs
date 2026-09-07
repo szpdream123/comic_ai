@@ -344,7 +344,8 @@ test("Agent mode keeps its running task stoppable after an earlier media result 
     },
   });
 
-  assert.match(html, /canvas-agent-send-button is-running[^>]*data-agent-action="stop"/);
+  assert.match(html, /canvas-agent-composer-stop[^>]*data-agent-action="stop"/);
+  assert.match(html, /canvas-agent-send-button[^>]*data-agent-action="interject-prompt"/);
   assert.doesNotMatch(html, /canvas-agent-send-button[^>]*data-agent-action="send"/);
 });
 
