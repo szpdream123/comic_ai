@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,68 @@ test("buildProductionWeb keeps the previous hashed entry for already-open pages"
   assert.notEqual(first.entryUrl, second.entryUrl);
   await stat(join(sourceRoot, first.entryUrl.replace(/^\//, "")));
   await stat(join(sourceRoot, second.entryUrl.replace(/^\//, "")));
+});
+
+test("unchanged production outputs and manifest are reused without being rewritten", async (context) => {
+  const cwd = await mkdtemp(join(tmpdir(), "comic-ai-production-web-reuse-"));
+  context.after(() => rm(cwd, { recursive: true, force: true }));
+  const sourceRoot = join(cwd, "apps", "web");
+  const outputDir = join(sourceRoot, ".production");
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(join(sourceRoot, "app.js"), 'globalThis.release = "stable";\n');
+  const first = await buildProductionWeb({ cwd });
+  const paths = [...first.outputFiles.map((file) => join(outputDir, file)), first.manifestPath];
+  const oldTime = new Date("2020-01-01T00:00:00Z");
+  for (const path of paths) await utimes(path, oldTime, oldTime);
+
+  assert.deepEqual(await buildProductionWeb({ cwd }), first);
+  for (const path of paths) assert.equal((await stat(path)).mtimeMs, oldTime.getTime());
+});
+
+test("production build repairs damaged output and preserves the last release on compilation failure", async (context) => {
+  const cwd = await mkdtemp(join(tmpdir(), "comic-ai-production-web-repair-"));
+  context.after(() => rm(cwd, { recursive: true, force: true }));
+  const sourceRoot = join(cwd, "apps", "web");
+  await mkdir(sourceRoot, { recursive: true });
+  const sourcePath = join(sourceRoot, "app.js");
+  await writeFile(sourcePath, 'globalThis.release = "stable";\n');
+  const first = await buildProductionWeb({ cwd });
+  const entryPath = join(sourceRoot, first.entryUrl.slice(1));
+  const original = await readFile(entryPath, "utf8");
+  const manifest = await readFile(first.manifestPath, "utf8");
+  await writeFile(entryPath, "damaged");
+  await buildProductionWeb({ cwd });
+  assert.equal(await readFile(entryPath, "utf8"), original);
+  await rm(entryPath);
+  await buildProductionWeb({ cwd });
+  assert.equal(await readFile(entryPath, "utf8"), original);
+  await writeFile(sourcePath, 'import "./missing.js";');
+  await assert.rejects(buildProductionWeb({ cwd }), /Could not resolve/);
+  assert.equal(await readFile(entryPath, "utf8"), original);
+  assert.equal(await readFile(first.manifestPath, "utf8"), manifest);
+});
+
+test("production build supports read-only published files in a writable directory", {
+  skip: process.platform === "win32" ? "requires POSIX file permissions" : false,
+}, async (context) => {
+  const cwd = await mkdtemp(join(tmpdir(), "comic-ai-production-web-permissions-"));
+  context.after(() => rm(cwd, { recursive: true, force: true }));
+  const sourceRoot = join(cwd, "apps", "web");
+  const outputDir = join(sourceRoot, ".production");
+  await mkdir(sourceRoot, { recursive: true });
+  const sourcePath = join(sourceRoot, "app.js");
+  await writeFile(sourcePath, 'globalThis.release = "one";\n');
+  const first = await buildProductionWeb({ cwd });
+  for (const path of [...first.outputFiles.map((file) => join(outputDir, file)), first.manifestPath]) {
+    await chmod(path, 0o444);
+  }
+  assert.deepEqual(await buildProductionWeb({ cwd }), first);
+  const oldManifest = await stat(first.manifestPath);
+  await writeFile(sourcePath, 'globalThis.release = "two";\n');
+  const second = await buildProductionWeb({ cwd });
+  assert.notEqual(second.entryUrl, first.entryUrl);
+  assert.notEqual((await stat(second.manifestPath)).ino, oldManifest.ino);
+  await stat(join(sourceRoot, first.entryUrl.slice(1)));
 });
 
 test("buildProductionWeb keeps browser video plugin resources on the public toolbox path", async (context) => {
