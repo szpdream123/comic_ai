@@ -54,7 +54,7 @@ import {
 import { createCanvasPanoramaViewerController } from "./canvas-panorama-viewer.js";
 
 const DEFAULT_STYLE_HREFS = [
-  "/src/features/production-workbench/production-workbench.css",
+  "/src/features/production-workbench/production-workbench.css?home-font=2&single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&prompt-hover-preview=1",
   "/src/features/new-canvas/new-canvas.css?v=20260813-2",
 ];
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
