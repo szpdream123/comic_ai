@@ -1774,6 +1774,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.match(routeHtml, new RegExp(`<h1[^>]*>${heading}<\\/h1>`));
         assert.match(routeHtml, new RegExp(`<h2>${ctaTitle}<\\/h2>`));
         assert.match(routeHtml, /<a href="\/canvas"(?: aria-current="page")?>AI视频生成<\/a>/);
+        assert.match(routeHtml, /<a href="\/guides">创作指南<\/a>/);
+        assert.match(routeHtml, /<a href="\/answers">常见问题<\/a>/);
         assert.match(routeHtml, /<script type="application\/ld\+json">/);
         assert.match(routeHtml, /"@type":"FAQPage"/);
         assert.match(routeHtml, /data-public-seo-login/);

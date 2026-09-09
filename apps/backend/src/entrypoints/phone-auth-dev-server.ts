@@ -109,6 +109,7 @@ import { TextModelGatewayError } from "../modules/model-gateway/text-model-gatew
 import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
 import { createGeoGenerationService, parseGeoGeneratedDocument, recoverStaleGeoGenerationRuns } from "../modules/geo/geo-generation.service.ts";
 import { createGeoMonitoringService } from "../modules/geo/geo-monitoring.service.ts";
+import { GeoSearchAdapter } from "../modules/geo/geo-search.adapter.ts";
 import { listGeoPlatforms } from "../modules/geo/geo-platforms.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
@@ -18113,7 +18114,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     <section class="public-seo-content" aria-labelledby="public-seo-heading">
       <nav class="public-seo-nav" aria-label="公开创作页面">
         <a class="public-seo-brand" href="/">灵曦AI</a>
-        <div>${navigation}</div>
+        <div>${navigation}<a href="/guides">创作指南</a><a href="/answers">常见问题</a></div>
       </nav>
       <header class="public-seo-intro">
         <p>${escapeSeoHtml(route.eyebrow)}</p>
@@ -20558,7 +20559,16 @@ export function createPhoneAuthDevServer(
         });
         const geoMonitoringService = createGeoMonitoringService({
           db,
-          gateway: canvasTextChatGateway,
+          gateway: options.textChatGateway ?? createTextModelChatGateway({
+            gateway: new TextModelGatewayService({
+              db,
+              adapter: new GeoSearchAdapter(),
+              cumobAdapter: new GeoSearchAdapter(),
+              modelflareAdapter: new GeoSearchAdapter(),
+              resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
+              env: runtimeEnv,
+            }),
+          }),
           publicSiteOrigin: publicSiteOrigin(request, runtimeEnv),
           resolveModelProvider: async (modelCode) => (
             await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(modelCode)
