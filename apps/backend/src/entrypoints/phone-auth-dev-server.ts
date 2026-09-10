@@ -113,6 +113,7 @@ import { GeoSearchAdapter } from "../modules/geo/geo-search.adapter.ts";
 import { listGeoPlatforms } from "../modules/geo/geo-platforms.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
+import { renderProductGeoArticleLinks, selectRelatedGeoArticles } from "../modules/geo/geo-related-links.ts";
 import { geoRuntimeConfigKey, loadGeoRuntimeSettings, loadGeoRuntimeSettingsRevision, normalizeGeoRuntimeSettings } from "../modules/geo/geo-settings.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
@@ -17154,9 +17155,7 @@ async function serveGeoPublic(
     const versionSettings = await loadGeoRuntimeSettingsRevision(db, result.body.data.version.configRevisionId);
     const allPublished = await service.listPublished();
     const related = "data" in allPublished.body
-      ? allPublished.body.data
-        .filter((entry) => entry.item.id !== result.body.data.item.id)
-        .slice(0, 4)
+      ? selectRelatedGeoArticles(result.body.data, allPublished.body.data, 4)
         .map((entry) => ({
           href: geoPublicHref(entry.item.contentType, entry.item.slug),
           title: entry.version.title,
@@ -18089,6 +18088,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     .filter((page): page is PublicSeoRoute => Boolean(page))
     .map((page) => `<a href="${page.path}"><strong>${escapeSeoHtml(page.heading)}</strong><span>${escapeSeoHtml(page.description)}</span></a>`)
     .join("\n          ");
+  const articleLinks = renderProductGeoArticleLinks(route.path);
   const structuredData = JSON.stringify({
     "@context": "https://schema.org",
     "@graph": [
@@ -18154,7 +18154,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
           <span>继续了解</span>
           <h2 id="public-seo-related-heading">相关创作入口</h2>
         </div>
-        <div>${relatedLinks}</div>
+        <div>${articleLinks}${articleLinks && relatedLinks ? "\n          " : ""}${relatedLinks}</div>
       </section>
       <section class="public-seo-cta" aria-label="开始创作">
         <div><h2>${escapeSeoHtml(route.ctaTitle)}</h2><p>${escapeSeoHtml(route.ctaBody)}</p></div>
