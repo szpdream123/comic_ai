@@ -114,6 +114,7 @@ import { listGeoPlatforms } from "../modules/geo/geo-platforms.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
 import { renderProductGeoArticleLinks, selectRelatedGeoArticles } from "../modules/geo/geo-related-links.ts";
+import { createGeoImageVariantCache, geoImageWidth, readGeoImageSource } from "../modules/geo/geo-image-variants.ts";
 import { geoRuntimeConfigKey, loadGeoRuntimeSettings, loadGeoRuntimeSettingsRevision, normalizeGeoRuntimeSettings } from "../modules/geo/geo-settings.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
@@ -17152,6 +17153,16 @@ async function serveGeoPublic(
     if (!("data" in result.body)) {
       return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
     }
+    const publicationDates = await db.query<{ first_published_at: Date | string | null; public_updated_at: Date | string | null }>(
+      `SELECT
+         (SELECT MIN(version.published_at) FROM geo_content_versions version
+          WHERE version.content_item_id=$1) AS first_published_at,
+         (SELECT MAX(event.created_at) FROM geo_audit_events event
+          WHERE event.target_type='geo_content_item' AND event.target_id=$1
+            AND event.event_type IN ('published','rolled_back')
+            AND event.metadata_json->>'versionId'=$2) AS public_updated_at`,
+      [result.body.data.item.id, result.body.data.version.id],
+    );
     const versionSettings = await loadGeoRuntimeSettingsRevision(db, result.body.data.version.configRevisionId);
     const allPublished = await service.listPublished();
     const related = "data" in allPublished.body
@@ -17168,8 +17179,12 @@ async function serveGeoPublic(
       brandName: "灵曦AI",
       contentType,
       document: result.body.data.version.document,
-      publishedAt: result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
-      updatedAt: result.body.data.item.updatedAt,
+      publishedAt: publicationDates.rows[0]?.first_published_at
+        ? new Date(publicationDates.rows[0].first_published_at).toISOString()
+        : result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
+      updatedAt: publicationDates.rows[0]?.public_updated_at
+        ? new Date(publicationDates.rows[0].public_updated_at).toISOString()
+        : result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
       authorName: versionSettings.publicAuthorName,
       evidence: result.body.data.evidence,
       related,
@@ -17238,7 +17253,7 @@ async function serveDynamicSitemap(
   const geoRootEntries = Object.entries(geoPublicRouteTypes)
     .filter(([, contentType]) => publishedTypes.has(contentType))
     .map(([route]) => ({ href: `/${route}`, lastmod: null }));
-  const entries = [...staticEntries, ...geoRootEntries, ...dynamicEntries];
+  const entries = [...staticEntries, { href: "/geo-resources/index.html", lastmod: null }, ...geoRootEntries, ...dynamicEntries];
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries
     .map((entry) => `  <url><loc>${escapeSeoHtml(`${origin}${entry.href}`)}</loc>${entry.lastmod ? `<lastmod>${escapeSeoHtml(new Date(entry.lastmod).toISOString())}</lastmod>` : ""}</url>`)
     .join("\n")}\n</urlset>\n`;
@@ -17255,6 +17270,8 @@ async function serveDynamicSitemap(
   response.statusCode = 200;
   response.end(file);
 }
+
+const geoImageVariant = createGeoImageVariantCache();
 
 async function serveGeoAsset(
   request: Parameters<typeof createServer>[0],
@@ -17292,7 +17309,7 @@ async function serveGeoAsset(
     `SELECT EXISTS (
        SELECT 1 FROM geo_content_items item
        JOIN geo_content_versions version ON version.id=item.current_published_version_id
-       WHERE item.status='published' AND (
+       WHERE item.status<>'archived' AND (
          version.document_json->'blocks' @> $1::jsonb
          OR version.document_json->'blocks' @> $2::jsonb
        )
@@ -17319,6 +17336,30 @@ async function serveGeoAsset(
     expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
     responseContentDisposition: "inline",
   });
+  const variantWidth = geoImageWidth(new URL(request.url ?? "/", publicOrigin).searchParams.get("width"));
+  if (variantWidth && /^https?:\/\//i.test(signed.url) && ["image/png", "image/jpeg", "image/webp"].includes(storageObject.contentType.toLowerCase())) {
+    try {
+      const key = `${storageObject.id}:${storageObject.etag ?? storageObject.checksum ?? ""}:${variantWidth}`;
+      const bytes = await geoImageVariant(key, async () => {
+        const upstream = await fetchProviderArtifactSafely(signed.url, { signal: AbortSignal.timeout(20_000) }, fetch);
+        const source = await readGeoImageSource(upstream);
+        return sharp(source, { failOn: "error", limitInputPixels: 40_000_000 }).rotate()
+          .resize({ width: variantWidth, withoutEnlargement: true }).webp({ quality: 82, effort: 3 }).toBuffer();
+      });
+      const etag = staticAssetEtag(bytes);
+      response.setHeader("etag", etag);
+      response.setHeader("content-type", "image/webp");
+      response.setHeader("cache-control", isPublished ? "public, max-age=300, must-revalidate" : "private, no-store");
+      response.setHeader("x-content-type-options", "nosniff");
+      if (requestMatchesEtag(request, etag)) { response.statusCode = 304; response.end(); return; }
+      response.setHeader("content-length", String(bytes.length));
+      response.statusCode = 200;
+      response.end(request.method === "HEAD" ? undefined : bytes);
+      return;
+    } catch {
+      // Keep the original image available if fetching, decoding or capacity checks fail.
+    }
+  }
   response.statusCode = 307;
   response.setHeader("location", signed.url);
   const redirectMaxAge = Number.isFinite(signedUrlExpiresInSeconds)

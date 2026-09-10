@@ -97,6 +97,18 @@ export function renderProductGeoArticleLinks(path: string) {
     .join("\n          ");
 }
 
+export function renderGeoTemplateLinks(path: string) {
+  const resources = [
+    { article: "/guides/ai-character-consistency", file: "character-consistency-checklist.csv", title: "角色一致性检查清单" },
+    { article: "/guides/ai-short-drama-dialogue-storyboard", file: "dialogue-storyboard.csv", title: "对白分镜表" },
+    { article: "/guides/ai-short-drama-asset-management", file: "asset-version-register.csv", title: "素材版本登记表" },
+  ];
+  const pathname = path.replace(/\/$/, "");
+  const matches = resources.filter((resource) => resource.article === pathname || pathname === "/cases/cafe-dialogue-reference-workflow");
+  if (matches.length === 0) return "";
+  return `<aside class="geo-cta" aria-label="配套制作模板"><h2>配套制作模板</h2><p>下载 CSV 后可用 Excel 打开。示例行仅演示填写格式，请按自己的项目替换。</p><ul>${matches.map((resource) => `<li><a href="/geo-resources/${resource.file}" download>下载${resource.title}（CSV）</a></li>`).join("")}</ul><a href="/geo-resources/index.html">查看全部模板与填写说明</a></aside>`;
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
