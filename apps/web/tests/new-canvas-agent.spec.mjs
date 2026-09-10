@@ -1688,6 +1688,7 @@ test("Canvas Agent refreshes the canvas as soon as canvas.patch succeeds", async
 
 test("Canvas Agent refreshes the canvas when media generation starts and completes", async () => {
   const refreshes = [];
+  const registered = [];
   const workbench = {
     ui: {
       selectedCanvasProjectId: "canvas-live",
@@ -1721,6 +1722,9 @@ test("Canvas Agent refreshes the canvas when media generation starts and complet
     surface: { querySelector: () => null },
     workbench,
     pollIntervalMs: 1,
+    onGenerationTaskCreated(taskId, defaults) {
+      registered.push({ taskId, defaults });
+    },
   });
 
   await controller.handleAction({ dataset: { agentAction: "send" } });
@@ -1729,6 +1733,9 @@ test("Canvas Agent refreshes the canvas when media generation starts and complet
   }
 
   assert.equal(refreshes.length, 2);
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0].taskId, "generation-1");
+  assert.equal(registered[0].defaults.targetType, "canvas");
   controller.dispose();
 });
 
@@ -3536,6 +3543,47 @@ test("media-only Agent creates a new text-model task instead of interjecting whi
   } finally {
     controller.dispose();
   }
+});
+
+test("media-only Agent does not re-fetch generation details on every waiting poll", async () => {
+  let generationDetailRequests = 0;
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        promptDraft: "生成一张图片",
+        generationModelsStatus: "ready",
+        generationModels: [{ modelCode: "image-model", modelLabel: "Image", mediaType: "image", enabled: true }],
+        generationModelCodes: { image: "image-model" },
+      },
+    },
+    api: {
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-conversation" } };
+      },
+      async sendFreeGenerationMessage() {
+        return { task: { id: "agent-task", status: "queued" } };
+      },
+      async *streamFreeGenerationEvents() {
+        yield { data: { id: "event-1", sequence: 1, eventType: "task.waiting_external", event: { generationTaskId: "generation-1" } } };
+      },
+      async getGenerationTasks() {
+        generationDetailRequests += 1;
+        return { items: [] };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 1,
+  });
+
+  await controller.submitPrompt({ text: "生成一张图片" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(generationDetailRequests, 0);
+  controller.dispose();
 });
 
 test("media-only Agent creates and titles a conversation from its first message, then supports switching and renaming", async () => {

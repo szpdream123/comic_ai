@@ -730,6 +730,24 @@ test("new-canvas editor exposes a full-height workspace and feature rail", () =>
   assert.doesNotMatch(html, /class="canvas-config-library-launch"/);
   assert.doesNotMatch(html, /CANVAS AGENT/);
   assert.doesNotMatch(html, /智能协作/);
+  assert.match(html, /data-canvas-utility-action="toggle-menu"/);
+  const utilityHtml = renderNewCanvasLayout("<main data-canvas-x6-mount></main>", {
+    canvasUtilityMenuOpen: true,
+    canvasUtilityModal: "operation-history",
+    canvasOperationHistoryCanUndo: true,
+    canvasOperationHistory: [{ id: "operation-1", label: "移动节点位置" }],
+    canvasAgent: { status: "idle" },
+  });
+  assert.match(utilityHtml, /data-canvas-utility-action="open-task-center"/);
+  assert.match(utilityHtml, /data-canvas-utility-action="open-operation-history"/);
+  assert.match(utilityHtml, /data-canvas-utility-action="undo"/);
+  assert.match(utilityHtml, /移动节点位置/);
+  const taskCenterHtml = renderNewCanvasLayout("<main data-canvas-x6-mount></main>", {
+    canvasUtilityModal: "task-center",
+    canvasAgent: { status: "idle" },
+  });
+  assert.match(taskCenterHtml, /data-canvas-utility-modal-backdrop/);
+  assert.match(taskCenterHtml, /任务中心/);
   const handRail = renderNewCanvasChromeRail({ canvasDocument: { viewport: { interactionMode: "hand" } } });
   assert.match(handRail, /new-canvas-interaction-tool[^>]*data-interaction-mode="hand"[^>]*aria-label="抓手工具"/);
   assert.match(handRail, /new-canvas-interaction-tool[^>]*>[^<]*<svg[^>]*>.*抓手工具/s);

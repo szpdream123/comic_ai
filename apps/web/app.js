@@ -128,6 +128,13 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       .filter(([key]) => !/(?:api[_-]?key|token|secret|password|credential)/iu.test(key))
       .map(([key, nested]) => [key, sanitizeCatalogValue(nested)]));
   };
+  const normalizeExecutionProfile = (profile) => {
+    if (Array.isArray(profile)) return profile.map(normalizeExecutionProfile);
+    if (!profile || typeof profile !== "object") {
+      return typeof profile === "string" ? profile.replaceAll("{{modelId}}", "{{model}}") : profile;
+    }
+    return Object.fromEntries(Object.entries(profile).map(([key, value]) => [key, normalizeExecutionProfile(value)]));
+  };
   const createBackendMediaExecutionProfile = (mediaKind) => ({
     preset: "custom",
     protocol: {
@@ -141,7 +148,6 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
         body: {
           model: "{{model}}",
           prompt: "{{prompt}}",
-          canvasNodeId: "{{nodeId}}",
         },
       },
       response: {
@@ -238,7 +244,14 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
     applying = true;
     const state = store.getState();
     const existingModels = Array.isArray(state?.config?.generalModels)
-      ? state.config.generalModels.filter((model) => model?.source !== "comic-ai-backend")
+      ? state.config.generalModels
+        .filter((model) => model?.source !== "comic-ai-backend")
+        .map((model) => ({
+          ...model,
+          ...(model?.executionProfile
+            ? { executionProfile: normalizeExecutionProfile(model.executionProfile) }
+            : {}),
+        }))
       : [];
     const providers = { ...(state?.config?.providers ?? {}) };
     const defaultTextModelId = modelCatalog.find((model) => model.category === "text")?.id;

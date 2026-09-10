@@ -10300,6 +10300,7 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
     onOpenHome: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "home" } }),
     onOpenProjects: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "new-canvas" } }),
     onOpenTaskCenter: () => handleAction(workbench, { dataset: { action: "open-task-center" } }),
+    onOpenOperationRecords: () => handleAction(workbench, { dataset: { action: "set-canvas-sidebar-mode", canvasSidebarMode: "history" } }),
   };
 }
 
@@ -10472,6 +10473,17 @@ async function syncNewCanvasMount(workbench) {
       ...(isAiCanvasRuntime ? getAiCanvasRuntimeProjectBridge(workbench) : {}),
       ...runtimeContext,
       ...(isAiCanvasRuntime ? { embedded: false } : {}),
+      onGenerationTaskCreated(taskId, defaults = {}) {
+        const normalizedTaskId = registerTaskCenterTask(workbench, taskId, {
+          ...defaults,
+          taskId,
+        });
+        if (normalizedTaskId) {
+          scheduleTaskCenterPolling(workbench, { immediate: true });
+          syncTaskCenterActionCountDom(workbench);
+        }
+        return normalizedTaskId;
+      },
       agentOnly: workbench.ui.canvasAgentOnly === true,
       capabilityProfile: workbench.ui.canvasAgentCapabilityProfile || undefined,
       onDirectorDeskNotify({ message, tone }) {

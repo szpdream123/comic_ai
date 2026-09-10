@@ -2,6 +2,7 @@ import { renderCanvasSurfaceForHost } from "../production-workbench/project-deta
 import {
   applyCanvasGraphInteractionMode,
   applyCanvasGraphViewportPreferences,
+  applyCanvasWorkflowHistory,
   clearCanvasGraphEditorOverlay,
   clearCanvasGraphSelection,
   mountCanvasGraphEditorOverlay,
@@ -68,6 +69,18 @@ const instances = new WeakMap();
 const canvasAudioWaveformCache = new Map();
 const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
 const CANVAS_STYLE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000];
+
+function canvasOperationHistoryLabel(commands = []) {
+  const items = Array.isArray(commands) ? commands : [commands];
+  const events = items.map((command) => String(command?.event ?? ""));
+  if (events.some((event) => event === "cell:added")) return "新增节点或连线";
+  if (events.some((event) => event === "cell:removed")) return "删除节点或连线";
+  if (events.some((event) => event.includes("position"))) return "移动节点位置";
+  if (events.some((event) => event.includes("source") || event.includes("target"))) return "调整节点连线";
+  if (events.some((event) => event.includes("size"))) return "调整节点大小";
+  if (events.some((event) => event.includes("data") || event.includes("attrs"))) return "编辑节点内容";
+  return "画布修改";
+}
 
 function isCanvasNodeInteractiveTarget(event) {
   const path = event.composedPath?.() ?? [];
@@ -290,6 +303,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         workbench,
         renderLayout: () => render(),
         capabilityProfile: context.capabilityProfile,
+        onGenerationTaskCreated: context.onGenerationTaskCreated,
       });
       const configLibraryController = createCanvasConfigLibraryController({ surface, workbench });
       const directorDeskOverlay = createDirectorDeskOverlay({ surface, workbench });
@@ -305,6 +319,40 @@ function createProductionCanvasAdapter(dependencies = {}) {
       let suppressStoryboardExtractClickUntil = 0;
       let canvasNodePointer = null;
       let suppressCanvasBlankClickUntil = 0;
+      let canvasOperationHistoryGraph = null;
+      const syncCanvasOperationHistoryState = (historyGraph = graph) => {
+        workbench.ui.canvasOperationHistoryCanUndo = historyGraph?.canUndo?.() === true;
+        workbench.ui.canvasOperationHistoryCanRedo = historyGraph?.canRedo?.() === true;
+      };
+      const bindCanvasOperationHistory = (historyGraph) => {
+        if (!historyGraph || historyGraph === canvasOperationHistoryGraph) return;
+        canvasOperationHistoryGraph = historyGraph;
+        syncCanvasOperationHistoryState(historyGraph);
+        historyGraph.on?.("history:add", ({ cmds } = {}) => {
+          const entries = Array.isArray(workbench.ui.canvasOperationHistory) ? workbench.ui.canvasOperationHistory : [];
+          workbench.ui.canvasOperationHistory = [...entries.map((entry) => ({ ...entry, undone: false })), {
+            id: `${Date.now()}-${entries.length}`,
+            label: canvasOperationHistoryLabel(cmds),
+            undone: false,
+          }].slice(-80);
+          syncCanvasOperationHistoryState(historyGraph);
+        });
+        historyGraph.on?.("history:undo", () => {
+          const entries = Array.isArray(workbench.ui.canvasOperationHistory) ? workbench.ui.canvasOperationHistory : [];
+          let targetIndex = entries.length - 1;
+          while (targetIndex >= 0 && entries[targetIndex]?.undone === true) targetIndex -= 1;
+          if (targetIndex >= 0) entries[targetIndex] = { ...entries[targetIndex], undone: true };
+          syncCanvasOperationHistoryState(historyGraph);
+        });
+        historyGraph.on?.("history:redo", () => {
+          const entries = Array.isArray(workbench.ui.canvasOperationHistory) ? workbench.ui.canvasOperationHistory : [];
+          let targetIndex = entries.length - 1;
+          while (targetIndex >= 0 && entries[targetIndex]?.undone !== true) targetIndex -= 1;
+          if (targetIndex >= 0) entries[targetIndex] = { ...entries[targetIndex], undone: false };
+          syncCanvasOperationHistoryState(historyGraph);
+        });
+        historyGraph.on?.("history:change", () => syncCanvasOperationHistoryState(historyGraph));
+      };
       const disposeCanvasSelectEnhancer = installCanvasSelectEnhancer(surface);
       workbench.onDirectorDeskOpen = (node) => directorDeskOverlay.open(node);
       workbench.onDirectorDeskSyncFrame = (node) => directorDeskOverlay.syncCurrentFrame(node);
@@ -408,6 +456,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           return;
         }
         graph = mountedGraph;
+        bindCanvasOperationHistory(graph);
         if (!graph) showCanvasGraphMountFailure(surface);
         const stage = surface.querySelector?.(".canvas-stage");
         if (stage && graph) {
@@ -494,6 +543,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
         const currentChromeRail = surface.querySelector?.(".new-canvas-chrome-rail");
         const nextChromeRail = template.content.querySelector?.(".new-canvas-chrome-rail");
         if (currentChromeRail && nextChromeRail) currentChromeRail.replaceWith(nextChromeRail);
+        const currentUtilityMenu = surface.querySelector?.("[data-new-canvas-utility-menu]");
+        const nextUtilityMenu = template.content.querySelector?.("[data-new-canvas-utility-menu]");
+        if (currentUtilityMenu && nextUtilityMenu) currentUtilityMenu.replaceWith(nextUtilityMenu);
         const currentMinimap = surface.querySelector?.("[data-canvas-minimap]");
         const nextMinimap = template.content.querySelector?.("[data-canvas-minimap]");
         if (currentMinimap && nextMinimap) currentMinimap.replaceWith(nextMinimap);
@@ -716,6 +768,36 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.stopPropagation();
           return;
         }
+        const utilityActionTarget = event.target?.closest?.("[data-canvas-utility-action]");
+        if (utilityActionTarget) {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          const utilityAction = String(utilityActionTarget.dataset?.canvasUtilityAction ?? "");
+          if (utilityAction === "toggle-menu") {
+            workbench.ui.canvasUtilityMenuOpen = workbench.ui.canvasUtilityMenuOpen !== true;
+            void renderControls();
+            return;
+          }
+          if (utilityAction === "close-modal") {
+            workbench.ui.canvasUtilityModal = "";
+            void render();
+            return;
+          }
+          if (utilityAction === "undo" || utilityAction === "redo") {
+            applyCanvasWorkflowHistory(workbench, utilityAction);
+            syncCanvasOperationHistoryState();
+            void render();
+            return;
+          }
+          if (utilityAction === "open-task-center" || utilityAction === "open-operation-history") {
+            workbench.ui.canvasUtilityMenuOpen = false;
+            workbench.ui.canvasUtilityModal = utilityAction === "open-task-center" ? "task-center" : "operation-history";
+            if (utilityAction === "open-operation-history") syncCanvasOperationHistoryState();
+            void render();
+            if (utilityAction === "open-task-center") void agentController.loadTaskCenter().then(() => render());
+            return;
+          }
+        }
         const minimapActionTarget = event.target?.closest?.("[data-minimap-action]");
         if (minimapActionTarget) {
           event.stopPropagation();
@@ -748,7 +830,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (agentActionTarget) {
           event.preventDefault?.();
           event.stopPropagation();
-          void agentController.handleAction(agentActionTarget);
+          void agentController.handleAction(agentActionTarget).then(() => {
+            if (workbench.ui.canvasUtilityModal === "task-center") void render();
+          });
           return;
         }
         const actionTarget = event.target?.closest?.("[data-action]")
@@ -1016,6 +1100,13 @@ function createProductionCanvasAdapter(dependencies = {}) {
         event.stopPropagation();
       };
       const onKeydown = (event) => {
+        if (event.key === "Escape" && workbench.ui?.canvasUtilityModal) {
+          event.preventDefault();
+          event.stopPropagation();
+          workbench.ui.canvasUtilityModal = "";
+          void render();
+          return;
+        }
         const zoomValueInput = event.target?.closest?.("[data-canvas-zoom-value-input]");
         if (zoomValueInput && event.key === "Enter") {
           event.preventDefault();

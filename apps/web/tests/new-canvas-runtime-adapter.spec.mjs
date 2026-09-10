@@ -195,6 +195,10 @@ test("AI Canvas backend media models declare task polling instead of a synchrono
   assert.match(catalogBridge, /data\.result\.images\.\*\.url/);
   assert.match(catalogBridge, /data\.result\.videos\.\*\.url/);
   assert.match(catalogBridge, /executionProfile: category === "image" \|\| category === "video"/);
+  assert.match(catalogBridge, /normalizeExecutionProfile/);
+  assert.ok(catalogBridge.includes('replaceAll("{{modelId}}", "{{model}}")'));
+  assert.match(catalogBridge, /model: "\{\{model\}\}"/);
+  assert.doesNotMatch(catalogBridge, /canvasNodeId: "\{\{nodeId\}\}"/);
 });
 
 test("AI Canvas adapter preserves backend media parameter schemas and defaults", async () => {
@@ -445,7 +449,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /createAiCanvasRuntimeCatalogBridge/);
   assert.match(appSource, /const catalogBridge = createAiCanvasRuntimeCatalogBridge\(runtimeStore, context\)/);
   assert.match(appSource, /backendBaseUrl[\s\S]*?\/api\/canvas\//);
-  assert.match(appSource, /canvasNodeId: "\{\{nodeId\}\}"/);
+  assert.doesNotMatch(appSource, /canvasNodeId: "\{\{nodeId\}\}"/);
   assert.match(mediaProtocolSource, /variables: \{[\s\S]*\.\.\.e\.variables,[\s\S]*e\.nodeId \? \{ nodeId: e\.nodeId \} : \{\}/);
   assert.match(conversationExecutionSource, /async function _r\(e, t, n, nodeId\)/);
   assert.match(conversationExecutionSource, /await _r\(i, e\.projectId, e\.signal, o\)/);

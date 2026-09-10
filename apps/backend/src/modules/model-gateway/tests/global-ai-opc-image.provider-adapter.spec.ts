@@ -275,6 +275,30 @@ describe("GlobalAiOpc image provider adapter", () => {
     assert.equal(polled.artifacts?.[0]?.url, "https://cdn.global-ai-opc.example/seedream.png");
   });
 
+  it("does not forward legacy model aliases from provider defaults", () => {
+    const payload = buildGlobalAiOpcImagePayload({
+      providerRequestId: "provider-request-global-gpt-legacy-model",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-global-gpt-legacy-model:task-global-gpt-legacy-model",
+      payloadRef: "creator://payload-global-gpt-legacy-model",
+      payloadHash: "hash-global-gpt-legacy-model",
+      redactedPayload: { prompt: "A legacy-safe image" },
+    }, {
+      model: "gpt-image-2",
+      defaultRequestParams: {
+        modelId: "stale-model-id",
+        model_id: "stale-model-id-alias",
+        watermark: false,
+      },
+    });
+
+    assert.equal(payload.model, "gpt-image-2");
+    assert.equal(payload.watermark, false);
+    assert.equal("modelId" in payload, false);
+    assert.equal("model_id" in payload, false);
+  });
+
   it("prefers the dedicated create endpoint over a stale request path", async () => {
     const capturedUrls: string[] = [];
     const adapter = createProviderAdapterFromModelConfig({

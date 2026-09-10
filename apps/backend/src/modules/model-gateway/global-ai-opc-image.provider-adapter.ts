@@ -185,7 +185,9 @@ export function buildGlobalAiOpcImagePayload(
   const model = config.model?.trim() || defaultModel;
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
-  const defaults = config.defaultRequestParams ?? {};
+  // Provider configs may retain the legacy modelId aliases, but GlobalAiOpc only
+  // accepts the canonical model field that this adapter sets below.
+  const defaults = omitKeys(config.defaultRequestParams ?? {}, ["modelId", "model_id"]);
   const prompt =
     readString(payload.prompt) ??
     readString(parameters.prompt) ??

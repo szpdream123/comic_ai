@@ -15,7 +15,7 @@ import {
   renderHomeAgentModelPicker,
 } from "../production-workbench/home-agent-model-picker.js";
 import { renderPromptAttachmentCard } from "../production-workbench/episode-workbench-rebuilt.js?video-category=2&storyboard-style-picker=1";
-import { renderNewCanvasChromeRail } from "./canvas-chrome.js";
+import { renderNewCanvasChromeRail, renderNewCanvasUtilityMenu } from "./canvas-chrome.js";
 import { renderCanvasStyleGuide } from "./canvas-style-guide.js";
 import { confirmCanvasAction } from "./canvas-ui-controls.js";
 
@@ -662,14 +662,41 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
   return `
     <div class="new-canvas-layout ${agentOnly ? "is-agent-only" : ""} ${agentPanelClosed ? "is-agent-collapsed" : ""}" style="--canvas-agent-panel-width:${agentPanelWidth}px">
       ${agentOnly ? "" : `
-      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
+      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${renderNewCanvasUtilityMenu(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
       `}
       ${sessionReady && !agentOnly ? renderCanvasStyleGuide(ui) : ""}
       ${sessionReady ? renderCanvasAgentPanel(agentUi) : ""}
       ${sessionReady && !agentOnly ? renderCanvasAgentRewindConfirmModal(ui) : ""}
+      ${sessionReady && !agentOnly ? renderNewCanvasUtilityModal(ui) : ""}
       ${agentOnly ? "" : auxiliaryMarkup}
     </div>
   `;
+}
+
+function renderNewCanvasUtilityModal(ui = {}) {
+  const modal = String(ui.canvasUtilityModal ?? "");
+  if (!modal) return "";
+  const agent = ensureCanvasAgentState(ui);
+  const busy = Boolean(agent.busyAction);
+  const title = modal === "task-center" ? "任务中心" : "操作记录";
+  const content = modal === "task-center"
+    ? renderAgentTaskCenter(agent, busy, { modal: true })
+    : renderCanvasOperationHistory(ui);
+  return `<section class="new-canvas-utility-backdrop" data-canvas-utility-modal-backdrop role="dialog" aria-modal="true" aria-labelledby="new-canvas-utility-modal-title">
+    <div class="new-canvas-utility-modal">
+      <header class="new-canvas-utility-modal-head"><h2 id="new-canvas-utility-modal-title">${title}</h2><button type="button" class="new-canvas-utility-modal-close" data-canvas-utility-action="close-modal" aria-label="关闭" title="关闭">×</button></header>
+      <div class="new-canvas-utility-modal-body">${content}</div>
+    </div>
+  </section>`;
+}
+
+function renderCanvasOperationHistory(ui = {}) {
+  const items = Array.isArray(ui.canvasOperationHistory) ? ui.canvasOperationHistory : [];
+  const canUndo = ui.canvasOperationHistoryCanUndo === true;
+  const canRedo = ui.canvasOperationHistoryCanRedo === true;
+  const controls = `<div class="new-canvas-operation-actions" role="toolbar" aria-label="操作历史控制"><button type="button" data-canvas-utility-action="undo" ${canUndo ? "" : "disabled"}>撤销</button><button type="button" data-canvas-utility-action="redo" ${canRedo ? "" : "disabled"}>还原</button></div>`;
+  if (!items.length) return `${controls}<div class="new-canvas-operation-empty">暂无操作记录</div>`;
+  return `${controls}<div class="new-canvas-operation-list" aria-label="操作记录列表">${items.slice(0, 80).reverse().map((item, index) => `<article class="new-canvas-operation-item${item?.undone === true ? " is-undone" : ""}"><span class="new-canvas-operation-mark" aria-hidden="true">${item?.undone === true ? "-" : "+"}</span><div><strong>${escapeHtml(item?.label || "画布修改")}</strong><small>${item?.undone === true ? "已撤销" : index === 0 ? "当前" : "已完成"}</small></div></article>`).join("")}</div>`;
 }
 
 function renderCanvasAgentReopenButton() {
@@ -798,6 +825,7 @@ export function createCanvasAgentController({
   pollIntervalMs = 1500,
   loadPromptEditorModule = () => import(PROMPT_EDITOR_MODULE_URL),
   capabilityProfile = workbench?.ui?.canvasAgentCapabilityProfile ?? "",
+  onGenerationTaskCreated = null,
 }) {
   const ui = workbench.ui ?? (workbench.ui = {});
   const mediaOnly = capabilityProfile === "media_generation_only";
@@ -1087,6 +1115,7 @@ export function createCanvasAgentController({
   const conversationCache = new Map();
   let disposed = false;
   const refreshedCanvasEventKeys = new Set();
+  const registeredGenerationTaskIds = new Set();
   const canvasRefreshRetryTimers = new Set();
   const canvasRefreshRetryDelaysMs = [250, 750, 1_500, 3_000, 5_000, 5_000];
 
@@ -1122,12 +1151,34 @@ export function createCanvasAgentController({
   };
 
   const refreshCanvasAfterAgentMutation = (incoming = []) => {
-    if (mediaOnly) return;
-    if (typeof workbench.refreshCanvasAfterAgentPatch !== "function") return;
     for (const event of Array.isArray(incoming) ? incoming : []) {
       const eventType = String(event?.eventType ?? "");
       const stepId = String(event?.event?.stepId ?? "");
       const generationTaskId = String(event?.event?.generationTaskId ?? "");
+      if (
+        generationTaskId &&
+        ["task.waiting_external", "step.waiting_external", "generation.completed_wakeup"].includes(eventType) &&
+        !registeredGenerationTaskIds.has(generationTaskId)
+      ) {
+        registeredGenerationTaskIds.add(generationTaskId);
+        void Promise.resolve(onGenerationTaskCreated?.(generationTaskId, {
+          kind: agent.generationKind,
+          mediaKind: agent.generationKind,
+          targetType: mediaOnly ? "canvas_agent_conversation" : "canvas",
+          targetId: mediaOnly
+            ? agent.conversationId
+            : workbench.ui?.selectedCanvasProjectId,
+          conversationId: agent.conversationId,
+          prompt: [...(agent.messages ?? [])].reverse().find((message) => message?.role === "user")?.text ?? "",
+        })).catch(() => undefined);
+      }
+      if (mediaOnly) {
+        if (eventType === "generation.completed_wakeup" && generationTaskId) {
+          void hydrateMediaMessages().then(() => syncPanel({ liveOnly: true })).catch(() => undefined);
+        }
+        continue;
+      }
+      if (typeof workbench.refreshCanvasAfterAgentPatch !== "function") continue;
       let refreshKey = "";
       if (eventType === "step.succeeded" && stepId) {
         const created = (agent.events ?? []).find((candidate) =>
@@ -1194,11 +1245,6 @@ export function createCanvasAgentController({
         reduceCanvasAgentEvents(agent, [event]);
         refreshCanvasAfterAgentMutation([event]);
         agent.error = "";
-        if (mediaOnly && agent.status === "waiting_external") {
-          await hydrateMediaMessages();
-          syncPanel({ liveOnly: true });
-          break;
-        }
         syncPanel({ liveOnly: mediaOnly });
         if (TERMINAL_STATUSES.has(agent.status)) {
           await refreshConversationMessages(agent.conversationId);
@@ -1236,11 +1282,6 @@ export function createCanvasAgentController({
         agent.error = "";
         panelChanged = true;
         if (TERMINAL_STATUSES.has(agent.status)) await refreshConversationMessages(agent.conversationId);
-      }
-      if (mediaOnly && agent.status === "waiting_external") {
-        const previousMediaState = mediaMessageStateSignature(agent.messages);
-        await hydrateMediaMessages();
-        panelChanged = panelChanged || previousMediaState !== mediaMessageStateSignature(agent.messages);
       }
       if (panelChanged) syncPanel({ liveOnly: mediaOnly });
     } catch (error) {
@@ -3036,7 +3077,7 @@ function countActiveAgentTasks(agent) {
   return ids.size;
 }
 
-function renderAgentTaskCenter(agent, busy) {
+function renderAgentTaskCenter(agent, busy, options = {}) {
   const filter = agent.taskFilter === "all" ? "all" : "active";
   const items = (Array.isArray(agent.taskItems) ? agent.taskItems : [])
     .filter((task) => filter === "all" || ACTIVE_AGENT_TASK_STATUSES.has(task.status));
@@ -3049,7 +3090,7 @@ function renderAgentTaskCenter(agent, busy) {
         <button type="button" role="tab" aria-selected="${filter === "active"}" class="${filter === "active" ? "active" : ""}" data-agent-action="set-task-filter" data-task-filter="active">进行中</button>
         <button type="button" role="tab" aria-selected="${filter === "all"}" class="${filter === "all" ? "active" : ""}" data-agent-action="set-task-filter" data-task-filter="all">全部</button>
       </div>
-      <button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭任务中心" title="关闭">×</button>
+      <button type="button" class="canvas-agent-close-view" ${options.modal ? 'data-canvas-utility-action="close-modal"' : 'data-agent-action="close-agent-view"'} aria-label="关闭任务中心" title="关闭">×</button>
     </header>
     <div class="canvas-agent-special-content">
       ${loading && !items.length ? renderAgentSpecialEmpty("正在同步任务", "读取已持久化的会话、消息和任务事件。") : ""}

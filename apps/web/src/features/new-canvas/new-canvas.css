@@ -2407,6 +2407,120 @@
   overflow: hidden;
 }
 
+.new-canvas-utility-menu {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 42;
+}
+
+.new-canvas-utility-trigger {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 7px;
+  background: rgba(25,30,35,.92);
+  color: #e8f0f1;
+  box-shadow: 0 10px 24px rgba(0,0,0,.28);
+  cursor: pointer;
+}
+
+.new-canvas-utility-trigger:hover,
+.new-canvas-utility-trigger:focus-visible { border-color: #78aebc; background: #24343a; }
+
+.new-canvas-utility-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  min-width: 168px;
+  padding: 6px;
+  gap: 3px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 7px;
+  background: rgba(18,22,27,.98);
+  box-shadow: 0 16px 34px rgba(0,0,0,.38);
+}
+
+.new-canvas-utility-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #e8f0f1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-canvas-utility-item:hover,
+.new-canvas-utility-item:focus-visible { background: rgba(120,174,188,.16); }
+.new-canvas-utility-item svg { width: 18px; height: 18px; color: #8fc5cf; }
+
+.new-canvas-utility-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3,5,7,.64);
+}
+
+.new-canvas-utility-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(760px, 100%);
+  max-height: min(760px, calc(100dvh - 48px));
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 8px;
+  background: #101419;
+  color: #e8f0f1;
+  box-shadow: 0 24px 70px rgba(0,0,0,.5);
+}
+
+.new-canvas-utility-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.new-canvas-utility-modal-head h2 { margin: 0; font-size: 17px; }
+.new-canvas-utility-modal-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #aeb9bd;
+  font-size: 24px;
+  cursor: pointer;
+}
+.new-canvas-utility-modal-close:hover { background: rgba(255,255,255,.1); color: #fff; }
+.new-canvas-utility-modal-body { min-height: 0; overflow: auto; padding: 14px; }
+.new-canvas-utility-modal-body .canvas-agent-task-center { min-height: 0; border: 0; background: transparent; }
+.new-canvas-utility-modal-body .canvas-agent-special-head { position: static; }
+.new-canvas-operation-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+.new-canvas-operation-actions button { min-height: 32px; padding: 0 13px; border: 1px solid #42555c; border-radius: 5px; background: #1a252a; color: #e8f0f1; cursor: pointer; }
+.new-canvas-operation-actions button:hover:not(:disabled) { border-color: #78aebc; background: #243a41; }
+.new-canvas-operation-actions button:disabled { cursor: not-allowed; opacity: .45; }
+.new-canvas-operation-list { display: grid; gap: 8px; }
+.new-canvas-operation-item { display: grid; grid-template-columns: 26px minmax(0,1fr); gap: 10px; padding: 11px 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 6px; background: rgba(255,255,255,.025); }
+.new-canvas-operation-item.is-undone { opacity: .52; }
+.new-canvas-operation-mark { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: #244d4a; color: #a3e4d4; font-weight: 700; }
+.new-canvas-operation-item strong, .new-canvas-operation-item small, .new-canvas-operation-item p { display: block; }
+.new-canvas-operation-item small { margin-top: 3px; color: #8fa0a4; font-size: 12px; }
+.new-canvas-operation-item p { margin: 7px 0 0; color: #b8c4c7; font-size: 12px; line-height: 1.45; }
+.new-canvas-operation-empty { padding: 48px 12px; color: #8fa0a4; text-align: center; }
+
 .canvas-agent-panel {
   position: relative;
   grid-column: 2;

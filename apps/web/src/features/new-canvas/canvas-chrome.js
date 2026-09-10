@@ -19,6 +19,7 @@ const CHROME_ICON_PATHS = {
   media: '<rect x="4" y="5" width="16" height="14" rx="2" /><path d="m8 15 3-3 2 2 2-2 3 3" />',
   guide: '<rect x="5" y="4" width="14" height="16" rx="2" /><path d="M8 8h8M8 12h6M8 16h4" />',
   sparkle: '<path d="m12 3 1.4 5.6L19 10l-5.6 1.4L12 17l-1.4-5.6L5 10l5.6-1.4L12 3Z" /><path d="m19 16 .6 2.4L22 19l-2.4.6L19 22l-.6-2.4L16 19l2.4-.6L19 16Z" />',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16" />',
 };
 
 function renderChromeIcon(name, options = {}) {
@@ -81,4 +82,15 @@ export function renderNewCanvasChrome(ui = {}) {
       </div>
     </header>
   `;
+}
+
+export function renderNewCanvasUtilityMenu(ui = {}) {
+  const open = ui.canvasUtilityMenuOpen === true;
+  return `<div class="new-canvas-utility-menu${open ? " is-open" : ""}" data-new-canvas-utility-menu>
+    <button type="button" class="new-canvas-utility-trigger" data-canvas-utility-action="toggle-menu" aria-label="画布工具菜单" aria-expanded="${open}" title="画布工具菜单">${renderChromeIcon("menu")}</button>
+    ${open ? `<div class="new-canvas-utility-popover" role="menu" aria-label="画布工具菜单">
+      <button type="button" class="new-canvas-utility-item" data-canvas-utility-action="open-task-center" role="menuitem">${renderChromeIcon("sparkle")}<span>任务中心</span></button>
+      <button type="button" class="new-canvas-utility-item" data-canvas-utility-action="open-operation-history" role="menuitem">${renderChromeIcon("history")}<span>操作记录</span></button>
+    </div>` : ""}
+  </div>`;
 }
