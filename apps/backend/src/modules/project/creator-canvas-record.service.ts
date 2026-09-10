@@ -9,6 +9,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
   CanvasValidationError,
+  validateCanvasDocumentEnvelope,
 } from "./creator-canvas-validation.ts";
 
 export class CanvasConflictError extends Error {
@@ -480,14 +481,20 @@ export async function saveCanvasByCanvasProjectId(
   }), {
     canvasProjectId: canvas.id,
   });
+  validateCanvasDocumentEnvelope(document);
 
-  const currentDocument = await findCurrentCanvasDocument(db, canvas.id, canvas.server_revision);
-  if (currentDocument?.content_hash === hashCanvasDocument(document)) {
+  const contentHash = hashCanvasDocument(document);
+  const currentDocument = await findCurrentCanvasDocumentMeta(db, canvas.id, canvas.server_revision);
+  if (Number(currentDocument?.node_count ?? 0) > 0 && document.nodes.length === 0) {
+    throw new CanvasDocumentError("canvas_empty_overwrite_blocked", "refusing to overwrite a canvas with an empty document");
+  }
+  if (currentDocument?.content_hash === contentHash) {
+    const storedDocument = await findCurrentCanvasDocumentJson(db, canvas.id, canvas.server_revision);
     await db.query("COMMIT");
     return {
       canvasProjectId: canvas.id,
       serverRevision: canvas.server_revision,
-      document: currentDocument.document_json,
+      document: storedDocument?.document_json ?? document,
       session: { viewport: currentDocument.viewport_json, selectedNodeIds: [], selectedEdgeIds: [] },
     };
   }
@@ -499,6 +506,7 @@ export async function saveCanvasByCanvasProjectId(
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     document,
+    contentHash,
     userId: access.ownerUserId,
     now: input.now,
   });
@@ -1994,6 +2002,7 @@ async function insertCanvasDocument(
     canvasProjectId: string;
     serverRevision: number;
     document: CanvasDocument;
+    contentHash?: string;
     userId: string;
     now: Date;
   },
@@ -2039,7 +2048,7 @@ async function insertCanvasDocument(
       JSON.stringify(input.document.viewport),
       input.document.nodes.length,
       input.document.edges.length,
-      hashCanvasDocument(input.document),
+      input.contentHash ?? hashCanvasDocument(input.document),
       input.userId,
       input.now,
     ],
@@ -2306,16 +2315,23 @@ async function appendCanvasRevision(
         server_revision, operation, document_json, summary_json,
         created_by_user_id, actor_team_member_id, created_at
       )
-      SELECT $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::timestamptz
-      WHERE $4 <> 'autosave'
-         OR $3 % 10 = 0
-         OR NOT EXISTS (
-           SELECT 1
-           FROM creator_canvas_revisions
-           WHERE canvas_project_id = $2
-             AND operation = 'autosave'
-             AND created_at >= $9::timestamptz - interval '30 seconds'
-         )
+      SELECT $1, $2, $3, $4, COALESCE($5::jsonb, document.document_json), $6::jsonb, $7, $8, $9::timestamptz
+      FROM (SELECT 1) AS seed
+      LEFT JOIN creator_canvas_documents document
+        ON document.canvas_project_id = $2
+       AND document.server_revision = $3
+      WHERE COALESCE($5::jsonb, document.document_json) IS NOT NULL
+        AND (
+          $4 <> 'autosave'
+          OR $3 % 10 = 0
+          OR NOT EXISTS (
+            SELECT 1
+            FROM creator_canvas_revisions
+            WHERE canvas_project_id = $2
+              AND operation = 'autosave'
+              AND created_at >= $9::timestamptz - interval '30 seconds'
+          )
+        )
       ON CONFLICT (canvas_project_id, server_revision) DO NOTHING
     `,
     [
@@ -2323,7 +2339,7 @@ async function appendCanvasRevision(
       input.canvasProjectId,
       input.serverRevision,
       input.operation,
-      JSON.stringify(input.document),
+      input.operation === "autosave" ? null : JSON.stringify(input.document),
       JSON.stringify({ nodeCount: liveNodes.length, edgeCount: input.document.edges.length, mediaCount }),
       input.userId,
       input.actorTeamMemberId ?? null,
@@ -2332,15 +2348,33 @@ async function appendCanvasRevision(
   );
 }
 
-async function findCurrentCanvasDocument(
+async function findCurrentCanvasDocumentMeta(
   db: SqlDatabase,
   canvasProjectId: string,
   serverRevision: number,
 ) {
-  return queryOne<CanvasDocumentRow>(
+  return queryOne<Pick<CanvasDocumentRow, "id" | "server_revision" | "viewport_json" | "content_hash"> & { node_count?: number }>(
     db,
     `
-      SELECT id, server_revision, document_json, viewport_json, content_hash
+      SELECT id, server_revision, viewport_json, content_hash, node_count
+      FROM creator_canvas_documents
+      WHERE canvas_project_id = $1
+        AND server_revision = $2
+      LIMIT 1
+    `,
+    [canvasProjectId, serverRevision],
+  );
+}
+
+async function findCurrentCanvasDocumentJson(
+  db: SqlDatabase,
+  canvasProjectId: string,
+  serverRevision: number,
+) {
+  return queryOne<Pick<CanvasDocumentRow, "document_json">>(
+    db,
+    `
+      SELECT document_json
       FROM creator_canvas_documents
       WHERE canvas_project_id = $1
         AND server_revision = $2

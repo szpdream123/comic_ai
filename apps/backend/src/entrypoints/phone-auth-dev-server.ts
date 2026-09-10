@@ -27825,6 +27825,9 @@ export function createPhoneAuthDevServer(
             }
             throw error;
           }
+          const publicUrl = buildStorageObjectPublicUrl(storageRuntime, completed.storageObject);
+          const proxyUrl = `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`;
+          const sourceUrl = publicUrl || proxyUrl;
           const uploadRecord = await completeProjectUploadRecord(db, {
             uploadSessionId,
             storageObjectId: completed.storageObject.id,
@@ -27833,7 +27836,7 @@ export function createPhoneAuthDevServer(
             provider: completed.storageObject.provider,
             contentType: completed.storageObject.contentType,
             sizeBytes: completed.storageObject.sizeBytes ?? null,
-            publicUrl: null,
+            publicUrl,
             status: "uploaded",
             errorMessage: null,
             now: new Date(),
@@ -27843,9 +27846,9 @@ export function createPhoneAuthDevServer(
             body: {
               ...completed,
               urls: {
-                previewUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`,
-                sourceUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`,
-                downloadUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?download=1`,
+                previewUrl: sourceUrl,
+                sourceUrl,
+                downloadUrl: publicUrl || `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?download=1`,
                 expiresAt: null,
               },
               uploadRecord,

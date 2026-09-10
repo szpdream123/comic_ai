@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 
 import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
 import type { CanvasActorScope } from "../../identity/canvas-actor-scope.service.ts";
+import { CanvasValidationError } from "../creator-canvas-validation.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
@@ -19,6 +20,7 @@ import {
   listCanvasRevisions,
   listCanvasNodeRuns,
   normalizeCanvasDocument,
+  CanvasDocumentError,
   saveCanvasByCanvasProjectId,
   selectCanvasNodeArtifact,
 } from "../creator-canvas-record.service.ts";
@@ -51,6 +53,36 @@ describe("creator canvas record service", { concurrency: false }, () => {
     assert.equal(document.edges[0]?.sourceNodeId, "a");
     assert.equal(document.edges[0]?.targetPortId, "in_asset");
     assert.equal(document.edges[0]?.source, "a");
+  });
+
+  it("rejects ephemeral data URLs when saving a canvas document", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T08:00:00.000Z"),
+      });
+      await assert.rejects(
+        () => saveCanvasByCanvasProjectId(db, {
+          canvasProjectId: canvas.canvasProjectId,
+          userId,
+          clientRevision: canvas.serverRevision,
+          document: {
+            ...canvas.document,
+            nodes: [{
+              id: "node-1",
+              type: "ai-image",
+              data: { imageUrl: "data:image/png;base64,AAAA" },
+            }],
+          },
+          now: new Date("2026-06-12T08:01:00.000Z"),
+        }),
+        (error) => error instanceof CanvasValidationError && error.code === "canvas_document_ephemeral_value_forbidden",
+      );
+    } finally {
+      await db.close();
+    }
   });
 
   it("uses a team-member scope for document access and records the actual actor", async () => {
@@ -112,6 +144,45 @@ describe("creator canvas record service", { concurrency: false }, () => {
 
       assert.equal(loaded?.serverRevision, saved.serverRevision);
       assert.deepEqual(actors.rows[0], { revision_actor: memberId, event_actor: memberId });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("refuses to overwrite a canvas that already has nodes with an empty document", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-09-10T11:00:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [canvasNode("keep-me", "image", 10, 20, "image", "Keep")],
+        },
+        now: new Date("2026-09-10T11:01:00.000Z"),
+      });
+      await assert.rejects(
+        () => saveCanvasByCanvasProjectId(db, {
+          canvasProjectId: canvas.canvasProjectId,
+          userId,
+          clientRevision: saved.serverRevision,
+          document: { ...saved.document, nodes: [], edges: [] },
+          now: new Date("2026-09-10T11:02:00.000Z"),
+        }),
+        (error) => error instanceof CanvasDocumentError && error.code === "canvas_empty_overwrite_blocked",
+      );
+      const loaded = await findCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+      });
+      assert.equal(loaded?.document.nodes.length, 1);
+      assert.equal(loaded?.document.nodes[0]?.id, "keep-me");
     } finally {
       await db.close();
     }
@@ -542,6 +613,14 @@ describe("creator canvas record service", { concurrency: false }, () => {
       assert.equal(commands.filter((sql) => sql === "BEGIN").length, 2);
       assert.equal(commands.filter((sql) => sql === "COMMIT").length, 2);
       assert.equal(commands.filter((sql) => sql === "ROLLBACK").length, 0);
+      assert.equal(
+        commands.filter((sql) => sql.includes("SELECT id, server_revision, viewport_json, content_hash")).length,
+        2,
+      );
+      assert.equal(
+        commands.filter((sql) => sql.includes("SELECT document_json") && sql.includes("FROM creator_canvas_documents")).length,
+        1,
+      );
       assert.equal(saved.serverRevision, 2);
       assert.equal(unchanged.serverRevision, 2);
       assert.deepEqual(counts.rows[0], { document_count: 1, revision_count: 2 });

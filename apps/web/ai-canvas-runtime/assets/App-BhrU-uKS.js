@@ -4839,7 +4839,7 @@ function sa() {
 	}), document.body)] });
 }
 function ca() {
-	let e = o(), { openNodePicker: t, closeNodePicker: n, toggleAvatarMenu: r, nodePickerOpen: i, setAssetsPanelOpen: a, setCharacterLibraryOpen: s, setHistoryPanelOpen: c, unreadDramaAssetCount: l } = K(gn((e) => ({
+	let e = o(), { openNodePicker: t, closeNodePicker: n, toggleAvatarMenu: r, nodePickerOpen: i, setAssetsPanelOpen: a, setCharacterLibraryOpen: s, setHistoryPanelOpen: c, unreadDramaAssetCount: l, canvasHistoryPinned: f, updateConfig: p, saveConfig: m, agentTasks: h } = K(gn((e) => ({
 		openNodePicker: e.openNodePicker,
 		closeNodePicker: e.closeNodePicker,
 		toggleAvatarMenu: e.toggleAvatarMenu,
@@ -4847,8 +4847,16 @@ function ca() {
 		setAssetsPanelOpen: e.setAssetsPanelOpen,
 		setCharacterLibraryOpen: e.setCharacterLibraryOpen,
 		setHistoryPanelOpen: e.setHistoryPanelOpen,
-		unreadDramaAssetCount: u(e.dramaAssets)
-	}))), d = (0, Q.useRef)(null);
+		unreadDramaAssetCount: u(e.dramaAssets),
+		canvasHistoryPinned: !!e.config.canvasHistoryPinned,
+		updateConfig: e.updateConfig,
+		saveConfig: e.saveConfig,
+		agentTasks: e.agentTasks
+	}))), d = (0, Q.useRef)(null), g = (Array.isArray(h) ? h : []).filter((e) => ![
+		"completed",
+		"failed",
+		"stopped"
+	].includes(e.status)).length;
 	return /* @__PURE__ */ (0, Z.jsxs)("aside", {
 		"data-tauri-drag-region": !0,
 		className: "sidebar-floating",
@@ -5004,6 +5012,40 @@ function ca() {
 						strokeWidth: "1.5",
 						children: [/* @__PURE__ */ (0, Z.jsx)("path", { d: "M11.007 21H9.605c-3.585 0-5.377 0-6.491-1.135S2 16.903 2 13.25s0-5.48 1.114-6.615S6.02 5.5 9.605 5.5h3.803c3.585 0 5.378 0 6.492 1.135c.857.873 1.054 2.156 1.1 4.365" }), /* @__PURE__ */ (0, Z.jsx)("path", { d: "m18.85 18.85l-1.35-.9V15.7M13 17.5a4.5 4.5 0 1 0 9 0a4.5 4.5 0 0 0-9 0m3-12l-.1-.31c-.494-1.54-.742-2.31-1.331-2.75C13.979 2 13.197 2 11.632 2h-.264c-1.565 0-2.348 0-2.937.44c-.59.44-.837 1.21-1.332 2.75L7 5.5" })]
 					})
+				})
+			}),
+			/* @__PURE__ */ (0, Z.jsxs)("button", {
+				type: "button",
+				className: "sidebar-btn-v3",
+				"data-tooltip": g > 0 ? e("任务中心 · {count} 进行中", { count: g }) : e("任务中心"),
+				"aria-label": g > 0 ? e("任务中心，{count} 个进行中", { count: g }) : e("任务中心"),
+				onClick: () => {
+					window.dispatchEvent(new CustomEvent("ai-canvas-open-project-task-center", { cancelable: true }));
+				},
+				children: [/* @__PURE__ */ (0, Z.jsx)(X, {
+					icon: "mdi:progress-wrench",
+					width: "20",
+					height: "20",
+					"aria-hidden": "true"
+				}), g > 0 ? /* @__PURE__ */ (0, Z.jsx)("span", {
+					className: "sidebar-badge",
+					children: g > 99 ? "99+" : g
+				}) : null]
+			}),
+			/* @__PURE__ */ (0, Z.jsx)("button", {
+				type: "button",
+				className: `sidebar-btn-v3${f ? " active" : ""}`,
+				"data-tooltip": e("操作记录"),
+				"aria-label": e("操作记录"),
+				"aria-pressed": f,
+				onClick: () => {
+					p({ canvasHistoryPinned: !f }), m({ silent: !0 });
+				},
+				children: /* @__PURE__ */ (0, Z.jsx)(X, {
+					icon: "mdi:history",
+					width: "20",
+					height: "20",
+					"aria-hidden": "true"
 				})
 			}),
 			/* @__PURE__ */ (0, Z.jsx)("button", {
@@ -13988,7 +14030,7 @@ function du(e, t) {
 //#endregion
 //#region src/components/canvas/HistoryTimelinePanel.tsx
 function fu() {
-	let e = o(), [t, n] = (0, Q.useState)(!0), [r, i] = (0, Q.useState)(!1), a = (0, Q.useRef)(null), { history: s, historyIndex: c, undo: l, redo: u, pinned: d, chatOpen: f, chatPanelDetached: p } = K(gn((e) => ({
+	let e = o(), [t, n] = (0, Q.useState)(!0), a = (0, Q.useRef)(null), { history: s, historyIndex: c, undo: l, redo: u, pinned: d, chatOpen: f, chatPanelDetached: p } = K(gn((e) => ({
 		history: e.history,
 		historyIndex: e.historyIndex,
 		undo: e.undo,
@@ -14024,24 +14066,13 @@ function fu() {
 		v,
 		y,
 		b
-	]), T = (0, Q.useMemo)(() => [...C, ...w ? [w] : []].reverse(), [C, w]), E = d || r;
-	return (0, Q.useEffect)(() => {
-		if (!r || d) return;
-		let e = (e) => {
-			a.current?.contains(e.target) || i(!1);
-		};
-		return document.addEventListener("pointerdown", e, !0), () => document.removeEventListener("pointerdown", e, !0);
-	}, [r, d]), /* @__PURE__ */ (0, Z.jsxs)("div", {
+	]), T = (0, Q.useMemo)(() => [...C, ...w ? [w] : []].reverse(), [C, w]), E = d;
+	return /* @__PURE__ */ (0, Z.jsxs)("div", {
 		ref: a,
 		className: "canvas-history-wrap relative h-12 w-4 select-none",
 		"data-pinned": d ? "true" : "false",
 		"data-open": E ? "true" : "false",
 		"data-chat-open": g ? "true" : "false",
-		onPointerEnter: () => i(!0),
-		onFocusCapture: () => i(!0),
-		onBlurCapture: (e) => {
-			e.currentTarget.contains(e.relatedTarget) || i(!1);
-		},
 		children: [/* @__PURE__ */ (0, Z.jsx)("span", {
 			"aria-hidden": "true",
 			className: "canvas-history-hint absolute right-0 top-0 flex h-12 w-4 items-center justify-end\n                   transition-opacity duration-150",

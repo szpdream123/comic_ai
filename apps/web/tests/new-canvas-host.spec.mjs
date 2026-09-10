@@ -15,7 +15,11 @@ import {
   resolveCanvasGraphNodeAtClientPoint,
   unmountNewCanvas,
 } from "../src/features/new-canvas/index.js";
-import { resolveNewCanvasHostUpdateOptionsForTest } from "../src/features/production-workbench/index.js";
+import {
+  materializeCanvasDocumentMediaForSaveForTest,
+  resolveNewCanvasHostUpdateOptionsForTest,
+  saveProjectCanvasNowForTest,
+} from "../src/features/production-workbench/index.js";
 import {
   createCanvasConfigLibraryController,
   renderCanvasConfigLibraryShell,
@@ -1419,6 +1423,9 @@ test("Canvas detail hands the complete page to the upstream runtime host", () =>
     "utf8",
   );
   assert.match(workbenchSource, /syncNewCanvasMount/);
+  assert.match(workbenchSource, /canvasSessionUiStateReady !== true/);
+  assert.match(workbenchSource, /skipped empty canvas overwrite/);
+  assert.match(workbenchSource, /rememberLoadedCanvasDocument/);
   assert.match(workbenchSource, /prepareNewCanvasMountForRender/);
   assert.match(workbenchSource, /restoreNewCanvasMountAfterRender/);
   assert.match(workbenchSource, /function replaceWorkbenchChrome/);
@@ -1720,6 +1727,35 @@ test("canvas host renders the zoom label from the preserved X6 graph", () => {
   assert.equal(synchronizedNotifications.length, renderNotifications.length);
 });
 
+test("Canvas save skips empty overwrite after a loaded document had nodes", async () => {
+  const saves = [];
+  const workbench = {
+    api: {
+      saveStandaloneCanvas(canvasProjectId, payload) {
+        saves.push({ canvasProjectId, payload });
+        return { canvas: { canvasProjectId, serverRevision: 3, document: payload.document } };
+      },
+    },
+    ui: {
+      selectedCanvasProjectId: "f4126354-c462-4e52-be1b-349669cb57ec",
+      activeCanvasProjectId: "f4126354-c462-4e52-be1b-349669cb57ec",
+      canvasServerRevision: 8215,
+      canvasLoadedNodeCountByProject: {
+        "f4126354-c462-4e52-be1b-349669cb57ec": 4,
+      },
+      canvasDocument: {
+        canvasProjectId: "f4126354-c462-4e52-be1b-349669cb57ec",
+        nodes: [],
+        edges: [],
+      },
+    },
+  };
+  const saved = await saveProjectCanvasNowForTest(workbench);
+  assert.equal(saved, null);
+  assert.equal(saves.length, 0);
+  assert.equal(workbench.ui.canvasSaveStatus, "idle");
+});
+
 test("Canvas Director capture deletion uses the built-in confirmation modal", () => {
   const html = renderCanvasSurfaceForHost({
     ui: {
@@ -1738,4 +1774,43 @@ test("Canvas Director capture deletion uses the built-in confirmation modal", ()
   assert.match(html, /data-action="close-canvas-director-capture-delete-modal"/);
   assert.match(html, /data-action="confirm-canvas-director-capture-delete"/);
   assert.match(html, /确定删除这个视频吗/);
+});
+
+test("canvas save materializes data URLs into COS object URLs before persisting", async () => {
+  const uploads = [];
+  const workbench = {
+    api: {
+      async uploadFile(file, options = {}) {
+        uploads.push({ name: file.name, type: file.type, category: options.category, canvasProjectId: options.canvasProjectId });
+        return {
+          upload: {
+            storageObjectId: "obj-uploaded",
+            storageObjectKey: "canvas-uploads/obj-uploaded.png",
+            publicUrl: "https://cdn.example.test/canvas-uploads/obj-uploaded.png",
+            sourceUrl: "https://cdn.example.test/canvas-uploads/obj-uploaded.png",
+          },
+        };
+      },
+    },
+    ui: {},
+  };
+  const document = {
+    canvasProjectId: "canvas-1",
+    nodes: [{
+      id: "node-1",
+      type: "ai-image",
+      data: {
+        fileName: "paste.png",
+        imageUrl: "data:image/png;base64,AAAA",
+        previewUrl: "blob:http://127.0.0.1/temp",
+      },
+    }],
+  };
+  const next = await materializeCanvasDocumentMediaForSaveForTest(workbench, document, "canvas-1");
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].category, "canvas-uploads");
+  assert.equal(uploads[0].canvasProjectId, "canvas-1");
+  assert.equal(next.nodes[0].data.imageUrl, "https://cdn.example.test/canvas-uploads/obj-uploaded.png");
+  assert.equal(next.nodes[0].data.storageObjectId, "obj-uploaded");
+  assert.equal(Object.prototype.hasOwnProperty.call(next.nodes[0].data, "previewUrl"), false);
 });

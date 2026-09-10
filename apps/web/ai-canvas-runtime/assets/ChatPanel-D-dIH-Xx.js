@@ -534,25 +534,6 @@ function Ee({ detached: e, chatPanelDetached: t, projectName: n, showBackButton:
 							height: "16"
 						})
 					}),
-					m && /* @__PURE__ */ (0, q.jsxs)("button", {
-						type: "button",
-						className: "relative flex h-8 w-8 items-center justify-center rounded-lg text-canvas-text-muted\n                       transition-[color,background-color,box-shadow,transform] duration-150 hover:bg-canvas-hover hover:text-canvas-text\n                       active:scale-95 motion-reduce:transform-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50",
-						onClick: () => {
-							const event = new CustomEvent("ai-canvas-open-project-task-center", { cancelable: true });
-							globalThis.dispatchEvent(event);
-							if (!event.defaultPrevented) m();
-						},
-						"data-tooltip": _("任务中心"),
-						"aria-label": h > 0 ? _("任务中心，{count} 个进行中", { count: h }) : _("任务中心"),
-						children: [/* @__PURE__ */ (0, q.jsx)(B, {
-							icon: "mdi:progress-wrench",
-							width: "16",
-							height: "16"
-						}), h > 0 && /* @__PURE__ */ (0, q.jsx)("span", {
-							className: "absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400",
-							"aria-hidden": "true"
-						})]
-					}),
 					d && /* @__PURE__ */ (0, q.jsx)("button", {
 						type: "button",
 						className: "chat-panel-memory-btn flex items-center justify-center w-8 h-8 rounded-lg\n                       text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover\n                       active:scale-95 transition-[color,background-color,box-shadow,transform] duration-150\n                       motion-reduce:transform-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50",

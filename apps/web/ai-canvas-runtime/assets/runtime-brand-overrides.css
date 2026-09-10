@@ -390,6 +390,14 @@
   content: "资产";
 }
 
+.new-canvas-root .sidebar-floating .sidebar-btn-v3[data-tooltip^="任务中心"]::after {
+  content: "任务中心";
+}
+
+.new-canvas-root .canvas-history-wrap:not([data-pinned="true"]) {
+  display: none !important;
+}
+
 .new-canvas-root .sidebar-floating .sidebar-logo-wrap {
   display: flex;
   align-items: center;

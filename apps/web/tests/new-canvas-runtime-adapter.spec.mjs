@@ -26,6 +26,7 @@ test("AI Canvas document hooks are versioned and round-trip without mutation", (
   assert.equal(deserializeAiCanvasDocument("invalid").version, AI_CANVAS_DOCUMENT_VERSION);
 });
 
+
 test("AI Canvas document hooks normalize legacy X6 canvas data for React Flow runtime", () => {
   const legacyDocument = {
     version: 1,
@@ -484,6 +485,9 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /loadProject: async \(\) => applyHostProjectState/);
   assert.match(appSource, /saveCurrentProject: saveThroughHost/);
   assert.match(appSource, /saveCurrentProjectSilent: saveThroughHost/);
+  assert.match(appSource, /blocked empty canvas overwrite/);
+  assert.match(appSource, /hostProjectGuard\.enableSaves\?\.\(\)/);
+  assert.match(appSource, /projectLoadStatus: "loading"/);
   assert.match(appSource, /hostProjectGuard\.update\(next\)/);
   assert.match(appSource, /hostProjectGuard\.dispose\(\)/);
   assert.match(appSource, /theme: normalizeAiCanvasTheme\(context\.theme\)/);
@@ -521,6 +525,29 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(runtimeDialogSource, /showImageSize: Z\.resolutions\?\.length > 0/);
   assert.match(runtimeDialogSource, /showAspectRatio: Z\.ratios\?\.length > 0/);
   assert.match(runtimeDialogSource, /me = \(0, G\.useCallback\)\(\(e\) => l\(t, \{ aspectRatio: e \}\)/);
+});
+
+test("new canvas floating menu hosts task center and operation history", () => {
+  const runtimeAppSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
+    "utf8",
+  );
+  const chatPanelSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/ChatPanel-D-dIH-Xx.js", import.meta.url),
+    "utf8",
+  );
+  const brandCss = readFileSync(
+    new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(runtimeAppSource, /"data-tooltip": g > 0 \? e\("任务中心 · \{count\} 进行中"/);
+  assert.match(runtimeAppSource, /"data-tooltip": e\("操作记录"\)/);
+  assert.match(runtimeAppSource, /p\(\{ canvasHistoryPinned: !f \}\)/);
+  assert.match(runtimeAppSource, /ai-canvas-open-project-task-center/);
+  assert.doesNotMatch(chatPanelSource, /ai-canvas-open-project-task-center/);
+  assert.doesNotMatch(chatPanelSource, /"data-tooltip": _\("任务中心"\)/);
+  assert.match(brandCss, /sidebar-btn-v3\[data-tooltip\^="任务中心"\]/);
+  assert.match(brandCss, /\.new-canvas-root \.canvas-history-wrap:not\(\[data-pinned="true"\]\)/);
 });
 
 test("project task center opens after the runtime click dispatch completes", () => {

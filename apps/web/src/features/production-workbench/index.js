@@ -10388,6 +10388,13 @@ async function syncNewCanvasMount(workbench) {
     disposeNewCanvasMount(workbench);
     return null;
   }
+  if (
+    isCanvasNavTab(workbench.ui?.activeNavTab)
+    && workbench.ui?.canvasProjectView === "detail"
+    && workbench.ui?.canvasSessionUiStateReady !== true
+  ) {
+    return null;
+  }
   const host = workbench.root?.querySelector?.("[data-new-canvas-mount]");
   if (!host) {
     return null;
@@ -32320,6 +32327,129 @@ function normalizeStandaloneCanvasDocument(document, canvasProjectId = null) {
   };
 }
 
+const CANVAS_PERSISTED_MEDIA_KEYS = [
+  "imageUrl",
+  "videoUrl",
+  "audioUrl",
+  "previewUrl",
+  "thumbnailUrl",
+  "url",
+  "sourceUrl",
+  "resultUrl",
+  "output",
+];
+
+function isEphemeralCanvasMediaUrl(value) {
+  return /^(?:data|blob|file):/i.test(String(value ?? "").trim());
+}
+
+function persistableCanvasObjectUrl(upload) {
+  const publicUrl = String(upload?.publicUrl ?? upload?.sourceUrl ?? "").trim();
+  if (/^https?:\/\//i.test(publicUrl) && !/\/api\/storage\/objects\//i.test(publicUrl)) {
+    return publicUrl;
+  }
+  const storageObjectId = String(upload?.storageObjectId ?? "").trim();
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
+  return publicUrl;
+}
+
+function dataUrlToUploadFile(dataUrl, fileName = "canvas-upload") {
+  const match = String(dataUrl ?? "").match(/^data:([^;]+);base64,(.+)$/i);
+  if (!match) return null;
+  const mimeType = match[1] || "application/octet-stream";
+  const binary = globalThis.atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const extension = mimeType.split("/")[1]?.replace("+xml", "") || "bin";
+  const name = /\.[a-z0-9]+$/i.test(fileName) ? fileName : `${fileName}.${extension}`;
+  return typeof File === "function"
+    ? new File([bytes], name, { type: mimeType, lastModified: Date.now() })
+    : new Blob([bytes], { type: mimeType });
+}
+
+async function materializeCanvasDocumentMediaForSave(workbench, document, canvasProjectId) {
+  if (!document || typeof document !== "object" || !Array.isArray(document.nodes)) return document;
+  if (typeof workbench.api?.uploadFile !== "function") return document;
+  const cache = new Map();
+  let changed = false;
+  const nodes = [];
+  for (const node of document.nodes) {
+    const data = node?.data && typeof node.data === "object" ? { ...node.data } : {};
+    let nodeChanged = false;
+    for (const key of CANVAS_PERSISTED_MEDIA_KEYS) {
+      const value = String(data[key] ?? "").trim();
+      if (!isEphemeralCanvasMediaUrl(value)) continue;
+      if (value.startsWith("blob:") || value.startsWith("file:")) {
+        delete data[key];
+        nodeChanged = true;
+        continue;
+      }
+      let uploaded = cache.get(value);
+      if (!uploaded) {
+        const file = dataUrlToUploadFile(value, String(data.fileName ?? node?.id ?? "canvas-upload"));
+        if (!file) {
+          delete data[key];
+          nodeChanged = true;
+          continue;
+        }
+        uploaded = await uploadLocalFile(workbench, file, "canvas-uploads", {
+          projectId: null,
+          canvasProjectId,
+        });
+        cache.set(value, uploaded);
+      }
+      const uploadedUrl = persistableCanvasObjectUrl(uploaded);
+      if (!uploadedUrl) {
+        delete data[key];
+        nodeChanged = true;
+        continue;
+      }
+      data[key] = uploadedUrl;
+      if (uploaded?.storageObjectId) data.storageObjectId = uploaded.storageObjectId;
+      if (uploaded?.storageObjectKey) data.storageObjectKey = uploaded.storageObjectKey;
+      nodeChanged = true;
+    }
+    if (nodeChanged) {
+      changed = true;
+      nodes.push({ ...node, data });
+    } else {
+      nodes.push(node);
+    }
+  }
+  if (!changed) return document;
+  const nextDocument = { ...document, nodes };
+  if (workbench.ui) workbench.ui.canvasDocument = nextDocument;
+  return nextDocument;
+}
+
+function canvasDocumentNodeCount(document) {
+  return Array.isArray(document?.nodes) ? document.nodes.length : 0;
+}
+
+function rememberLoadedCanvasDocument(workbench, canvasProjectId, document) {
+  const projectId = String(canvasProjectId ?? "").trim();
+  if (!projectId) return;
+  workbench.ui.canvasDocumentLoaded = true;
+  workbench.ui.canvasLoadedNodeCountByProject = {
+    ...(workbench.ui.canvasLoadedNodeCountByProject && typeof workbench.ui.canvasLoadedNodeCountByProject === "object"
+      ? workbench.ui.canvasLoadedNodeCountByProject
+      : {}),
+    [projectId]: canvasDocumentNodeCount(document),
+  };
+}
+
+function shouldSkipEmptyCanvasSave(workbench, document) {
+  if (canvasDocumentNodeCount(document) > 0) return false;
+  const projectId = resolveCanvasSaveProjectId(workbench);
+  if (!projectId || projectId === DEFAULT_CANVAS_PROJECT_ID || !isUuidLike(projectId)) return false;
+  const loadedCount = Number(workbench.ui?.canvasLoadedNodeCountByProject?.[projectId] ?? 0);
+  if (loadedCount > 0) return true;
+  const revision = Number(workbench.ui?.canvasServerRevision ?? 0);
+  return Number.isFinite(revision) && revision > 1;
+}
+
 function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
   const selectedProjectId = workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID;
   const currentDocument = workbench.ui.canvasDocument;
@@ -32652,6 +32782,7 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
     [projectId]: document,
   };
   workbench.ui.canvasDocument = document;
+  rememberLoadedCanvasDocument(workbench, projectId, document);
   applyCanvasGraphViewport(workbench);
   if (restoreRefreshDraft) {
     void saveProjectCanvasNow(workbench).catch(() => undefined);
@@ -32974,6 +33105,9 @@ function scheduleProjectCanvasSave(workbench, options = {}) {
   if (!document || typeof document !== "object") {
     return;
   }
+  if (shouldSkipEmptyCanvasSave(workbench, document)) {
+    return;
+  }
   if (workbench.canvasSaveInFlight) {
     workbench.canvasSaveQueuedDocument = document;
     workbench.ui.canvasSaveStatus = "pending";
@@ -33164,7 +33298,12 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
     projectId = await createStandaloneCanvasForSave(workbench, projectId);
   }
   let revision = Number(workbench.ui.canvasServerRevision ?? 1) || 1;
-  let documentToSave = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId);
+  let documentToSave = await materializeCanvasDocumentMediaForSave(workbench, normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId), projectId);
+  if (shouldSkipEmptyCanvasSave(workbench, documentToSave)) {
+    workbench.ui.canvasSaveStatus = "idle";
+    console.warn("[canvas] skipped empty canvas overwrite");
+    return null;
+  }
   const requestOptions = { timeoutMs: 30_000, ...(options.keepalive === true ? { keepalive: true } : {}) };
   let savePromise = saveCanvas.call(workbench.api, projectId, {
     clientRevision: revision,
@@ -33183,7 +33322,7 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
       }
       projectId = await createStandaloneCanvasForSave(workbench, projectId);
       revision = 1;
-      documentToSave = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId);
+      documentToSave = await materializeCanvasDocumentMediaForSave(workbench, normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId), projectId);
       savePromise = saveCanvas.call(workbench.api, projectId, {
         clientRevision: revision,
         document: documentToSave,
@@ -36530,6 +36669,10 @@ export function resumeCanvasGenerationPollingForTest(workbench) {
 
 export function saveProjectCanvasNowForTest(workbench) {
   return saveProjectCanvasNow(workbench);
+}
+
+export function materializeCanvasDocumentMediaForSaveForTest(workbench, document, canvasProjectId) {
+  return materializeCanvasDocumentMediaForSave(workbench, document, canvasProjectId);
 }
 
 export function persistCanvasViewportBeforePageHideForTest(workbench) {
@@ -43932,6 +44075,9 @@ async function uploadLocalFile(workbench, file, category, options = {}) {
     projectId: Object.prototype.hasOwnProperty.call(options, "projectId")
       ? options.projectId
       : workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
+    canvasProjectId: Object.prototype.hasOwnProperty.call(options, "canvasProjectId")
+      ? options.canvasProjectId
+      : workbench.ui?.selectedCanvasProjectId ?? null,
     onProgress: options.onProgress,
     signal: options.signal,
     uploadLimits: options.uploadLimits ?? getEpisodeUploadLimits(workbench),
@@ -45213,14 +45359,14 @@ async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
   }
   const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
   const targetNode = canvasDocument.nodes?.find?.((node) => node.id === nodeId);
-  const specialImageNode = targetNode?.type === "ai-panorama" || targetNode?.type === "ai-storyboard";
+  const persistImageUrl = ["ai-image", "source-image", "ai-panorama", "ai-storyboard", "upload"].includes(String(targetNode?.type ?? ""));
   if (!targetNode || !canvasUploadNodeAcceptsMedia(targetNode.type, mediaKind)) {
     if (targetNode && ["source-image", "source-video", "source-audio", "ai-panorama", "ai-storyboard"].includes(targetNode.type)) {
       workbench.ui.toast = targetNode.type === "source-video"
         ? "视频源节点只支持视频素材。"
         : targetNode.type === "source-audio"
           ? "音频源节点只支持音频素材。"
-          : specialImageNode
+          : persistImageUrl && targetNode.type !== "source-image"
             ? "全景和分镜节点只支持图片素材。"
             : "图片源节点只支持图片素材。";
       render(workbench);
@@ -45272,18 +45418,15 @@ async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
 
   try {
     const upload = await uploadLocalFile(workbench, file, "canvas-uploads");
-    const stableUploadUrl = upload.storageObjectId
-      ? `/api/storage/objects/${encodeURIComponent(upload.storageObjectId)}/content?proxy=1`
-      : upload.previewUrl ?? upload.publicUrl ?? "";
-    if (!stableUploadUrl) {
+    const uploadedUrl = persistableCanvasObjectUrl(upload);
+    if (!uploadedUrl) {
       throw new Error("上传完成后未返回稳定素材地址。");
     }
-    const uploadedUrl = resolveApiUrl(stableUploadUrl);
     updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
       status: "ready",
       previewUrl: uploadedUrl,
       url: uploadedUrl,
-      ...(specialImageNode ? { imageUrl: uploadedUrl } : {}),
+      ...(persistImageUrl || mediaKind === "image" ? { imageUrl: uploadedUrl } : {}),
       uploadSessionId: upload.uploadSessionId ?? null,
       storageObjectId: upload.storageObjectId ?? null,
       storageObjectKey: upload.storageObjectKey ?? "",

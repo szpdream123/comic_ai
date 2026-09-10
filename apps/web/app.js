@@ -539,7 +539,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       ...(projects.length ? { projects } : {}),
       currentProjectId: currentProject?.id ?? currentProjectId ?? null,
       projectName: currentProject?.name ?? "",
-      ...(hasDocument ? { projectLoadStatus: "ready" } : {}),
+      ...(hasDocument ? { projectLoadStatus: "loading" } : {}),
     };
     if (hasDocument) {
       patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
@@ -558,8 +558,19 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       groups: cloneValue(state.groups ?? []),
     };
   };
+  let saveEnabled = false;
+  const loadedNodeCount = Array.isArray(document?.nodes) ? document.nodes.length : 0;
   const saveThroughHost = async () => {
+    if (!saveEnabled) {
+      return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
+    }
     const nextDocument = readRuntimeDocument();
+    const hostNodeCount = Array.isArray(document?.nodes) ? document.nodes.length : loadedNodeCount;
+    const nextNodeCount = Array.isArray(nextDocument?.nodes) ? nextDocument.nodes.length : 0;
+    if ((hostNodeCount > 0 || loadedNodeCount > 0) && nextNodeCount === 0) {
+      console.warn("[creator-app] blocked empty canvas overwrite");
+      return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
+    }
     document = nextDocument;
     if (typeof context.onDocumentChange === "function") {
       await context.onDocumentChange(nextDocument, { scheduleSave: true, immediateSave: true });
@@ -576,6 +587,10 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
   });
   applyHostProjectState({ document });
   return {
+    enableSaves() {
+      saveEnabled = true;
+      store.setState({ projectLoadStatus: "ready" });
+    },
     update(next = {}) {
       if (next.projectCatalog !== undefined || next.currentProjectId !== undefined || next.document !== undefined || next.canvasDocument !== undefined) {
         applyHostProjectState(next);
@@ -652,7 +667,6 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
         currentProjectId: resolvedCurrentProjectId,
         projectName: currentProject?.name ?? state.projectName ?? "",
         switchingProjectName: null,
-        ...(next.document !== undefined ? { projectLoadStatus: "ready" } : {}),
       };
       if (
         state.currentProjectId === patch.currentProjectId
@@ -1342,6 +1356,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         ...runtimeContext,
       });
     return projectBridgePromise.then((projectBridge) => mountAiCanvasRuntime(surface, runtimeContext).then(async (runtimeHandle) => {
+      hostProjectGuard.enableSaves?.();
       await ensureAiCanvasRuntimeDefaultConversation(runtimeStore, runtimeContext);
       return ({
       ...runtimeHandle,
