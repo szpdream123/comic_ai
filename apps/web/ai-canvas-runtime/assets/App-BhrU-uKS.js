@@ -4839,7 +4839,7 @@ function sa() {
 	}), document.body)] });
 }
 function ca() {
-	let e = o(), { openNodePicker: t, closeNodePicker: n, toggleAvatarMenu: r, nodePickerOpen: i, setAssetsPanelOpen: a, setCharacterLibraryOpen: s, setHistoryPanelOpen: c, unreadDramaAssetCount: l, canvasHistoryPinned: f, updateConfig: p, saveConfig: m, agentTasks: h } = K(gn((e) => ({
+	let e = o(), { openNodePicker: t, closeNodePicker: n, toggleAvatarMenu: r, nodePickerOpen: i, setAssetsPanelOpen: a, setCharacterLibraryOpen: s, setHistoryPanelOpen: c, unreadDramaAssetCount: l, canvasHistoryPinned: f, updateConfig: p, saveConfig: m, agentTasks: h, taskCenterActiveCount: T } = K(gn((e) => ({
 		openNodePicker: e.openNodePicker,
 		closeNodePicker: e.closeNodePicker,
 		toggleAvatarMenu: e.toggleAvatarMenu,
@@ -4851,12 +4851,9 @@ function ca() {
 		canvasHistoryPinned: !!e.config.canvasHistoryPinned,
 		updateConfig: e.updateConfig,
 		saveConfig: e.saveConfig,
-		agentTasks: e.agentTasks
-	}))), d = (0, Q.useRef)(null), g = (Array.isArray(h) ? h : []).filter((e) => ![
-		"completed",
-		"failed",
-		"stopped"
-	].includes(e.status)).length;
+		agentTasks: e.agentTasks,
+		taskCenterActiveCount: e.taskCenterActiveCount
+	}))), d = (0, Q.useRef)(null), g = Math.max(0, Number(T) || 0);
 	return /* @__PURE__ */ (0, Z.jsxs)("aside", {
 		"data-tauri-drag-region": !0,
 		className: "sidebar-floating",
@@ -6247,8 +6244,8 @@ function Ya({ nodeId: e, fallbackLabel: t, overlay: n = !1, compactSpinner: r = 
 		let n = t.comfyNodeProgress[e];
 		return n?.projectId === t.currentProjectId ? n : null;
 	});
-	if (!i) return n ? null : /* @__PURE__ */ (0, Z.jsxs)("div", {
-		className: "node-preview-loading",
+	if (!i) return /* @__PURE__ */ (0, Z.jsxs)("div", {
+		className: n ? "pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-canvas-card/90 px-5 text-canvas-text" : "node-preview-loading",
 		children: [/* @__PURE__ */ (0, Z.jsx)("div", { className: r ? "spinner" : "spinner large" }), /* @__PURE__ */ (0, Z.jsx)("span", { children: t })]
 	});
 	let a = i.percent !== void 0, o = a && i.value !== void 0 && i.max !== void 0 ? `${i.value} / ${i.max} · ${i.percent}%` : t;
@@ -16581,7 +16578,7 @@ function tf() {
 				return;
 			}
 			if (n.data?.role === "source" || n.data?.type === "ai-text" && n.data?.output || n.data?.type === "ai-image" && n.data?.imageUrl || n.data?.type === "ai-animation" && n.data?.imageUrl || n.data?.type === "ai-panorama" && n.data?.imageUrl || n.data?.type === "ai-video" && n.data?.videoUrl) {
-				m();
+				Yt(n);
 				return;
 			}
 			Yt(n);
@@ -16783,8 +16780,8 @@ function tf() {
 						Me && /* @__PURE__ */ (0, Z.jsx)(h, {
 							variant: p.Dots,
 							gap: 20,
-							size: 1,
-							color: "var(--theme-hover)"
+							size: 1.6,
+							color: "color-mix(in srgb, var(--theme-text) 28%, transparent)"
 						}),
 						f && /* @__PURE__ */ (0, Z.jsxs)(Z.Fragment, { children: [/* @__PURE__ */ (0, Z.jsx)(se, {
 							position: "bottom-right",
@@ -17285,7 +17282,10 @@ function cf() {
 	}, [t.message]);
 	return (0, ni.createPortal)(/* @__PURE__ */ (0, Z.jsx)(jt, { children: t.visible && /* @__PURE__ */ (0, Z.jsx)(J.div, {
 		className: "fixed top-16 left-1/2 z-[300]",
-		style: { x: "-50%" },
+		style: {
+			x: "-50%",
+			zIndex: 10000
+		},
 		initial: {
 			opacity: 0,
 			y: -10,

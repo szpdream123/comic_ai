@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  PutBucketCorsCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -214,6 +215,31 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       console.error("[storage][s3-compatible] deleteObject failed", {
         bucket: input.bucket,
         objectKey: input.objectKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  async ensureBrowserReadCors(input: { bucket: string }) {
+    try {
+      await this.client.send(
+        new PutBucketCorsCommand({
+          Bucket: input.bucket,
+          CORSConfiguration: {
+            CORSRules: [{
+              AllowedHeaders: ["*"],
+              AllowedMethods: ["GET", "HEAD"],
+              AllowedOrigins: ["*"],
+              ExposeHeaders: ["ETag", "Content-Length", "Content-Type"],
+              MaxAgeSeconds: 3600,
+            }],
+          },
+        }),
+      );
+    } catch (error) {
+      console.error("[storage][s3-compatible] putBucketCors failed", {
+        bucket: input.bucket,
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;

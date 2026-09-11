@@ -250,7 +250,9 @@ function collectReferenceImageUrls(payload: Record<string, unknown>) {
   const parameters = readObject(payload.parameters);
   const candidates = [
     ...readArray(payload.referenceImages),
+    ...readArray(payload.images),
     ...readArray(payload.references),
+    ...readArray(parameters.images),
     ...readArray(parameters.referenceImages),
     ...readArray(parameters.quickReferences),
     ...readArray(parameters.references),

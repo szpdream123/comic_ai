@@ -394,6 +394,28 @@
   content: "任务中心";
 }
 
+.new-canvas-root .sidebar-floating .sidebar-btn-v3[data-tooltip^="任务中心"] {
+  position: relative !important;
+}
+
+.new-canvas-root .sidebar-floating .sidebar-btn-v3 .sidebar-badge {
+  position: absolute !important;
+  top: 1px !important;
+  right: 1px !important;
+  z-index: 2 !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  min-width: 1.15rem !important;
+  height: 1.15rem !important;
+  padding: 0 0.28rem !important;
+  border-radius: 0.58rem !important;
+  background: #efb84f !important;
+  color: #221707 !important;
+  font-size: 0.62rem !important;
+  font-weight: 850 !important;
+  line-height: 1 !important;
+}
+
 .new-canvas-root .canvas-history-wrap:not([data-pinned="true"]) {
   display: none !important;
 }
@@ -1106,8 +1128,281 @@
   }
 }
 
+/* Match node and overlay editor controls to the floating canvas menu
+   (48×58 hit area, 22px icons) so selected-node popovers stay usable. */
+.new-canvas-root .node-floating-toolbar {
+  min-height: 58px !important;
+  align-items: center !important;
+  gap: 2px !important;
+  padding: 4px !important;
+  border-radius: 14px !important;
+}
+
+.new-canvas-root .node-floating-toolbar .ftb-btn,
+.new-canvas-root .img-toolbar .ftb-btn {
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  min-height: 48px !important;
+  border-radius: 8px !important;
+}
+
+.new-canvas-root .node-floating-toolbar .ftb-btn svg,
+.new-canvas-root .img-toolbar .ftb-btn svg {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+}
+
+.new-canvas-root .img-toolbar-zone,
+.new-canvas-root .img-toolbar {
+  gap: 2px !important;
+}
+
+.new-canvas-root .img-toolbar-main-divider,
+.new-canvas-root .node-floating-toolbar .ftb-divider {
+  height: 28px !important;
+  margin-inline: 2px !important;
+}
+
+.fullscreen-overlay .crop-aspect-bar,
+.crop-overlay .crop-aspect-bar,
+.expand-overlay .crop-aspect-bar,
+.composer-overlay .crop-aspect-bar,
+.matting-overlay .matting-toolbar,
+.point-edit-overlay .point-edit-toolbar,
+.composer-overlay .composer-toolbar,
+.image-editor-zoom-controls {
+  min-height: 70px !important;
+  gap: 6px !important;
+  padding: 8px 10px !important;
+  border-radius: 16px !important;
+}
+
+.fullscreen-overlay button,
+.crop-overlay button,
+.expand-overlay button,
+.composer-overlay button,
+.matting-overlay button,
+.point-edit-overlay button,
+.preset-modal-overlay button,
+.reverse-prompt-modal button,
+.camera-studio-overlay button {
+  min-height: 48px !important;
+  min-width: 48px !important;
+  font-size: 15px !important;
+  line-height: 1.2 !important;
+}
+
+.fullscreen-overlay .crop-aspect-btn,
+.fullscreen-overlay .crop-action-btn,
+.crop-overlay .crop-aspect-btn,
+.crop-overlay .crop-action-btn,
+.expand-overlay .crop-aspect-btn,
+.expand-overlay .crop-action-btn,
+.composer-overlay .crop-aspect-btn,
+.composer-overlay .crop-action-btn,
+.composer-toolbar .crop-aspect-btn,
+.composer-toolbar .img-pill-btn,
+.matting-btn,
+.customgrid-btn,
+.point-edit-btn,
+.image-editor-zoom-btn,
+.image-editor-zoom-value,
+.camera-studio-reset,
+.camera-studio-generate {
+  min-height: 48px !important;
+  height: 48px !important;
+  padding: 0 14px !important;
+  border-radius: 12px !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+}
+
+.fullscreen-overlay .crop-aspect-btn.icon-only,
+.fullscreen-overlay .crop-aspect-btn.crop-aspect-close,
+.crop-overlay .crop-aspect-btn.icon-only,
+.crop-overlay .crop-aspect-btn.crop-aspect-close,
+.expand-overlay .crop-aspect-btn.icon-only,
+.expand-overlay .crop-aspect-btn.crop-aspect-close,
+.composer-overlay .crop-aspect-btn.icon-only,
+.composer-overlay .crop-aspect-btn.crop-aspect-close,
+.composer-toolbar .crop-aspect-btn.icon-only,
+.matting-btn,
+.point-edit-btn,
+.image-editor-zoom-btn,
+.camera-studio-reset,
+.fullscreen-close,
+.composer-side-expand {
+  width: 48px !important;
+  min-width: 48px !important;
+  height: 48px !important;
+  padding: 0 !important;
+}
+
+.fullscreen-overlay button svg,
+.crop-overlay button svg,
+.expand-overlay button svg,
+.composer-overlay button svg,
+.matting-overlay button svg,
+.point-edit-overlay button svg,
+.preset-modal-overlay button svg,
+.reverse-prompt-modal button svg,
+.camera-studio-overlay button svg,
+.fullscreen-overlay .crop-aspect-btn svg,
+.fullscreen-overlay .crop-action-btn svg,
+.crop-overlay .crop-aspect-btn svg,
+.crop-overlay .crop-action-btn svg,
+.expand-overlay .crop-aspect-btn svg,
+.expand-overlay .crop-action-btn svg,
+.composer-toolbar .crop-aspect-btn svg,
+.matting-btn svg,
+.point-edit-btn svg,
+.image-editor-zoom-btn svg,
+.fullscreen-close svg {
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  min-height: 22px !important;
+}
+
+.camera-studio-overlay .fullscreen-header,
+.fullscreen-overlay .fullscreen-header {
+  min-height: 58px !important;
+}
+
+.camera-studio-mode button,
+.camera-studio-focus-switch button,
+.camera-studio-temperature button,
+.camera-studio-presets button {
+  min-height: 48px !important;
+  padding: 8px 10px !important;
+  font-size: 14px !important;
+}
+
+.camera-studio-select-grid select,
+.fullscreen-overlay select,
+.composer-overlay select {
+  min-height: 48px !important;
+  font-size: 15px !important;
+}
+
+.camera-studio-range input,
+.fullscreen-overlay input[type="range"],
+.composer-side input[type="range"] {
+  height: 8px !important;
+}
+
+.camera-studio-range input::-webkit-slider-thumb,
+.fullscreen-overlay input[type="range"]::-webkit-slider-thumb,
+.composer-side input[type="range"]::-webkit-slider-thumb {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+.camera-studio-range input::-moz-range-thumb,
+.fullscreen-overlay input[type="range"]::-moz-range-thumb,
+.composer-side input[type="range"]::-moz-range-thumb {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+.image-editor-zoom-controls {
+  height: auto !important;
+}
+
+.image-editor-zoom-value {
+  min-width: 64px !important;
+  font-size: 15px !important;
+}
+
+.reverse-prompt-actions .preset-modal-btn-primary,
+.reverse-prompt-actions .preset-modal-btn-secondary,
+.preset-modal-btn-primary,
+.preset-modal-btn-secondary {
+  min-height: 48px !important;
+  height: 48px !important;
+  padding: 0 18px !important;
+  font-size: 16px !important;
+}
+
+.expand-controls {
+  width: 360px !important;
+  gap: 12px !important;
+  padding: 14px 16px !important;
+  border-radius: 16px !important;
+}
+
+.expand-controls .expand-label,
+.expand-controls .expand-value {
+  font-size: 14px !important;
+}
+
+.expand-controls .expand-slider {
+  height: 8px !important;
+}
+
+.expand-controls .expand-slider::-webkit-slider-thumb {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+.expand-controls .expand-slider::-moz-range-thumb {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+.expand-controls .expand-prompt-input {
+  min-height: 48px !important;
+  padding: 12px 14px !important;
+  border-radius: 10px !important;
+  font-size: 15px !important;
+}
+
+.expand-controls .model-selector-trigger {
+  min-height: 48px !important;
+  height: 48px !important;
+  font-size: 15px !important;
+}
+
+.expand-controls .model-selector-icon,
+.expand-controls .model-selector-icon svg,
+.expand-controls .model-selector-trigger svg {
+  width: 22px !important;
+  height: 22px !important;
+  max-width: 22px !important;
+  max-height: 22px !important;
+}
+
 /* The canvas toolbar controls the React Flow grid; do not leave a second
    theme texture visible when the grid is toggled off. */
 .canvas-bg-off-white::after {
+  display: none !important;
+}
+
+.app-canvas-viewport .react-flow__background {
+  z-index: 0 !important;
+}
+
+.app-canvas-viewport .react-flow__background circle {
+  fill: color-mix(in srgb, var(--theme-text) 32%, transparent) !important;
+}
+
+.new-canvas-root .chat-panel,
+.new-canvas-root .chat-panel-header,
+.new-canvas-root .chat-panel-input-area,
+.ai-canvas-standalone-mount .chat-panel,
+.ai-canvas-standalone-mount .chat-panel-header,
+.ai-canvas-standalone-mount .chat-panel-input-area {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.canvas-radial-backdrop,
+.canvas-radial-menu,
+.canvas-radial-hold-indicator,
+.canvas-radial-editor,
+[data-canvas-radial-menu] {
   display: none !important;
 }

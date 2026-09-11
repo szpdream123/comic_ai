@@ -84,6 +84,9 @@ export interface StorageAdapter {
     bucket: string;
     objectKey: string;
   }): Promise<void>;
+  ensureBrowserReadCors?(input: {
+    bucket: string;
+  }): Promise<void>;
 }
 
 interface StorageObjectRow {

@@ -40367,6 +40367,9 @@ button.asset-generator-task-preview:focus-visible {
 
 .workbench-body .canvas-stage {
   background-color: color-mix(in srgb, var(--theme-input-background) 82%, #000 18%);
+}
+
+.workbench-body .canvas-stage.is-canvas-grid-visible {
   background-image:
     radial-gradient(circle, rgba(255, 255, 255, 0.075) 1px, transparent 1.2px),
     radial-gradient(circle at 74% 18%, var(--theme-accent-soft), transparent 26rem),
@@ -45769,6 +45772,9 @@ button.asset-generator-task-preview:focus-visible {
 
 .workbench-body[data-workbench-theme="daylight"] .canvas-stage {
   background-color: #f4f9fd;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .canvas-stage.is-canvas-grid-visible {
   background-image:
     radial-gradient(circle, rgba(28, 92, 139, 0.16) 1px, transparent 1.2px),
     radial-gradient(circle at 74% 18%, rgba(42, 151, 224, 0.12), transparent 26rem),
@@ -47250,20 +47256,33 @@ button.asset-generator-task-preview:focus-visible {
 /* Unified task center */
 .task-center-action {
   position: relative;
+  overflow: visible;
 }
 
 .task-center-action-count {
   display: inline-grid;
   place-items: center;
-  min-width: 1.3rem;
-  height: 1.3rem;
-  padding: 0 0.32rem;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.28rem;
   border-radius: 0.65rem;
   background: #efb84f;
   color: #221707;
   font-size: 0.68rem;
   font-weight: 850;
   line-height: 1;
+  overflow: visible;
+  flex-shrink: 0;
+  position: absolute;
+  top: 0.12rem;
+  right: 0.12rem;
+  z-index: 1;
+}
+
+.workbench-main.home-mode .task-center-action-count,
+.statusbar-quick-action.task-center-action .task-center-action-count {
+  overflow: visible;
+  text-overflow: unset;
 }
 
 .task-center-backdrop {

@@ -643,6 +643,7 @@ export function updateCanvasViewport(document, patch = {}) {
       y: Number(patch.y ?? previousViewport.y ?? 0),
       zoom: clampNumber(patch.zoom ?? previousViewport.zoom ?? 1, 0.1, 8),
       snapEnabled: patch.snapEnabled ?? previousViewport.snapEnabled ?? false,
+      showBackgroundGrid: patch.showBackgroundGrid ?? previousViewport.showBackgroundGrid ?? false,
       interactionMode: patch.interactionMode ?? previousViewport.interactionMode ?? "default",
     },
   });

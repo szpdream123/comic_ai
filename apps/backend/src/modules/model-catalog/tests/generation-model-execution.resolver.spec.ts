@@ -287,6 +287,40 @@ describe("generation model execution resolver", () => {
     assert.deepEqual(execution.parameters.sourceVideo, sourceVideo);
   });
 
+  it("keeps canvas assistant reference media when the model schema omits those fields", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "wan3.0-r2v",
+      modelConfig: videoModelConfig({
+        modelCode: "wan3.0-r2v",
+        parameterSchema: {
+          durationSec: { type: "integer" },
+          aspectRatio: { enum: ["16:9", "9:16"] },
+          resolution: { enum: ["480P", "720P"] },
+        },
+      }),
+      dispatchPolicy: undefined,
+      parameters: {
+        images: ["https://signed.example/connected.png"],
+        referenceImages: ["https://signed.example/ref.png"],
+        referenceVideos: ["https://signed.example/ref.mp4"],
+        referenceAudios: ["https://signed.example/ref.mp3"],
+        firstFrame: "https://signed.example/first.png",
+        lastFrame: "https://signed.example/last.png",
+        generateAudio: true,
+      },
+      fallbackQueueName: "generation-submit-video",
+    });
+
+    assert.deepEqual(execution.parameters.images, ["https://signed.example/connected.png"]);
+    assert.deepEqual(execution.parameters.referenceImages, ["https://signed.example/ref.png"]);
+    assert.deepEqual(execution.parameters.referenceVideos, ["https://signed.example/ref.mp4"]);
+    assert.deepEqual(execution.parameters.referenceAudios, ["https://signed.example/ref.mp3"]);
+    assert.equal(execution.parameters.firstFrame, "https://signed.example/first.png");
+    assert.equal(execution.parameters.lastFrame, "https://signed.example/last.png");
+    assert.equal(execution.parameters.generateAudio, true);
+  });
+
   it("maps first-last-frame generation to the provider first-last-frame task mode", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

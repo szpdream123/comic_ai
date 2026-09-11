@@ -235,7 +235,7 @@ function collectMediaInputs(
     ? [payload.images, payload.referenceImages, payload.filePaths, payload.firstFrameUrl, payload.imageUrl, parameters.images, parameters.referenceImages, parameters.filePaths, parameters.quickReferences, parameters.firstFrame, parameters.lastFrame, parameters.imageReference]
     : mediaType === "video"
       ? [payload.videos, payload.videoFilePaths, payload.referenceVideoUrl, payload.sourceVideoUrl, parameters.videos, parameters.referenceVideos, parameters.sourceVideo, parameters.editSourceVideo, parameters.videoFilePaths]
-      : [payload.audios, payload.audioFilePaths, payload.referenceAudioUrl, parameters.audios, parameters.referenceAudio, parameters.audioFilePaths];
+      : [payload.audios, payload.audioFilePaths, payload.referenceAudioUrl, parameters.audios, parameters.referenceAudio, parameters.referenceAudios, parameters.audioFilePaths];
   const seen = new Set<string>();
   const inputs: unknown[] = [];
   for (const item of candidates.flatMap(readMediaInputs)) {

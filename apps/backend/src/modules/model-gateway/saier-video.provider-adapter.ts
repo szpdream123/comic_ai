@@ -131,6 +131,7 @@ export function buildSaierVideoPayload(
     firstFrameUrl,
     lastFrameUrl,
     ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.images),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
     ...readMediaUrlArray(parameters.quickReferences),
@@ -155,6 +156,7 @@ export function buildSaierVideoPayload(
     ...readMediaUrlArray(payload.audios),
     ...readMediaUrlArray(parameters.audios),
     ...readMediaUrlArray(parameters.referenceAudio),
+    ...readMediaUrlArray(parameters.referenceAudios),
   ]);
   const content = buildReferenceContent({
     referenceImageUrls,

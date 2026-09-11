@@ -282,6 +282,7 @@ function buildSuperResolutionPayload(
   ]);
   const referenceImageUrls = dedupe([
     ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.images),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
   ]);

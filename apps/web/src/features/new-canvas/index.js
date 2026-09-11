@@ -535,6 +535,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (!currentStage || !nextStage) return render();
         currentStage.classList.toggle("is-canvas-hand-mode", nextStage.classList.contains("is-canvas-hand-mode"));
         currentStage.classList.toggle("is-canvas-move-mode", nextStage.classList.contains("is-canvas-move-mode"));
+        currentStage.classList.toggle("is-canvas-grid-visible", nextStage.classList.contains("is-canvas-grid-visible"));
         for (const selector of [".canvas-zoom-tools", ".canvas-command-tools"]) {
           const current = currentStage.querySelector?.(selector);
           const next = nextStage.querySelector?.(selector);

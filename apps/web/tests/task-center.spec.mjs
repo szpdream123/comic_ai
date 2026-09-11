@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   applyTaskCenterTaskProjectionForTest,
+  discoverActiveTaskCenterTasksForTest,
   registerTaskCenterTaskForTest,
   resolveTaskCenterPollDelayForTest,
   runTaskCenterPollingForTest,
@@ -430,9 +431,79 @@ describe("production workbench task center", () => {
 
     registerTaskCenterTaskForTest(workbench, "task-video-live", { status: "completed", kind: "video" });
 
-    assert.equal(dom.attributes.get("aria-label"), "任务中心");
-    assert.equal(dom.getBadge(), null);
-  });
+      assert.equal(dom.attributes.get("aria-label"), "任务中心");
+      assert.equal(dom.getBadge(), null);
+    });
+
+    it("keeps the generating badge after an empty discovery and continues discovering later", async () => {
+      const previousWindow = globalThis.window;
+      const timers = [];
+      globalThis.window = {
+        setTimeout(callback, delayMs) {
+          timers.push({ callback, delayMs });
+          return timers.length;
+        },
+        clearTimeout() {},
+      };
+      const dom = createTaskCenterActionRoot();
+      const workbench = {
+        root: dom.root,
+        ui: {
+          taskCenterTasksById: {},
+          taskCenterTaskOrder: [],
+        },
+        api: {
+          async listTaskCenterTasks(params) {
+            assert.equal(params.status, "active");
+            return { items: [] };
+          },
+        },
+      };
+
+      try {
+        registerTaskCenterTaskForTest(workbench, "task-canvas-live", { status: "queued", kind: "image" });
+        assert.equal(dom.getBadge()?.textContent, "1");
+
+        await discoverActiveTaskCenterTasksForTest(workbench);
+
+        assert.equal(workbench.ui.taskCenterTasksById["task-canvas-live"].status, "queued");
+        assert.equal(dom.getBadge()?.textContent, "1");
+        assert.equal(timers.some((timer) => timer.delayMs === 15_000), true);
+      } finally {
+        globalThis.window = previousWindow;
+      }
+    });
+
+    it("stops idle task-center discovery when no generating tasks remain", async () => {
+      const previousWindow = globalThis.window;
+      const timers = [];
+      globalThis.window = {
+        setTimeout(callback, delayMs) {
+          timers.push({ callback, delayMs });
+          return timers.length;
+        },
+        clearTimeout() {},
+      };
+      const workbench = {
+        ui: {
+          taskCenterTasksById: {},
+          taskCenterTaskOrder: [],
+        },
+        api: {
+          async listTaskCenterTasks(params) {
+            assert.equal(params.status, "active");
+            return { items: [] };
+          },
+        },
+      };
+
+      try {
+        await discoverActiveTaskCenterTasksForTest(workbench);
+        assert.equal(timers.some((timer) => timer.delayMs === 15_000), false);
+      } finally {
+        globalThis.window = previousWindow;
+      }
+    });
 
   it("polls task updates on background surfaces without a full render", async () => {
     const dom = createTaskCenterActionRoot();

@@ -141,6 +141,7 @@ function buildExtraTokenVideoPayload(
   const filePathImageUrls = readMediaUrlArray(parameters.filePaths);
   const referenceImageUrls = dedupeStrings([
     ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.images),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
     ...readMediaUrlArray(parameters.quickReferences),
@@ -168,6 +169,7 @@ function buildExtraTokenVideoPayload(
       ...readMediaUrlArray(payload.audios),
       ...readMediaUrlArray(parameters.audios),
       ...readMediaUrlArray(parameters.referenceAudio),
+      ...readMediaUrlArray(parameters.referenceAudios),
     ]);
   const imageUrls = dedupeStrings([...filePathImageUrls, firstFrameUrl, lastFrameUrl, ...referenceImageUrls]);
 

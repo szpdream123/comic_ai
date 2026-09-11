@@ -235,4 +235,43 @@ describe("S3 compatible storage adapter", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it("writes a browser GET/HEAD CORS rule onto the bucket", async () => {
+    let capturedPath = "";
+    let capturedBody = "";
+    const server = createServer((request, response) => {
+      capturedPath = request.url ?? "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        capturedBody += chunk;
+      });
+      request.on("end", () => {
+        response.writeHead(200);
+        response.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.equal(typeof address, "object");
+
+    try {
+      const adapter = new S3CompatibleStorageAdapter({
+        endpoint: `http://127.0.0.1:${address!.port}`,
+        region: "ap-guangzhou",
+        accessKeyId: "test-access-key",
+        secretAccessKey: "test-secret-key",
+        forcePathStyle: true,
+      });
+
+      await adapter.ensureBrowserReadCors({ bucket: "creator-test" });
+
+      assert.match(capturedPath, /\/creator-test\/?\?cors=/i);
+      assert.match(capturedBody, /<AllowedOrigin>\*<\/AllowedOrigin>/);
+      assert.match(capturedBody, /<AllowedMethod>GET<\/AllowedMethod>/);
+      assert.match(capturedBody, /<AllowedMethod>HEAD<\/AllowedMethod>/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });

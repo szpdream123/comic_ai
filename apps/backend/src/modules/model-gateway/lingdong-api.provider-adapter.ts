@@ -314,6 +314,7 @@ export function buildLingdongVideoPayload(
     ...readMediaUrlArray(parameters.audios),
     ...readMediaUrlsByKind(parameters.filePaths, "audio"),
     ...readMediaUrlArray(parameters.referenceAudio),
+    ...readMediaUrlArray(parameters.referenceAudios),
   ]);
   const ratioValue = resolveLingdongRatioValue(profile, parameters);
 

@@ -94,7 +94,34 @@ test("AI Canvas initializes the browser process shim before the runtime bridge i
 
 test("canvas grid toggle does not leave the off-white theme texture visible", () => {
   const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url), "utf8");
   assert.match(source, /\.canvas-bg-off-white::after\s*\{[\s\S]*display:\s*none\s*!important/);
+  assert.match(source, /\.app-canvas-viewport \.react-flow__background circle\s*\{[\s\S]*fill:\s*color-mix\(in srgb, var\(--theme-text\) 32%, transparent\)/);
+  assert.match(appSource, /color: "color-mix\(in srgb, var\(--theme-text\) 28%, transparent\)"/);
+});
+
+test("expand editor toasts budget errors above the fullscreen overlay", () => {
+  const expandSource = readFileSync(new URL("../ai-canvas-runtime/assets/ExpandEditor-DGeOoZRf.js", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url), "utf8");
+  assert.match(expandSource, /useAppStore-BH-MdRLu\.js/);
+  assert.match(expandSource, /if \(K\) \{\s*F\(K\);\s*We\.getState\(\)\.showToast\(K, "error"\);\s*return;\s*\}/);
+  assert.match(appSource, /className: "fixed top-16 left-1\/2 z-\[300\]"/);
+  assert.match(appSource, /zIndex:\s*10000/);
+});
+
+test("node and overlay popover buttons match the floating canvas menu size", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(source, /\.node-floating-toolbar \.ftb-btn[\s\S]*width:\s*48px\s*!important/);
+  assert.match(source, /\.node-floating-toolbar \.ftb-btn svg[\s\S]*width:\s*22px\s*!important/);
+  assert.match(source, /\.node-floating-toolbar \{[\s\S]*gap:\s*2px\s*!important/);
+  assert.match(source, /\.img-toolbar-zone[\s\S]*gap:\s*2px\s*!important/);
+  assert.match(source, /\.crop-aspect-btn[\s\S]*min-height:\s*48px\s*!important/);
+  assert.match(source, /\.expand-controls \.expand-prompt-input[\s\S]*min-height:\s*48px\s*!important/);
+  assert.match(source, /\.expand-controls \.model-selector-trigger[\s\S]*min-height:\s*48px\s*!important/);
+  assert.match(source, /\.camera-studio-overlay button[\s\S]*min-height:\s*48px\s*!important/);
+  assert.match(source, /\.image-editor-zoom-btn[\s\S]*min-height:\s*48px\s*!important/);
+  assert.match(source, /\.point-edit-btn[\s\S]*min-height:\s*48px\s*!important/);
+  assert.match(source, /\.reverse-prompt-actions \.preset-modal-btn-primary[\s\S]*min-height:\s*48px\s*!important/);
 });
 
 test("AI node dialog declares runtime models before using the model fallback", () => {
@@ -400,6 +427,9 @@ test("Canvas node controls refresh only their target X6 node", () => {
   assert.doesNotMatch(hostSource, /if \(action === "set-canvas-interaction-mode"\) \{[^}]*void renderInteraction\(\);/);
   assert.match(hostSource, /currentStage\.classList\.toggle\("is-canvas-hand-mode", nextStage\.classList\.contains\("is-canvas-hand-mode"\)\)/);
   assert.match(hostSource, /currentStage\.classList\.toggle\("is-canvas-move-mode", nextStage\.classList\.contains\("is-canvas-move-mode"\)\)/);
+  assert.match(hostSource, /currentStage\.classList\.toggle\("is-canvas-grid-visible", nextStage\.classList\.contains\("is-canvas-grid-visible"\)\)/);
+  assert.match(hostSource, /const applyBackgroundGridPreference = \(\) =>/);
+  assert.match(hostSource, /action === "toggle-canvas-background-grid"\) \{\s*event\.preventDefault\?\.\(\);\s*event\.stopPropagation\(\);[\s\S]*?renderControls\(\)/);
   assert.match(hostSource, /currentChromeRail\.replaceWith\(nextChromeRail\)/);
   assert.match(hostSource, /if \(next\.surfaceOnly === true\) return render\(\)/);
   assert.match(hostSource, /event\.__newCanvasHandled = true;[\s\S]*?event\.preventDefault\?\.\(\);[\s\S]*?context\.onAction/);
@@ -1612,7 +1642,9 @@ test("new Canvas forwards the injected runtime bridge, creator API, document, an
   assert.match(mountSync, /adapter: aiCanvasRuntimeAdapter/);
   assert.match(mountSync, /syncDocument: async \(document, metadata = \{\}\)/);
   assert.match(mountSync, /workbench\.updateCanvasDocument\(document/);
-  assert.match(mountSync, /metadata\.immediateSave === true[\s\S]*?await workbench\.saveCanvasNow\(\)/);
+  assert.match(mountSync, /immediateSave:\s*metadata\.immediateSave === true/);
+  assert.doesNotMatch(mountSync, /CANVAS_VIEWPORT_SAVE_DELAY_MS/);
+  assert.doesNotMatch(mountSync, /await workbench\.saveCanvasNow\(\)/);
 });
 
 test("new Canvas injects the outer project catalog and delegates runtime project actions", () => {
@@ -1689,7 +1721,7 @@ test("canvas load completions keep the outer host mounted", () => {
   );
   const completionRender = source.match(/function renderAfterCanvasLoad[\s\S]*?function shouldMountNewCanvas/)?.[0] ?? "";
   assert.match(completionRender, /hasReusableNewCanvasHost\(workbench\)/);
-  assert.match(completionRender, /updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true \}\)/);
+  assert.match(completionRender, /updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true, syncHostDocument: true \}\)/);
   assert.match(completionRender, /renderWorkbenchChrome\(workbench\)/);
   assert.doesNotMatch(completionRender, /prepareNewCanvasMountForRender/);
   const reusableHost = source.match(/function hasReusableNewCanvasHost[\s\S]*?function renderAfterCanvasLoad/)?.[0] ?? "";

@@ -74,6 +74,28 @@ test("AI Canvas document hooks normalize legacy X6 canvas data for React Flow ru
   assert.equal(JSON.parse(serializeAiCanvasDocument(legacyDocument)).nodes[1].type, "ai-image");
 });
 
+test("AI Canvas generation overlay stays visible for in-flight image nodes", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
+  const runtimeAppSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
+    "utf8",
+  );
+  const runningNode = deserializeAiCanvasDocument({
+    nodes: [{
+      id: "image-generating",
+      type: "ai-image",
+      data: { status: "running", imageUrl: "https://example.test/old.png", prompt: "天空" },
+    }],
+  }).nodes[0];
+  assert.equal(runningNode.data.status, "loading");
+  assert.match(appSource, /rawStatus === "ready" \|\| rawStatus === "empty"/);
+  assert.match(adapterSource, /previousType !== "send" && \["loading", "running", "queued", "processing", "pending", "submitted"\]/);
+  assert.match(runtimeAppSource, /if \(!i\) return \/\* @__PURE__ \*\/ \(0, Z\.jsxs\)\("div", \{/);
+  assert.match(runtimeAppSource, /n \? "pointer-events-none absolute inset-0 z-20[\s\S]*?node-preview-loading"/);
+  assert.doesNotMatch(runtimeAppSource, /if \(!i\) return n \? null/);
+});
+
 test("AI Canvas runtime grouping converts legacy group membership and positions", () => {
   const result = normalizeAiCanvasRuntimeGrouping([
     {
@@ -199,7 +221,55 @@ test("AI Canvas backend media models declare task polling instead of a synchrono
   assert.match(catalogBridge, /normalizeExecutionProfile/);
   assert.ok(catalogBridge.includes('replaceAll("{{modelId}}", "{{model}}")'));
   assert.match(catalogBridge, /model: "\{\{model\}\}"/);
+  assert.match(catalogBridge, /images: "\{\{imageUrls\}\}"/);
+  assert.match(catalogBridge, /referenceImages: "\{\{referenceImageUrls\}\}"/);
+  assert.match(catalogBridge, /referenceVideos: "\{\{referenceVideoUrls\}\}"/);
+  assert.match(catalogBridge, /referenceAudios: "\{\{referenceAudioUrls\}\}"/);
+  assert.match(catalogBridge, /firstFrame: "\{\{firstImage\}\}"/);
+  assert.match(catalogBridge, /lastFrame: "\{\{lastImage\}\}"/);
+  assert.match(catalogBridge, /duration: "\{\{duration\}\}"/);
+  assert.match(catalogBridge, /aspectRatio: "\{\{aspectRatio\}\}"/);
+  assert.match(catalogBridge, /resolution: "\{\{resolution\}\}"/);
+  assert.match(catalogBridge, /generateAudio: "\{\{generateAudio\}\}"/);
+  assert.match(catalogBridge, /intervalMs: 15_000/);
+  assert.doesNotMatch(catalogBridge, /intervalMs: 2_000/);
   assert.doesNotMatch(catalogBridge, /canvasNodeId: "\{\{nodeId\}\}"/);
+});
+
+test("AI Canvas image and video generation registers with the project task center instead of polling /tasks", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
+  assert.match(appSource, /function installAiCanvasAssistantTaskCenterBridge/);
+  assert.match(appSource, /const taskCenterBridge = installAiCanvasAssistantTaskCenterBridge\(runtimeWindow/);
+  assert.match(appSource, /context\.onGenerationTaskCreated\(taskId/);
+  assert.match(appSource, /waitForTaskCenter\(taskId/);
+  assert.match(appSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__/);
+  assert.match(adapterSource, /onGenerationTaskCreated: context\.onGenerationTaskCreated/);
+  assert.match(workbenchSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__\?\.\(task\)/);
+});
+
+test("AI Canvas task center button shows the same generating count as the workbench", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
+  const runtimeAppSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
+    "utf8",
+  );
+  const brandCss = readFileSync(
+    new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(workbenchSource, /function countTaskCenterActiveTasks\(workbench\)/);
+  assert.match(workbenchSource, /taskCenterActiveCount: countTaskCenterActiveTasks\(workbench\)/);
+  assert.match(workbenchSource, /updateMountedNewCanvasSurface\(workbench, \{ taskCenterActiveCount: activeCount, surfaceOnly: true \}\)/);
+  assert.match(adapterSource, /taskCenterActiveCount: context\.taskCenterActiveCount/);
+  assert.match(appSource, /runtimeStore\.setState\(\{ taskCenterActiveCount: nextCount \}\)/);
+  assert.match(appSource, /if \(next !== runtimeContext && !Object\.prototype\.hasOwnProperty\.call\(next, "taskCenterActiveCount"\)\) return;/);
+  assert.match(runtimeAppSource, /taskCenterActiveCount: e\.taskCenterActiveCount/);
+  assert.match(runtimeAppSource, /g > 0 \? \/\* @__PURE__ \*\/ \(0, Z\.jsx\)\("span", \{[\s\S]*className: "sidebar-badge"/);
+  assert.match(brandCss, /\.sidebar-btn-v3 \.sidebar-badge/);
 });
 
 test("AI Canvas adapter preserves backend media parameter schemas and defaults", async () => {
@@ -383,19 +453,56 @@ test("host-originated runtime updates do not schedule another document sync", as
   await handle.dispose();
 });
 
+test("chrome-only runtime updates do not clone the host document into the runtime", async () => {
+  const synced = [];
+  const updates = [];
+  const adapter = createAiCanvasRuntimeAdapter({
+    mountRuntime: async () => ({ update(next) { updates.push(next); }, dispose() {} }),
+    syncDocument(document) { synced.push(document); },
+  });
+  const handle = await adapter.mount({}, {
+    canvasProjectId: "canvas-chrome-update",
+    document: { nodes: [{ id: "mounted-node" }] },
+  });
+  await handle.update({
+    ui: { canvasDocument: { nodes: [{ id: "host-clone" }] } },
+    surfaceOnly: true,
+    hostDocumentSync: false,
+  });
+  assert.equal(synced.length, 0);
+  assert.equal(updates[0].document, undefined);
+  assert.equal(updates[0].taskCenterActiveCount, undefined);
+  assert.equal(handle.document.nodes[0].id, "mounted-node");
+  await handle.dispose();
+});
+
 test("AI Canvas polling refreshes the mounted runtime without a full host render", () => {
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   assert.match(workbenchSource, /workbench\.refreshCanvasAfterAgentPatch = \(\) => syncCanvasHeadFromLive\([\s\S]*\{ force: true, render: !isAiCanvasRuntimeActive\(workbench\) \}/);
   assert.match(workbenchSource, /function isAiCanvasRuntimeActive\(workbench\)/);
   assert.match(workbenchSource, /else refreshMountedRuntime\(\);/);
-  assert.match(workbenchSource, /updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true, hostDocumentSync: false \}\)/);
+  assert.match(workbenchSource, /else refreshMountedRuntime\(true\);/);
+  assert.match(workbenchSource, /shouldSyncHostDocument/);
+  assert.match(workbenchSource, /syncHostDocument: true/);
+  assert.match(workbenchSource, /hostDocumentSync: false/);
   assert.match(workbenchSource, /render: workbench\.canvasLiveRender !== false && !isAiCanvasRuntimeActive\(workbench\)/);
+  const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(adapterSource, /Object\.prototype\.hasOwnProperty\.call\(next, "document"\)/);
+  assert.doesNotMatch(adapterSource, /next\.ui\?\.canvasDocument/);
+  assert.match(appSource, /const documentProvided = next\.document !== undefined \|\| next\.canvasDocument !== undefined/);
+  assert.match(appSource, /documentProvided && !saveEnabled/);
+  assert.match(appSource, /arePersistableCanvasRuntimeDocumentsEqual/);
+  assert.match(appSource, /omitRuntimeEphemeralNodeFields/);
 });
 
 test("AI Canvas runtime document sync skips duplicate host deep equality", () => {
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
-  assert.match(workbenchSource, /skipEquality: true/);
+  const runtimeSync = workbenchSource.match(
+    /syncDocument: async \(document, metadata = \{\}\) => \{[\s\S]*?return document;\s*\},/,
+  )?.[0] ?? "";
   assert.match(workbenchSource, /options\.skipEquality !== true && currentDocument/);
+  assert.doesNotMatch(runtimeSync, /skipEquality:\s*true/);
 });
 
 test("new Canvas mounts the standalone React Flow runtime directly in the page", () => {
@@ -475,6 +582,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /setChatPanelDetached\?\.\(false\)/);
   assert.match(appSource, /setChatPanelDetached\?\.\(false\);[\s\S]*?openChat\?\.\(\)/);
   assert.match(appSource, /\.chat-panel \.chat-panel-textarea \{[\s\S]*?min-height: 92px !important;[\s\S]*?max-height: 220px !important;/);
+  assert.match(appSource, /\.new-canvas-root \.chat-panel,[\s\S]*?\.new-canvas-root \.chat-panel-header,[\s\S]*?\.new-canvas-root \.chat-panel-input-area \{[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/);
   assert.match(appSource, /div:has\(> \.chat-panel-textarea\) \{[\s\S]*?min-height: 92px !important;/);
   assert.match(appSource, /function ensureAiCanvasRuntimeDefaultConversation\(runtimeStore, context = \{\}\)/);
   assert.match(appSource, /loadConversationsForProject\?\.\(currentProjectId\)/);
@@ -524,7 +632,48 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(runtimeDialogSource, /runtimeModels/);
   assert.match(runtimeDialogSource, /showImageSize: Z\.resolutions\?\.length > 0/);
   assert.match(runtimeDialogSource, /showAspectRatio: Z\.ratios\?\.length > 0/);
-  assert.match(runtimeDialogSource, /me = \(0, G\.useCallback\)\(\(e\) => l\(t, \{ aspectRatio: e \}\)/);
+});
+
+test("video param panel follows backend model capability instead of ComfyUI fallback", () => {
+  const runtimeDialogSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url),
+    "utf8",
+  );
+  const videoParamSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/MentionEditor-BXDyakbM.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(runtimeDialogSource, /canvas-model-prefs/);
+  assert.match(runtimeDialogSource, /provider: o \|\| \(selectedRuntimeModel \? "general" : o\)/);
+  assert.match(videoParamSource, /R = e === "comfyui" \|\| e === "runninghub"/);
+  assert.doesNotMatch(videoParamSource, /e === "comfyui" \|\| e === "runninghub" \|\| !e/);
+});
+
+test("new canvas aspect ratio change writes nodeWidth and nodeHeight", () => {
+  const runtimeDialogSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url),
+    "utf8",
+  );
+  const storeSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/useAppStore-BH-MdRLu.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(storeSource, /function Ix\(e\) \{\s*if \(e === "自适应"\) return \{\s*nodeWidth: 280,\s*nodeHeight: 280/);
+  assert.match(runtimeDialogSource, /Yt as s,/);
+  assert.match(runtimeDialogSource, /let n = \{ aspectRatio: e \}, r = s\(e\);\s*r && Object\.assign\(n, r\), l\(t, n\);/);
+  assert.doesNotMatch(runtimeDialogSource, /me = \(0, G\.useCallback\)\(\(e\) => l\(t, \{ aspectRatio: e \}\)/);
+});
+
+test("completed canvas nodes open the prompt dialog on click after refresh", () => {
+  const runtimeAppSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
+    "utf8",
+  );
+  const completedClick = runtimeAppSource.match(
+    /if \(n\.data\?\.role === "source" \|\| n\.data\?\.type === "ai-text" && n\.data\?\.output \|\| n\.data\?\.type === "ai-image" && n\.data\?\.imageUrl[\s\S]{0,280}?return;/,
+  )?.[0] ?? "";
+  assert.match(completedClick, /Yt\(n\);/);
+  assert.doesNotMatch(completedClick, /m\(\);/);
 });
 
 test("new canvas floating menu hosts task center and operation history", () => {
@@ -548,6 +697,8 @@ test("new canvas floating menu hosts task center and operation history", () => {
   assert.doesNotMatch(chatPanelSource, /"data-tooltip": _\("任务中心"\)/);
   assert.match(brandCss, /sidebar-btn-v3\[data-tooltip\^="任务中心"\]/);
   assert.match(brandCss, /\.new-canvas-root \.canvas-history-wrap:not\(\[data-pinned="true"\]\)/);
+  assert.match(brandCss, /\.new-canvas-root \.chat-panel[\s\S]*?backdrop-filter:\s*none !important/);
+  assert.match(brandCss, /\.canvas-radial-backdrop,[\s\S]*?\.canvas-radial-menu,[\s\S]*?\.canvas-radial-hold-indicator,[\s\S]*?\.canvas-radial-editor,[\s\S]*?\[data-canvas-radial-menu\] \{[\s\S]*?display: none !important;/);
 });
 
 test("project task center opens after the runtime click dispatch completes", () => {
@@ -578,4 +729,12 @@ test("standalone Canvas context menu omits local folder actions", () => {
   assert.ok(menuStart >= 0);
   const contextMenuSource = appAssetSource.slice(menuStart, menuEnd > menuStart ? menuEnd : undefined);
   assert.doesNotMatch(contextMenuSource, /创建文件夹|打开项目文件夹/);
+});
+
+test("deferred media loading does not strip AI Canvas prompt dialog thumbnails", () => {
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  assert.match(
+    workbenchSource,
+    /\[data-selection-picker-id\], \.asset-image-lightbox, \.modal-backdrop, \[data-canvas-image-fullscreen\], \.canvas-text-skill-layer, \.canvas-script-batch-layer, \.ai-dialog-float, \.connected-nodes-float, \.connected-node-thumb/,
+  );
 });

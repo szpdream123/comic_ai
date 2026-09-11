@@ -501,7 +501,7 @@ function Fe({ provider: e, selectedModel: t, nodeId: n, videoReferences: r, onCh
 		duration: _,
 		frameRate: l,
 		generateAudio: v
-	}), xe = be ?? M ?? N, I = xe ?? P, L = e === "volcengine" || e === "dreamina" || !!be, Se = Ne(P), R = e === "comfyui" || e === "runninghub" || !e, Ce = L || !R, B = o ?? 832, we = l ?? 24, Te = d ?? 77, Fe = g ?? "16:9", Ie = u.map((e) => ({
+	}), xe = be ?? M ?? N, I = xe ?? P, L = e === "volcengine" || e === "dreamina" || !!be, Se = Ne(P), R = e === "comfyui" || e === "runninghub", Ce = L || !R, B = o ?? 832, we = l ?? 24, Te = d ?? 77, Fe = g ?? "16:9", Ie = u.map((e) => ({
 		value: e,
 		label: e
 	})), H = w, Le = Ie.some((e) => e.value === Fe) ? Fe : u[0], Re = I?.resolutions?.length ? I.resolutions : I?.defaultResolution ? [I.defaultResolution] : void 0, ze = I?.ratios?.length ? I.ratios : I?.defaultRatio ? [I.defaultRatio] : void 0, U = Re ? Re.map((e) => ({

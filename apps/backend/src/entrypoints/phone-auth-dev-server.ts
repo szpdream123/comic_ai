@@ -20023,6 +20023,14 @@ export function createPhoneAuthDevServer(
     localObjectStore:
       options.storageRuntime?.localObjectStore ?? defaultStorageRuntime.localObjectStore,
   };
+  if (typeof storageRuntime.adapter?.ensureBrowserReadCors === "function") {
+    void storageRuntime.adapter.ensureBrowserReadCors({ bucket: storageRuntime.bucket }).catch((error) => {
+      console.error("[storage] browser CORS setup failed", {
+        bucket: storageRuntime.bucket,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
   const hydrateBrandKitFileUrls = async (
     brandKit: BrandKitDetailRecord,
     sessionToken: string,

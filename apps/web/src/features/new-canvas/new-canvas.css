@@ -9019,6 +9019,13 @@
     auto;
 }
 
+:host-context([data-workbench-theme="daylight"]) .new-canvas-root .canvas-stage.is-canvas-grid-visible {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(28, 92, 139, 0.28) 0.8px, transparent 1.1px),
+    radial-gradient(circle at 74% 18%, rgba(42, 151, 224, 0.12), transparent 26rem),
+    radial-gradient(circle at 12% 84%, rgba(42, 151, 224, 0.1), transparent 24rem);
+}
+
 .new-canvas-root .x6-widget-snapline-vertical,
 .new-canvas-root .x6-widget-snapline-horizontal {
   stroke: var(--new-canvas-control-text);

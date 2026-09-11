@@ -42,6 +42,7 @@ import {
   persistCanvasNodePositionsForTest,
   persistCanvasViewportBeforePageHideForTest,
   persistCanvasSessionForTest,
+  updateActiveCanvasDocumentForTest,
   persistStoryboardCardDescriptionForTest,
   persistStoryboardDescriptionFromCardForTest,
   preserveStoryboardPromptRichTextForTest,
@@ -42700,14 +42701,138 @@ describe("production workbench project tab", () => {
     assert.deepEqual(applied, [["zoom", 0.4], ["translate", 336, 280], ["grid", "show"]]);
   });
 
-  it("persists settled Canvas viewport changes to the canonical document immediately", () => {
+  it("debounces settled Canvas viewport changes instead of saving the full document immediately", () => {
     const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
     const viewportUpdate = source.match(
       /workbench\.updateCanvasViewport = \(canvasDocument\) => \{[\s\S]*?\n  \};/,
     )?.[0] ?? "";
+    const runtimeSync = source.match(
+      /syncDocument: async \(document, metadata = \{\}\) => \{[\s\S]*?return document;\s*\},/,
+    )?.[0] ?? "";
 
-    assert.match(viewportUpdate, /updateActiveCanvasDocument\(workbench, canvasDocument, \{ immediateSave: true \}\)/);
+    assert.match(viewportUpdate, /delayMs:\s*CANVAS_VIEWPORT_SAVE_DELAY_MS/);
+    assert.doesNotMatch(viewportUpdate, /immediateSave:\s*true/);
     assert.match(viewportUpdate, /persistCanvasSession\(/);
+    assert.match(runtimeSync, /immediateSave:\s*metadata\.immediateSave === true/);
+    assert.doesNotMatch(runtimeSync, /CANVAS_VIEWPORT_SAVE_DELAY_MS/);
+    assert.doesNotMatch(runtimeSync, /workbench\.saveCanvasNow/);
+  });
+
+  it("lets a node move replace a pending viewport save with the default debounce", async () => {
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    let nextTimerId = 1;
+    globalThis.setTimeout = ((callback, delayMs) => {
+      const timer = { id: nextTimerId++, callback, delayMs };
+      timers.push(timer);
+      return timer.id;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timerId) => {
+      const index = timers.findIndex((timer) => timer.id === timerId);
+      if (index >= 0) timers.splice(index, 1);
+    }) as typeof clearTimeout;
+    const saveCalls = [];
+    const initialDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "node-1", type: "image", position: { x: 40, y: 80 }, data: {} }],
+      edges: [],
+    };
+    const workbench = {
+      api: {
+        async saveStandaloneCanvas(canvasProjectId, payload) {
+          saveCalls.push({ canvasProjectId, payload });
+          return { canvas: { canvasProjectId, serverRevision: saveCalls.length + 1, document: payload.document } };
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 1,
+        canvasProjects: [{ id: "canvas-main", title: "画布" }],
+        canvasDocument: initialDocument,
+        canvasDocumentsByProject: { "canvas-main": initialDocument },
+      }),
+    };
+
+    try {
+      updateActiveCanvasDocumentForTest(workbench, {
+        ...initialDocument,
+        viewport: { x: 12, y: -8, zoom: 1 },
+      }, { delayMs: 2_000 });
+      updateActiveCanvasDocumentForTest(workbench, {
+        ...initialDocument,
+        viewport: { x: 48, y: -24, zoom: 1 },
+      }, { delayMs: 2_000 });
+      updateActiveCanvasDocumentForTest(workbench, {
+        ...initialDocument,
+        nodes: [{ id: "node-1", type: "image", position: { x: 180, y: 240 }, data: {} }],
+      });
+
+      assert.equal(saveCalls.length, 0);
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 600);
+      await timers[0].callback();
+      assert.equal(saveCalls.length, 1);
+      assert.deepEqual(saveCalls[0].payload.document.nodes[0].position, { x: 180, y: 240 });
+    } finally {
+      globalThis.setTimeout = previousSetTimeout;
+      globalThis.clearTimeout = previousClearTimeout;
+    }
+  });
+
+  it("saves a Canvas node move through the position API instead of a full document revision", async () => {
+    const documentSaves = [];
+    const positionSaves = [];
+    const initialDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: "node-1", type: "image", position: { x: 40, y: 80 }, data: { prompt: "keep" } },
+        { id: "node-2", type: "video", position: { x: 400, y: 80 }, data: { prompt: "still" } },
+      ],
+      edges: [{ id: "edge-1", source: "node-1", target: "node-2" }],
+    };
+    const workbench = {
+      api: {
+        async saveStandaloneCanvas(canvasProjectId, payload) {
+          documentSaves.push({ canvasProjectId, payload });
+          return { canvas: { canvasProjectId, serverRevision: 8, document: payload.document } };
+        },
+        async saveCanvasNodePositions(canvasProjectId, payload) {
+          positionSaves.push({ canvasProjectId, payload });
+          return { canvas: { canvasProjectId, serverRevision: 7 } };
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 7,
+        canvasProjects: [{ id: "canvas-main", title: "画布" }],
+        canvasDocument: initialDocument,
+        canvasDocumentsByProject: { "canvas-main": initialDocument },
+      }),
+    };
+
+    updateActiveCanvasDocumentForTest(workbench, {
+      ...initialDocument,
+      nodes: [
+        { ...initialDocument.nodes[0], position: { x: 180, y: 240 } },
+        initialDocument.nodes[1],
+      ],
+    });
+    await workbench.canvasPositionSaveInFlight;
+
+    assert.equal(documentSaves.length, 0);
+    assert.equal(positionSaves.length, 1);
+    assert.equal(positionSaves[0].payload.clientRevision, 7);
+    assert.deepEqual(positionSaves[0].payload.positions, [{ nodeKey: "node-1", x: 180, y: 240 }]);
+    assert.equal(workbench.ui.canvasServerRevision, 7);
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasRevisionConflict ?? null, null);
   });
 
   it("loads the Canvas document and user session concurrently", async () => {
@@ -42782,7 +42907,56 @@ describe("production workbench project tab", () => {
       await Promise.resolve();
       assert.equal(saveCalls.length, 1);
       assert.equal(saveCalls[0].options.keepalive, true);
+      assert.match(source, /canvasSaveTimer[\s\S]*canvasSaveInFlight[\s\S]*canvasSaveQueuedDocument[\s\S]*keepalive: true/);
       assert.match(source, /addEventListener\?\.\("pagehide", workbench\.persistCanvasViewportBeforePageHide, \{ once: true \}\)/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("flushes a pending Canvas document save on pagehide without an X6 graph", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    const saveCalls = [];
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const document = {
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "node-1", type: "image", position: { x: 180, y: 240 }, data: {} }],
+      edges: [],
+    };
+    const workbench = {
+      canvasSaveTimer: 1,
+      api: {
+        async saveStandaloneCanvas(canvasProjectId, input, options) {
+          saveCalls.push({ canvasProjectId, input, options });
+          return { canvas: { canvasProjectId, serverRevision: 5, document: input.document } };
+        },
+      },
+      ui: {
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 4,
+        canvasSaveStatus: "pending",
+        canvasDocumentsByProject: { "canvas-main": document },
+        canvasDocument: document,
+      },
+    };
+
+    try {
+      assert.equal(persistCanvasViewportBeforePageHideForTest(workbench), true);
+      const draft = JSON.parse(stored.get("comic-ai:canvas-refresh-draft:canvas-main"));
+      assert.deepEqual(draft.document.nodes[0].position, { x: 180, y: 240 });
+      await Promise.resolve();
+      assert.equal(saveCalls.length, 1);
+      assert.equal(saveCalls[0].options.keepalive, true);
+      assert.deepEqual(saveCalls[0].input.document.nodes[0].position, { x: 180, y: 240 });
     } finally {
       globalThis.window = previousWindow;
     }
@@ -43312,6 +43486,123 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasRevisionConflict, null);
   });
 
+  it("does not poll Canvas head after an Agent patch when live is already connected", async () => {
+    let headCalls = 0;
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "local-node", type: "text", data: { text: "本地内容" } }],
+      edges: [],
+    };
+    const workbench = {
+      canvasLiveAbortController: { signal: { aborted: false } },
+      api: {
+        async getCanvasHead() {
+          headCalls += 1;
+          throw new Error("idle live canvas must not poll head");
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 2,
+        canvasLastSavedRevision: 2,
+        canvasSaveStatus: "saved",
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-main": document },
+      }),
+    };
+
+    await refreshCanvasAfterAgentPatchForTest(workbench);
+
+    assert.equal(headCalls, 0);
+    assert.equal(workbench.ui.canvasServerRevision, 2);
+  });
+
+  it("does not poll Canvas head for live events without a newer revision", async () => {
+    let headCalls = 0;
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+      edges: [],
+    };
+    const workbench = {
+      api: {
+        async getCanvasHead() {
+          headCalls += 1;
+          throw new Error("idle live events must not poll canvas head");
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 2,
+        canvasLastSavedRevision: 2,
+        canvasSaveStatus: "saved",
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-main": document },
+      }),
+    };
+
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "ping", ts: "2026-09-11T00:00:00.000Z" },
+    }, { render: false });
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "revision", eventId: "revision-missing" },
+    }, { render: false });
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "revision", eventId: "revision-stale", serverRevision: 2 },
+    }, { render: false });
+
+    assert.equal(headCalls, 0);
+  });
+
+  it("does not poll Canvas head while a local canvas save is in flight", async () => {
+    let headCalls = 0;
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "local-node", type: "text", position: { x: 40, y: 80 }, data: { text: "本地内容" } }],
+      edges: [],
+    };
+    const workbench = {
+      canvasSaveInFlight: Promise.resolve(),
+      api: {
+        async getCanvasHead() {
+          headCalls += 1;
+          throw new Error("local canvas edits must not poll head");
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 2,
+        canvasLastSavedRevision: 2,
+        canvasSaveStatus: "saving",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+      }),
+    };
+
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "revision", eventId: "revision-event-3", serverRevision: 3 },
+    }, { render: false });
+
+    assert.equal(headCalls, 0);
+    assert.equal(workbench.ui.canvasDocument.nodes[0].position.x, 40);
+    assert.equal(workbench.ui.canvasServerRevision, 2);
+  });
+
   it("accepts the persisted Canvas generation result without creating a local revision conflict", async () => {
     const previousSetTimeout = globalThis.setTimeout;
     const previousClearTimeout = globalThis.clearTimeout;
@@ -43577,12 +43868,14 @@ describe("production workbench project tab", () => {
       canvasLiveRetryDelayMs: 0,
       canvasLiveRender: false,
       api: {
-        async *streamCanvasLive() {},
-        async getCanvasHead() {
+        async *streamCanvasLive() {
           const error = new Error("forbidden");
           error.status = 403;
           error.errorCode = "canvas_actor_access_denied";
           throw error;
+        },
+        async getCanvasHead() {
+          throw new Error("idle live reconnect must not poll canvas head");
         },
       },
       ui: buildProjectUi({

@@ -164,6 +164,7 @@ export function buildGlobalAiOpcVideoPayload(
   const orderedReferenceImageSet = new Set(orderedReferenceImages);
   const compatibilityReferenceImages = dedupeUrls([
     ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.images),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
   ]).filter((url) => !orderedReferenceImageSet.has(url));

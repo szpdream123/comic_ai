@@ -2397,8 +2397,15 @@ function at({ action: e }) {
 }
 function ot({ nodeType: e, nodeId: t, prompt: n = "", placeholder: r, selectedModel: a, selectedProvider: o, selectedWorkflowId: s, animationAction: c = "idle", onAnimationActionChange: u, animationFrames: d = 8, onAnimationFramesChange: f, canGenerate: p = !0, isGenerating: h = !1, onCancelGeneration: _, onChange: v, onContinuousEditEnd: y, onSubmit: b, onModelSelect: x, onWorkflowSelect: S, onDebug: C, onPassThrough: w, imageSize: T, aspectRatio: E, onChangeImageSize: D, onChangeAspectRatio: O, batchCount: k = 1, onChangeBatchCount: A, cameraSettings: j, onChangeCameraSettings: M, videoResolution: N, videoFps: P, videoFrames: ee, onChangeVideoResolution: F, onChangeVideoFps: I, seedanceResolution: L, seedanceRatio: te, seedanceDuration: R, generateAudio: z, videoReferences: B, onChangeVideoReferences: ne, onChangeSeedanceResolution: re, onChangeSeedanceRatio: ie, onChangeSeedanceDuration: ae, onChangeGenerateAudio: oe, audioPurpose: se, audioVoice: ce, audioFormat: le, audioSpeed: ue, musicTitle: U, musicLyrics: fe, musicBpm: W, musicDuration: me, autoGenerateLyrics: he, onChangeAudioVoice: ve, onChangeAudioFormat: ye, onChangeAudioSpeed: xe, onChangeMusicTitle: Se, onChangeMusicLyrics: Ce, onChangeMusicBpm: q, onChangeMusicDuration: we, onChangeAutoGenerateLyrics: Te, workflows: Ee = [], editorRef: De, selectedStyle: Oe, onStyleChange: ke }) {
 	let J = i(), je = r ?? J("输入提示词开始创作   (Enter 生成，Shift+Enter 换行)"), [Ne, Pe] = (0, G.useState)(!1), [Fe, Y] = (0, G.useState)(!1), [Ie, Le] = (0, G.useState)(!1), [Re, X] = (0, G.useState)(null), ze = (0, G.useRef)(null), Be = (0, G.useRef)(null), Ve = (0, G.useRef)(null), He = (0, G.useRef)(null), Ue = (0, G.useRef)(!1), [Ge, Ke] = (0, G.useState)(!1), runtimeModels = g((e) => e.config.generalModels), selectedRuntimeModel = (() => {
-		let e = String(a ?? "").replace(/^general\//, "");
-		return runtimeModels?.find((t) => t.id === a || t.id === e || t.modelId === a || t.modelId === e || t.id?.replace(/^general\//, "") === e || t.modelId?.replace(/^general\//, "") === e);
+		let t = String(a ?? "").trim();
+		if (!t) try {
+			t = String(JSON.parse(localStorage.getItem("canvas-model-prefs") || "{}")[e] ?? "").trim();
+		} catch {
+			t = "";
+		}
+		if (!t) return;
+		let n = t.replace(/^general\//, "");
+		return runtimeModels?.find((e) => e.id === t || e.id === n || e.modelId === t || e.modelId === n || e.id?.replace(/^general\//, "") === n || e.modelId?.replace(/^general\//, "") === n);
 	})(), creditCost = (() => {
 		if (e !== "ai-image" && e !== "ai-video") return;
 		let t = selectedRuntimeModel?.pricing;
@@ -2658,8 +2665,8 @@ function ot({ nodeType: e, nodeId: t, prompt: n = "", placeholder: r, selectedMo
 						}]
 					}),
 					e === "ai-video" && /* @__PURE__ */ (0, K.jsx)(ge, {
-						provider: o,
-						selectedModel: a,
+						provider: o || (selectedRuntimeModel ? "general" : o),
+						selectedModel: a || (selectedRuntimeModel ? `general/${selectedRuntimeModel.id}` : a),
 						nodeId: t,
 						videoReferences: B,
 						onChangeVideoReferences: ne,
@@ -3835,7 +3842,10 @@ function pt() {
 				audioPurpose: void 0
 			} : {}
 		});
-	}, [t, l]), pe = (0, G.useCallback)((e) => l(t, { imageSize: e }), [t, l]), me = (0, G.useCallback)((e) => l(t, { aspectRatio: e }), [t, l]), ge = (0, G.useCallback)((e) => l(t, { batchCount: e }), [t, l]), _e = (0, G.useCallback)((e) => l(t, { cameraSettings: e }), [t, l]), ve = (0, G.useCallback)((e) => B({ videoResolution: e }), [B]), be = (0, G.useCallback)((e) => l(t, { videoFps: e }), [t, l]), Se = (0, G.useCallback)((e) => l(t, { seedanceResolution: e }), [t, l]), q = (0, G.useCallback)((e) => l(t, { seedanceRatio: e }), [t, l]), we = (0, G.useCallback)((e) => B({ seedanceDuration: e }), [B]), De = (0, G.useCallback)((e) => l(t, { generateAudio: e }), [t, l]), Oe = (0, G.useCallback)((e) => l(t, { videoReferences: e }), [t, l]), ke = (0, G.useCallback)((e) => l(t, { audioVoice: e }), [t, l]), Ae = (0, G.useCallback)((e) => l(t, { audioFormat: e }), [t, l]), J = (0, G.useCallback)((e) => B({ audioSpeed: e }), [B]), je = (0, G.useCallback)((e) => B({ musicTitle: e }), [B]), Me = (0, G.useCallback)((e) => B({ musicLyrics: e }), [B]), Ne = (0, G.useCallback)((e) => B({ musicBpm: e }), [B]), Pe = (0, G.useCallback)((e) => B({ musicDuration: e }), [B]), Fe = (0, G.useCallback)((e) => l(t, { autoGenerateLyrics: e }), [t, l]), Y = (0, G.useCallback)((e) => l(t, { style: e }), [t, l]), Ie = (0, G.useCallback)((e) => l(t, { animationAction: e }), [t, l]), Le = (0, G.useCallback)((e) => l(t, { animationFrames: e }), [t, l]);
+	}, [t, l]), pe = (0, G.useCallback)((e) => l(t, { imageSize: e }), [t, l]), me = (0, G.useCallback)((e) => {
+		let n = { aspectRatio: e }, r = s(e);
+		r && Object.assign(n, r), l(t, n);
+	}, [t, l]), ge = (0, G.useCallback)((e) => l(t, { batchCount: e }), [t, l]), _e = (0, G.useCallback)((e) => l(t, { cameraSettings: e }), [t, l]), ve = (0, G.useCallback)((e) => B({ videoResolution: e }), [B]), be = (0, G.useCallback)((e) => l(t, { videoFps: e }), [t, l]), Se = (0, G.useCallback)((e) => l(t, { seedanceResolution: e }), [t, l]), q = (0, G.useCallback)((e) => l(t, { seedanceRatio: e }), [t, l]), we = (0, G.useCallback)((e) => B({ seedanceDuration: e }), [B]), De = (0, G.useCallback)((e) => l(t, { generateAudio: e }), [t, l]), Oe = (0, G.useCallback)((e) => l(t, { videoReferences: e }), [t, l]), ke = (0, G.useCallback)((e) => l(t, { audioVoice: e }), [t, l]), Ae = (0, G.useCallback)((e) => l(t, { audioFormat: e }), [t, l]), J = (0, G.useCallback)((e) => B({ audioSpeed: e }), [B]), je = (0, G.useCallback)((e) => B({ musicTitle: e }), [B]), Me = (0, G.useCallback)((e) => B({ musicLyrics: e }), [B]), Ne = (0, G.useCallback)((e) => B({ musicBpm: e }), [B]), Pe = (0, G.useCallback)((e) => B({ musicDuration: e }), [B]), Fe = (0, G.useCallback)((e) => l(t, { autoGenerateLyrics: e }), [t, l]), Y = (0, G.useCallback)((e) => l(t, { style: e }), [t, l]), Ie = (0, G.useCallback)((e) => l(t, { animationAction: e }), [t, l]), Le = (0, G.useCallback)((e) => l(t, { animationFrames: e }), [t, l]);
 	if (!t || !C || !T || !E) return null;
 	let Re = T.audioPurpose ?? (T.model ? P(T.model)?.audioPurpose : void 0), X = E === "ai-image" || E === "ai-video" ? 2 : T.imageUrl || T.thumbnailUrl || T.videoUrl || T.audioUrl ? 12 : -20, ze = (e) => {
 		let n = e.match(/^@\{([^:]+):([^}]+)\}$/);

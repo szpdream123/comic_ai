@@ -19,7 +19,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-13";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260911-3";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -148,6 +148,20 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
         body: {
           model: "{{model}}",
           prompt: "{{prompt}}",
+          images: "{{imageUrls}}",
+          referenceImages: "{{referenceImageUrls}}",
+          ...(mediaKind === "video"
+            ? {
+              referenceVideos: "{{referenceVideoUrls}}",
+              referenceAudios: "{{referenceAudioUrls}}",
+              firstFrame: "{{firstImage}}",
+              lastFrame: "{{lastImage}}",
+              duration: "{{duration}}",
+              aspectRatio: "{{aspectRatio}}",
+              resolution: "{{resolution}}",
+              generateAudio: "{{generateAudio}}",
+            }
+            : {}),
         },
       },
       response: {
@@ -166,7 +180,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
           },
           errorPath: "data.error",
         },
-        intervalMs: 2_000,
+        intervalMs: 15_000,
         maxDurationMs: 30 * 60 * 1_000,
       },
     },
@@ -407,9 +421,12 @@ function normalizeAiCanvasRuntimeNode(node, index = 0) {
   const size = node.size && typeof node.size === "object" ? node.size : {};
   const label = String(data.label ?? data.title ?? node.title ?? "").trim()
     || (type === "comment" ? "备注" : "生成节点");
-  const status = data.status === "running" || data.status === "ready" || data.status === "empty"
-    ? "idle"
-    : data.status ?? "idle";
+  const rawStatus = String(data.status ?? "").trim().toLowerCase();
+  const status = ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus)
+    ? "loading"
+    : rawStatus === "ready" || rawStatus === "empty"
+      ? "idle"
+      : data.status ?? "idle";
   const nextData = {
     ...data,
     label,
@@ -519,14 +536,105 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       return value;
     }
   };
+  const omitRuntimeEphemeralNodeFields = (node, options = {}) => {
+    if (!node || typeof node !== "object") return node;
+    const {
+      selected: _selected,
+      dragging: _dragging,
+      resizing: _resizing,
+      measured: _measured,
+      positionAbsolute: _positionAbsolute,
+      width: _width,
+      height: _height,
+      internals: _internals,
+      ...rest
+    } = node;
+    if (options.ignoreLayout !== true) return rest;
+    const {
+      style: _style,
+      className: _className,
+      size: _size,
+      zIndex: _zIndex,
+      position,
+      ...content
+    } = rest;
+    return {
+      ...content,
+      ...(position && typeof position === "object"
+        ? {
+            position: {
+              x: Math.round(Number(position.x ?? 0)),
+              y: Math.round(Number(position.y ?? 0)),
+            },
+          }
+        : {}),
+    };
+  };
+  const omitRuntimeEphemeralEdgeFields = (edge, options = {}) => {
+    if (!edge || typeof edge !== "object") return edge;
+    const {
+      selected: _selected,
+      hidden: _hidden,
+      sourceNodeId: _sourceNodeId,
+      targetNodeId: _targetNodeId,
+      sourcePortId: _sourcePortId,
+      targetPortId: _targetPortId,
+      ...rest
+    } = edge;
+    const normalized = {
+      ...rest,
+      id: String(edge.id ?? ""),
+      source: String(edge.source ?? edge.sourceNodeId ?? ""),
+      target: String(edge.target ?? edge.targetNodeId ?? ""),
+      ...(edge.sourceHandle ?? edge.sourcePortId
+        ? { sourceHandle: edge.sourceHandle ?? edge.sourcePortId }
+        : {}),
+      ...(edge.targetHandle ?? edge.targetPortId
+        ? { targetHandle: edge.targetHandle ?? edge.targetPortId }
+        : {}),
+    };
+    if (options.ignoreLayout !== true) return normalized;
+    const { style: _style, className: _className, ...content } = normalized;
+    return content;
+  };
+  const persistableCanvasRuntimeDocument = (value, options = {}) => {
+    const source = value && typeof value === "object" ? value : {};
+    const { updatedAt: _updatedAt, createdAt: _createdAt, viewport: _viewport, ...envelope } = source;
+    return cloneValue({
+      ...envelope,
+      version: Number(source.version ?? 1) || 1,
+      nodes: (Array.isArray(source.nodes) ? source.nodes : []).map((node) => omitRuntimeEphemeralNodeFields(node, options)),
+      edges: (Array.isArray(source.edges) ? source.edges : []).map((edge) => omitRuntimeEphemeralEdgeFields(edge, options)),
+      groups: Array.isArray(source.groups) ? source.groups : [],
+    });
+  };
+  const arePersistableCanvasRuntimeDocumentsEqual = (left, right) => {
+    try {
+      const stableJson = (value) => JSON.stringify(
+        persistableCanvasRuntimeDocument(value, { ignoreLayout: true }),
+        (_key, nestedValue) => {
+          if (!nestedValue || Array.isArray(nestedValue) || typeof nestedValue !== "object") return nestedValue;
+          return Object.keys(nestedValue).sort().reduce((sorted, key) => {
+            sorted[key] = nestedValue[key];
+            return sorted;
+          }, Object.create(null));
+        },
+      );
+      return stableJson(left) === stableJson(right);
+    } catch {
+      return false;
+    }
+  };
+  let saveEnabled = false;
   const applyHostProjectState = (next = {}) => {
+    const documentProvided = next.document !== undefined || next.canvasDocument !== undefined;
     if (next.projectCatalog !== undefined) {
       projectCatalog = normalizeAiCanvasRuntimeProjects(next.projectCatalog);
     }
     if (next.currentProjectId !== undefined) {
       currentProjectId = String(next.currentProjectId ?? "").trim();
     }
-    if (next.document !== undefined || next.canvasDocument !== undefined) {
+    if (documentProvided) {
       hasDocument = true;
       document = normalizeAiCanvasRuntimeDocument(
         next.document ?? next.canvasDocument,
@@ -539,9 +647,9 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       ...(projects.length ? { projects } : {}),
       currentProjectId: currentProject?.id ?? currentProjectId ?? null,
       projectName: currentProject?.name ?? "",
-      ...(hasDocument ? { projectLoadStatus: "loading" } : {}),
+      ...(documentProvided && !saveEnabled ? { projectLoadStatus: "loading" } : {}),
     };
-    if (hasDocument) {
+    if (documentProvided) {
       patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
       patch.edges = Array.isArray(document.edges) ? cloneValue(document.edges) : [];
       patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
@@ -550,15 +658,17 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
   };
   const readRuntimeDocument = () => {
     const state = store.getState();
-    return {
-      version: Number(document?.version ?? 1) || 1,
+    const source = document && typeof document === "object" ? document : {};
+    const { updatedAt: _updatedAt, ...envelope } = source;
+    return persistableCanvasRuntimeDocument({
+      ...envelope,
+      version: Number(source.version ?? 1) || 1,
       ...(currentProjectId ? { canvasProjectId: currentProjectId } : {}),
-      nodes: cloneValue(state.nodes ?? []),
-      edges: cloneValue(state.edges ?? []),
-      groups: cloneValue(state.groups ?? []),
-    };
+      nodes: state.nodes ?? [],
+      edges: state.edges ?? [],
+      groups: state.groups ?? source.groups ?? [],
+    });
   };
-  let saveEnabled = false;
   const loadedNodeCount = Array.isArray(document?.nodes) ? document.nodes.length : 0;
   const saveThroughHost = async () => {
     if (!saveEnabled) {
@@ -571,9 +681,12 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       console.warn("[creator-app] blocked empty canvas overwrite");
       return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
     }
+    if (arePersistableCanvasRuntimeDocumentsEqual(document, nextDocument)) {
+      return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
+    }
     document = nextDocument;
     if (typeof context.onDocumentChange === "function") {
-      await context.onDocumentChange(nextDocument, { scheduleSave: true, immediateSave: true });
+      await context.onDocumentChange(nextDocument, { scheduleSave: true });
     }
     return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
   };
@@ -797,6 +910,186 @@ async function ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context = 
   state?.createConversation?.(settledProjectId);
 }
 
+function isAiCanvasAssistantTaskTerminal(task) {
+  const status = String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase();
+  if (["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status)) {
+    return true;
+  }
+  if (status !== "completed" && status !== "succeeded") return false;
+  return Boolean(resolveAiCanvasAssistantTaskMedia(task).url);
+}
+
+function resolveAiCanvasAssistantTaskMedia(task) {
+  const videoUrl = String(
+    task?.result?.videoUrl
+      ?? task?.fixedVideos?.[0]?.url
+      ?? "",
+  ).trim();
+  const imageUrl = String(
+    task?.result?.imageUrl
+      ?? task?.result?.sourceUrl
+      ?? task?.result?.downloadUrl
+      ?? task?.fixedImages?.[0]?.url
+      ?? "",
+  ).trim();
+  const kind = task?.kind === "video" || task?.mediaKind === "video" || videoUrl ? "video" : "image";
+  return { kind, url: kind === "video" ? videoUrl || imageUrl : imageUrl || videoUrl };
+}
+
+function createAiCanvasAssistantTaskResponse(task) {
+  const status = String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase();
+  const mappedStatus = status === "succeeded" ? "completed" : status === "cancelled" ? "canceled" : status;
+  const media = resolveAiCanvasAssistantTaskMedia(task);
+  const mediaKey = media.kind === "video" ? "videos" : "images";
+  return new Response(JSON.stringify({
+    requestId: `canvas-assistant-task-center-${Date.now().toString(36)}`,
+    data: {
+      status: mappedStatus || "failed",
+      ...(media.url ? { result: { [mediaKey]: [{ url: media.url }] } } : {}),
+      error: task?.failure?.displayMessage ?? task?.displayMessage ?? task?.error ?? undefined,
+    },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
+  const fetchImpl = runtimeWindow?.fetch;
+  const canUseTaskCenter = typeof context.onGenerationTaskCreated === "function"
+    && (
+      typeof context.api?.getGenerationTasks === "function"
+      || typeof context.api?.getGenerationTask === "function"
+      || typeof context.api?.listTaskCenterTasks === "function"
+    );
+  if (typeof fetchImpl !== "function" || fetchImpl.__comicAiTaskCenterBridge || !canUseTaskCenter) {
+    return { dispose() {} };
+  }
+  const originalFetch = fetchImpl.bind(runtimeWindow);
+  const waiters = new Map();
+  const terminalTasks = new Map();
+  const resolveRequestUrl = (input) => String(
+    typeof input === "string" ? input : input?.url ?? "",
+  );
+  const resolveRequestMethod = (input, init) => String(
+    init?.method ?? (typeof input !== "string" ? input?.method : "") ?? "GET",
+  ).toUpperCase();
+  const readJsonBody = async (input, init) => {
+    const raw = init?.body;
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      try { return await input.clone().json(); } catch { return null; }
+    }
+    return null;
+  };
+  const notifyWaiters = (task) => {
+    const taskId = String(task?.taskId ?? task?.generationTaskId ?? task?.id ?? "").trim();
+    if (!taskId || !isAiCanvasAssistantTaskTerminal(task)) return;
+    terminalTasks.set(taskId, task);
+    const pending = waiters.get(taskId);
+    if (!pending?.size) return;
+    waiters.delete(taskId);
+    const response = createAiCanvasAssistantTaskResponse(task);
+    for (const waiter of pending) {
+      try { waiter.resolve(response.clone()); } catch { waiter.reject?.(new Error("任务中心回写失败")); }
+    }
+  };
+  globalThis.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__ = notifyWaiters;
+  const waitForTaskCenter = (taskId, signal) => {
+    const cached = terminalTasks.get(taskId);
+    if (cached) return Promise.resolve(createAiCanvasAssistantTaskResponse(cached));
+    return new Promise((resolve, reject) => {
+      const pending = waiters.get(taskId) ?? new Set();
+      const waiter = { resolve, reject };
+      let timeoutId = 0;
+      const onAbort = () => {
+        cleanup();
+        reject(signal?.reason ?? new DOMException("任务已被取消", "AbortError"));
+      };
+      const cleanup = () => {
+        pending.delete(waiter);
+        if (!pending.size) waiters.delete(taskId);
+        signal?.removeEventListener?.("abort", onAbort);
+        if (timeoutId) runtimeWindow.clearTimeout?.(timeoutId);
+      };
+      waiter.resolve = (response) => {
+        cleanup();
+        resolve(response);
+      };
+      waiter.reject = (error) => {
+        cleanup();
+        reject(error);
+      };
+      pending.add(waiter);
+      waiters.set(taskId, pending);
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      timeoutId = runtimeWindow.setTimeout?.(() => {
+        waiter.reject(new Error("模型任务轮询超时"));
+      }, 30 * 60 * 1_000) ?? 0;
+    });
+  };
+  const bridgedFetch = async (input, init = {}) => {
+    const url = resolveRequestUrl(input);
+    const method = resolveRequestMethod(input, init);
+    const generationsMatch = url.match(/\/api\/canvas\/[^/]+\/assistant\/(images|videos)\/generations(?:\?|$)/);
+    const tasksMatch = url.match(/\/api\/canvas\/[^/]+\/assistant\/tasks\/([^/?]+)(?:\?|$)/);
+    if (method === "POST" && generationsMatch) {
+      const body = await readJsonBody(input, init);
+      const response = await originalFetch(input, init);
+      try {
+        const payload = await response.clone().json();
+        const taskId = String(payload?.data?.[0]?.task_id ?? payload?.[0]?.task_id ?? "").trim();
+        if (taskId) {
+          const mediaKind = generationsMatch[1] === "videos" ? "video" : "image";
+          const nodeId = String(body?.canvasNodeId ?? body?.nodeKey ?? body?.nodeId ?? "").trim();
+          void Promise.resolve(context.onGenerationTaskCreated(taskId, {
+            kind: mediaKind,
+            mediaKind,
+            targetType: nodeId ? "canvas_node" : "canvas",
+            targetId: nodeId || context.currentProjectId || context.canvasProjectId,
+            prompt: String(body?.prompt ?? ""),
+            model: String(body?.model ?? ""),
+          })).catch(() => undefined);
+        }
+      } catch {
+        // Task-center registration is best-effort; the submit response still returns to runtime.
+      }
+      return response;
+    }
+    if (method === "GET" && tasksMatch) {
+      const taskId = decodeURIComponent(tasksMatch[1]);
+      void Promise.resolve(context.onGenerationTaskCreated?.(taskId, {
+        targetType: "canvas",
+        targetId: context.currentProjectId || context.canvasProjectId,
+      })).catch(() => undefined);
+      return waitForTaskCenter(taskId, init?.signal ?? input?.signal);
+    }
+    return originalFetch(input, init);
+  };
+  bridgedFetch.__comicAiTaskCenterBridge = true;
+  runtimeWindow.fetch = bridgedFetch;
+  return {
+    dispose() {
+      if (runtimeWindow.fetch === bridgedFetch) runtimeWindow.fetch = originalFetch;
+      if (globalThis.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__ === notifyWaiters) {
+        globalThis.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__ = undefined;
+      }
+      for (const pending of waiters.values()) {
+        for (const waiter of pending) {
+          try { waiter.reject(new DOMException("任务已被取消", "AbortError")); } catch {}
+        }
+      }
+      waiters.clear();
+    },
+  };
+}
+
 function mountStandaloneAiCanvasRuntime(surface, context = {}) {
   globalThis.process ??= { env: { NODE_ENV: "production" } };
   aiCanvasRuntimePromise ??= import("/ai-canvas-runtime/runtime.js");
@@ -807,7 +1100,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260907-13";
+      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260911-3";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -998,6 +1291,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .app-shell {
           --chat-panel-width: 600px;
+        }
+        .new-canvas-root .chat-panel,
+        .new-canvas-root .chat-panel-header,
+        .new-canvas-root .chat-panel-input-area {
+          -webkit-backdrop-filter: none !important;
+          backdrop-filter: none !important;
         }
         .new-canvas-root .chat-panel {
           top: 12px !important;
@@ -1211,6 +1510,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         .new-canvas-root .app-shell {
           --chat-panel-width: 600px;
         }
+        .new-canvas-root .chat-panel,
+        .new-canvas-root .chat-panel-header,
+        .new-canvas-root .chat-panel-input-area {
+          -webkit-backdrop-filter: none !important;
+          backdrop-filter: none !important;
+        }
         .new-canvas-root .chat-panel {
           top: 12px !important;
           bottom: 12px !important;
@@ -1336,7 +1641,19 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       onDirectorDeskSyncFrame: context.onDirectorDeskSyncFrame,
       onDirectorDeskExportVideo: context.onDirectorDeskExportVideo,
       onDocumentChange: (document, metadata = {}) => context.syncDocument?.(document, metadata),
+      onGenerationTaskCreated: context.onGenerationTaskCreated,
+      taskCenterActiveCount: Number(context.taskCenterActiveCount ?? 0) || 0,
     };
+    const applyTaskCenterActiveCount = (next = runtimeContext) => {
+      if (!runtimeStore?.setState) return;
+      if (next !== runtimeContext && !Object.prototype.hasOwnProperty.call(next, "taskCenterActiveCount")) return;
+      const count = Number(next.taskCenterActiveCount ?? runtimeContext.taskCenterActiveCount ?? 0);
+      const nextCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+      runtimeContext.taskCenterActiveCount = nextCount;
+      if (Number(runtimeStore.getState?.()?.taskCenterActiveCount ?? 0) === nextCount) return;
+      runtimeStore.setState({ taskCenterActiveCount: nextCount });
+    };
+    applyTaskCenterActiveCount();
     const hostProjectGuard = createAiCanvasRuntimeHostProjectGuard(runtimeStore, runtimeContext);
     const runtimeWindow = surface?.ownerDocument?.defaultView ?? globalThis;
     const onOpenProjectTaskCenter = (event) => {
@@ -1351,6 +1668,10 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       }, 0);
     };
     runtimeWindow?.addEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+    const taskCenterBridge = installAiCanvasAssistantTaskCenterBridge(runtimeWindow, {
+      ...context,
+      ...runtimeContext,
+    });
     const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
         ...context,
         ...runtimeContext,
@@ -1368,11 +1689,13 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         catalogBridge.update(next);
         hostProjectGuard.update(next);
         projectBridge.update(next);
+        applyTaskCenterActiveCount(next);
         return runtimeHandle?.update?.(next);
       },
       async dispose() {
         try {
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+          taskCenterBridge.dispose();
           projectBridge.dispose();
           await runtimeHandle?.dispose?.();
         } finally {
@@ -1387,9 +1710,11 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       });
     }).catch((error) => {
       runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+      taskCenterBridge.dispose();
       projectBridge.dispose();
       throw error;
     })).catch((error) => {
+      taskCenterBridge.dispose();
       hostProjectGuard.dispose();
       themeBridge.dispose();
       configBridge.dispose();

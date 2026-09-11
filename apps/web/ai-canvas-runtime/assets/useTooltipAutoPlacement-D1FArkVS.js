@@ -2116,7 +2116,7 @@ function Un(e = Date.now()) {
 	for (let [t, n] of z) e - n.uploadedAt > On && z.delete(t);
 }
 function Wn(e) {
-	return e ? !!(N(e) || e.startsWith("asset://") || e.includes("asset.localhost") || e.startsWith("file://")) : !1;
+	return e ? !!(N(e) || e.startsWith("blob:") || e.startsWith("asset://") || e.includes("asset.localhost") || e.startsWith("file://")) : !1;
 }
 async function Gn(e, t, n) {
 	let r = 32 * 1024, i = [], a = "", o = 0;
@@ -2310,19 +2310,17 @@ async function tr(e, t = "", n = "image", r) {
 async function nr(e, t = {}) {
 	let { provider: n = "", mode: r = "publicUrl", kind: i = "image", signal: a, dataUrlBudget: o } = t;
 	if (a?.aborted) throw V(a);
-	if (/^https?:\/\//i.test(e)) return e;
-	if (N(e) && r === "dataUrl") return Xe(o, await $e(e, i, zn(i), a)), e;
-	if (r === "dataUrl") {
-		let t = await Je(e, {
-			kind: i,
-			label: zn(i),
-			dataUrlBudget: o,
-			signal: a
-		});
-		if (!t) throw Error(`无法读取本地${i === "video" ? "视频" : i === "audio" ? "音频" : "图片"}参考，请重新导入文件`);
-		return t;
-	}
-	return tr(e, n, i, a);
+	if (/^https?:\/\//i.test(e) && !e.includes("asset.localhost")) return e;
+	if (r !== "dataUrl") return tr(e, n, i, a);
+	if (N(e)) return Xe(o, await $e(e, i, zn(i), a)), e;
+	let s = await Je(e, {
+		kind: i,
+		label: zn(i),
+		dataUrlBudget: o,
+		signal: a
+	});
+	if (!s) throw Error(`无法读取本地${i === "video" ? "视频" : i === "audio" ? "音频" : "图片"}参考，请重新导入文件`);
+	return s;
 }
 //#endregion
 //#region src/services/ai/imageUtils.ts
@@ -5530,10 +5528,9 @@ function Uo(e) {
 }
 async function Wo(e, t, n, r) {
 	return Fo(e.filter((e) => e.kind === t), async (e) => nr(G(e), {
-		mode: "dataUrl",
+		mode: "publicUrl",
 		kind: t,
-		signal: r,
-		dataUrlBudget: n
+		signal: r
 	}), r);
 }
 function Go(e, t) {
@@ -5747,7 +5744,7 @@ async function Zo(e, t) {
 			capability: o
 		}), d(i.executionProfile)) {
 			let n = Qe("本次视频模型参考媒体"), r = Go(l, {
-				image: await Io(s.imageUrls, a.providerConfigId, t),
+				image: await fr(s.imageUrls, a.providerConfigId, t),
 				video: await Wo(l, "video", n, t),
 				audio: await Wo(l, "audio", n, t)
 			}), u = No(c, {
@@ -5908,10 +5905,9 @@ async function rs(e, t) {
 		if (t?.aborted) throw t.reason ?? new DOMException("请求已取消", "AbortError");
 		let i = G(e);
 		r.push(await nr(i, {
-			mode: "dataUrl",
+			mode: "publicUrl",
 			kind: "audio",
-			signal: t,
-			dataUrlBudget: n
+			signal: t
 		}));
 	}
 	return r;

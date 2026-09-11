@@ -433,11 +433,13 @@ function buildSeedanceRequest(input: ProviderSubmissionInput, model?: string) {
   const referenceVideoUrl = readString(payload.referenceVideoUrl) ??
     readString(payload.sourceVideoUrl) ??
     readMediaUrls(payload.sourceVideo)[0] ??
-    readMediaUrls(parameters.sourceVideo)[0];
+    readMediaUrls(parameters.sourceVideo)[0] ??
+    readMediaUrls(parameters.referenceVideos)[0];
   const referenceAudioUrl = readString(payload.referenceAudioUrl) ??
     readString(payload.audioUrl) ??
     readMediaUrls(payload.referenceAudio)[0] ??
-    readMediaUrls(parameters.referenceAudio)[0];
+    readMediaUrls(parameters.referenceAudio)[0] ??
+    readMediaUrls(parameters.referenceAudios)[0];
   const hasReferenceMedia = referenceImageUrls.length > 0 || Boolean(referenceVideoUrl) || Boolean(referenceAudioUrl);
   const content: Array<Record<string, unknown>> = [{
     type: "text",

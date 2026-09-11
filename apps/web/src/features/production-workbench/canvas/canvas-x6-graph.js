@@ -2719,25 +2719,9 @@ export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
     graph.__comicAiCanvasSnapEnabled = snapEnabled;
   }
 
-  // Apply background grid visibility
-  if (graph.__comicAiCanvasBackgroundGridVisible !== showBackgroundGrid) {
-    graph.drawBackground?.({ color: "transparent" });
-    graph.drawGrid?.({
-      type: "dot",
-      args: {
-        color: "rgba(129, 146, 152, 0.18)",
-        thickness: 1,
-      },
-    });
-    if (graph.options?.grid) {
-      graph.options.grid.visible = showBackgroundGrid;
-    }
-    graph.showGrid?.();
-    if (!showBackgroundGrid) {
-      graph.hideGrid?.();
-    }
-    graph.__comicAiCanvasBackgroundGridVisible = showBackgroundGrid;
-  }
+  const stage = graph.__comicAiCanvasMount?.closest?.(".canvas-stage");
+  stage?.classList?.toggle?.("is-canvas-grid-visible", showBackgroundGrid);
+  graph.__comicAiCanvasBackgroundGridVisible = showBackgroundGrid;
 
   return true;
 }

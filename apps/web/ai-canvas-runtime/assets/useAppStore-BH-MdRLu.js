@@ -19481,6 +19481,7 @@ function tA() {
 }
 var nA = (e) => ({
 	agentTasks: [],
+	taskCenterActiveCount: 0,
 	createAgentTask: (t) => {
 		let n = Date.now(), r = tA(), i = {
 			id: r,

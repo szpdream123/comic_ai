@@ -2,6 +2,7 @@ import { o as e, t } from "./react-Dfufv8pq.js";
 import { t as n } from "./jsx-runtime-BAkIPmuO.js";
 import { r } from "./ViewportImage-txaOn4PW.js";
 import { Ct as i, Kt as a, ht as o, mt as s, st as c } from "./useTooltipAutoPlacement-D1FArkVS.js";
+import { t as We } from "./useAppStore-BH-MdRLu.js";
 import { l } from "./assetFormat-UuOoHpLo.js";
 import { t as u } from "./FullscreenOverlay-BTKONk6M.js";
 import { t as d } from "./ModelSelector-BPW0Bkh4.js";
@@ -211,6 +212,7 @@ function v({ isOpen: e, imageUrl: t, onClose: n, onGenerate: g }) {
 		if (!G || !e || !e.complete || R !== t || M) return;
 		if (K) {
 			F(K);
+			We.getState().showToast(K, "error");
 			return;
 		}
 		let n = b.current + 1;

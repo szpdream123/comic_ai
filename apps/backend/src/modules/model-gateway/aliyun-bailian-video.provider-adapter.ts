@@ -173,8 +173,11 @@ function buildCreateTaskPayload(
     readString(payload.imageUrl),
     readString(payload.referenceImageUrl),
     ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.images),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
+    readMediaUrl(parameters.firstFrame),
+    readMediaUrl(parameters.lastFrame),
   ].filter((item): item is string => Boolean(item)));
 
   return {

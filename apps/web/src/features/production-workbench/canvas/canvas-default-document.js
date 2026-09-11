@@ -32,7 +32,7 @@ export function createDefaultCanvasDocument(input = {}) {
   return {
     version: 1,
     canvasProjectId: String(input.canvasProjectId ?? ""),
-    viewport: { x: 0, y: 0, zoom: 1, snapEnabled: false, interactionMode: "default" },
+    viewport: { x: 0, y: 0, zoom: 1, snapEnabled: false, showBackgroundGrid: false, interactionMode: "default" },
     nodes: [],
     edges: [],
     createdAt: now,

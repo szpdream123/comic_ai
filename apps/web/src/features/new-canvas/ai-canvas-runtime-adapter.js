@@ -219,6 +219,9 @@ function normalizeRuntimeNodeData(node, nextType) {
       if (audioUrl != null) next.audioUrl = audioUrl;
     }
   }
+  if (previousType !== "send" && ["loading", "running", "queued", "processing", "pending", "submitted"].includes(String(next.status ?? "").trim().toLowerCase())) {
+    next.status = "loading";
+  }
   return next;
 }
 
@@ -512,6 +515,8 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
         runtimeVersion: AI_CANVAS_RUNTIME_ADAPTER_VERSION,
         creatorApi: creatorApiBridge,
         api: creatorApiBridge,
+        onGenerationTaskCreated: context.onGenerationTaskCreated,
+        taskCenterActiveCount: context.taskCenterActiveCount,
         modelCatalog: catalog.models,
         skillCatalog: catalog.skills,
         document,
@@ -550,12 +555,12 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
         },
         async update(next = {}) {
           if (disposed) return false;
-          const nextDocument = next.document
-            ?? next.canvasDocument
-            ?? next.ui?.canvasDocument;
-          // Host-originated updates already contain the canonical document. Keep
-          // the runtime document current, but do not send it back through
-          // syncDocument, otherwise polling can schedule another save request.
+          const nextDocument = Object.prototype.hasOwnProperty.call(next, "document")
+            ? next.document
+            : next.canvasDocument;
+          // Only apply an explicit host document. Chrome-only updates pass `ui`
+          // and must not clone the canvas back into the runtime store, otherwise
+          // autosave treats the new node/edge identities as an edit.
           if (nextDocument !== undefined) {
             document = deserializeAiCanvasDocument(nextDocument, document);
             if (next.hostDocumentSync !== false) {
@@ -569,9 +574,12 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
             runtimeVersion: AI_CANVAS_RUNTIME_ADAPTER_VERSION,
             creatorApi: creatorApiBridge,
             api: creatorApiBridge,
+            ...(Object.prototype.hasOwnProperty.call(next, "taskCenterActiveCount")
+              ? { taskCenterActiveCount: next.taskCenterActiveCount }
+              : {}),
             modelCatalog: catalog.models,
             skillCatalog: catalog.skills,
-            document,
+            ...(nextDocument !== undefined ? { document } : {}),
           });
         },
         async dispose() {

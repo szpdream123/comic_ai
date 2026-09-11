@@ -169,6 +169,7 @@ import {
   AI_CANVAS_RUNTIME_ADAPTER_VERSION,
   AI_CANVAS_RUNTIME_KIND,
   createAiCanvasRuntimeAdapter,
+  deserializeAiCanvasDocument,
   createDirectorDeskOverlay,
   dismissCanvasSurfaceOverlays,
   disposeCanvasGraph,
@@ -273,6 +274,7 @@ const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
 const DEFAULT_CANVAS_PROJECT_ID = "canvas-project-main";
+const CANVAS_VIEWPORT_SAVE_DELAY_MS = 2_000;
 const CANVAS_REFRESH_DRAFT_STORAGE_PREFIX = "comic-ai:canvas-refresh-draft";
 const CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY = "comic-ai:canvas-pending-create-idempotency";
 const CANVAS_PENDING_CREATE_IDEMPOTENCY_MAX_AGE_MS = 5 * 60_000;
@@ -2489,7 +2491,7 @@ function prepareDeferredMediaElements(root) {
     if (image.closest?.(".asset-generator-backdrop")) continue;
     // Picker dialogs have their own scroll container; native lazy loading is
     // more reliable there than observing against the workbench root.
-    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer")) continue;
+    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer, .ai-dialog-float, .connected-nodes-float, .connected-node-thumb")) continue;
     const source = String(image.getAttribute?.("src") ?? "").trim();
     if (!isDeferredMediaSource(source)) continue;
     image.dataset.deferredMediaManaged = "true";
@@ -3056,6 +3058,7 @@ export async function initProductionWorkbench({
     taskCenterPollInFlight: false,
     taskCenterPageLoadInFlight: false,
     taskCenterDiscoveryInFlight: false,
+    taskCenterDiscoveryTimer: null,
     taskCenterPollStartedAt: null,
     taskCenterLastDiscoveryAt: 0,
     taskCenterAppliedVersions: new Map(),
@@ -3672,7 +3675,9 @@ export async function initProductionWorkbench({
   workbench.updateCanvasDocument = (canvasDocument, options = {}) => updateActiveCanvasDocument(workbench, canvasDocument, options);
   workbench.ensureCanvasGenerationConfig = (options = {}) => ensureCanvasGenerationConfig(workbench, options);
   workbench.updateCanvasViewport = (canvasDocument) => {
-    const updated = updateActiveCanvasDocument(workbench, canvasDocument, { immediateSave: true });
+    const updated = updateActiveCanvasDocument(workbench, canvasDocument, {
+      delayMs: CANVAS_VIEWPORT_SAVE_DELAY_MS,
+    });
     void persistCanvasSession(
       workbench,
       resolveCanvasSaveProjectId(workbench),
@@ -6128,13 +6133,23 @@ export async function initProductionWorkbench({
 function persistCanvasViewportBeforePageHide(workbench) {
   const graphDocument = flushCanvasGraphDocument(workbench?.canvasGraph, workbench);
   const viewportSynced = syncCanvasGraphViewport(workbench?.canvasGraph, workbench);
-  if (graphDocument) {
+  const pendingDocument = workbench.ui?.canvasDocument;
+  const hasPendingSave = Boolean(
+    graphDocument
+    || viewportSynced
+    || workbench.canvasSaveTimer
+    || workbench.canvasSaveInFlight
+    || workbench.canvasSaveQueuedDocument
+    || workbench.ui?.canvasSaveStatus === "pending"
+    || workbench.ui?.canvasSaveStatus === "saving",
+  );
+  if (hasPendingSave && pendingDocument && typeof pendingDocument === "object") {
     workbench.ui.canvasSaveStatus = "pending";
     writeCanvasRefreshDraft(workbench);
     persistWorkbenchState(workbench);
     void saveProjectCanvasNow(workbench, { keepalive: true }).catch(() => undefined);
   }
-  return Boolean(graphDocument || viewportSynced);
+  return Boolean(graphDocument || viewportSynced || hasPendingSave);
 }
 
 function installEpisodeWorkbenchTestHooks(workbench) {
@@ -9914,7 +9929,7 @@ function renderAfterCanvasLoad(workbench, options = {}) {
     return false;
   }
   if (workbench.newCanvasInstance) {
-    updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+    updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
   }
   renderWorkbenchChrome(workbench);
   return true;
@@ -10080,6 +10095,7 @@ const NEW_CANVAS_CONTROLS_ACTIONS = new Set([
   "set-canvas-edge-style",
   "toggle-canvas-edges",
   "toggle-canvas-snap",
+  "toggle-canvas-background-grid",
   "set-canvas-interaction-mode",
   "toggle-canvas-minimap",
 ]);
@@ -10165,7 +10181,7 @@ async function switchAiCanvasRuntimeProject(workbench, projectId) {
   if (workbench.newCanvasMount?.isConnected) {
     workbench.newCanvasMount.dataset.canvasProjectId = targetId;
   }
-  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
   return targetId;
 }
 
@@ -10178,7 +10194,7 @@ async function createAiCanvasRuntimeProject(workbench, name) {
   }
   workbench.ui.canvasProjectView = "detail";
   syncCanvasProjectIdInLocation(project.id);
-  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
   return project.id;
 }
 
@@ -10301,6 +10317,7 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
     onOpenProjects: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "new-canvas" } }),
     onOpenTaskCenter: () => handleAction(workbench, { dataset: { action: "open-task-center" } }),
     onOpenOperationRecords: () => handleAction(workbench, { dataset: { action: "set-canvas-sidebar-mode", canvasSidebarMode: "history" } }),
+    taskCenterActiveCount: countTaskCenterActiveTasks(workbench),
   };
 }
 
@@ -10467,11 +10484,7 @@ async function syncNewCanvasMount(workbench) {
                 workbench.updateCanvasDocument(document, {
                   scheduleSave: metadata.scheduleSave !== false,
                   immediateSave: metadata.immediateSave === true,
-                  skipEquality: true,
                 });
-              }
-              if (metadata.immediateSave === true && typeof workbench.saveCanvasNow === "function") {
-                await workbench.saveCanvasNow();
               }
               return document;
             },
@@ -10634,6 +10647,10 @@ function updateMountedNewCanvasSurface(workbench, options = {}) {
   }
   syncPersistentWorkbenchToastState(workbench);
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") persistWorkbenchState(workbench);
+  const shouldSyncHostDocument = options.syncHostDocument === true
+    || options.nodeOnly === true
+    || Object.prototype.hasOwnProperty.call(options, "document")
+    || Object.prototype.hasOwnProperty.call(options, "canvasDocument");
   void workbench.newCanvasInstance.update({
     state: workbench.state,
     session: workbench.session,
@@ -10644,10 +10661,14 @@ function updateMountedNewCanvasSurface(workbench, options = {}) {
           theme: workbench.ui?.selectedWorkbenchTheme === "daylight" ? "light" : "dark",
           projectCatalog: buildAiCanvasRuntimeProjectCatalog(workbench),
           currentProjectId: workbench.ui?.selectedCanvasProjectId,
+          taskCenterActiveCount: countTaskCenterActiveTasks(workbench),
         }
       : {}),
     hostDocumentSync: false,
     ...options,
+    ...(shouldSyncHostDocument
+      ? { document: options.document ?? options.canvasDocument ?? workbench.ui?.canvasDocument }
+      : {}),
   }).then(() => syncCanvasPromptEditor(workbench, host.shadowRoot)).catch((error) => {
     console.warn("[creator-app] new canvas surface update failed", error);
   });
@@ -14177,6 +14198,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "toggle-canvas-node-search",
     "toggle-canvas-sidebar",
     "toggle-canvas-snap",
+    "toggle-canvas-background-grid",
     "set-canvas-viewport",
     "set-canvas-edge-style",
     "set-canvas-interaction-mode",
@@ -16226,6 +16248,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-canvas-background-grid") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const viewport = canvasDocument.viewport ?? {};
+    updateCanvasViewportAndRender(workbench, {
+      showBackgroundGrid: viewport.showBackgroundGrid === true ? false : true,
+    });
+    return;
+  }
+
   if (action === "set-canvas-interaction-mode") {
     const interactionMode = ["hand", "classic"].includes(target.dataset.interactionMode)
       ? target.dataset.interactionMode
@@ -17726,7 +17757,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const result = await runCanvasScriptWorkflowStage(workbench, nodeId, stage, selected);
       if (!result.ok && workbench.ui.toast !== result.message) {
         workbench.ui.toast = result.message;
-        updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+        updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
         renderWorkbenchChrome(workbench);
       }
       return;
@@ -31388,7 +31419,7 @@ async function runCanvasScriptWorkflowStage(workbench, scriptNodeId, stage, sele
   workbench.ui.toast = result.message;
   scheduleProjectCanvasSave(workbench, { delayMs: 500 });
   if (result.ok) refreshCanvasGraphFromDocument(workbench);
-  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
   renderWorkbenchChrome(workbench);
   return result;
 }
@@ -32312,6 +32343,18 @@ function createStandaloneCanvasDocument({ canvasProjectId }) {
   return normalizeStandaloneCanvasDocument(document, canvasProjectId);
 }
 
+const CANVAS_PERSISTED_MEDIA_KEYS = [
+  "imageUrl",
+  "videoUrl",
+  "audioUrl",
+  "previewUrl",
+  "thumbnailUrl",
+  "url",
+  "sourceUrl",
+  "resultUrl",
+  "output",
+];
+
 function normalizeStandaloneCanvasDocument(document, canvasProjectId = null) {
   const {
     projectId: _legacyProjectId,
@@ -32326,18 +32369,6 @@ function normalizeStandaloneCanvasDocument(document, canvasProjectId = null) {
       : {}),
   };
 }
-
-const CANVAS_PERSISTED_MEDIA_KEYS = [
-  "imageUrl",
-  "videoUrl",
-  "audioUrl",
-  "previewUrl",
-  "thumbnailUrl",
-  "url",
-  "sourceUrl",
-  "resultUrl",
-  "output",
-];
 
 function isEphemeralCanvasMediaUrl(value) {
   return /^(?:data|blob|file):/i.test(String(value ?? "").trim());
@@ -32456,6 +32487,9 @@ function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
   if (options.skipEquality !== true && currentDocument && canvasDocument && areCanvasDocumentsEqual(currentDocument, canvasDocument)) {
     return currentDocument;
   }
+  const positionChanges = options.scheduleSave === false
+    ? null
+    : collectCanvasNodePositionChanges(currentDocument, canvasDocument);
   workbench.ui.canvasDocument = canvasDocument;
   workbench.ui.canvasDocumentsByProject = {
     ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
@@ -32464,30 +32498,83 @@ function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
     [selectedProjectId]: canvasDocument,
   };
   if (options.scheduleSave !== false) {
-    scheduleProjectCanvasSave(workbench, options.immediateSave === true ? { delayMs: 0 } : {});
+    if (positionChanges) {
+      if (positionChanges.length) {
+        const positionSave = persistCanvasNodePositions(workbench, positionChanges);
+        if (positionSave?.catch) void positionSave.catch(() => undefined);
+      }
+      return canvasDocument;
+    }
+    const delayMs = Number.isFinite(options.delayMs)
+      ? options.delayMs
+      : (options.immediateSave === true ? 0 : undefined);
+    scheduleProjectCanvasSave(workbench, delayMs === undefined ? {} : { delayMs });
   }
   return canvasDocument;
 }
 
-function areCanvasDocumentsEqual(left, right) {
+function collectCanvasNodePositionChanges(currentDocument, nextDocument) {
+  if (!currentDocument || !nextDocument) return null;
+  if (!areCanvasDocumentsEqual(currentDocument, nextDocument, { ignoreNodePositions: true })) return null;
+  const currentNodes = Array.isArray(currentDocument.nodes) ? currentDocument.nodes : [];
+  const nextNodes = Array.isArray(nextDocument.nodes) ? nextDocument.nodes : [];
+  if (currentNodes.length !== nextNodes.length) return null;
+  const currentById = new Map(currentNodes.map((node) => [String(node?.id ?? ""), node]));
+  const changes = [];
+  for (const node of nextNodes) {
+    const nodeKey = String(node?.id ?? "").trim();
+    if (!nodeKey || !currentById.has(nodeKey)) return null;
+    const current = currentById.get(nodeKey);
+    const x = Number(node?.position?.x);
+    const y = Number(node?.position?.y);
+    const currentX = Number(current?.position?.x);
+    const currentY = Number(current?.position?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (Math.round(x) === Math.round(currentX) && Math.round(y) === Math.round(currentY)) continue;
+    changes.push({ nodeKey, x, y });
+  }
+  return changes;
+}
+
+function areCanvasDocumentsEqual(left, right, options = {}) {
   try {
-    const withoutDocumentTimestamp = (value) => {
-      if (!value || Array.isArray(value) || typeof value !== "object") return value;
-      return Object.keys(value).reduce((document, key) => {
-        if (key !== "updatedAt") document[key] = value[key];
-        return document;
-      }, Object.create(null));
-    };
-    const stableJson = (value) => JSON.stringify(value, (_key, nestedValue) => {
+    const ignoredKeys = new Set([
+      "updatedAt",
+      "createdAt",
+      "selected",
+      "dragging",
+      "resizing",
+      "measured",
+      "positionAbsolute",
+      "internals",
+      "size",
+      "zIndex",
+      "width",
+      "height",
+      "style",
+      "className",
+      "extent",
+      "viewport",
+      "canvasProjectId",
+      "version",
+      ...(options.ignoreNodePositions === true ? ["position"] : []),
+    ]);
+    const stableJson = (value) => JSON.stringify(deserializeAiCanvasDocument(value), (key, nestedValue) => {
+      if (ignoredKeys.has(key)) return undefined;
+      if (key === "x" || key === "y") {
+        const number = Number(nestedValue);
+        return Number.isFinite(number) ? Math.round(number) : nestedValue;
+      }
       if (!nestedValue || Array.isArray(nestedValue) || typeof nestedValue !== "object") {
         return nestedValue;
       }
-      return Object.keys(nestedValue).sort().reduce((sorted, key) => {
-        sorted[key] = nestedValue[key];
+      return Object.keys(nestedValue).sort().reduce((sorted, nestedKey) => {
+        if (ignoredKeys.has(nestedKey)) return sorted;
+        sorted[nestedKey] = nestedValue[nestedKey];
         return sorted;
       }, Object.create(null));
     });
-    return stableJson(withoutDocumentTimestamp(left)) === stableJson(withoutDocumentTimestamp(right));
+    return stableJson(left) === stableJson(right);
   } catch {
     return false;
   }
@@ -32772,6 +32859,7 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   workbench.ui.activeCanvasProjectId = projectId;
   workbench.ui.selectedCanvasProjectId = projectId;
   workbench.ui.canvasServerRevision = serverRevision;
+  workbench.ui.canvasLastSavedRevision = serverRevision;
   workbench.ui.canvasSaveStatus = restoreRefreshDraft ? "pending" : "idle";
   workbench.ui.canvasSaveError = "";
   workbench.ui.canvasRevisionConflict = null;
@@ -32905,22 +32993,38 @@ function applyCanvasLiveAccessRevoked(workbench, canvasProjectId, options = {}) 
 }
 
 async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision = 0, options = {}) {
-  const refreshMountedRuntime = () => {
+  const refreshMountedRuntime = (syncHostDocument = false) => {
     if (options.render === false && isAiCanvasRuntimeActive(workbench)) {
-      updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, hostDocumentSync: false });
+      updateMountedNewCanvasSurface(workbench, {
+        surfaceOnly: true,
+        hostDocumentSync: false,
+        ...(syncHostDocument ? { syncHostDocument: true } : {}),
+      });
     }
   };
   const canSync = () => options.force === true
     ? Boolean(canvasProjectId && typeof workbench.api?.getCanvasHead === "function")
     : shouldSubscribeCanvasLive(workbench, canvasProjectId);
   if (!canSync()) return null;
-  const activeSave = workbench.canvasSaveInFlight;
-  if (activeSave) await Promise.resolve(activeSave).catch(() => null);
-  const activePositionSave = workbench.canvasPositionSaveInFlight;
-  if (activePositionSave) await Promise.resolve(activePositionSave).catch(() => null);
-  if (!canSync()) return null;
+  const localCanvasBusy = Boolean(
+    workbench.canvasSaveInFlight
+    || workbench.canvasPositionSaveInFlight
+    || workbench.canvasSaveTimer
+    || workbench.canvasSaveQueuedDocument
+    || ["pending", "saving"].includes(String(workbench.ui?.canvasSaveStatus ?? "")),
+  );
   const currentRevision = Number(workbench.ui.canvasServerRevision ?? 0);
-  if (Number(hintedRevision) > 0 && Number(hintedRevision) <= currentRevision) return null;
+  const lastSavedRevision = Number(workbench.ui.canvasLastSavedRevision ?? 0);
+  const knownRevision = Math.max(currentRevision, lastSavedRevision);
+  const hinted = Number(hintedRevision);
+  const hasNewerHint = Number.isFinite(hinted) && hinted > knownRevision;
+  const liveSubscriptionActive = Boolean(
+    workbench.canvasLiveAbortController
+    && !workbench.canvasLiveAbortController.signal.aborted
+  );
+  if (localCanvasBusy || (!hasNewerHint && (options.force !== true || liveSubscriptionActive))) {
+    return null;
+  }
 
   const requestId = Number(workbench.canvasLiveHeadRequestId ?? 0) + 1;
   workbench.canvasLiveHeadRequestId = requestId;
@@ -32954,25 +33058,12 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
     ? normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, canvasProjectId)
     : null;
   if (currentDocument && areCanvasDocumentsEqual(currentDocument, serverDocument)) {
-    if (workbench.canvasSaveTimer) {
-      clearTimeout(workbench.canvasSaveTimer);
-      workbench.canvasSaveTimer = null;
-    }
-    workbench.canvasSaveQueuedDocument = null;
-    workbench.ui.canvasDocument = serverDocument;
-    workbench.ui.canvasDocumentsByProject = {
-      ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
-        ? workbench.ui.canvasDocumentsByProject
-        : {}),
-      [canvasProjectId]: serverDocument,
-    };
     workbench.ui.canvasServerRevision = serverRevision;
+    workbench.ui.canvasLastSavedRevision = serverRevision;
     workbench.ui.canvasRevisionConflict = null;
     workbench.ui.canvasSaveStatus = "saved";
     workbench.ui.canvasSaveError = "";
     clearCanvasRefreshDraft(workbench, canvasProjectId, currentDocument);
-    if (options.render !== false) render(workbench);
-    else refreshMountedRuntime();
     return head;
   }
 
@@ -32990,12 +33081,13 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
     [canvasProjectId]: serverDocument,
   };
   workbench.ui.canvasServerRevision = serverRevision;
+  workbench.ui.canvasLastSavedRevision = serverRevision;
   workbench.ui.canvasRevisionConflict = null;
   workbench.ui.canvasSaveStatus = "saved";
   workbench.ui.canvasSaveError = "";
   clearCanvasRefreshDraft(workbench, canvasProjectId, serverDocument);
   if (options.render !== false) render(workbench);
-  else refreshMountedRuntime();
+  else refreshMountedRuntime(true);
   return head;
 }
 
@@ -33013,7 +33105,9 @@ async function handleCanvasLiveEvent(workbench, canvasProjectId, event, options 
     return;
   }
   if (eventType !== "revision") return;
-  await syncCanvasHeadFromLive(workbench, canvasProjectId, Number(payload.serverRevision ?? 0), options);
+  const serverRevision = Number(payload.serverRevision ?? 0);
+  if (!Number.isFinite(serverRevision) || serverRevision <= 0) return;
+  await syncCanvasHeadFromLive(workbench, canvasProjectId, serverRevision, options);
 }
 
 function waitForCanvasLiveRetry(workbench, attempt, signal) {
@@ -33053,17 +33147,11 @@ async function runCanvasLiveSubscription(workbench, canvasProjectId, controller)
         await handleCanvasLiveEvent(workbench, canvasProjectId, event, updateOptions);
       }
       if (controller.signal.aborted) return;
-      await syncCanvasHeadFromLive(workbench, canvasProjectId, 0, updateOptions);
     } catch (error) {
       if (controller.signal.aborted) return;
       if (isCanvasLiveAccessRevokedError(error)) {
         applyCanvasLiveAccessRevoked(workbench, canvasProjectId, updateOptions);
         return;
-      }
-      try {
-        await syncCanvasHeadFromLive(workbench, canvasProjectId, 0, updateOptions);
-      } catch {
-        // A transient head failure follows the same bounded reconnect backoff.
       }
     }
     if (controller.signal.aborted || !shouldSubscribeCanvasLive(workbench, canvasProjectId)) return;
@@ -33346,6 +33434,7 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
     }
     workbench.ui.activeCanvasProjectId = canvas?.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? projectId;
     workbench.ui.canvasServerRevision = Number(canvas?.serverRevision ?? revision) || revision;
+    workbench.ui.canvasLastSavedRevision = workbench.ui.canvasServerRevision;
     workbench.ui.canvasSaveStatus = "saved";
     workbench.ui.canvasSaveError = "";
     workbench.ui.canvasRevisionConflict = null;
@@ -33383,6 +33472,7 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
           if (workbench.canvasSaveRequestId !== saveRequestId) return retryCanvas;
           workbench.ui.activeCanvasProjectId = retryCanvas?.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? projectId;
           workbench.ui.canvasServerRevision = Number(retryCanvas?.serverRevision ?? revision) || revision;
+          workbench.ui.canvasLastSavedRevision = workbench.ui.canvasServerRevision;
           workbench.ui.canvasSaveStatus = "saved";
           workbench.ui.canvasSaveError = "";
           workbench.ui.canvasRevisionConflict = null;
@@ -33981,6 +34071,7 @@ function normalizeCanvasViewport(viewport = {}) {
     y: Number(viewport.y ?? 0),
     zoom: clampCanvasZoom(viewport.zoom ?? 1),
     snapEnabled: viewport.snapEnabled ?? false,
+    showBackgroundGrid: viewport.showBackgroundGrid === true,
     interactionMode,
   };
 }
@@ -34667,6 +34758,9 @@ function resolveCanvasViewportPatch(viewport = {}, patchName = "") {
   }
   if (patchName === "toggle-snap") {
     return { snapEnabled: !(viewport.snapEnabled ?? false) };
+  }
+  if (patchName === "toggle-background-grid") {
+    return { showBackgroundGrid: viewport.showBackgroundGrid !== true };
   }
   if (patchName === "reset") {
     return { x: 0, y: 0, zoom: 1, snapEnabled: false };
@@ -36547,6 +36641,10 @@ export function registerTaskCenterTaskForTest(workbench, taskOrId, defaults = {}
   return registerTaskCenterTask(workbench, taskOrId, defaults);
 }
 
+export function discoverActiveTaskCenterTasksForTest(workbench) {
+  return discoverActiveTaskCenterTasks(workbench);
+}
+
 export function scheduleTaskCenterPollingForTest(workbench, options = {}) {
   return scheduleTaskCenterPolling(workbench, options);
 }
@@ -36705,6 +36803,10 @@ export function resolveCanvasRevisionConflictForTest(workbench, version, options
 
 export function persistCanvasSessionForTest(workbench, canvasProjectId, serverRevision) {
   return persistCanvasSession(workbench, canvasProjectId, serverRevision);
+}
+
+export function updateActiveCanvasDocumentForTest(workbench, canvasDocument, options = {}) {
+  return updateActiveCanvasDocument(workbench, canvasDocument, options);
 }
 
 export function loadStandaloneCanvasProjectForTest(workbench, canvasProjectId) {
@@ -53088,16 +53190,37 @@ const TASK_CENTER_NORMAL_POLL_WINDOW_MS = 5 * 60_000;
 const IMAGE_GENERATION_FAST_POLL_WINDOW_MS = 60_000;
 const CANVAS_GENERATION_FAST_POLL_INTERVAL_MS = 15_000;
 const CANVAS_GENERATION_FAST_POLL_WINDOW_MS = 60_000;
+const TASK_CENTER_DISCOVERY_INTERVAL_MS = 15_000;
+const TASK_CENTER_LOCAL_TASK_GRACE_MS = 120_000;
 
 function isTaskCenterActiveStatus(status) {
   return new Set(["queued", "running", "pending", "submitted", "external_submitted", "accepted", "provider_submitted", "processing"])
     .has(String(status ?? "").trim().toLowerCase());
 }
 
+function isRecentlyRegisteredTaskCenterTask(task, now = Date.now()) {
+  const createdAt = Date.parse(String(task?.createdAt ?? ""));
+  return Number.isFinite(createdAt) && now - createdAt < TASK_CENTER_LOCAL_TASK_GRACE_MS;
+}
+
+function scheduleTaskCenterDiscovery(workbench) {
+  if (
+    typeof window === "undefined" ||
+    typeof window.setTimeout !== "function" ||
+    typeof workbench.api?.listTaskCenterTasks !== "function" ||
+    workbench.taskCenterDiscoveryTimer
+  ) {
+    return;
+  }
+  workbench.taskCenterDiscoveryTimer = window.setTimeout(() => {
+    workbench.taskCenterDiscoveryTimer = null;
+    void discoverActiveTaskCenterTasks(workbench);
+  }, TASK_CENTER_DISCOVERY_INTERVAL_MS);
+}
+
 async function discoverActiveTaskCenterTasks(workbench) {
   if (
     workbench.taskCenterDiscoveryInFlight ||
-    workbench.taskCenterLastDiscoveryAt ||
     typeof workbench.api?.listTaskCenterTasks !== "function"
   ) {
     return;
@@ -53125,6 +53248,8 @@ async function discoverActiveTaskCenterTasks(workbench) {
     workbench.ui.generationPollingActive = activeTaskIds.length > 0;
     if (changed && !syncTaskCenterActionCountDom(workbench)) {
       render(workbench);
+    } else {
+      syncTaskCenterActionCountDom(workbench);
     }
     if (activeTaskIds.length) {
       scheduleTaskCenterPolling(workbench);
@@ -53133,36 +53258,47 @@ async function discoverActiveTaskCenterTasks(workbench) {
     // Task-center discovery is background-only; opening the drawer still exposes retryable errors.
   } finally {
     workbench.taskCenterDiscoveryInFlight = false;
+    if (collectTaskCenterTrackedTaskIds(workbench).length) {
+      scheduleTaskCenterDiscovery(workbench);
+    }
   }
 }
 
-function syncTaskCenterActionCountDom(workbench) {
-  const action = workbench.root?.querySelector?.(".task-center-action");
-  if (!action) {
-    return false;
-  }
-  const activeCount = Object.values(workbench.ui.taskCenterTasksById ?? {})
+function countTaskCenterActiveTasks(workbench) {
+  return Object.values(workbench?.ui?.taskCenterTasksById ?? {})
     .filter((task) => isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus))
     .length;
-  action.setAttribute?.(
-    "aria-label",
-    `任务中心${activeCount > 0 ? `，${activeCount} 个任务进行中` : ""}`,
-  );
-  let count = action.querySelector?.(".task-center-action-count") ?? null;
-  if (activeCount === 0) {
-    count?.remove?.();
-    return true;
-  }
-  if (!count) {
-    count = action.ownerDocument?.createElement?.("b") ?? null;
-    if (!count) {
-      return false;
+}
+
+function syncTaskCenterActionCountDom(workbench) {
+  const activeCount = countTaskCenterActiveTasks(workbench);
+  const action = workbench.root?.querySelector?.(".task-center-action");
+  let synced = false;
+  if (action) {
+    action.setAttribute?.(
+      "aria-label",
+      `任务中心${activeCount > 0 ? `，${activeCount} 个任务进行中` : ""}`,
+    );
+    let count = action.querySelector?.(".task-center-action-count") ?? null;
+    if (activeCount === 0) {
+      count?.remove?.();
+    } else {
+      if (!count) {
+        count = action.ownerDocument?.createElement?.("b") ?? null;
+        if (count) {
+          count.className = "task-center-action-count";
+          action.appendChild?.(count);
+        }
+      }
+      if (count) count.textContent = `${Math.min(99, activeCount)}${activeCount > 99 ? "+" : ""}`;
     }
-    count.className = "task-center-action-count";
-    action.appendChild?.(count);
+    synced = true;
   }
-  count.textContent = `${Math.min(99, activeCount)}${activeCount > 99 ? "+" : ""}`;
-  return true;
+  if (isAiCanvasRuntimeActive(workbench) && workbench.newCanvasInstance) {
+    updateMountedNewCanvasSurface(workbench, { taskCenterActiveCount: activeCount, surfaceOnly: true });
+    synced = true;
+  }
+  return synced;
 }
 
 function taskCenterTaskVersion(task) {
@@ -53264,6 +53400,7 @@ function reconcileTaskCenterActiveTasks(workbench, items = [], options = {}) {
   let changed = false;
   for (const [taskId, task] of Object.entries(currentTasks)) {
     if (!isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus) || returnedTaskIds.has(taskId)) continue;
+    if (isRecentlyRegisteredTaskCenterTask(task)) continue;
     delete nextTasks[taskId];
     changed = true;
   }
@@ -53430,6 +53567,7 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   if (isDeletedConversationGeneration(workbench, taskId)) return false;
   const version = taskCenterTaskVersion(task);
   if (options.force !== true && workbench.taskCenterAppliedVersions?.get(taskId) === version) {
+    globalThis.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__?.(task);
     return false;
   }
   const mediaKind = task?.kind === "audio" || task?.mediaKind === "audio"
@@ -53475,7 +53613,7 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
     if (
       targetNode &&
       ["canvas", "canvas_node"].includes(targetType) &&
-      ["queued", "running", "processing", "completed", "succeeded", "failed", "canceled", "cancelled", "result_unknown", "manual_review_required"].includes(
+      ["loading", "queued", "running", "processing", "completed", "succeeded", "failed", "canceled", "cancelled", "result_unknown", "manual_review_required"].includes(
         String(targetNode.data?.status ?? "").trim().toLowerCase(),
       )
     ) {
@@ -53695,6 +53833,7 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   if (applied) {
     workbench.taskCenterAppliedVersions?.set(taskId, version);
   }
+  globalThis.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__?.(task);
   return applied;
 }
 
@@ -54012,7 +54151,7 @@ function isCanvasGenerationPollingVisible(workbench) {
 function resolveCanvasGenerationPollTargets(workbench) {
   const canvasDocument = workbench.ui?.canvasDocument;
   return (Array.isArray(canvasDocument?.nodes) ? canvasDocument.nodes : [])
-    .filter((node) => ["running", "queued", "processing"].includes(String(node?.data?.status ?? "").trim().toLowerCase()))
+    .filter((node) => ["loading", "running", "queued", "processing"].includes(String(node?.data?.status ?? "").trim().toLowerCase()))
     .map((node) => {
       const taskId = resolveCanvasNodeTaskId(canvasDocument, node.id);
       return taskId ? {

@@ -106,6 +106,7 @@ describe("canvas workflow document", () => {
     const document = createDefaultCanvasDocument({ canvasProjectId: "canvas-default-snap" });
 
     assert.equal(document.viewport.snapEnabled, false);
+    assert.equal(document.viewport.showBackgroundGrid, false);
   });
 
   it("reopens the editor when the selected X6 node is clicked again", () => {
@@ -417,6 +418,7 @@ describe("canvas workflow document", () => {
       y: -24,
       zoom: 1.5,
       snapEnabled: false,
+      showBackgroundGrid: false,
       interactionMode: "default",
     });
     assert.deepEqual(workbench.ui.canvasDocument.viewport, savedDocument.viewport);
@@ -1143,8 +1145,10 @@ describe("canvas workflow document", () => {
       y: 80,
       zoom: 1.25,
       snapEnabled: false,
+      showBackgroundGrid: false,
       interactionMode: "default",
     });
+    assert.equal(updateCanvasViewport(document, { showBackgroundGrid: true }).viewport.showBackgroundGrid, true);
     assert.deepEqual(nextDocument.nodes, document.nodes);
     assert.equal(updateCanvasViewport(document, { zoom: 0.1 }).viewport.zoom, 0.1);
     assert.equal(updateCanvasViewport(document, { zoom: 8 }).viewport.zoom, 8);
@@ -2483,7 +2487,7 @@ it("keeps primary viewport controls visible without the removed grid and more me
   assert.doesNotMatch(workbenchSource, /gridVisible/);
   assert.doesNotMatch(canvasStateSource, /gridVisible/);
   assert.doesNotMatch(graphSource, /gridVisible|hideGrid/);
-  assert.match(source, /is-canvas-grid-visible/);
+  assert.match(source, /viewport\.showBackgroundGrid === true \? "is-canvas-grid-visible" : ""/);
   assert.match(source, /data-action="toggle-canvas-sidebar"[^>]*>[^]*?资产管理/);
   assert.match(source, /data-action="arrange-canvas-nodes"/);
   assert.match(source, /data-action="toggle-canvas-minimap"/);
@@ -2683,6 +2687,27 @@ it("toggles X6 edge visibility while keeping port snap independent from grid sna
   snapCalls.length = 0;
   assert.equal(applyCanvasGraphViewportPreferences(graph, { snapEnabled: true }), true);
   assert.deepEqual(snapCalls, ["grid-size:20", "enable"]);
+});
+
+it("toggles the CSS background grid class from viewport preference", () => {
+  const classList = [];
+  const graph = {
+    options: { snapline: { enabled: true }, connecting: { snap: true } },
+    getPlugin: () => ({ enable() {}, disable() {} }),
+    setGridSize() {},
+    __comicAiCanvasMount: {
+      closest: () => ({
+        classList: {
+          toggle: (name, on) => classList.push([name, on]),
+        },
+      }),
+    },
+  };
+  assert.equal(applyCanvasGraphViewportPreferences(graph, { showBackgroundGrid: true }), true);
+  assert.deepEqual(classList, [["is-canvas-grid-visible", true]]);
+  classList.length = 0;
+  assert.equal(applyCanvasGraphViewportPreferences(graph, { showBackgroundGrid: false }), true);
+  assert.deepEqual(classList, [["is-canvas-grid-visible", false]]);
 });
 
 it("renders a sparse dot-only Canvas grid", () => {

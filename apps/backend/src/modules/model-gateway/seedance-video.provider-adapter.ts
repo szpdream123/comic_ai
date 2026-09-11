@@ -245,6 +245,8 @@ function buildCreateTaskPayload(
     readMediaUrl(parameters.lastFrame);
   const referenceImageUrls = [
     ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(payload.images),
+    ...readMediaUrlArray(parameters.images),
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
   ];
@@ -253,12 +255,14 @@ function buildCreateTaskPayload(
     readString(payload.sourceVideoUrl) ??
     readMediaUrl(payload.sourceVideo) ??
     readMediaUrl(parameters.sourceVideo) ??
-    readMediaUrl(parameters.editSourceVideo);
+    readMediaUrl(parameters.editSourceVideo) ??
+    readMediaUrlArray(parameters.referenceVideos)[0];
   const referenceAudioUrl = findFirstSubmittableAudioUrl([
     readString(payload.referenceAudioUrl),
     readString(payload.audioUrl),
     ...readAudioUrlArray(payload.referenceAudio),
     ...readAudioUrlArray(parameters.referenceAudio),
+    ...readAudioUrlArray(parameters.referenceAudios),
     ...readAudioUrlArray(parameters.audioFilePaths),
     ...readAudioUrlArray(payload.audios),
     ...readAudioUrlArray(parameters.audios),

@@ -9941,7 +9941,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           <span${!assetSidebarMode ? ' data-canvas-node-count' : ""}>${assetSidebarMode ? `共 ${sidebarMode === "history" ? sidebarItems.length : (sidebarMode === "assets" ? `${sidebarAssets.length} / ${allSidebarAssets.length}` : sidebarItems.length)} ${sidebarMode === "history" ? "条记录" : "项"}` : `显示 ${sidebarItems.length} / ${nodes.length} 节点`}</span>
         </footer>
       </aside>
-      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} is-canvas-grid-visible ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
+      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} ${viewport.showBackgroundGrid === true ? "is-canvas-grid-visible" : ""} ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
         <button class="canvas-detail-back" type="button" data-action="back-to-canvas-projects" aria-label="返回画布项目列表">
           ${renderCanvasIcon("collapse")}<span>项目</span>
         </button>
