@@ -110,9 +110,12 @@ import { TextModelGatewayError } from "../modules/model-gateway/text-model-gatew
 import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
 import { createGeoGenerationService, parseGeoGeneratedDocument, recoverStaleGeoGenerationRuns } from "../modules/geo/geo-generation.service.ts";
 import { createGeoMonitoringService } from "../modules/geo/geo-monitoring.service.ts";
+import { GeoSearchAdapter } from "../modules/geo/geo-search.adapter.ts";
 import { listGeoPlatforms } from "../modules/geo/geo-platforms.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
+import { renderProductGeoArticleLinks, selectRelatedGeoArticles } from "../modules/geo/geo-related-links.ts";
+import { createGeoImageVariantCache, geoImageWidth, readGeoImageSource } from "../modules/geo/geo-image-variants.ts";
 import { geoRuntimeConfigKey, loadGeoRuntimeSettings, loadGeoRuntimeSettingsRevision, normalizeGeoRuntimeSettings } from "../modules/geo/geo-settings.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
@@ -17262,12 +17265,20 @@ async function serveGeoPublic(
     if (!("data" in result.body)) {
       return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
     }
+    const publicationDates = await db.query<{ first_published_at: Date | string | null; public_updated_at: Date | string | null }>(
+      `SELECT
+         (SELECT MIN(version.published_at) FROM geo_content_versions version
+          WHERE version.content_item_id=$1) AS first_published_at,
+         (SELECT MAX(event.created_at) FROM geo_audit_events event
+          WHERE event.target_type='geo_content_item' AND event.target_id=$1
+            AND event.event_type IN ('published','rolled_back')
+            AND event.metadata_json->>'versionId'=$2) AS public_updated_at`,
+      [result.body.data.item.id, result.body.data.version.id],
+    );
     const versionSettings = await loadGeoRuntimeSettingsRevision(db, result.body.data.version.configRevisionId);
     const allPublished = await service.listPublished();
     const related = "data" in allPublished.body
-      ? allPublished.body.data
-        .filter((entry) => entry.item.id !== result.body.data.item.id)
-        .slice(0, 4)
+      ? selectRelatedGeoArticles(result.body.data, allPublished.body.data, 4)
         .map((entry) => ({
           href: geoPublicHref(entry.item.contentType, entry.item.slug),
           title: entry.version.title,
@@ -17280,8 +17291,12 @@ async function serveGeoPublic(
       brandName: "灵曦AI",
       contentType,
       document: result.body.data.version.document,
-      publishedAt: result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
-      updatedAt: result.body.data.item.updatedAt,
+      publishedAt: publicationDates.rows[0]?.first_published_at
+        ? new Date(publicationDates.rows[0].first_published_at).toISOString()
+        : result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
+      updatedAt: publicationDates.rows[0]?.public_updated_at
+        ? new Date(publicationDates.rows[0].public_updated_at).toISOString()
+        : result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
       authorName: versionSettings.publicAuthorName,
       evidence: result.body.data.evidence,
       related,
@@ -17350,7 +17365,7 @@ async function serveDynamicSitemap(
   const geoRootEntries = Object.entries(geoPublicRouteTypes)
     .filter(([, contentType]) => publishedTypes.has(contentType))
     .map(([route]) => ({ href: `/${route}`, lastmod: null }));
-  const entries = [...staticEntries, ...geoRootEntries, ...dynamicEntries];
+  const entries = [...staticEntries, { href: "/geo-resources/index.html", lastmod: null }, ...geoRootEntries, ...dynamicEntries];
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries
     .map((entry) => `  <url><loc>${escapeSeoHtml(`${origin}${entry.href}`)}</loc>${entry.lastmod ? `<lastmod>${escapeSeoHtml(new Date(entry.lastmod).toISOString())}</lastmod>` : ""}</url>`)
     .join("\n")}\n</urlset>\n`;
@@ -17367,6 +17382,8 @@ async function serveDynamicSitemap(
   response.statusCode = 200;
   response.end(file);
 }
+
+const geoImageVariant = createGeoImageVariantCache();
 
 async function serveGeoAsset(
   request: Parameters<typeof createServer>[0],
@@ -17404,7 +17421,7 @@ async function serveGeoAsset(
     `SELECT EXISTS (
        SELECT 1 FROM geo_content_items item
        JOIN geo_content_versions version ON version.id=item.current_published_version_id
-       WHERE item.status='published' AND (
+       WHERE item.status<>'archived' AND (
          version.document_json->'blocks' @> $1::jsonb
          OR version.document_json->'blocks' @> $2::jsonb
        )
@@ -17431,6 +17448,30 @@ async function serveGeoAsset(
     expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
     responseContentDisposition: "inline",
   });
+  const variantWidth = geoImageWidth(new URL(request.url ?? "/", publicOrigin).searchParams.get("width"));
+  if (variantWidth && /^https?:\/\//i.test(signed.url) && ["image/png", "image/jpeg", "image/webp"].includes(storageObject.contentType.toLowerCase())) {
+    try {
+      const key = `${storageObject.id}:${storageObject.etag ?? storageObject.checksum ?? ""}:${variantWidth}`;
+      const bytes = await geoImageVariant(key, async () => {
+        const upstream = await fetchProviderArtifactSafely(signed.url, { signal: AbortSignal.timeout(20_000) }, fetch);
+        const source = await readGeoImageSource(upstream);
+        return sharp(source, { failOn: "error", limitInputPixels: 40_000_000 }).rotate()
+          .resize({ width: variantWidth, withoutEnlargement: true }).webp({ quality: 82, effort: 3 }).toBuffer();
+      });
+      const etag = staticAssetEtag(bytes);
+      response.setHeader("etag", etag);
+      response.setHeader("content-type", "image/webp");
+      response.setHeader("cache-control", isPublished ? "public, max-age=300, must-revalidate" : "private, no-store");
+      response.setHeader("x-content-type-options", "nosniff");
+      if (requestMatchesEtag(request, etag)) { response.statusCode = 304; response.end(); return; }
+      response.setHeader("content-length", String(bytes.length));
+      response.statusCode = 200;
+      response.end(request.method === "HEAD" ? undefined : bytes);
+      return;
+    } catch {
+      // Keep the original image available if fetching, decoding or capacity checks fail.
+    }
+  }
   response.statusCode = 307;
   response.setHeader("location", signed.url);
   const redirectMaxAge = Number.isFinite(signedUrlExpiresInSeconds)
@@ -18202,6 +18243,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     .filter((page): page is PublicSeoRoute => Boolean(page))
     .map((page) => `<a href="${page.path}"><strong>${escapeSeoHtml(page.heading)}</strong><span>${escapeSeoHtml(page.description)}</span></a>`)
     .join("\n          ");
+  const articleLinks = renderProductGeoArticleLinks(route.path);
   const structuredData = JSON.stringify({
     "@context": "https://schema.org",
     "@graph": [
@@ -18227,7 +18269,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     <section class="public-seo-content" aria-labelledby="public-seo-heading">
       <nav class="public-seo-nav" aria-label="公开创作页面">
         <a class="public-seo-brand" href="/">灵曦AI</a>
-        <div>${navigation}</div>
+        <div>${navigation}<a href="/guides">创作指南</a><a href="/answers">常见问题</a></div>
       </nav>
       <header class="public-seo-intro">
         <p>${escapeSeoHtml(route.eyebrow)}</p>
@@ -18267,7 +18309,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
           <span>继续了解</span>
           <h2 id="public-seo-related-heading">相关创作入口</h2>
         </div>
-        <div>${relatedLinks}</div>
+        <div>${articleLinks}${articleLinks && relatedLinks ? "\n          " : ""}${relatedLinks}</div>
       </section>
       <section class="public-seo-cta" aria-label="开始创作">
         <div><h2>${escapeSeoHtml(route.ctaTitle)}</h2><p>${escapeSeoHtml(route.ctaBody)}</p></div>
@@ -20680,7 +20722,16 @@ export function createPhoneAuthDevServer(
         });
         const geoMonitoringService = createGeoMonitoringService({
           db,
-          gateway: canvasTextChatGateway,
+          gateway: options.textChatGateway ?? createTextModelChatGateway({
+            gateway: new TextModelGatewayService({
+              db,
+              adapter: new GeoSearchAdapter(),
+              cumobAdapter: new GeoSearchAdapter(),
+              modelflareAdapter: new GeoSearchAdapter(),
+              resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
+              env: runtimeEnv,
+            }),
+          }),
           publicSiteOrigin: publicSiteOrigin(request, runtimeEnv),
           resolveModelProvider: async (modelCode) => (
             await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(modelCode)
@@ -27016,19 +27067,43 @@ export function createPhoneAuthDevServer(
           { includeCredit: false },
         );
         if (request.method === "GET" && storageObjectContentMatch) {
-          const publicSkillObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
-          const publicSkillObject = isUuid(publicSkillObjectId)
-            ? await queryOne<{ id: string }>(
-              db,
-              `SELECT object.id
-               FROM storage_objects object
-               WHERE object.id = $1 AND object.status = 'available' AND object.deleted_at IS NULL
-                 AND (EXISTS (SELECT 1 FROM skills skill WHERE skill.status = 'published' AND skill.visibility = 'public' AND (skill.cover_storage_object_id = object.id OR skill.preview_storage_object_id = object.id))
-                   OR EXISTS (SELECT 1 FROM skill_files file JOIN skills skill ON skill.id = file.skill_id WHERE file.storage_object_id = object.id AND skill.status = 'published' AND skill.visibility = 'public'))
-               LIMIT 1`,
-              [publicSkillObjectId],
-            )
-            : null;
+          const previewStorageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
+          // Published marketplace covers are visible before a visitor adds the prompt.
+          const publishedPromptCover = isUuid(previewStorageObjectId)
+            && url.searchParams.get("proxy") === "1"
+            && url.searchParams.get("download") !== "1"
+            && url.searchParams.get("thumbnail") !== "1"
+            ? await queryOne<{ bucket: string; object_key: string }>(db, `
+                SELECT storage.bucket, storage.object_key
+                FROM storage_objects storage
+                WHERE storage.id = $1
+                  AND storage.bucket = $2
+                  AND storage.status = 'available'
+                  AND storage.deleted_at IS NULL
+                  AND storage.content_type LIKE 'image/%'
+                  AND EXISTS (
+                    SELECT 1 FROM prompts prompt
+                    WHERE prompt.cover_storage_object_id = storage.id
+                      AND prompt.is_published = true
+                      AND prompt.status = 'enabled'
+                      AND prompt.deleted_at IS NULL
+                  )
+              `, [previewStorageObjectId, storageBucket])
+            : undefined;
+          if (publishedPromptCover) {
+            const signed = await storageRuntime.adapter.createSignedReadUrl({
+              bucket: publishedPromptCover.bucket,
+              objectKey: publishedPromptCover.object_key,
+              expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+              responseContentDisposition: "inline",
+            });
+            response.statusCode = 307;
+            response.setHeader("location", signed.url);
+            response.setHeader("cache-control", "private, no-store");
+            response.setHeader("referrer-policy", "no-referrer");
+            response.end();
+            return;
+          }
           const adminRoute = await requireAdminRouteSession({
             db,
             cookieHeader: request.headers.cookie,
@@ -27044,7 +27119,7 @@ export function createPhoneAuthDevServer(
               && object.contentType.startsWith("video/")
               && isHomeRecommendationObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix }),
             );
-            if (!isAdminReadableHomeVideo && !authenticated && !publicSkillObject) {
+            if (!isAdminReadableHomeVideo && !authenticated) {
               return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
             }
             if (isAdminReadableHomeVideo && object) {
@@ -27072,38 +27147,6 @@ export function createPhoneAuthDevServer(
               response.statusCode = 307;
               response.setHeader("location", signed.url);
               response.setHeader("cache-control", "private, no-store");
-              response.setHeader("referrer-policy", "no-referrer");
-              response.end();
-              return;
-            }
-          }
-          if (publicSkillObject) {
-            const object = await findStorageObject(db, publicSkillObject.id);
-            if (object) {
-              const signed = await storageRuntime.adapter.createSignedReadUrl({
-                bucket: object.bucket,
-                objectKey: object.objectKey,
-                expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
-                responseContentDisposition: "inline",
-              });
-              if (url.searchParams.get("proxy") === "1") {
-                const streamed = await streamStorageObjectContent({
-                  response,
-                  signedUrl: signed.url,
-                  relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
-                  range: typeof request.headers.range === "string" ? request.headers.range : null,
-                  contentType: object.contentType,
-                  download: false,
-                  fetchImpl: options.fetchImpl ?? fetch,
-                });
-                if (!streamed) {
-                  return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
-                }
-                return;
-              }
-              response.statusCode = 307;
-              response.setHeader("location", signed.url);
-              response.setHeader("cache-control", "public, max-age=300");
               response.setHeader("referrer-policy", "no-referrer");
               response.end();
               return;

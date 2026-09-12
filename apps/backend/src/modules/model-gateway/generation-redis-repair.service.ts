@@ -13,6 +13,7 @@ import {
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import { selectGenerationQueue, type GenerationQueueConfig } from "./generation-queue.config.ts";
+import { agentGenerationQueueConfig } from "./agent-generation-queue.ts";
 import {
   markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotFailed,
@@ -256,7 +257,7 @@ export async function repairExpiredGenerationSubmitLeases(
         provider.id AS provider_request_id,
         provider.status AS provider_status,
         provider.external_submission_started_at,
-        provider.external_request_id,
+        provider.external_request_id
       FROM tasks task
       LEFT JOIN LATERAL (
         SELECT
@@ -822,7 +823,7 @@ export async function repairRunningSeedancePollJobs(
       "repair",
       repairToken,
     );
-    const queueName = selectGenerationQueue(input.config, "poll", candidate.task_id);
+    const queueName = selectGenerationQueue(agentGenerationQueueConfig(input.config, snapshot.agentExecutionScope), "poll", candidate.task_id);
     await input.publisher.add(
       queueName,
       `generation.${mediaType}.poll.repair`,

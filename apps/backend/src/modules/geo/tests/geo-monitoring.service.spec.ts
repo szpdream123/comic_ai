@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { createGeoMonitoringService, type GeoMonitoringGatewayLike } from "../geo-monitoring.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { ModelError } from "../../model-gateway/model-error.ts";
 
 const adminId = "35000000-0000-4000-8000-000000000001";
 const contentId = "35000000-0000-4000-8000-000000000002";
@@ -59,6 +60,23 @@ describe("GEO monitoring service", () => {
       });
       assert.equal(oversizedAnswer.status, 400);
 
+      const target = await service.listForContent(contentId);
+      if (!("data" in target.body)) throw new Error("expected monitoring data");
+      const echoed = await service.importManual({
+        contentItemId: contentId, platformId: "kimi", actorAdminAccountId: adminId,
+        results: target.body.data.questions.map((question) => ({
+          questionId: question.id, answer: ` ${question.rawQuestion} `, citedUrls: [],
+        })),
+      });
+      assert.equal(echoed.status, 400);
+      const punctuatedEcho = await service.importManual({
+        contentItemId: contentId, platformId: "kimi", actorAdminAccountId: adminId,
+        results: target.body.data.questions.map((question) => ({
+          questionId: question.id, answer: ` ${question.rawQuestion}。 `, citedUrls: [],
+        })),
+      });
+      assert.equal(punctuatedEcho.status, 400);
+
       const imported = await service.importManual({
         contentItemId: contentId,
         platformId: "kimi",
@@ -102,17 +120,16 @@ describe("GEO monitoring service", () => {
         calls.push(input as unknown as Record<string, unknown>);
         return {
           content: answers[calls.length - 1]!,
-          usage: { outputTokens: 10 },
+          usage: { outputTokens: 10, geoSearch: { completed: true } },
           providerRequestId: providerRequestIds[calls.length - 1]!,
         };
       },
     };
     try {
       await seedPublishedContent(db);
-      await seedProviderRequests(db);
       const service = createGeoMonitoringService({
         db,
-        gateway,
+        gateway: verifiedSearchGateway(gateway),
         publicSiteOrigin: "https://lingxi.ai",
         resolveModelProvider: async () => "deepseek",
         now: () => fixedNow,
@@ -176,12 +193,16 @@ describe("GEO monitoring service", () => {
   it("marks a failed official run without retaining partial question results", async () => {
     const db = await createMigratedTestDb();
     let callCount = 0;
-    let failureMode: "invalid_json" | "provider" = "invalid_json";
+    let failureMode: "invalid_json" | "provider" | "search" = "invalid_json";
     const gateway: GeoMonitoringGatewayLike = {
       async completeJson() {
         callCount += 1;
         if (callCount % 2 === 0) {
           if (failureMode === "invalid_json") return "not-json";
+          if (failureMode === "search") throw ModelError.fromUnknown(
+            Object.assign(new Error("geo_search_not_verified"), { code: "geo_search_not_verified" }),
+            { failureCode: "provider_stream_error" },
+          );
           throw new Error("provider unavailable");
         }
         return JSON.stringify({ answer: "灵曦AI", citedUrls: [] });
@@ -191,7 +212,7 @@ describe("GEO monitoring service", () => {
       await seedPublishedContent(db);
       const service = createGeoMonitoringService({
         db,
-        gateway,
+        gateway: verifiedSearchGateway(gateway),
         publicSiteOrigin: "https://lingxi.ai",
         resolveModelProvider: async () => "deepseek",
         now: () => fixedNow,
@@ -218,6 +239,34 @@ describe("GEO monitoring service", () => {
       assert.deepEqual(new Set(runs.rows.map((row) => row.error_code)), new Set(["geo_monitor_output_invalid", "geo_monitor_provider_failed"]));
       const results = await db.query(`SELECT id FROM geo_monitor_results`);
       assert.equal(results.rows.length, 0);
+      failureMode = "search";
+      const searchFailure = await service.runOfficialApi({
+        contentItemId: contentId, platformId: "deepseek", modelCode: "deepseek-chat", actorAdminAccountId: adminId,
+      });
+      assert.equal(searchFailure.status, 409);
+      if (!("error" in searchFailure.body)) throw new Error("expected search error");
+      assert.equal(searchFailure.body.error.code, "geo_monitor_search_unavailable");
+      assert.match(searchFailure.body.error.message, /本次不计为未收录/);
+      assert.equal((await db.query("SELECT id FROM geo_monitor_results")).rows.length, 0);
+      const unverified = createGeoMonitoringService({ db, resolveModelProvider: async () => "deepseek",
+        gateway: { async completeJson() { return JSON.stringify({ answer: "普通模型回答", citedUrls: [] }); } },
+      });
+      const unverifiedResult = await unverified.runOfficialApi({ contentItemId: contentId,
+        platformId: "deepseek", modelCode: "deepseek-chat", actorAdminAccountId: adminId });
+      assert.equal(unverifiedResult.status, 409);
+      if (!("error" in unverifiedResult.body)) throw new Error("expected unverified error");
+      assert.equal(unverifiedResult.body.error.code, "geo_monitor_search_unavailable");
+      assert.equal((await db.query("SELECT id FROM geo_monitor_results")).rows.length, 0);
+      const missingProof = createGeoMonitoringService({ db, resolveModelProvider: async () => "deepseek",
+        gateway: { async completeJson() { throw new Error("unused"); },
+          async completeJsonWithUsage() { return { content: JSON.stringify({ answer: "普通模型回答", citedUrls: [] }), usage: {}, providerRequestId: providerRequestIds[0] }; } },
+      });
+      const missingProofResult = await missingProof.runOfficialApi({ contentItemId: contentId,
+        platformId: "deepseek", modelCode: "deepseek-chat", actorAdminAccountId: adminId });
+      assert.equal(missingProofResult.status, 409);
+      if (!("error" in missingProofResult.body)) throw new Error("expected missing proof error");
+      assert.equal(missingProofResult.body.error.code, "geo_monitor_search_unavailable");
+      assert.equal((await db.query("SELECT id FROM geo_monitor_results")).rows.length, 0);
     } finally {
       await db.close();
     }
@@ -231,9 +280,10 @@ describe("GEO monitoring service", () => {
       const timeoutService = createGeoMonitoringService({
         db,
         gateway: {
-          async completeJson(input) {
+          async completeJson() { throw new Error("unused"); },
+          async completeJsonWithUsage(input) {
             timeoutSignal = input.signal;
-            return new Promise<string>((_resolve, reject) => {
+            return new Promise<never>((_resolve, reject) => {
               input.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
             });
           },
@@ -325,7 +375,7 @@ describe("GEO monitoring service", () => {
       );
       const service = createGeoMonitoringService({
         db,
-        gateway,
+        gateway: verifiedSearchGateway(gateway),
         publicSiteOrigin: "https://lingxi.ai",
         resolveModelProvider: async () => "deepseek",
         now: () => fixedNow,
@@ -370,7 +420,7 @@ describe("GEO monitoring service", () => {
       await seedPublishedContent(db);
       const service = createGeoMonitoringService({
         db,
-        gateway,
+        gateway: verifiedSearchGateway(gateway),
         publicSiteOrigin: "https://lingxi.ai",
         resolveModelProvider: async () => "deepseek",
         now: () => fixedNow,
@@ -411,7 +461,7 @@ describe("GEO monitoring service", () => {
       await seedPublishedContent(db);
       const service = createGeoMonitoringService({
         db,
-        gateway,
+        gateway: verifiedSearchGateway(gateway),
         publicSiteOrigin: "https://lingxi.ai",
         resolveModelProvider: async () => "deepseek",
         now: () => fixedNow,
@@ -465,7 +515,16 @@ async function seedProviderRequests(db: { query<T = Record<string, unknown>>(sql
   );
 }
 
+function verifiedSearchGateway(gateway: GeoMonitoringGatewayLike): GeoMonitoringGatewayLike {
+  return { ...gateway, async completeJsonWithUsage(input) {
+    if (gateway.completeJsonWithUsage) return gateway.completeJsonWithUsage(input);
+    return { content: await gateway.completeJson(input), usage: { geoSearch: { completed: true } },
+      providerRequestId: providerRequestIds[0] };
+  } };
+}
+
 async function seedPublishedContent(db: { query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> }) {
+  await seedProviderRequests(db);
   await db.query(
     `INSERT INTO admin_accounts (id,login_name,password_hash,display_name,status)
      VALUES ($1,'geo_monitor_admin','plain:test-password','GEO Monitor Admin','active')`,

@@ -57,6 +57,9 @@ export function validateGeoDraft(input: {
         try { return new URL(block.src.trim(), "https://geo.invalid").pathname; } catch { return ""; }
       })();
       if (!block.alt.trim()) blockers.push(issue("image_alt_missing", "图片必须填写能够说明画面内容的替代文字。", `blocks.${index}.alt`));
+      if (/^(?:image|img|photo|picture|图片|截图|配图)(?:[\s_-]*\d+)?(?:\.(?:png|jpe?g|webp))?$/i.test(block.alt.trim())) {
+        warnings.push(issue("image_alt_generic", "请用具体的人物、界面或操作描述替代通用图片名称。", `blocks.${index}.alt`));
+      }
       if (/^\/api\/storage\/objects\//i.test(imagePathname)) {
         blockers.push(issue("private_image_url", "公开文章不能使用需要登录或临时签名的内部图片地址。", `blocks.${index}.src`));
       } else if (/^https?:\/\//i.test(block.src.trim())) {

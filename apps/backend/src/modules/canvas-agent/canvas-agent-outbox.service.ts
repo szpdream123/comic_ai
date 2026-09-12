@@ -1,4 +1,5 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { agentExecutionScopePredicate } from "../shared/db/agent-execution-scope.ts";
 
 export interface CanvasAgentWakeupPublisher {
   publish(input: {
@@ -80,6 +81,9 @@ export class CanvasAgentOutboxService {
         UPDATE canvas_agent_outbox
         SET status='pending', locked_by=NULL, locked_at=NULL, available_at=$2, updated_at=$2
         WHERE status='dispatching' AND locked_at < $1
+          AND task_id IN (SELECT agent.id FROM canvas_agent_tasks agent
+            JOIN tasks workflow_task ON workflow_task.id = agent.workflow_task_id
+            WHERE ${agentExecutionScopePredicate("workflow_task")})
         RETURNING id
       `,
       [new Date(now.getTime() - lockTimeoutMs), now],
@@ -94,8 +98,10 @@ export class CanvasAgentOutboxService {
           SELECT outbox.id, conversation.id AS conversation_id, conversation.shard_id
           FROM canvas_agent_outbox outbox
           JOIN canvas_agent_tasks task ON task.id = outbox.task_id
+          JOIN tasks workflow_task ON workflow_task.id = task.workflow_task_id
           JOIN canvas_agent_conversations conversation ON conversation.id = task.conversation_id
           WHERE outbox.status='pending' AND outbox.available_at <= $1
+            AND ${agentExecutionScopePredicate("workflow_task")}
           ORDER BY outbox.created_at ASC
           LIMIT $2
           FOR UPDATE OF outbox, conversation SKIP LOCKED

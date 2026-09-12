@@ -5,6 +5,7 @@ import { Pool, type PoolClient } from "pg";
 
 import type { SqlDatabase, SqlQueryResult } from "./sql.ts";
 import { applySqlMigrations } from "./migrations.ts";
+import { agentExecutionDatabaseUrl } from "./agent-execution-scope.ts";
 
 export interface DevDatabase extends SqlDatabase {
   close(): Promise<void>;
@@ -65,7 +66,7 @@ async function createStandaloneDevDb(): Promise<DevDatabase> {
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const pool = new Pool({
-      connectionString,
+      connectionString: agentExecutionDatabaseUrl(connectionString, process.env),
       ...loadDatabasePoolConfig(process.env),
     });
     pool.on("error", (error) => {

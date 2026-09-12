@@ -89,6 +89,10 @@ describe("GEO content workflow", () => {
       assert.equal(publicV1.status, 200);
       if (!("data" in publicV1.body)) throw new Error("published content missing");
       assert.equal(publicV1.body.data.version.versionNumber, 1);
+      assert.deepEqual(publicV1.body.data.version.questionIds, [question.body.data.id]);
+      const publicListing = await service.listPublished();
+      if (!("data" in publicListing.body)) throw new Error("published listing missing");
+      assert.deepEqual(publicListing.body.data[0]?.version.questionIds, [question.body.data.id]);
 
       const successor = await service.createDraftFromDocument({
         contentItemId: draft.body.data.item.id,

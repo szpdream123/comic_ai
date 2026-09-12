@@ -172,12 +172,24 @@ function appendStyles(root, styleHrefs) {
     :host(.is-agent-only) .new-canvas-root { visibility: visible !important; background: transparent !important; }
     [data-new-canvas-style-gate] { display: block; min-height: calc(100dvh - 6rem); background: #08111b; }
     [data-new-canvas-style-gate] > * { visibility: hidden; }
+    :host(.is-agent-only) { position: relative; }
+    :host(.is-agent-only) .new-canvas-root[data-new-canvas-surface] { position: absolute; inset: 0; visibility: hidden !important; opacity: 0; pointer-events: none; }
+    :host(.is-agent-only) [data-new-canvas-style-gate] { display: flex; align-items: center; justify-content: center; min-height: 0; height: 100%; background: transparent; }
+    :host(.is-agent-only) [data-new-canvas-style-gate] > * { display: none; }
+    :host(.is-agent-only) [data-new-canvas-loading-label] { display: block; visibility: visible; }
   `;
   const loadingGate = document.createElement("div");
   loadingGate.dataset.newCanvasStyleGate = "true";
   loadingGate.setAttribute("role", "status");
   loadingGate.setAttribute("aria-label", "正在加载画布");
   loadingGate.innerHTML = "<span></span><span></span><span></span>";
+  if (shadowRoot.host?.classList?.contains("is-agent-only")) {
+    loadingGate.setAttribute("aria-label", "正在加载自由会话");
+    const loadingLabel = document.createElement("span");
+    loadingLabel.dataset.newCanvasLoadingLabel = "true";
+    loadingLabel.textContent = "正在加载自由会话…";
+    loadingGate.append(loadingLabel);
+  }
   fragment.append(criticalStyle);
   fragment.append(loadingGate);
   const links = [];
@@ -1188,12 +1200,14 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (mediaComposerResizeHandle && event.button === 0) {
           const composer = mediaComposerResizeHandle.closest?.(".canvas-agent-media-composer");
           const composerHeight = Number(workbench.ui.canvasAgent?.mediaComposerHeight);
+          const composerStyle = composer ? globalThis.getComputedStyle?.(composer) : null;
           mediaComposerResize = {
             pointerId: event.pointerId,
             startY: Number(event.clientY ?? 0),
-            startHeight: Number.isFinite(composerHeight)
+            startHeight: Number.parseFloat(composerStyle?.height) || (Number.isFinite(composerHeight)
               ? composerHeight
-              : Math.round(composer?.getBoundingClientRect?.().height ?? 272),
+              : Math.round(composer?.getBoundingClientRect?.().height ?? 272)),
+            minHeight: Math.max(176, Number.parseFloat(composerStyle?.minHeight) || 0),
             handle: mediaComposerResizeHandle,
             composer,
           };
@@ -1292,7 +1306,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           const nextHeight = Math.min(
             560,
             Math.max(
-              176,
+              mediaComposerResize.minHeight,
               Math.round(mediaComposerResize.startHeight + mediaComposerResize.startY - Number(event.clientY ?? 0)),
             ),
           );

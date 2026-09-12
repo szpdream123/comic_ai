@@ -4,6 +4,24 @@ import { describe, it } from "node:test";
 import { analyzeGeoMonitorAnswer } from "../geo-monitoring-analyzer.ts";
 
 describe("GEO monitoring answer analysis", () => {
+  it("recognizes verified official www aliases without accepting other hosts or ports", () => {
+    for (const [url, expected] of [
+      ["https://lingxiyunai.com/guides/example/?from=ai", true],
+      ["https://www.lingxiyunai.com/guides/example", true],
+      ["https://lingxiyunai.com:8443/guides/example", false],
+      ["https://lingxiyunai.com.attacker.example/guides/example", false],
+      ["https://preview.lingxiyunai.com/guides/example", false],
+    ] as const) {
+      assert.equal(analyzeGeoMonitorAnswer({ answer: "参考来源", citedUrls: [url],
+        brandName: "灵曦AI", publishedHref: "https://www.lingxiyunai.com/guides/example",
+      }).articleCited, expected, url);
+    }
+    assert.equal(analyzeGeoMonitorAnswer({ answer: "参考来源",
+      citedUrls: ["https://www.example.org/guides/example"], brandName: "灵曦AI",
+      publishedHref: "https://example.org/guides/example",
+    }).articleCited, false);
+  });
+
   it("classifies an answer without the brand or article URL as not mentioned", () => {
     assert.deepEqual(
       analyzeGeoMonitorAnswer({

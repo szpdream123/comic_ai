@@ -8,6 +8,8 @@ import { runWithRedisStartupRetry } from "../apps/backend/src/modules/model-gate
 import { acquireRuntimeScopedProcessInstanceLock } from "./process-instance-lock.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
+import { agentGenerationQueueConfig } from "../apps/backend/src/modules/model-gateway/agent-generation-queue.ts";
+import { agentExecutionMetadata } from "../apps/backend/src/modules/shared/db/agent-execution-scope.ts";
 
 loadDotEnvFile(runtimeEnvFilePath());
 if (process.env.CREATOR_DEV_STACK_MANAGED !== "true") {
@@ -55,6 +57,9 @@ const { resolveWorkerIsolationConfig } = await import("../apps/backend/src/modul
 const isolationConfig = resolveWorkerIsolationConfig(process.env);
 
 const config = loadGenerationQueueConfig(process.env);
+const agentQueueConfig = agentGenerationQueueConfig(config, agentExecutionMetadata(process.env).agentExecutionScope);
+const workerQueueConfigs = [config, agentQueueConfig];
+console.info(`[generation-video] Agent dispatch scope=${agentExecutionMetadata(process.env).agentExecutionScope} submit=${agentQueueConfig.queueNames.submit.join(",")} poll=${agentQueueConfig.queueNames.poll.join(",")} result=${agentQueueConfig.queueNames.result.join(",")}`);
 const releaseLocalWorkerInstanceLock = isolationConfig.workerEnvironment === "local"
   ? acquireRuntimeScopedProcessInstanceLock([
       isolationConfig.workerEnvironment,
@@ -306,44 +311,44 @@ const processors = {
   },
 };
 
-const submitQueueProcessor = async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => {
-  const input = { job, config, publisher: workerPublisher, processors, now: new Date() };
+const submitQueueProcessor = async (job, queueConfig) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => {
+  const input = { job, config: queueConfig, publisher: workerPublisher, processors, now: new Date() };
   if (job.data?.mediaType === "video") return handleGenerationSubmitVideoJob(input);
   if (job.data?.mediaType === "audio") return handleGenerationSubmitAudioJob(input);
   return handleGenerationSubmitImageJob(input);
 }));
 
-const pollQueueProcessor = async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => {
-  const input = { job, config, publisher: workerPublisher, processors, now: new Date() };
+const pollQueueProcessor = async (job, queueConfig) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => {
+  const input = { job, config: queueConfig, publisher: workerPublisher, processors, now: new Date() };
   if (job.data?.mediaType === "video") return handleGenerationPollVideoJob(input);
   if (job.data?.mediaType === "audio") return handleGenerationPollAudioJob(input);
   return handleGenerationPollImageJob(input);
 }));
 
-const resultQueueProcessor = async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationFinalizeArtifactJob({
+const resultQueueProcessor = async (job, queueConfig) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationFinalizeArtifactJob({
   job: withDefaultStorageBucket(job, storageRuntime.bucket),
-  config,
+  config: queueConfig,
   publisher: workerPublisher,
   processors,
   finalizeRateLimiter: rateLimiter,
   now: new Date(),
 })));
 
-const submitWorkers = config.queueNames.submit.map((queueName) => new Worker(
+const submitWorkers = workerQueueConfigs.flatMap((queueConfig) => queueConfig.queueNames.submit.map((queueName) => new Worker(
   queueName,
-  submitQueueProcessor,
+  (job) => submitQueueProcessor(job, queueConfig),
   { ...workerOptions, concurrency: Math.max(config.submit.image.concurrency, config.submit.video.concurrency) },
-));
-const pollWorkers = config.queueNames.poll.map((queueName) => new Worker(
+)));
+const pollWorkers = workerQueueConfigs.flatMap((queueConfig) => queueConfig.queueNames.poll.map((queueName) => new Worker(
   queueName,
-  pollQueueProcessor,
+  (job) => pollQueueProcessor(job, queueConfig),
   { ...workerOptions, concurrency: Math.max(config.poll.image.concurrency, config.poll.video.concurrency, config.poll.audio.concurrency) },
-));
-const resultWorkers = config.queueNames.result.map((queueName) => new Worker(
+)));
+const resultWorkers = workerQueueConfigs.flatMap((queueConfig) => queueConfig.queueNames.result.map((queueName) => new Worker(
   queueName,
-  resultQueueProcessor,
+  (job) => resultQueueProcessor(job, queueConfig),
   { ...workerOptions, concurrency: config.finalize.artifact.concurrency },
-));
+)));
 const generationWorkers = [...submitWorkers, ...pollWorkers, ...resultWorkers];
 
 
@@ -386,7 +391,7 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
     : null;
   const failedAt = new Date();
   const artifactStage = job?.data?.artifactStage;
-  const artifactQueueFailure = config.queueNames.result.includes(queueName)
+  const artifactQueueFailure = workerQueueConfigs.some((queueConfig) => queueConfig.queueNames.result.includes(queueName))
     || artifactStage === "fetch"
     || artifactStage === "persist";
   try {

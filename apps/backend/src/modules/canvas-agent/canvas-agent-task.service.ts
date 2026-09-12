@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import { agentExecutionMetadata, agentExecutionScopePredicate } from "../shared/db/agent-execution-scope.ts";
 import {
   claimQueuedTask,
   createWorkflowWithTasks,
@@ -402,6 +403,7 @@ export async function createCanvasAgentTask(
       canvasProjectId: input.canvasId,
       workflowType: "canvas_agent",
       inputSnapshot: {
+        ...agentExecutionMetadata(),
         agentTaskId,
         conversationId: input.conversationId,
         mode: input.mode,
@@ -414,6 +416,7 @@ export async function createCanvasAgentTask(
         targetEntityType: "canvas_agent_task",
         targetEntityId: agentTaskId,
         inputSnapshot: {
+          ...agentExecutionMetadata(),
           agentTaskId,
           canvasId: input.canvasId,
           conversationId: input.conversationId,
@@ -490,6 +493,7 @@ export async function claimCanvasAgentTask(
   db: SqlDatabase,
   input: { taskId: string; workerId: string; leaseMs: number; now: Date },
 ) {
+  if (!await ownsCanvasAgentTask(db, input.taskId)) return undefined;
   const agentTask = await findCanvasAgentTask(db, input.taskId);
   if (!agentTask || agentTask.status !== "queued") return undefined;
   // Approval/external waits release the generic task lease. A fresh attempt is
@@ -525,10 +529,19 @@ export async function claimCanvasAgentTask(
   await appendCanvasAgentEvent(db, {
     taskId: input.taskId,
     eventType: "task.started",
-    event: { attemptId: claimed.attempt.id },
+    event: { attemptId: claimed.attempt.id, workerId: input.workerId, ...agentExecutionMetadata() },
     now: input.now,
   });
   return { task: taskFromRow(row), attempt: claimed.attempt };
+}
+
+export async function ownsCanvasAgentTask(db: SqlDatabase, taskId: string) {
+  const result = await db.query<{ id: string }>(`
+    SELECT agent.id FROM canvas_agent_tasks agent
+    JOIN tasks workflow_task ON workflow_task.id = agent.workflow_task_id
+    WHERE agent.id = $1 AND ${agentExecutionScopePredicate("workflow_task")}
+  `, [taskId]);
+  return result.rows.length > 0;
 }
 
 export async function claimCanvasAgentConversationLock(

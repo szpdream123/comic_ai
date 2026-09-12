@@ -14056,6 +14056,7 @@
           state.geoOperations = {
             platforms: [], questions: [], evidence: [], content: [], details: {}, settings: null,
             selectedQuestionId: "", selectedQuestionIds: [], selectedEvidenceIds: [], loadError: "",
+            contentLoaded: false,
             monitoringContentItemId: "", monitoringPlatformId: "", monitoring: null, monitoringLoadError: "", monitoringLoading: false, monitoringRequestToken: 0,
           };
         }
@@ -14065,8 +14066,377 @@
         if (typeof state.geoOperations.monitoringContentItemId !== "string") state.geoOperations.monitoringContentItemId = "";
         if (typeof state.geoOperations.monitoringPlatformId !== "string") state.geoOperations.monitoringPlatformId = "";
         if (typeof state.geoOperations.monitoringLoading !== "boolean") state.geoOperations.monitoringLoading = false;
+        if (typeof state.geoOperations.contentLoaded !== "boolean") state.geoOperations.contentLoaded = false;
         if (!Number.isSafeInteger(state.geoOperations.monitoringRequestToken)) state.geoOperations.monitoringRequestToken = 0;
         return state.geoOperations;
+      }
+
+      const GEO_BAIDU_SUBMISSION_SCHEMA_VERSION = 1;
+      const GEO_BAIDU_SITE_ORIGIN = "https://www.lingxiyunai.com";
+      const GEO_BAIDU_SUBMISSION_BATCH_LIMIT = 20;
+      const GEO_BAIDU_CONTENT_ROUTES = { guide: "guides", case: "cases", report: "reports", answer: "answers" };
+      const GEO_BAIDU_STATIC_PUBLISHED_PAGES = [
+        ["/", "灵曦AI官网"], ["/script", "剧本工作台"], ["/canvas", "创作画布"], ["/projects", "项目管理"], ["/assets", "素材库"], ["/team", "团队协作"],
+      ];
+      const GEO_BAIDU_COLLECTION_LABELS = { guide: "创作指南", answer: "常见问题", case: "案例", report: "报告" };
+
+      function geoBaiduStorageKey(session, siteOrigin = GEO_BAIDU_SITE_ORIGIN) {
+        const accountId = String(session?.account?.id || "").trim();
+        if (!accountId) return "";
+        try {
+          const origin = new URL(siteOrigin).origin;
+          return `lingxi-admin.geo-baidu-submission.v${GEO_BAIDU_SUBMISSION_SCHEMA_VERSION}:${encodeURIComponent(accountId)}:${encodeURIComponent(origin)}`;
+        } catch {
+          return "";
+        }
+      }
+
+      function geoBaiduPublishedEntries(content, siteOrigin = GEO_BAIDU_SITE_ORIGIN) {
+        const origin = new URL(siteOrigin).origin;
+        const entries = GEO_BAIDU_STATIC_PUBLISHED_PAGES.map(([path, topic]) => ({ id: `static:${path}`, url: `${origin}${path}`, topic, contentType: "page", slug: path }));
+        const seen = new Set();
+        entries.forEach((entry) => seen.add(entry.url));
+        const publishedContent = (Array.isArray(content) ? content : []).filter((item) => {
+          const route = GEO_BAIDU_CONTENT_ROUTES[item?.contentType];
+          const slug = String(item?.slug || "").trim();
+          return Boolean(route && item?.status !== "archived" && item?.currentPublishedVersionId && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug));
+        });
+        Object.entries(GEO_BAIDU_CONTENT_ROUTES).forEach(([contentType, route]) => {
+          if (!publishedContent.some((item) => item.contentType === contentType)) return;
+          const url = `${origin}/${route}`;
+          seen.add(url);
+          entries.push({ id: `collection:${contentType}`, url, topic: GEO_BAIDU_COLLECTION_LABELS[contentType], contentType: "page", slug: route });
+        });
+        for (const item of publishedContent) {
+          const route = GEO_BAIDU_CONTENT_ROUTES[item.contentType];
+          const slug = String(item.slug).trim();
+          const url = `${origin}/${route}/${slug}`;
+          if (seen.has(url)) continue;
+          seen.add(url);
+          entries.push({ id: String(item.id || ""), url, topic: String(item.topic || slug), contentType: item.contentType, slug });
+        }
+        return entries;
+      }
+
+      function geoBaiduNormalizePublishedUrl(rawUrl, allowedUrls, siteOrigin = GEO_BAIDU_SITE_ORIGIN) {
+        let parsed;
+        try {
+          parsed = new URL(String(rawUrl || "").trim());
+        } catch {
+          throw new Error("请输入有效的官网 URL");
+        }
+        const origin = new URL(siteOrigin).origin;
+        if (parsed.origin !== origin || parsed.username || parsed.password) throw new Error("仅允许当前官网 origin 的 URL");
+        const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+        const normalized = `${origin}${pathname}`;
+        if (!allowedUrls.has(normalized)) throw new Error("URL 必须对应当前仍有已发布版本的 GEO 内容");
+        return normalized;
+      }
+
+      function geoBaiduEmptyLedger(siteOrigin = GEO_BAIDU_SITE_ORIGIN) {
+        return {
+          schemaVersion: GEO_BAIDU_SUBMISSION_SCHEMA_VERSION,
+          siteOrigin: new URL(siteOrigin).origin,
+          quota: { available: null, paused: false, updatedAt: null },
+          records: [],
+          updatedAt: null,
+        };
+      }
+
+      function geoBaiduTimestamp(value, label, required = false) {
+        if (value == null || value === "") {
+          if (required) throw new Error(`${label}缺少有效时间`);
+          return null;
+        }
+        const parsed = new Date(value);
+        if (!Number.isFinite(parsed.getTime())) throw new Error(`${label}时间无效`);
+        return parsed.toISOString();
+      }
+
+      function geoBaiduNormalizeBackup(payload, allowedUrls, siteOrigin, strict = true) {
+        if (!payload || typeof payload !== "object" || payload.schemaVersion !== GEO_BAIDU_SUBMISSION_SCHEMA_VERSION) {
+          throw new Error("不是受支持的百度提交记录备份");
+        }
+        let backupOrigin;
+        try {
+          backupOrigin = new URL(String(payload.siteOrigin || "")).origin;
+        } catch {
+          throw new Error("备份中的官网地址无效");
+        }
+        if (backupOrigin !== new URL(siteOrigin).origin) throw new Error("备份不属于当前官网");
+        if (!Array.isArray(payload.records) || payload.records.length > 5000) throw new Error("备份记录列表无效");
+        const available = payload.quota?.available == null || payload.quota?.available === ""
+          ? null
+          : Number(payload.quota.available);
+        if (available !== null && (!Number.isSafeInteger(available) || available < 0)) throw new Error("当前可用数量无效");
+        const records = [];
+        const seen = new Set();
+        for (const rawRecord of payload.records) {
+          let url;
+          try {
+            url = geoBaiduNormalizePublishedUrl(rawRecord?.url, allowedUrls, siteOrigin);
+          } catch (error) {
+            if (strict || !String(error.message || "").includes("已发布")) throw error;
+            continue;
+          }
+          if (seen.has(url)) throw new Error("备份包含重复 URL");
+          seen.add(url);
+          const attemptedAt = geoBaiduTimestamp(rawRecord?.attemptedAt, "提交尝试");
+          const acceptedAt = geoBaiduTimestamp(rawRecord?.acceptedAt, "平台接收");
+          const indexedAt = geoBaiduTimestamp(rawRecord?.indexedAt, "索引确认");
+          if (acceptedAt && !attemptedAt) throw new Error("平台接收记录必须先有提交尝试");
+          records.push({ url, attemptedAt, acceptedAt, indexedAt });
+        }
+        return {
+          schemaVersion: GEO_BAIDU_SUBMISSION_SCHEMA_VERSION,
+          siteOrigin: new URL(siteOrigin).origin,
+          quota: {
+            available,
+            paused: Boolean(payload.quota?.paused),
+            updatedAt: geoBaiduTimestamp(payload.quota?.updatedAt, "额度更新"),
+          },
+          records,
+          updatedAt: geoBaiduTimestamp(payload.updatedAt, "记录更新"),
+        };
+      }
+
+      function geoBaiduRecordStage(ledger, rawUrls, stage, allowedUrls, timestamp = new Date().toISOString()) {
+        if (!["attempted", "accepted", "indexed"].includes(stage)) throw new Error("请选择有效的记录阶段");
+        const urls = [...new Set((Array.isArray(rawUrls) ? rawUrls : []).map((url) => geoBaiduNormalizePublishedUrl(url, allowedUrls, ledger.siteOrigin)))];
+        if (!urls.length) throw new Error("请至少填写一个已发布 URL");
+        if (stage === "attempted" && ledger.quota?.paused) throw new Error("当前已因额度超限暂停，不能新增提交尝试");
+        const recordsByUrl = new Map((ledger.records || []).map((record) => [record.url, { ...record }]));
+        const newAttemptCount = stage === "attempted" ? urls.filter((url) => !recordsByUrl.get(url)?.attemptedAt).length : 0;
+        if (stage === "attempted" && Number.isSafeInteger(ledger.quota?.available) && newAttemptCount > ledger.quota.available) {
+          throw new Error("提交尝试数量超过当前可用数量，请先更新额度状态");
+        }
+        for (const url of urls) {
+          const record = recordsByUrl.get(url) || { url, attemptedAt: null, acceptedAt: null, indexedAt: null };
+          if (stage === "accepted" && !record.attemptedAt) throw new Error("记录平台接收前，请先记录提交尝试");
+        }
+        const recordedAt = geoBaiduTimestamp(timestamp, "记录", true);
+        for (const url of urls) {
+          const record = recordsByUrl.get(url) || { url, attemptedAt: null, acceptedAt: null, indexedAt: null };
+          if (stage === "attempted" && !record.attemptedAt) record.attemptedAt = recordedAt;
+          if (stage === "accepted" && !record.acceptedAt) record.acceptedAt = recordedAt;
+          if (stage === "indexed" && !record.indexedAt) record.indexedAt = recordedAt;
+          recordsByUrl.set(url, record);
+        }
+        const quota = stage === "attempted" && Number.isSafeInteger(ledger.quota?.available)
+          ? { ...ledger.quota, available: ledger.quota.available - newAttemptCount, updatedAt: recordedAt }
+          : ledger.quota;
+        return { ...ledger, quota, records: [...recordsByUrl.values()], updatedAt: recordedAt };
+      }
+
+      function geoBaiduSubmissionBatch(entries, ledger) {
+        const available = ledger?.quota?.available;
+        if (ledger?.quota?.paused || !Number.isSafeInteger(available) || available <= 0) return [];
+        const recorded = new Set((ledger.records || []).filter((record) => record.attemptedAt || record.acceptedAt || record.indexedAt).map((record) => record.url));
+        return entries.filter((entry) => !recorded.has(entry.url)).slice(0, Math.min(available, GEO_BAIDU_SUBMISSION_BATCH_LIMIT)).map((entry) => entry.url);
+      }
+
+      function geoBaiduImportData(payload, currentLedger, allowedUrls, importedAt = new Date().toISOString()) {
+        if (payload?.schemaVersion === GEO_BAIDU_SUBMISSION_SCHEMA_VERSION) {
+          const ledger = geoBaiduNormalizeBackup(payload, allowedUrls, currentLedger.siteOrigin, true);
+          return { ledger: { ...ledger, updatedAt: geoBaiduTimestamp(importedAt, "导入", true) }, importedCount: ledger.records.length, ignoredCount: 0 };
+        }
+        if (!payload || typeof payload !== "object" || !Array.isArray(payload.reportedSubmitted?.urls)) {
+          throw new Error("JSON 不是受支持的备份或 submission-status 格式");
+        }
+        if (typeof payload.reportedSubmitted.platformAcceptanceVerified !== "boolean" || typeof payload.reportedSubmitted.indexingVerified !== "boolean") {
+          throw new Error("submission-status 的平台接收与索引确认字段必须是布尔值");
+        }
+        const attemptedAt = geoBaiduTimestamp(payload.checkedAt || importedAt, "检查", true);
+        const importedUrls = [];
+        let ignoredCount = 0;
+        for (const rawUrl of payload.reportedSubmitted.urls) {
+          try {
+            importedUrls.push(geoBaiduNormalizePublishedUrl(rawUrl, allowedUrls, currentLedger.siteOrigin));
+          } catch {
+            ignoredCount += 1;
+          }
+        }
+        const currentQuota = { ...currentLedger.quota };
+        let ledger = currentLedger;
+        if (importedUrls.length) {
+          ledger = geoBaiduRecordStage({ ...ledger, quota: { ...ledger.quota, available: null, paused: false } }, importedUrls, "attempted", allowedUrls, attemptedAt);
+          if (payload.reportedSubmitted.platformAcceptanceVerified) ledger = geoBaiduRecordStage(ledger, importedUrls, "accepted", allowedUrls, attemptedAt);
+          if (payload.reportedSubmitted.indexingVerified) ledger = geoBaiduRecordStage(ledger, importedUrls, "indexed", allowedUrls, attemptedAt);
+          ledger = { ...ledger, quota: currentQuota };
+        }
+        if (payload.submissionStatus === "paused_quota_exceeded") {
+          ledger = { ...ledger, quota: { available: 0, paused: true, updatedAt: attemptedAt }, updatedAt: attemptedAt };
+        }
+        return { ledger, importedCount: new Set(importedUrls).size, ignoredCount };
+      }
+
+      function geoBaiduSubmissionState() {
+        const store = geoOperationsState();
+        const scopeKey = geoBaiduStorageKey(state.session, GEO_BAIDU_SITE_ORIGIN);
+        const entries = geoBaiduPublishedEntries(store.content, GEO_BAIDU_SITE_ORIGIN);
+        const allowedUrls = new Set(entries.map((entry) => entry.url));
+        if (!store.contentLoaded) {
+          return {
+            scopeKey,
+            ledger: store.baiduSubmission?.ledger || geoBaiduEmptyLedger(GEO_BAIDU_SITE_ORIGIN),
+            storageError: "已发布内容加载完成后再读取本地提交记录。",
+            entries,
+            allowedUrls,
+          };
+        }
+        if (!store.baiduSubmission || store.baiduSubmission.scopeKey !== scopeKey) {
+          const next = { scopeKey, ledger: geoBaiduEmptyLedger(GEO_BAIDU_SITE_ORIGIN), storageError: "" };
+          if (!scopeKey) {
+            next.storageError = "无法识别当前后台账号，本地记录未加载。";
+          } else {
+            try {
+              const saved = localStorage.getItem(scopeKey);
+              if (saved) next.ledger = geoBaiduNormalizeBackup(JSON.parse(saved), allowedUrls, GEO_BAIDU_SITE_ORIGIN, false);
+            } catch {
+              next.storageError = "浏览器本地记录读取失败；可导入 JSON 备份恢复。";
+            }
+          }
+          store.baiduSubmission = next;
+        } else {
+          try {
+            store.baiduSubmission.ledger = geoBaiduNormalizeBackup(store.baiduSubmission.ledger, allowedUrls, GEO_BAIDU_SITE_ORIGIN, false);
+          } catch {
+            store.baiduSubmission.ledger = geoBaiduEmptyLedger(GEO_BAIDU_SITE_ORIGIN);
+            store.baiduSubmission.storageError = "本地记录格式无效，已停止读取；请检查 JSON 备份。";
+          }
+        }
+        return { ...store.baiduSubmission, entries, allowedUrls };
+      }
+
+      function geoBaiduSaveLedger(ledger) {
+        const store = geoOperationsState();
+        const submission = geoBaiduSubmissionState();
+        store.baiduSubmission.ledger = ledger;
+        store.baiduSubmission.storageError = "";
+        if (!submission.scopeKey) {
+          store.baiduSubmission.storageError = "无法识别当前后台账号，记录仅保留到本次页面关闭。";
+          return false;
+        }
+        try {
+          localStorage.setItem(submission.scopeKey, JSON.stringify(ledger));
+          return true;
+        } catch {
+          store.baiduSubmission.storageError = "浏览器本地记录保存失败；请立即导出 JSON 备份。";
+          return false;
+        }
+      }
+
+      function geoBaiduFormatTime(value) {
+        return value ? new Date(value).toLocaleString("zh-CN") : "未记录";
+      }
+
+      function geoBaiduDownload(filename, type, content) {
+        const url = URL.createObjectURL(new Blob([content], { type }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+
+      function geoBaiduUpdateQuota(event) {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const rawAvailable = String(data.get("available") || "").trim();
+        const available = rawAvailable === "" ? null : Number(rawAvailable);
+        if (available !== null && (!Number.isSafeInteger(available) || available < 0)) return showToast("当前可用数量必须是非负整数");
+        const submission = geoBaiduSubmissionState();
+        const updatedAt = new Date().toISOString();
+        const ledger = { ...submission.ledger, quota: { available, paused: Boolean(data.get("paused")), updatedAt }, updatedAt };
+        const saved = geoBaiduSaveLedger(ledger);
+        renderShell();
+        showToast(saved ? "百度额度状态已保存到当前浏览器" : "浏览器保存失败；请立即导出 JSON 备份");
+      }
+
+      function geoBaiduMarkQuotaExceeded() {
+        const submission = geoBaiduSubmissionState();
+        const updatedAt = new Date().toISOString();
+        const saved = geoBaiduSaveLedger({ ...submission.ledger, quota: { available: 0, paused: true, updatedAt }, updatedAt });
+        renderShell();
+        showToast(saved ? "已暂停待提交导出与新增提交尝试" : "已在当前页面暂停，但浏览器保存失败；请立即导出 JSON 备份");
+      }
+
+      function geoBaiduRecord(event) {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const urls = String(data.get("urls") || "").split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+        const submission = geoBaiduSubmissionState();
+        try {
+          const ledger = geoBaiduRecordStage(submission.ledger, urls, String(data.get("stage") || ""), submission.allowedUrls);
+          const saved = geoBaiduSaveLedger(ledger);
+          event.currentTarget.reset();
+          renderShell();
+          showToast(saved ? "人工记录已保存；未向百度发起请求" : "记录仅保留在当前页面；请立即导出 JSON 备份");
+        } catch (error) {
+          showToast(error.message || "记录失败");
+        }
+      }
+
+      async function geoBaiduImportFile(event) {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const submission = geoBaiduSubmissionState();
+        try {
+          const initialLedger = JSON.stringify(submission.ledger);
+          const payload = JSON.parse(await file.text());
+          const current = geoBaiduSubmissionState();
+          if (!submission.scopeKey || current.scopeKey !== submission.scopeKey) throw new Error("后台账号已切换，本次导入已取消");
+          if (JSON.stringify(current.ledger) !== initialLedger) throw new Error("读取文件期间记录已变化，请重新导入");
+          const result = geoBaiduImportData(payload, current.ledger, current.allowedUrls);
+          const saved = geoBaiduSaveLedger(result.ledger);
+          renderShell();
+          showToast(`${saved ? "已导入" : "已在当前页面导入"} ${result.importedCount} 条，忽略 ${result.ignoredCount} 条静态页、非当前发布或非官网 URL${saved ? "" : "；浏览器保存失败，请立即导出备份"}`);
+        } catch (error) {
+          showToast(error.message || "JSON 导入失败");
+        } finally {
+          event.target.value = "";
+        }
+      }
+
+      function geoBaiduExportBackup() {
+        const ledger = geoBaiduSubmissionState().ledger;
+        geoBaiduDownload(`lingxi-baidu-submission-${new Date().toISOString().slice(0, 10)}.json`, "application/json;charset=utf-8", `${JSON.stringify(ledger, null, 2)}\n`);
+      }
+
+      function geoBaiduExportPending() {
+        const submission = geoBaiduSubmissionState();
+        const batch = geoBaiduSubmissionBatch(submission.entries, submission.ledger);
+        if (!batch.length) return showToast(submission.ledger.quota.paused ? "额度状态已暂停，不能导出待提交 URL" : "没有可按当前额度导出的 URL");
+        geoBaiduDownload(`lingxi-baidu-pending-${new Date().toISOString().slice(0, 10)}.txt`, "text/plain;charset=utf-8", `${batch.join("\n")}\n`);
+      }
+
+      function geoBaiduPanelMarkup() {
+        if (!geoOperationsState().contentLoaded) {
+          return `<section class="card geo-baidu-card"><div><h3>百度提交记录与去重导出</h3><p class="metric-note">正在加载已发布内容，完成后读取当前浏览器中的本地记录。</p></div></section>`;
+        }
+        const submission = geoBaiduSubmissionState();
+        const ledger = submission.ledger;
+        const recordsByUrl = new Map(ledger.records.map((record) => [record.url, record]));
+        const batch = geoBaiduSubmissionBatch(submission.entries, ledger);
+        const counts = submission.entries.reduce((summary, entry) => {
+          const record = recordsByUrl.get(entry.url);
+          const stage = record?.indexedAt ? "indexed" : record?.acceptedAt ? "accepted" : record?.attemptedAt ? "attempted" : "pending";
+          summary[stage] += 1;
+          return summary;
+        }, { pending: 0, attempted: 0, accepted: 0, indexed: 0 });
+        const rows = submission.entries.length ? submission.entries.map((entry) => {
+          const record = recordsByUrl.get(entry.url) || {};
+          const stage = record.indexedAt ? ["索引确认", "green"] : record.acceptedAt ? ["平台接收", "blue"] : record.attemptedAt ? ["提交尝试", "warn"] : ["待提交", ""];
+          return `<tr><td><strong>${escapeHtml(entry.topic)}</strong><div class="metric-note"><a href="${escapeAttribute(entry.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(entry.url)}</a></div></td><td><span class="tag ${stage[1]}">${stage[0]}</span></td><td><div class="geo-baidu-stage-times"><span>尝试：${escapeHtml(geoBaiduFormatTime(record.attemptedAt))}</span><span>接收：${escapeHtml(geoBaiduFormatTime(record.acceptedAt))}</span><span>索引：${escapeHtml(geoBaiduFormatTime(record.indexedAt))}</span></div></td></tr>`;
+        }).join("") : `<tr><td colspan="3">当前没有可记录的已发布 GEO 内容。</td></tr>`;
+        const quotaLabel = ledger.quota.paused ? "已暂停（额度超限）" : Number.isSafeInteger(ledger.quota.available) ? `当前可用 ${ledger.quota.available}` : "可用数量未填写";
+        return `<section class="card geo-baidu-card"><div class="toolbar"><div><h3>百度提交记录与去重导出</h3><p class="metric-note">记录仅保存在当前浏览器，并按当前后台账号与官网分区。此工具只整理人工记录和下载文件，不会向百度发起请求。</p></div><span class="tag ${ledger.quota.paused ? "danger" : "blue"}">${escapeHtml(quotaLabel)}</span></div>
+          ${submission.storageError ? `<p class="form-error" role="alert">${escapeHtml(submission.storageError)}</p>` : ""}
+          <div class="geo-baidu-summary"><span>待提交 <strong>${counts.pending}</strong></span><span>提交尝试 <strong>${counts.attempted}</strong></span><span>平台接收 <strong>${counts.accepted}</strong></span><span>索引确认 <strong>${counts.indexed}</strong></span></div>
+          <div class="grid geo-baidu-controls"><form onsubmit="geoBaiduUpdateQuota(event)" class="section-stack"><div><h4>当前额度</h4><p class="metric-note">填写百度页面当前显示的可用数量；不预设每日条数，单批最多导出 20 条。</p></div><label class="field"><span>当前可用数量</span><input name="available" type="number" min="0" step="1" value="${ledger.quota.available == null ? "" : Number(ledger.quota.available)}" placeholder="以百度页面为准" /></label><label class="checkbox-row"><input name="paused" type="checkbox" ${ledger.quota.paused ? "checked" : ""} />暂停新增提交尝试和待提交导出</label><div class="row-actions"><button class="btn ghost" type="submit">保存额度状态</button><button class="btn danger" type="button" onclick="geoBaiduMarkQuotaExceeded()">标记额度超限</button></div></form>
+          <form onsubmit="geoBaiduRecord(event)" class="section-stack"><div><h4>人工记录</h4><p class="metric-note">每行一个当前已发布 URL。记录提交尝试不会自动记为平台接收或索引确认。</p></div><label class="field"><span>记录阶段</span><select name="stage"><option value="attempted">提交尝试</option><option value="accepted">平台接收</option><option value="indexed">索引确认</option></select></label><label class="field"><span>官网 URL</span><textarea name="urls" rows="5" required placeholder="https://www.lingxiyunai.com/guides/..."></textarea></label><button class="btn primary" type="submit">保存人工记录</button></form>
+          <aside class="section-stack"><div><h4>导入与导出</h4><p class="metric-note">JSON 可用于浏览器迁移备份，也兼容核查生成的 submission-status.json；导入时会校验官网与当前发布状态。</p></div><div class="row-actions"><label class="btn ghost">导入 JSON<input class="sr-only" type="file" accept="application/json,.json" onchange="geoBaiduImportFile(event)" /></label><button class="btn ghost" type="button" onclick="geoBaiduExportBackup()">导出 JSON 备份</button></div><label class="field"><span>按当前可用数生成的待提交 URL（${batch.length}）</span><textarea rows="5" readonly placeholder="请先填写当前可用数量">${escapeHtml(batch.join("\n"))}</textarea></label><button class="btn ghost" type="button" onclick="geoBaiduExportPending()" ${batch.length ? "" : "disabled"}>导出待提交 URL</button></aside></div>
+          <div class="table-wrap"><table><thead><tr><th>已发布内容</th><th>当前阶段</th><th>人工确认时间</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
       }
 
       function invalidateGeoContentRequests() {
@@ -14083,6 +14453,7 @@
       async function loadGeoOperations() {
         const store = geoOperationsState();
         invalidateGeoContentRequests();
+        store.contentLoaded = false;
         setPageLoading("geoOperations", true);
         try {
           const [platforms, questions, evidence, content, settings] = await Promise.all([
@@ -14096,6 +14467,7 @@
           store.questions = questions.data || [];
           store.evidence = evidence.data || [];
           store.content = content.data || [];
+          store.contentLoaded = true;
           store.settings = settings.data || null;
           const details = await Promise.all(store.content.map(async (item) => {
             try {
@@ -14615,13 +14987,13 @@
           const summary = run.status === "failed"
             ? `<span class="tag danger">失败</span> ${escapeHtml(run.errorSummary || run.errorCode || "调用失败")}`
             : ["cited", "mentioned", "not_mentioned"].filter((status) => counts[status]).map((status) => `<span class="tag ${status === "cited" ? "blue" : status === "mentioned" ? "warn" : ""}">${monitoringStatusLabel[status]} ${counts[status]}</span>`).join(" ");
-          return `<tr><td><strong>${escapeHtml(platformLabel)}</strong><div class="metric-note">${run.sourceType === "official_api" ? "官方API" : "人工导入"}${run.modelCode ? ` · ${escapeHtml(run.modelCode)}` : ""}${run.contentVersionNumber ? ` · 文章版本 ${Number(run.contentVersionNumber)}` : ""}</div></td><td>${summary || "无结果"}${resultDetails ? `<details class="geo-monitor-result-details"><summary>复核原始快照</summary><div class="section-stack">${resultDetails}</div></details>` : ""}</td><td>${escapeHtml(new Date(run.createdAt).toLocaleString("zh-CN"))}</td></tr>`;
+          return `<tr><td><strong>${escapeHtml(platformLabel)}</strong><div class="metric-note">${run.sourceType === "official_api" ? (run.status === "running" ? "联网检测中" : run.status === "failed" ? "API检测失败（无有效快照）" : (run.results || []).length && run.results.every((result) => result.analysisVersion === "geo-citation-v2") ? "官方联网搜索" : "历史API回答（未验证联网）") : "人工导入"}${run.modelCode ? ` · ${escapeHtml(run.modelCode)}` : ""}${run.contentVersionNumber ? ` · 文章版本 ${Number(run.contentVersionNumber)}` : ""}</div></td><td>${summary || "无结果"}${resultDetails ? `<details class="geo-monitor-result-details"><summary>复核原始快照</summary><div class="section-stack">${resultDetails}</div></details>` : ""}</td><td>${escapeHtml(new Date(run.createdAt).toLocaleString("zh-CN"))}</td></tr>`;
         }).join("") : `<tr><td colspan="3">尚无监测记录。</td></tr>`;
         const monitoringQuestionFields = monitorQuestions.map((question) => `<section class="geo-monitor-question"><strong>${escapeHtml(question.rawQuestion)}</strong><label class="field"><span>平台回答原文</span><textarea name="answer:${escapeAttribute(question.id)}" rows="4" required placeholder="粘贴该平台对这个问题的完整回答"></textarea></label><label class="field"><span>引用链接（每行一个，可留空）</span><textarea name="citedUrls:${escapeAttribute(question.id)}" rows="2" placeholder="https://..."></textarea></label></section>`).join("");
         const monitoringPanel = publishedContent.length ? `<section class="card geo-monitoring-card" aria-busy="${store.monitoringLoading ? "true" : "false"}"><div class="toolbar"><div><h3>大模型回答监测</h3><p class="metric-note">保存可复核的回答快照，判断其中是否提及灵曦AI或引用当前文章；结果不代表平台内部索引状态。</p></div><a class="btn ghost" href="${escapeAttribute(store.monitoring?.content?.href || "#")}" target="_blank">查看官网文章</a></div>
           <div class="form-grid geo-monitor-controls"><label class="field"><span>已发布文章</span><select onchange="geoSelectMonitoringContent(this.value)">${publishedContent.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === store.monitoringContentItemId ? "selected" : ""}>${escapeHtml(item.topic)} · ${escapeHtml(item.slug)}</option>`).join("")}</select></label><label class="field"><span>检测平台</span><select onchange="geoSelectMonitoringPlatform(this.value)">${store.platforms.filter((item) => item.enabled).map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === monitorPlatform?.id ? "selected" : ""}>${escapeHtml(item.label)} · ${item.monitoring?.mode === "official_api" ? "可自动检测" : "人工导入"}</option>`).join("")}</select></label></div>
           ${store.monitoringLoadError ? `<p class="form-error" role="alert">${escapeHtml(store.monitoringLoadError)}</p>` : ""}
-          ${store.monitoringLoading ? `<div class="state-panel"><strong>正在加载监测快照</strong><span>已暂停旧文章表单，完成后会自动恢复。</span></div>` : monitorQuestions.length ? `<div class="grid geo-monitoring-grid"><form onsubmit="geoImportMonitoring(event)" class="section-stack"><div><h4>导入回答快照</h4><p class="metric-note">请逐题粘贴同一次检测得到的完整回答；缺少任一问题时不会入库。</p></div><input type="hidden" name="platformId" value="${escapeAttribute(monitorPlatform?.id || "")}" />${monitoringQuestionFields}<div class="form-error" role="alert"></div><button class="btn primary" type="submit">保存并判定</button></form><aside class="section-stack"><div><h4>自动检测</h4><p class="metric-note">仅调用已配置且与目标平台匹配的官方模型API，不登录第三方网页、不绕过验证码。</p></div>${monitorPlatform?.monitoring?.mode === "official_api" ? `<form onsubmit="geoRunOfficialMonitoring(event)" class="section-stack"><input type="hidden" name="platformId" value="${escapeAttribute(monitorPlatform.id)}" /><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeAttribute(store.settings?.defaultModelCode || "")}" /></label><div class="form-error" role="alert"></div><button class="btn primary" type="submit">运行官方 API 检测</button></form>` : `<div class="state-panel"><strong>${escapeHtml(monitorPlatform?.label || "该平台")}暂不支持自动检测</strong><span>请在平台中提问后，将回答原文和引用链接粘贴到左侧。</span></div>`}</aside></div>` : `<div class="state-panel"><strong>正在读取已发布版本的问题</strong><span>若持续为空，请确认文章的当前发布版本已关联目标问题。</span></div>`}
+          ${store.monitoringLoading ? `<div class="state-panel"><strong>正在加载监测快照</strong><span>已暂停旧文章表单，完成后会自动恢复。</span></div>` : monitorQuestions.length ? `<div class="grid geo-monitoring-grid"><form onsubmit="geoImportMonitoring(event)" class="section-stack"><div><h4>导入回答快照</h4><p class="metric-note">请先在目标平台开启联网搜索，再逐题粘贴同一次检测的完整回答及引用链接；不要只粘贴问题。缺少任一问题时不会入库。</p></div><input type="hidden" name="platformId" value="${escapeAttribute(monitorPlatform?.id || "")}" />${monitoringQuestionFields}<div class="form-error" role="alert"></div><button class="btn primary" type="submit">保存并判定</button></form><aside class="section-stack"><div><h4>自动检测</h4><p class="metric-note">使用支持 Responses 联网搜索的 DeepSeek 或通义官方模型。只有取得实际搜索记录才保存结果；模型或接口不支持时请人工导入。</p></div>${monitorPlatform?.monitoring?.mode === "official_api" ? `<form onsubmit="geoRunOfficialMonitoring(event)" class="section-stack"><input type="hidden" name="platformId" value="${escapeAttribute(monitorPlatform.id)}" /><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeAttribute(store.settings?.defaultModelCode || "")}" /></label><div class="form-error" role="alert"></div><button class="btn primary" type="submit">运行联网搜索检测</button></form>` : `<div class="state-panel"><strong>${escapeHtml(monitorPlatform?.label || "该平台")}暂不支持自动检测</strong><span>请在平台中提问后，将回答原文和引用链接粘贴到左侧。</span></div>`}</aside></div>` : `<div class="state-panel"><strong>正在读取已发布版本的问题</strong><span>若持续为空，请确认文章的当前发布版本已关联目标问题。</span></div>`}
           <div class="table-wrap"><table><thead><tr><th>平台与方式</th><th>回答快照判定</th><th>检测时间</th></tr></thead><tbody>${monitoringRunRows}</tbody></table></div></section>` : `<section class="card"><div class="state-panel"><strong>大模型回答监测</strong><span>请先发布至少一篇关联目标问题的GEO文章。</span></div></section>`;
         return `<style>
           .geo-platform-picker{margin:0;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-subtle,#f8fafc)}
@@ -14703,10 +15075,13 @@
           .geo-quality-issue.danger{border-color:#fecaca;background:#fff7f7}.geo-quality-issue.warning{border-color:#fde68a;background:#fffdf2}
           .geo-danger-zone{border-color:#fecaca;background:#fff7f7}
           .geo-operations-page{grid-template-columns:minmax(0,1fr);min-width:0}.geo-operations-page>*{min-width:0}.geo-monitoring-card{display:grid;gap:18px;min-width:0;max-width:100%}.geo-monitoring-card>*,.geo-monitoring-card form,.geo-monitoring-card aside,.geo-monitoring-card label{min-width:0;max-width:100%}.geo-monitoring-card select,.geo-monitoring-card textarea,.geo-monitoring-card input{max-width:100%}.geo-monitor-controls{grid-template-columns:1fr 1fr}.geo-monitoring-grid{grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr);align-items:start}.geo-monitor-question{display:grid;gap:10px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}.geo-monitor-question strong{line-height:1.5}.geo-monitoring-grid aside{position:sticky;top:18px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}.geo-monitor-result-details{margin-top:10px}.geo-monitor-result-details summary{cursor:pointer;color:var(--primary);font-weight:700}.geo-monitor-result-detail{display:grid;gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-subtle,#f8fafc)}.geo-monitor-result-detail pre{max-height:240px;margin:0;padding:10px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;font:inherit;line-height:1.6}.geo-monitor-citations{display:grid;gap:5px}.geo-monitor-citations a{overflow-wrap:anywhere}
+          .geo-baidu-card{display:grid;gap:18px}.geo-baidu-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);border-radius:12px;overflow:hidden}.geo-baidu-summary>span{padding:12px;border-right:1px solid var(--line);color:var(--muted);font-size:12px}.geo-baidu-summary>span:last-child{border-right:0}.geo-baidu-summary strong{display:block;margin-top:4px;color:var(--text);font-size:20px}.geo-baidu-controls{grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}.geo-baidu-controls>form,.geo-baidu-controls>aside{min-width:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}.geo-baidu-stage-times{display:grid;gap:3px;color:var(--muted);font-size:12px}.geo-baidu-card td a{overflow-wrap:anywhere}
           @media(max-width:720px){.geo-operation-entry-grid{grid-template-columns:1fr}}
           @media(max-width:720px){.geo-platform-groups{grid-template-columns:1fr}}
           @media(max-width:720px){.geo-source-grid{grid-template-columns:1fr}}
           @media(max-width:900px){.geo-monitoring-grid,.geo-monitor-controls{grid-template-columns:1fr}.geo-monitoring-grid aside{position:static}}
+          @media(max-width:900px){.geo-baidu-controls{grid-template-columns:1fr}}
+          @media(max-width:720px){.geo-baidu-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.geo-baidu-summary>span{border-bottom:1px solid var(--line)}.geo-baidu-summary>span:nth-child(2n){border-right:0}.geo-baidu-summary>span:nth-last-child(-n+2){border-bottom:0}}
           @media(max-width:900px){.geo-draft-editor{width:100vw}.geo-article-edit-surface{padding:34px 20px 46px}.geo-article-edit-header h1{font-size:36px}.geo-inline-edit-summary{font-size:18px}.geo-heading-level,.geo-list-style,.geo-note-tone{position:static;display:inline-flex;margin-bottom:4px;opacity:1}.geo-block-tools{position:static;margin-bottom:8px;opacity:1;pointer-events:auto;transform:none;box-shadow:none}.geo-block-kind{display:none}.geo-block-insert-point{opacity:.7}.geo-cta-link-edit{grid-template-columns:1fr}.geo-draft-save-bar{padding:12px 16px}.geo-draft-save-bar span{display:none}}
           @media(pointer:coarse){.geo-block-tools{opacity:1;pointer-events:auto;transform:none}.geo-block-insert-point{opacity:.7}}
           @media(prefers-reduced-motion:reduce){.geo-block-tools,.geo-block-insert-point{transition:none}}
@@ -14719,6 +15094,7 @@
           </section>
           <section class="card"><div class="toolbar"><h3>问题与证据选择</h3><span class="metric-note">所选资料将作为模型唯一事实来源</span></div><div class="grid geo-source-grid"><div class="table-wrap"><table><thead><tr><th>选择</th><th>问题</th><th>优先级</th><th>覆盖</th></tr></thead><tbody>${questionRows}</tbody></table></div><div class="table-wrap"><table><thead><tr><th>选择</th><th>证据</th><th>审核</th><th>公开</th></tr></thead><tbody>${evidenceRows}</tbody></table></div></div></section>
           <section class="card"><div class="toolbar"><h3>内容中心</h3><span class="metric-note">阻断项必须清零，警告项可在人工确认后发布</span></div><div class="table-wrap"><table><thead><tr><th>内容</th><th>状态</th><th>自动质检</th><th>操作</th></tr></thead><tbody>${contentRows}</tbody></table></div></section>
+          ${geoBaiduPanelMarkup()}
           ${monitoringPanel}
           <section class="card"><div class="toolbar"><h3>GEO设置</h3><span class="tag blue">品牌固定为灵曦AI</span></div><form onsubmit="geoSaveSettings(event)" class="form-grid"><label class="field"><span>默认模型</span><input name="defaultModelCode" value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><label class="field"><span>公开作者</span><input name="publicAuthorName" value="${escapeHtml(store.settings?.publicAuthorName || "灵曦AI内容团队")}" /></label><label class="field"><span>品牌语气</span><input name="brandTone" value="${escapeHtml(store.settings?.brandTone || "专业、克制、清晰，不夸大效果")}" /></label><label class="field"><span>品牌事实（每行一条）</span><textarea name="brandFacts">${escapeHtml((store.settings?.brandFacts || []).join("\n"))}</textarea></label><label class="field"><span>禁用词（每行一条）</span><textarea name="forbiddenPhrases">${escapeHtml((store.settings?.forbiddenPhrases || []).join("\n"))}</textarea></label><label class="field"><span>目标字数</span><div class="row-actions"><input name="wordMin" type="number" min="300" value="${Number(store.settings?.defaultWordRange?.min || 1200)}" /><input name="wordMax" type="number" min="300" value="${Number(store.settings?.defaultWordRange?.max || 2600)}" /></div></label><label class="field"><span>内容相似度阻断线</span><input name="similarityThreshold" type="number" min="0.5" max="1" step="0.01" value="${Number(store.settings?.similarityThreshold || 0.82)}" /></label><button class="btn primary" type="submit">保存设置</button></form></section>
         </div>`;
@@ -14813,7 +15189,7 @@
             platformId: data.get("platformId"),
             modelCode: data.get("modelCode"),
           }),
-        }), "官方API检测已完成");
+        }), "联网搜索检测已完成");
         if (store.monitoringContentItemId === contentItemId) await geoSelectMonitoringContent(contentItemId);
       }
 
@@ -14907,6 +15283,12 @@
       window.geoSubmitReview = geoSubmitReview;
       window.geoPublishContent = geoPublishContent;
       window.geoSaveSettings = geoSaveSettings;
+      window.geoBaiduUpdateQuota = geoBaiduUpdateQuota;
+      window.geoBaiduMarkQuotaExceeded = geoBaiduMarkQuotaExceeded;
+      window.geoBaiduRecord = geoBaiduRecord;
+      window.geoBaiduImportFile = geoBaiduImportFile;
+      window.geoBaiduExportBackup = geoBaiduExportBackup;
+      window.geoBaiduExportPending = geoBaiduExportPending;
 
       function stripAdminReasonFields(root = document) {
         const forms = new Set();

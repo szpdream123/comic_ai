@@ -1,4 +1,6 @@
 import type { GeoBlock, GeoContentType, GeoDocument, GeoPublicSummary } from "./geo-types.ts";
+import { renderGeoTemplateLinks } from "./geo-related-links.ts";
+import { geoImageSources } from "./geo-image-variants.ts";
 
 export function renderGeoArticle(input: {
   template: string;
@@ -70,7 +72,13 @@ export function renderGeoArticle(input: {
     ? ` · 更新：<time datetime="${escapeAttribute(input.updatedAt)}">${escapeHtml(displayDate(input.updatedAt))}</time>`
     : "";
   const evidence = renderEvidence(input.evidence);
-  const content = `<main class="geo-article"><article><header><p class="geo-brand">${escapeHtml(input.brandName)}</p><h1>${escapeHtml(input.document.title)}</h1><p class="geo-summary">${escapeHtml(input.document.summary)}</p><p class="geo-byline">作者：${escapeHtml(input.authorName)} · 发布：<time datetime="${escapeAttribute(input.publishedAt)}">${escapeHtml(displayDate(input.publishedAt))}</time>${updated}</p></header><section class="geo-direct-answer"><h2>直接回答</h2><p>${escapeHtml(input.document.directAnswer)}</p></section>${input.document.blocks.map((block, index) => renderBlock(block, citationIndex, index)).join("")}${renderFaq(input.document)}${evidence}</article>${related}</main>`;
+  const templates = renderGeoTemplateLinks(new URL(input.canonicalUrl).pathname);
+  const headings = input.document.blocks.flatMap((block, index) => block.type === "heading" && block.level === 2
+    ? [{ text: block.text, anchor: headingAnchor(block.text, index) }] : []);
+  const contents = headings.length >= 3
+    ? `<nav class="geo-contents" aria-label="文章目录"><details><summary>本文目录</summary><ol>${headings.map((heading) => `<li><a href="#${escapeAttribute(heading.anchor)}">${escapeHtml(heading.text)}</a></li>`).join("")}</ol></details></nav>`
+    : "";
+  const content = `<main class="geo-article"><article><header><p class="geo-brand">${escapeHtml(input.brandName)}</p><h1>${escapeHtml(input.document.title)}</h1><p class="geo-summary">${escapeHtml(input.document.summary)}</p><p class="geo-byline">作者：${escapeHtml(input.authorName)} · 发布：<time datetime="${escapeAttribute(input.publishedAt)}">${escapeHtml(displayDate(input.publishedAt))}</time>${updated}</p></header><section class="geo-direct-answer"><h2>直接回答</h2><p>${escapeHtml(input.document.directAnswer)}</p></section>${contents}${input.document.blocks.map((block, index) => renderBlock(block, citationIndex, index)).join("")}${templates}${renderFaq(input.document)}${evidence}</article>${related}</main>`;
 
   return input.template
     .replace("{{GEO_HEAD}}", head)
@@ -106,7 +114,12 @@ function renderBlock(block: GeoBlock, citationIndex: Map<string, number>, index:
     case "steps": html = `<ol class="geo-steps">${block.items.map((item) => `<li><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.body)}</p></li>`).join("")}</ol>`; break;
     case "quote": html = `<blockquote><p>${escapeHtml(block.text)}</p><cite><a href="${escapeAttribute(block.sourceUrl)}" rel="nofollow noopener">${escapeHtml(block.sourceLabel)}</a></cite></blockquote>`; break;
     case "table": html = `<div class="geo-table"><table><thead><tr>${block.headers.map((item) => `<th>${escapeHtml(item)}</th>`).join("")}</tr></thead><tbody>${block.rows.map((row) => `<tr>${row.map((item) => `<td>${escapeHtml(item)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`; break;
-    case "image": html = `<figure><img src="${escapeAttribute(block.src)}" alt="${escapeAttribute(block.alt)}" loading="lazy" /><figcaption>${escapeHtml(block.caption)}</figcaption></figure>`; break;
+    case "image": {
+      const sources = geoImageSources(block.src);
+      const image = `<img src="${escapeAttribute(block.src)}" alt="${escapeAttribute(block.alt)}" loading="lazy" decoding="async" />`;
+      html = `<figure>${sources ? `<picture>${sources}${image}</picture>` : image}<figcaption>${escapeHtml(block.caption)}</figcaption>${sources ? `<a href="${escapeAttribute(block.src)}" target="_blank" rel="noopener">查看原图</a>` : ""}</figure>`;
+      break;
+    }
     case "note": html = `<aside class="geo-note geo-note-${block.tone}">${escapeHtml(block.text)}</aside>`; break;
     case "cta": html = `<aside class="geo-cta"><h2>${escapeHtml(block.title)}</h2><p>${escapeHtml(block.body)}</p><a href="${escapeAttribute(block.href)}">${escapeHtml(block.label)}</a></aside>`; break;
   }

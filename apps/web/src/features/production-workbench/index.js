@@ -143,6 +143,7 @@ import {
 import { runBrowserVideoWatermarkRemoval } from "../toolbox/browser-video-watermark-removal-client.js";
 
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
+import { bindStoryboardBodyAssetMentions } from "./storyboard-body-asset-mentions.js";
 import {
   getScriptManagementVisibleCards,
   resolveScriptLibraryPagination,
@@ -3634,6 +3635,8 @@ export async function initProductionWorkbench({
     },
   };
   const initialRouteToken = readWorkbenchRouteToken(window.location);
+  // The first mounted controller captures its API surface before refresh runs.
+  if (initialRouteToken === "free-generation") prepareFreeGenerationSurface(workbench);
   installWorkbenchToastQueue(workbench);
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
   syncWorkbenchDisplayCreditBalance(workbench, session);
@@ -6198,7 +6201,7 @@ async function refreshCustomerSupportConfig(workbench) {
     const config = await workbench.api.getCustomerSupportConfig();
     if (config && typeof config === "object") {
       workbench.ui.customerSupportConfig = config;
-      render(workbench);
+      renderWorkbenchChrome(workbench);
     }
   } catch {
     // Keep the built-in support copy when the public config cannot be loaded.
@@ -6213,7 +6216,7 @@ function loadAuthenticatedWorkbenchShellData(workbench) {
   if (!workbench.ui.announcementsLoaded && !workbench.ui.announcementsLoading) {
     runLazyWorkbenchTask(workbench, "announcements", async () => {
       await syncAnnouncementsFromApi(workbench);
-      render(workbench);
+      renderWorkbenchChrome(workbench);
     });
   }
   if (!workbench.ui.customerSupportConfig) {
@@ -6486,7 +6489,7 @@ async function refresh(workbench, options = {}) {
           });
         }
       }
-      render(workbench, { preserveNavigationShell: true });
+      renderAfterCanvasLoad(workbench, { preserveNavigationShell: true });
     };
     if (deferProjectData) {
       runLazyWorkbenchTask(workbench, "route restore", restoreRoutes);
@@ -9932,6 +9935,7 @@ function renderAfterCanvasLoad(workbench, options = {}) {
     updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
   }
   renderWorkbenchChrome(workbench);
+  resumeCanvasGenerationPollingIfNeeded(workbench);
   return true;
 }
 
@@ -48624,17 +48628,39 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
   if (!promptText) {
     return { ok: false, reason: "missing-storyboard-prompt" };
   }
-  const warning = storyboardOnly && !hasUsableStoryboardImage(selectedStoryboard)
+  let warning = storyboardOnly && !hasUsableStoryboardImage(selectedStoryboard)
     ? "请生成故事板图片"
     : "";
   const references = buildSelectedStoryboardQuickReference(workbench, selectedStoryboard, composerPrompt);
+  const bindBodyMentions = (prompt) => {
+    if (storyboardOnly) return prompt;
+    const buckets = resolvePromptMentionAssetBuckets(workbench);
+    const result = bindStoryboardBodyAssetMentions({
+      prompt,
+      sourcePrompt: composerPrompt,
+      imageCount: filterOrderedGenerationReferences(references ?? [], "image").length,
+      normalizeName: normalizeAssetReferenceLookupName,
+      assets: ["scene", "character", "prop"].flatMap((kind) => (buckets[kind] ?? []).map((asset) => ({
+        kind,
+        id: String(asset.assetId ?? asset.id ?? ""),
+        url: normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(asset)),
+        names: [asset.name, asset.label, ...(asset.mentionAliases ?? [])].map((name) => String(name ?? "").trim()).filter(Boolean),
+      }))),
+      selectedAssets: (selectedStoryboard.references ?? []).map((asset) => ({
+        id: String(asset.assetId ?? asset.id ?? ""),
+        url: normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(asset)),
+      })),
+    });
+    warning = [warning, result.warning].filter(Boolean).join("；");
+    return result.prompt;
+  };
   if (!references?.length) {
     updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
       ...resetGenerationComposerMedia(generationState),
       quickReferenceItems: [],
     }));
     clearEpisodeWorkbenchAttachmentComposer(workbench);
-    setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(composerPrompt));
+    setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(bindBodyMentions(composerPrompt)));
     if (!storyboardOnly) {
       appendStoryboardMentionAudioAttachments(workbench, composerPrompt);
     }
@@ -48653,7 +48679,7 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
     references,
   );
   clearEpisodeWorkbenchAttachmentComposer(workbench);
-  setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(normalizedPromptText, references));
+  setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(bindBodyMentions(normalizedPromptText), references));
   if (!storyboardOnly) {
     appendStoryboardMentionAudioAttachments(workbench, composerPrompt);
   }

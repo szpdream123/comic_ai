@@ -8,6 +8,7 @@ import { validateGenerationModelRequest } from "../model-catalog/generation-mode
 import { createGenerationModelConfigSnapshotForTask, createGenerationProviderRouteIdentity } from "../model-gateway/generation-model-config-snapshot.ts";
 import { appendGenerationTaskCreatedOutboxEvent } from "../model-gateway/generation-outbox.service.ts";
 import { loadGenerationQueueConfig } from "../model-gateway/generation-queue.config.ts";
+import { agentExecutionMetadata } from "../shared/db/agent-execution-scope.ts";
 import { OpenAICompatibleTextAdapter } from "../model-gateway/openai-compatible-text.adapter.ts";
 import { ModelflareResponsesAdapter } from "../model-gateway/modelflare-responses.adapter.ts";
 import { TextModelGatewayService } from "../model-gateway/text-model-gateway.service.ts";
@@ -41,6 +42,8 @@ import { CanvasAgentProviderConfigService } from "./canvas-agent-provider-config
 import { CanvasAgentPromptPreferenceService } from "./canvas-agent-prompt-preference.service.ts";
 import { inspectCanvasAgentVideoUrl } from "./canvas-agent-video-inspection.service.ts";
 import { createDefaultCanvasAgentToolRegistry } from "./canvas-agent-tool.registry.ts";
+import { registerFreeConversationTools } from "./free-conversation-tools.ts";
+import { registerFreeConversationArtifactTools } from "./free-conversation-artifacts.ts";
 import type { CanvasAgentActor, CanvasAgentGenerationIntake } from "./canvas-agent.types.ts";
 import { CanvasAgentWorker } from "./canvas-agent.worker.ts";
 
@@ -203,6 +206,8 @@ export function createCanvasAgentWorkerRuntime(input: {
     applyProviderConfigDraft: (request) => providerConfig.applyDraft({ ...request, now: now() }),
     now,
   });
+  registerFreeConversationTools(tools, { db: input.db, context });
+  registerFreeConversationArtifactTools(tools, { db: input.db, context });
   const checkpoint = new CanvasAgentCheckpointService({
     db: input.db,
     canvas: {
@@ -408,6 +413,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
         model: modelCode,
         parameters: executionParameters,
         sourceSurface: "canvas_agent",
+        ...agentExecutionMetadata(this.deps.env),
         agentTaskId: input.agentTaskId,
         agentStepId: input.agentStepId,
         teamMemberId: input.actorTeamMemberId,

@@ -261,7 +261,8 @@ function agentTask(
 }
 
 const unusedDb: SqlDatabase = {
-  async query<T>() {
+  async query<T>(sql: string) {
+    if (sql.includes("agentExecutionScope")) return { rows: [{ id: agentTaskId }] as T[] };
     return { rows: [] as T[] };
   },
 };

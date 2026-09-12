@@ -6,7 +6,7 @@ import { analyzeGeoMonitorAnswer, type GeoMonitorResultStatus } from "./geo-moni
 import { findGeoPlatform } from "./geo-platforms.ts";
 import { loadGeoRuntimeSettings } from "./geo-settings.ts";
 
-const analysisVersion = "geo-citation-v1";
+const analysisVersion = "geo-citation-v2";
 const maxOfficialQuestions = 20;
 const monitoringHistoryLimit = 100;
 const maxAnswerChars = 20_000;
@@ -162,6 +162,11 @@ export function createGeoMonitoringService(deps: {
       || snapshotChars(input.results) > maxSnapshotChars) {
       return failure(400, "geo_monitor_manual_results_invalid", "请为当前发布版本的每个问题填写一次非空回答。");
     }
+    if (target.questions.some((question) => inputByQuestion.get(question.id)!.answer
+      .normalize("NFKC").replace(/\s+/gu, "").replace(/[?!.。…]+$/u, "")
+      === question.rawQuestion.normalize("NFKC").replace(/\s+/gu, "").replace(/[?!.。…]+$/u, ""))) {
+      return failure(400, "geo_monitor_manual_results_invalid", "回答不能与问题原文相同，请粘贴平台的完整回答及引用链接。");
+    }
     const settings = await loadGeoRuntimeSettings(deps.db);
     const prepared = target.questions.map((question) => prepareResult({
       question,
@@ -245,7 +250,7 @@ export function createGeoMonitoringService(deps: {
           prompt: buildMonitoringPrompt(question.rawQuestion),
           createdByUserId: null,
           responseFormat: "json_object",
-          maxTokens: 2500,
+          maxTokens: 16000,
           maxResponseChars: maxOfficialResponseChars,
           payloadSummary: `GEO monitor ${runId} ${platform.id}: ${question.rawQuestion.slice(0, 80)}`,
           requestKeyPrefix: `geo-monitor-${platform.id}-${runId}`,
@@ -279,8 +284,12 @@ export function createGeoMonitoringService(deps: {
       });
       return created({ runId });
     } catch (error) {
-      const code = error instanceof GeoMonitoringOutputError ? error.code : "geo_monitor_provider_failed";
-      const message = error instanceof GeoMonitoringOutputError ? error.message : "监测平台调用失败，请稍后重试。";
+      const searchFailure = [(error as { code?: unknown })?.code, (error as Error)?.message]
+        .some((value) => typeof value === "string" && value.startsWith("geo_search_"));
+      const code = error instanceof GeoMonitoringOutputError ? error.code : searchFailure ? "geo_monitor_search_unavailable" : "geo_monitor_provider_failed";
+      const message = error instanceof GeoMonitoringOutputError ? error.message : searchFailure
+        ? "未取得可核验的联网搜索结果。请使用支持联网搜索的官方模型与接口，或人工导入联网回答；本次不计为未收录。"
+        : "监测平台调用失败，请稍后重试。";
       const failedAt = now();
       await deps.db.query(
         `UPDATE geo_monitor_runs SET status='failed',error_code=$2,error_summary=$3,completed_at=$4,updated_at=$4 WHERE id=$1 AND status='running'`,
@@ -446,9 +455,14 @@ async function heartbeatRun(db: SqlDatabase, runId: string, heartbeatAt: Date) {
 async function complete(gateway: GeoMonitoringGatewayLike, input: GeoMonitoringGatewayInput) {
   if (gateway.completeJsonWithUsage) {
     const completed = await gateway.completeJsonWithUsage(input);
+    const proof = completed.usage?.geoSearch;
+    if (!proof || typeof proof !== "object" || Array.isArray(proof)
+      || (proof as Record<string, unknown>).completed !== true) {
+      throw new Error("geo_search_not_verified");
+    }
     return { content: completed.content, providerRequestId: completed.providerRequestId };
   }
-  return { content: await gateway.completeJson(input), providerRequestId: null };
+  throw new Error("geo_search_not_verified");
 }
 
 async function completeWithDeadline(
@@ -563,7 +577,7 @@ function isProviderResponseTooLarge(error: unknown) {
 }
 
 function buildMonitoringPrompt(question: string) {
-  return `请直接回答下面的问题，并只返回JSON对象：{"answer":"完整回答","citedUrls":["实际引用的来源链接"]}。如果没有引用来源，citedUrls返回空数组。不要添加Markdown代码围栏。\n问题：${question}`;
+  return `请先执行联网搜索，再回答下面的问题，并只返回JSON对象：{"answer":"完整回答","citedUrls":["实际引用的来源链接"]}。仅引用本次搜索实际取得的来源，不要编造网址。如果没有引用来源，citedUrls返回空数组。不要添加Markdown代码围栏。\n问题：${question}`;
 }
 
 function contentTypeRouteName(contentType: string) {

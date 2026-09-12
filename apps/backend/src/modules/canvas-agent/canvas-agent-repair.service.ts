@@ -1,4 +1,5 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { agentExecutionScopePredicate } from "../shared/db/agent-execution-scope.ts";
 import { CANVAS_AGENT_CREDIT_REASON } from "./canvas-agent-billing.service.ts";
 import { settleReservationAllocationInTransaction } from "../credit-billing/credit-ledger.service.ts";
 import { refundTeamMemberGenerationCreditsInTransaction } from "../credit-billing/team-member-generation-credit.service.ts";
@@ -7,6 +8,7 @@ import {
   appendCanvasAgentMessage,
   enqueueCanvasAgentWakeup,
   updateCanvasAgentStep,
+  ownsCanvasAgentTask,
 } from "./canvas-agent-task.service.ts";
 
 export class CanvasAgentRepairService {
@@ -42,6 +44,7 @@ export class CanvasAgentRepairService {
         FROM canvas_agent_tasks task
         JOIN tasks workflow_task ON workflow_task.id = task.workflow_task_id
         WHERE task.status='running' AND task.lease_expires_at < $1
+          AND ${agentExecutionScopePredicate("workflow_task")}
         ORDER BY task.lease_expires_at ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
@@ -157,6 +160,7 @@ export class CanvasAgentRepairService {
     now?: Date;
   }) {
     const now = input.now ?? (this.deps.now ?? (() => new Date()))();
+    if (!await ownsCanvasAgentTask(this.deps.db, input.taskId)) return;
     await this.deps.db.query(
       `
         UPDATE canvas_agent_tasks
@@ -194,9 +198,11 @@ export class CanvasAgentRepairService {
                step.id AS step_id, step.generation_task_id,
                generation.status AS generation_status, generation.failure_code
         FROM canvas_agent_tasks agent
+        JOIN tasks workflow_task ON workflow_task.id = agent.workflow_task_id
         JOIN canvas_agent_steps step ON step.id = agent.current_step_id
         JOIN tasks generation ON generation.id = step.generation_task_id
         WHERE agent.status = 'waiting_external'
+          AND ${agentExecutionScopePredicate("workflow_task")}
           AND step.status IN ('waiting_external','succeeded','failed','canceled','result_unknown','manual_review_required')
           AND generation.status IN ('succeeded','failed','canceled','result_unknown','manual_review_required')
         ORDER BY agent.updated_at ASC, agent.id ASC

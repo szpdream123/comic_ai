@@ -56,6 +56,10 @@ function trimUrlPunctuation(value: string) {
 function normalizedTarget(value: string) {
   try {
     const url = new URL(value, "https://geo.local");
+    // These two public hosts serve the same canonical article. Do not merge arbitrary subdomains.
+    if (url.protocol === "https:" && !url.port && url.hostname === "lingxiyunai.com") {
+      url.hostname = "www.lingxiyunai.com";
+    }
     return {
       origin: /^[a-z][a-z\d+.-]*:\/\//iu.test(value.trim()) ? url.origin : "",
       path: decodeURIComponent(url.pathname).replace(/\/+$/u, "") || "/",

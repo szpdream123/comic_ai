@@ -211,6 +211,7 @@ test("admin GEO entry cards expose a narrow-screen single-column layout", () => 
     geoPlatformTags: () => "",
     geoPlatformPicker: () => "",
     geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+    geoBaiduPanelMarkup: () => "",
   };
   vm.runInNewContext(`${script.slice(pageStart, pageEnd)}\nresult = geoOperationsPage();`, context);
 
@@ -255,6 +256,7 @@ test("admin GEO generation groups multiple selected questions into one draft", a
     geoPlatformTags: () => "",
     geoPlatformPicker: () => "",
     geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+    geoBaiduPanelMarkup: () => "",
     renderShell: () => undefined,
     showToast: (message) => { throw new Error(message); },
     FormData: class {

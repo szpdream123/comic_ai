@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { agentExecutionScopePredicate } from "../shared/db/agent-execution-scope.ts";
 import {
   aggregateWorkflowStatus,
   finalizeTaskAttempt,
@@ -9,6 +10,7 @@ import {
 } from "../workflow-task/workflow-task.service.ts";
 import {
   claimCanvasAgentTask,
+  ownsCanvasAgentTask,
   claimCanvasAgentConversationLock,
   heartbeatCanvasAgentTask,
   heartbeatCanvasAgentConversationLock,
@@ -118,6 +120,7 @@ export class CanvasAgentWorker {
   }
 
   private async processTaskSerially(taskId: string): Promise<CanvasAgentWorkerProcessResult> {
+    if (!await ownsCanvasAgentTask(this.deps.db, taskId)) return { taskId, status: "skipped" };
     const current = await this.findTask(this.deps.db, taskId);
     if (current?.status === "cancel_requested") {
       return this.cancelUnclaimedTask(current);
@@ -328,11 +331,13 @@ export class CanvasAgentWorker {
   private async readQueuedTaskIds(limit: number) {
     const result = await this.deps.db.query<{ id: string }>(
       `
-        SELECT id
-        FROM canvas_agent_tasks
-        WHERE status = 'queued'
-           OR (status = 'cancel_requested' AND lease_owner IS NULL)
-        ORDER BY created_at ASC, id ASC
+        SELECT agent.id
+        FROM canvas_agent_tasks agent
+        JOIN tasks workflow_task ON workflow_task.id = agent.workflow_task_id
+        WHERE (agent.status = 'queued'
+           OR (agent.status = 'cancel_requested' AND agent.lease_owner IS NULL))
+          AND ${agentExecutionScopePredicate("workflow_task")}
+        ORDER BY agent.created_at ASC, agent.id ASC
         LIMIT $1
       `,
       [limit],

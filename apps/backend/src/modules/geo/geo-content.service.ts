@@ -336,7 +336,11 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
 
   async function listPublished(contentType?: GeoContentType) {
     const result = await deps.db.query<{ item: GeoItemRow; version: GeoVersionRow }>(
-      `SELECT row_to_json(item.*) AS item,row_to_json(version.*) AS version
+      `SELECT row_to_json(item.*) AS item,
+         to_jsonb(version) || jsonb_build_object('question_ids', ARRAY(
+           SELECT link.question_id AS question_ids FROM geo_content_question_links link
+           WHERE link.content_version_id=version.id ORDER BY link.question_id
+         )) AS version
        FROM geo_content_items item JOIN geo_content_versions version ON version.id=item.current_published_version_id
        WHERE item.status<>'archived' AND ($1::text IS NULL OR item.content_type=$1)
        ORDER BY version.published_at DESC NULLS LAST,item.updated_at DESC`,
@@ -350,7 +354,11 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     if (!match) return fail(404, "geo_content_not_found", "GEO公开内容不存在。");
     const typeByRoute: Record<string, GeoContentType> = { guides: "guide", cases: "case", reports: "report", answers: "answer" };
     const result = await deps.db.query<{ item: GeoItemRow; version: GeoVersionRow }>(
-      `SELECT row_to_json(item.*) AS item,row_to_json(version.*) AS version
+      `SELECT row_to_json(item.*) AS item,
+         to_jsonb(version) || jsonb_build_object('question_ids', ARRAY(
+           SELECT link.question_id AS question_ids FROM geo_content_question_links link
+           WHERE link.content_version_id=version.id ORDER BY link.question_id
+         )) AS version
        FROM geo_content_items item JOIN geo_content_versions version ON version.id=item.current_published_version_id
        WHERE item.content_type=$1 AND item.slug=$2 AND item.status<>'archived'`,
       [typeByRoute[match[1]!], match[2]],

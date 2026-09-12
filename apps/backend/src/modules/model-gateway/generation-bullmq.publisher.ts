@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import type { OutboxEventRecord } from "../shared/outbox/outbox-dispatch-repair.service.ts";
 import { selectGenerationQueue, type GenerationQueueConfig } from "./generation-queue.config.ts";
+import { agentGenerationQueueConfig } from "./agent-generation-queue.ts";
 
 export interface GenerationBullMQPublisher {
   add(
@@ -54,6 +55,7 @@ export function buildGenerationBullMQJob(
   event: OutboxEventRecord,
   config: GenerationQueueConfig,
 ): GenerationBullMQJob {
+  config = agentGenerationQueueConfig(config, event.payload.agentExecutionScope);
   if (event.eventType === "generation.task.finalize_requested") {
     return buildGenerationFinalizeBullMQJob(event, config);
   }

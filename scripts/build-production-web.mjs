@@ -1,6 +1,7 @@
 import { build } from "esbuild";
-import { mkdir, writeFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const productionWebManifestName = ".production-web-manifest.json";
@@ -31,6 +32,7 @@ export async function buildProductionWeb({
     target: "es2022",
     minify: true,
     metafile: true,
+    write: false,
     entryNames: "[name]-[hash]",
     chunkNames: "chunks/[name]-[hash]",
     assetNames: "assets/[name]-[hash]",
@@ -69,17 +71,51 @@ export async function buildProductionWeb({
     .join("/");
   const entryUrl = `/${entryRelativeToSource}`;
   const manifestPath = resolve(resolvedOutputDir, productionWebManifestName);
-  await writeFile(
+  // Publish only after compilation succeeds. Identical hashed files can be read-only
+  // (for example, extracted by root while the service runs as www).
+  for (const output of result.outputFiles) {
+    if (!isPathInside(resolvedOutputDir, output.path)) {
+      throw new Error("production_web_output_outside_output_dir");
+    }
+    await publishProductionFile(output.path, output.contents);
+  }
+  await publishProductionFile(
     manifestPath,
     `${JSON.stringify({
       version: productionWebManifestVersion,
       entryUrl,
       outputFiles,
     })}\n`,
-    "utf8",
   );
 
   return { entryUrl, outputFiles, manifestPath };
+}
+
+async function publishProductionFile(filePath, contents) {
+  const bytes = Buffer.from(contents);
+  try {
+    if ((await readFile(filePath)).equals(bytes)) return;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(temporaryPath, bytes, { flag: "wx", mode: 0o644 });
+    // Same-directory rename avoids truncating a published file or requiring write
+    // access to the old file. Directory write access is still required.
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    if (["EACCES", "EPERM", "EROFS"].includes(error.code)) {
+      error.message += ` [production-web] Cannot publish ${filePath}; check that the deployment directory is writable by the service account. Do not run the service as root to bypass this.`;
+    }
+    throw error;
+  } finally {
+    await rm(temporaryPath, { force: true }).catch((error) => {
+      console.warn(`[production-web] Cannot clean temporary file ${temporaryPath}: ${error.code}`);
+    });
+  }
 }
 
 function isPathInside(parentPath, candidatePath) {
