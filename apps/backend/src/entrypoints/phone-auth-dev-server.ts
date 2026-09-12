@@ -646,6 +646,20 @@ const scriptDocumentUploadLimits = {
     (extension) => ![".txt", ".docx"].includes(extension),
   ),
 };
+const seriesOriginalUploadLimits = {
+  document: {
+    label: "原著文件",
+    maxBytes: 20 * 1024 * 1024,
+    mimeTypes: [
+      "text/plain",
+      "text/markdown",
+      "text/x-markdown",
+      "application/octet-stream",
+    ],
+    extensions: [".txt", ".md", ".markdown"],
+  },
+  blockedExtensions: episodeUploadLimits.blockedExtensions,
+};
 const canvasAnnotationUploadLimits = {
   image: episodeUploadLimits.image,
   vector: {
@@ -4107,6 +4121,7 @@ function resolveUploadLimitsForPurpose(purpose: unknown) {
     };
   }
   if (normalizedPurpose === "script-documents") return scriptDocumentUploadLimits;
+  if (normalizedPurpose === "series-original") return seriesOriginalUploadLimits;
   if (normalizedPurpose === "canvas-annotations") return canvasAnnotationUploadLimits;
   if (normalizedPurpose === "new-canvas/brand-font") return brandFontUploadLimits;
   return episodeUploadLimits;
@@ -4115,7 +4130,7 @@ function resolveUploadLimitsForPurpose(purpose: unknown) {
 function getUploadLimitKind(
   contentType: unknown,
   fileName: unknown,
-  limits: typeof episodeUploadLimits | typeof scriptDocumentUploadLimits | typeof canvasAnnotationUploadLimits | typeof brandFontUploadLimits = episodeUploadLimits,
+  limits: typeof episodeUploadLimits | typeof scriptDocumentUploadLimits | typeof seriesOriginalUploadLimits | typeof canvasAnnotationUploadLimits | typeof brandFontUploadLimits = episodeUploadLimits,
 ) {
   const normalizedContentType = String(contentType ?? "").split(";")[0]!.trim().toLowerCase();
   const extension = getUploadExtension(fileName);
@@ -4157,6 +4172,8 @@ function validateUploadPolicy(input: {
       errorCode: "upload_type_not_allowed",
       message: String(input.purpose ?? "").trim() === "script-documents"
         ? "仅支持 docx 或 txt 剧本文档。"
+        : String(input.purpose ?? "").trim() === "series-original"
+          ? "仅支持 txt 或 md 原著文件。"
         : "\u4ec5\u652f\u6301\u56fe\u7247\u3001\u89c6\u9891\u548c\u97f3\u9891\u6587\u4ef6\u3002",
     };
   }

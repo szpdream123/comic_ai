@@ -511,6 +511,32 @@ test("AI Canvas runtime document sync skips duplicate host deep equality", () =>
   assert.doesNotMatch(runtimeSync, /skipEquality:\s*true/);
 });
 
+test("browser series original uploads through COS instead of a local project folder", () => {
+  const runtimeSource = readFileSync(new URL("../ai-canvas-runtime/runtime.js", import.meta.url), "utf8");
+  const fileServiceSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/fileService-BawXHbsK.js", import.meta.url),
+    "utf8",
+  );
+  const appSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
+    "utf8",
+  );
+  const conversationSource = readFileSync(
+    new URL("../ai-canvas-runtime/assets/conversationExecutionController-D8HECszZ.js", import.meta.url),
+    "utf8",
+  );
+  const backendSource = readFileSync(
+    new URL("../../backend/src/entrypoints/phone-auth-dev-server.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(runtimeSource, /__COMIC_AI_CANVAS_HOST_API__/);
+  assert.match(fileServiceSource, /purpose: "series-original"/);
+  assert.match(appSource, /sourceUrl: i, storageObjectId: t.storageObjectId/);
+  assert.match(conversationSource, /n.sourceUrl/);
+  assert.match(backendSource, /normalizedPurpose === "series-original"/);
+  assert.match(backendSource, /maxBytes: 20 \* 1024 \* 1024/);
+});
+
 test("new Canvas mounts the standalone React Flow runtime directly in the page", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");

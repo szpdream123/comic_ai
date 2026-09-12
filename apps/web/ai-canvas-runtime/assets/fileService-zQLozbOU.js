@@ -1403,7 +1403,7 @@ var Wn = /* @__PURE__ */ e({
 	image: 32 * 1024 * 1024,
 	video: 64 * 1024 * 1024,
 	audio: 32 * 1024 * 1024,
-	other: 8 * 1024 * 1024
+	other: 20 * 1024 * 1024
 }, Kn = 128 * 1024 * 1024, qn = 4096, H = {
 	image: "图片",
 	video: "视频",
@@ -1942,6 +1942,35 @@ async function Dr(e, t) {
 		if (!n) return null;
 		let r = q(n.type), i = r === "other" ? q(n.name) : r;
 		J(n.size, i, `${H[i]}「${n.name}」`);
+		let hostApi = globalThis.__COMIC_AI_CANVAS_HOST_API__;
+		if (typeof hostApi?.uploadFile === "function") {
+			let uploadedPayload = await hostApi.uploadFile(n, {
+				purpose: "series-original",
+				canvasProjectId: t && t !== "default" ? t : globalThis.__COMIC_AI_CANVAS_PROJECT_ID__ ?? null,
+				uploadLimits: {
+					document: {
+						label: "原著文件",
+						maxBytes: 20 * 1024 * 1024,
+						mimeTypes: ["text/plain", "text/markdown", "text/x-markdown", "application/octet-stream"],
+						extensions: [".txt", ".md", ".markdown"]
+					},
+					blockedExtensions: []
+				}
+			});
+			let upload = uploadedPayload?.upload ?? uploadedPayload;
+			let storageObjectId = String(upload?.storageObjectId ?? "").trim();
+			let sourceUrl = String(upload?.sourceUrl ?? upload?.publicUrl ?? uploadedPayload?.urls?.sourceUrl ?? "").trim();
+			let filePath = storageObjectId
+				? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+				: sourceUrl;
+			if (filePath) return {
+				dataUrl: filePath,
+				fileName: n.name,
+				fileSize: n.size,
+				filePath,
+				storageObjectId: storageObjectId || undefined
+			};
+		}
 		let a = Be(await n.arrayBuffer());
 		return {
 			dataUrl: `data:${g(n.name.split(".").pop()?.toLowerCase() || "")};base64,${a}`,

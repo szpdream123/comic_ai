@@ -183,7 +183,7 @@ function appendStyles(root, styleHrefs) {
   loadingGate.setAttribute("role", "status");
   loadingGate.setAttribute("aria-label", "正在加载画布");
   loadingGate.innerHTML = "<span></span><span></span><span></span>";
-  if (shadowRoot.host?.classList?.contains("is-agent-only")) {
+  if (root.host?.classList?.contains("is-agent-only")) {
     loadingGate.setAttribute("aria-label", "正在加载自由会话");
     const loadingLabel = document.createElement("span");
     loadingLabel.dataset.newCanvasLoadingLabel = "true";

@@ -63,6 +63,8 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /\.new-canvas-root \{ visibility: hidden !important; \}/);
   assert.match(source, /newCanvasStyleGate/);
   assert.match(source, /loadingGate\.innerHTML = "<span><\/span><span><\/span><span><\/span>"/);
+  assert.match(source, /if \(root\.host\?\.classList\?\.contains\("is-agent-only"\)\) \{/);
+  assert.doesNotMatch(source, /if \(shadowRoot\.host\?/);
   assert.match(source, /\[data-new-canvas-style-gate\] > \* \{ visibility: hidden; \}/);
   assert.match(source, /pendingLinks\.delete\(link\)/);
   assert.match(source, /pendingLinks\.size === 0[\s\S]*?criticalStyle\.remove\(\)[\s\S]*?loadingGate\.remove\(\)/);
@@ -81,6 +83,46 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /event\.target\?\.closest\?\.\("\.canvas-node-editor"\)/);
   assert.match(source, /event\.target\?\.closest\?\.\("input, textarea, select, \[contenteditable='true'\], \[role='textbox'\], \.canvas-prompt-mention-menu"\)[\s\S]*?event\.stopPropagation\(\)[\s\S]*?return/);
   assert.match(source, /__canvasDirectorHandled/);
+});
+
+test("new-canvas light-DOM mount does not throw on style bootstrap", async () => {
+  const previousDocument = globalThis.document;
+  const host = {
+    dataset: {},
+    shadowRoot: null,
+    replaceChildren(...nodes) { this.children = nodes; },
+  };
+  globalThis.document = {
+    createElement() {
+      return {
+        dataset: {},
+        classList: { contains() { return false; } },
+        setAttribute() {},
+        addEventListener() {},
+        removeEventListener() {},
+        append() {},
+        remove() {},
+        innerHTML: "",
+        textContent: "",
+      };
+    },
+    createDocumentFragment() {
+      return { append() {} };
+    },
+  };
+  try {
+    const instance = await mountNewCanvas(host, {
+      lightDom: true,
+      styleHrefs: [],
+      adapter: { async mount() { return { async dispose() {} }; } },
+    });
+    assert.equal(host.dataset.newCanvasMounted, "true");
+    assert.ok(instance);
+    await unmountNewCanvas(host);
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
 });
 
 test("AI Canvas initializes the browser process shim before the runtime bridge import", () => {
@@ -107,6 +149,14 @@ test("expand editor toasts budget errors above the fullscreen overlay", () => {
   assert.match(expandSource, /if \(K\) \{\s*F\(K\);\s*We\.getState\(\)\.showToast\(K, "error"\);\s*return;\s*\}/);
   assert.match(appSource, /className: "fixed top-16 left-1\/2 z-\[300\]"/);
   assert.match(appSource, /zIndex:\s*10000/);
+});
+
+test("series rail and script workbench match the canvas header type size", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(source, /\.group\\\/series aside\[role="dialog"\][\s\S]*font-size:\s*18px\s*!important/);
+  assert.match(source, /\[aria-label="剧本创作工作台"\][\s\S]*font-size:\s*18px\s*!important/);
+  assert.match(source, /\.group\\\/series aside\[role="dialog"\] svg[\s\S]*width:\s*18px\s*!important/);
+  assert.match(source, /\[aria-label="剧本创作工作台"\] svg[\s\S]*width:\s*18px\s*!important/);
 });
 
 test("node and overlay popover buttons match the floating canvas menu size", () => {

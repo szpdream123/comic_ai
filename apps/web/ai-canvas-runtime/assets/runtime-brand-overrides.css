@@ -1406,3 +1406,69 @@
 [data-canvas-radial-menu] {
   display: none !important;
 }
+
+/* Match series-rail and script-workbench type/icons to the canvas header. */
+.group\/series aside[role="dialog"],
+.group\/series aside[role="dialog"] button,
+.group\/series aside[role="dialog"] input,
+[aria-label="剧本创作工作台"],
+[aria-label="剧本创作工作台"] button,
+[aria-label="剧本创作工作台"] input,
+[aria-label="剧本创作工作台"] textarea,
+[aria-label="剧本创作工作台"] select,
+[aria-label="剧本"] {
+  font-size: 18px !important;
+  line-height: 1.35 !important;
+}
+
+.group\/series aside[role="dialog"] p,
+.group\/series aside[role="dialog"] span,
+[aria-label="剧本创作工作台"] p,
+[aria-label="剧本创作工作台"] span,
+[aria-label="剧本创作工作台"] h2,
+[aria-label="剧本创作工作台"] h3,
+[aria-label="剧本创作工作台"] label,
+[aria-label="剧本"] h2,
+[aria-label="剧本"] p,
+[aria-label="剧本"] span {
+  font-size: 18px !important;
+  line-height: 1.35 !important;
+}
+
+.group\/series aside[role="dialog"] svg,
+[aria-label="剧本创作工作台"] svg,
+[aria-label="剧本"] svg {
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  min-height: 18px !important;
+}
+
+.group\/series aside[role="dialog"] header > span,
+.group\/series aside[role="dialog"] header > button,
+[aria-label="剧本"] header > span,
+[aria-label="剧本"] header > button {
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+}
+
+.group\/series aside[role="dialog"] header,
+[aria-label="剧本创作工作台"] header,
+[aria-label="剧本"] header {
+  min-height: 56px !important;
+  gap: 10px !important;
+  padding: 10px 14px !important;
+}
+
+.group\/series aside[role="dialog"] button {
+  min-height: 32px;
+}
+
+[aria-label="剧本创作工作台"] header > span:first-child {
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+}

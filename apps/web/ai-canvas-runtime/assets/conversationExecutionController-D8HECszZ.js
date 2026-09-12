@@ -5445,10 +5445,18 @@ function U() {
 async function qa(e) {
 	let { series: t } = U(), n = t?.series?.originalWork;
 	if (!t || !n) throw Error("当前剧集还没有添加原著文件");
-	let r = await tt(t.id);
-	if (!r) throw Error("无法定位项目数据目录");
 	if (e.aborted) throw new DOMException("读取已取消", "AbortError");
-	return at(et(r, n.relativePath), g, e);
+	let r = String(n.sourceUrl ?? "").trim();
+	let i = String(n.relativePath ?? "").trim();
+	let a = r || (/^https?:\/\//i.test(i) || i.startsWith("/api/storage/") ? i : "");
+	if (a) {
+		let o = await fetch(a, { signal: e });
+		if (!o.ok) throw Error(`读取原著失败：HTTP ${o.status}`);
+		return await o.text();
+	}
+	let s = await tt(t.id);
+	if (!s) throw Error("无法定位项目数据目录");
+	return at(et(s, n.relativePath), g, e);
 }
 function Ja(e, t, n) {
 	let r = t.slice(n, n + Ga), i = n + r.length, a = i < t.length;

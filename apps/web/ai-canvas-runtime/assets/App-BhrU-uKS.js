@@ -2853,14 +2853,17 @@ function ki() {
 	}, L = () => I("original", async () => {
 		let t = await ut("txt,md", n);
 		if (!t) return;
-		if (!t.filePath) {
+		if (!t.filePath && !t.dataUrl) {
 			d(e("原著需要保存到项目目录，请在桌面端添加"), "error");
 			return;
 		}
-		let r = await et(n);
+		let i = t.filePath || t.dataUrl;
+		let a = /^https?:\/\//i.test(i ?? "") || String(i ?? "").startsWith("/api/storage/");
+		let r = a ? null : await et(n);
 		await s({ originalWork: {
 			fileName: t.fileName,
-			relativePath: Di(t.filePath, r),
+			relativePath: r ? Di(i, r) : i,
+			...(a ? { sourceUrl: i, storageObjectId: t.storageObjectId } : {}),
 			addedAt: Date.now()
 		} });
 	}), R = () => I("original", async () => {
