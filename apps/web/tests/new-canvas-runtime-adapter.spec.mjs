@@ -496,6 +496,12 @@ test("AI Canvas polling refreshes the mounted runtime without a full host render
   assert.match(appSource, /omitRuntimeEphemeralNodeFields/);
 });
 
+test("host live head documents do not echo back as canvas saves", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /if \(documentProvided\) \{\s*document = readRuntimeDocument\(\);/);
+  assert.match(appSource, /context\.onDocumentChange = \(nextDocument, metadata = \{\}\) => \{[\s\S]*arePersistableCanvasRuntimeDocumentsEqual\(document, nextDocument\)/);
+});
+
 test("AI Canvas runtime document sync skips duplicate host deep equality", () => {
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   const runtimeSync = workbenchSource.match(

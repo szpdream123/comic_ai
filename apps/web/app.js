@@ -19,7 +19,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260911-3";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-1";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -608,10 +608,10 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       groups: Array.isArray(source.groups) ? source.groups : [],
     });
   };
-  const arePersistableCanvasRuntimeDocumentsEqual = (left, right) => {
+  const arePersistableCanvasRuntimeDocumentsEqual = (left, right, options = {}) => {
     try {
       const stableJson = (value) => JSON.stringify(
-        persistableCanvasRuntimeDocument(value, { ignoreLayout: true }),
+        persistableCanvasRuntimeDocument(value, options),
         (_key, nestedValue) => {
           if (!nestedValue || Array.isArray(nestedValue) || typeof nestedValue !== "object") return nestedValue;
           return Object.keys(nestedValue).sort().reduce((sorted, key) => {
@@ -626,6 +626,27 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     }
   };
   let saveEnabled = false;
+  const originalOnDocumentChange = context.onDocumentChange;
+  context.onDocumentChange = (nextDocument, metadata = {}) => {
+    if (arePersistableCanvasRuntimeDocumentsEqual(document, nextDocument)) {
+      return undefined;
+    }
+    document = persistableCanvasRuntimeDocument(nextDocument);
+    return originalOnDocumentChange?.(nextDocument, metadata);
+  };
+  const readRuntimeDocument = () => {
+    const state = store.getState();
+    const source = document && typeof document === "object" ? document : {};
+    const { updatedAt: _updatedAt, ...envelope } = source;
+    return persistableCanvasRuntimeDocument({
+      ...envelope,
+      version: Number(source.version ?? 1) || 1,
+      ...(currentProjectId ? { canvasProjectId: currentProjectId } : {}),
+      nodes: state.nodes ?? [],
+      edges: state.edges ?? [],
+      groups: state.groups ?? source.groups ?? [],
+    });
+  };
   const applyHostProjectState = (next = {}) => {
     const documentProvided = next.document !== undefined || next.canvasDocument !== undefined;
     if (next.projectCatalog !== undefined) {
@@ -655,19 +676,9 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
     }
     store.setState(patch);
-  };
-  const readRuntimeDocument = () => {
-    const state = store.getState();
-    const source = document && typeof document === "object" ? document : {};
-    const { updatedAt: _updatedAt, ...envelope } = source;
-    return persistableCanvasRuntimeDocument({
-      ...envelope,
-      version: Number(source.version ?? 1) || 1,
-      ...(currentProjectId ? { canvasProjectId: currentProjectId } : {}),
-      nodes: state.nodes ?? [],
-      edges: state.edges ?? [],
-      groups: state.groups ?? source.groups ?? [],
-    });
+    if (documentProvided) {
+      document = readRuntimeDocument();
+    }
   };
   const loadedNodeCount = Array.isArray(document?.nodes) ? document.nodes.length : 0;
   const saveThroughHost = async () => {
@@ -1100,7 +1111,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260911-3";
+      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-1";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
