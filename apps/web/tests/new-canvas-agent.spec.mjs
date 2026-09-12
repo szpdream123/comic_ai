@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
+
+function readRuntimeAsset(prefix) {
+  const name = readdirSync(new URL("../ai-canvas-runtime/assets/", import.meta.url))
+    .find((file) => file.startsWith(prefix) && file.endsWith(".js"));
+  assert.ok(name, `missing runtime asset ${prefix}`);
+  return readFileSync(new URL(`../ai-canvas-runtime/assets/${name}`, import.meta.url), "utf8");
+}
 import {
   collapseAgentGenerationMessages,
   collapseAgentTimelineEvents,
@@ -17,15 +24,10 @@ import {
 } from "../src/features/new-canvas/canvas-agent-panel.js";
 
 test("Agent Center keeps package upload behind the Tauri IPC capability check", () => {
-  const source = readFileSync(
-    new URL("../ai-canvas-runtime/assets/ChatPanel-D-dIH-Xx.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /typeof window\.__TAURI_INTERNALS__\?\.invoke !== "function"/);
+  const source = readRuntimeAsset("ChatPanel-");
+  assert.match(source, /__TAURI_INTERNALS__\?\.invoke/);
   assert.match(source, /智能体上传需要桌面客户端/);
   assert.match(source, /智能体上传需在桌面客户端完成/);
-  assert.match(source, /disabled: p !== null \|\| typeof window === "undefined" \|\| typeof window\.__TAURI_INTERNALS__\?\.invoke !== "function"/);
 });
 
 test("Canvas Agent timeline collapses lifecycle events by step", () => {

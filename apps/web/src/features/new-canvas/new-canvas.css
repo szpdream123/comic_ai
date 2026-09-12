@@ -8747,8 +8747,23 @@
 }
 
 /* Keep the standalone Shadow DOM surface on the same palette as the workbench. */
-:host-context([data-workbench-theme="daylight"]) .new-canvas-root {
+:host-context([data-workbench-theme="daylight"]) .new-canvas-root,
+.new-canvas-root[data-workbench-theme="daylight"] {
   --new-canvas-color-scheme: light;
+  --new-canvas-background: #f4f7fb;
+  --new-canvas-foreground: #1b2730;
+  --new-canvas-muted: #5f7380;
+  --new-canvas-panel: #ffffff;
+  --new-canvas-panel-soft: #f7fafc;
+  --new-canvas-surface: #ffffff;
+  --new-canvas-control: #ffffff;
+  --new-canvas-control-hover: #eef3f7;
+  --new-canvas-control-active: #e4edf4;
+  --new-canvas-control-text: #1b2730;
+  --new-canvas-control-border: #d5e0e7;
+  --new-canvas-control-hover-border: #9bb1be;
+  --new-canvas-field: #ffffff;
+  --new-canvas-stage: #f4f7fb;
 }
 
 :host-context([data-workbench-theme="daylight"]) .new-canvas-root .canvas-agent-panel.is-media-only .canvas-agent-media-composer textarea.home-agent-rich-editor {
@@ -8796,6 +8811,26 @@
   color-scheme: var(--new-canvas-color-scheme);
   color: var(--new-canvas-foreground);
   background: var(--new-canvas-background);
+}
+
+.new-canvas-root[data-runtime-media-tools-surface] {
+  min-height: 0;
+  height: auto;
+  background: transparent;
+  isolation: auto;
+}
+
+.new-canvas-root[data-runtime-media-tools-surface] .canvas-media-tools-backdrop {
+  background: rgb(15 18 24 / 0.28);
+  backdrop-filter: none;
+}
+
+.new-canvas-root[data-workbench-theme="daylight"] .canvas-media-tools-drawer input,
+.new-canvas-root[data-workbench-theme="daylight"] .canvas-media-tools-drawer textarea,
+.new-canvas-root[data-workbench-theme="daylight"] .canvas-media-tools-drawer select {
+  background: var(--new-canvas-field, #ffffff);
+  color: var(--new-canvas-foreground, #1b2730);
+  border-color: var(--new-canvas-control-border, #d5e0e7);
 }
 
 .new-canvas-root .new-canvas-layout,

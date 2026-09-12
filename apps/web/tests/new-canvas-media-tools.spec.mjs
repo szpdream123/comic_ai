@@ -8,6 +8,8 @@ import {
   persistCanvasMediaRecoveryState,
   refreshCanvasMediaRecoveryState,
   renderCanvasMediaToolsShell,
+  findRuntimeCloudMediaToolTarget,
+  resolveRuntimeCloudMediaTool,
   shouldDismissMediaDrawer,
 } from "../src/features/new-canvas/media-tools-drawer.js";
 import { validateUploadFile } from "../src/shared/creator-api.js";
@@ -21,8 +23,28 @@ test("Canvas media tools render for selected image nodes", () => {
   const shell = renderCanvasMediaToolsShell(ui);
   assert.match(shell, /裁剪/);
   assert.match(shell, /Camera Studio/);
+  assert.match(shell, /高清超分/);
   assert.match(shell, /开始处理/);
   assert.match(shell, /data-media-drawer-grip/);
+});
+
+test("runtime floating toolbar HD and subject buttons map onto cloud media tools", () => {
+  const hd = {
+    classList: { contains(name) { return name === "act-hd"; } },
+    getAttribute() { return "高清超分"; },
+  };
+  const subject = {
+    className: "ftb-btn icon-only act-auto-subject",
+    getAttribute(name) { return name === "aria-label" ? "自动识别主体" : ""; },
+  };
+  assert.equal(resolveRuntimeCloudMediaTool(hd), "upscale");
+  assert.equal(resolveRuntimeCloudMediaTool(subject), "remove_background");
+  assert.equal(resolveRuntimeCloudMediaTool({ getAttribute() { return "裁剪"; } }), "");
+  const icon = { getAttribute() { return ""; }, className: "" };
+  assert.equal(findRuntimeCloudMediaToolTarget({
+    composedPath() { return [icon, hd]; },
+    target: { closest() { return null; } },
+  }), hd);
 });
 
 test("Canvas media tools show the selected storage image across every editor", () => {
@@ -34,7 +56,7 @@ test("Canvas media tools show the selected storage image across every editor", (
     canvasMediaTools: { open: true, tool: "outpaint" },
   };
   const state = ensureCanvasMediaToolsState(ui);
-  for (const tool of ["outpaint", "remove_background", "free_view", "camera_studio", "slice", "composite", "batch_grid"]) {
+  for (const tool of ["outpaint", "remove_background", "upscale", "free_view", "camera_studio", "slice", "composite", "batch_grid"]) {
     state.tool = tool;
     const shell = renderCanvasMediaToolsShell(ui);
     assert.match(shell, tool === "slice" ? /canvas-media-slice-stage/ : /canvas-media-source-preview/);
@@ -101,6 +123,97 @@ test("Canvas composite upload becomes the selected second image", async () => {
   assert.equal(ui.canvasMediaTools.compositeSecondaryArtifactId, "upload:secondary-upload");
   assert.equal(ui.canvasMediaTools.compositeUpload.title, "secondary.png");
   assert.match(ui.canvasMediaTools.compositeUpload.url, /secondary-upload/);
+  controller.dispose();
+});
+
+test("opening HD upscale from the runtime toolbar uses the cloud derivation drawer", async () => {
+  const ui = {
+    selectedCanvasNodeId: "image-node",
+    canvasDocument: { nodes: [{ id: "image-node", type: "image", data: { storageObjectId: "storage-1" } }] },
+  };
+  const controller = createCanvasMediaToolsController({ surface: {}, workbench: { ui }, render() {} });
+  await controller.handleAction({ dataset: { mediaAction: "open", mediaTool: "upscale" } });
+  const state = ensureCanvasMediaToolsState(ui);
+  assert.equal(state.open, true);
+  assert.equal(state.tool, "upscale");
+  const shell = renderCanvasMediaToolsShell(ui);
+  assert.match(shell, /高清超分/);
+  assert.match(shell, /使用云端模型提高分辨率/);
+  controller.dispose();
+});
+
+test("cloud upscale can bind a storage object from the preview URL", async () => {
+  const submissions = [];
+  const ui = {
+    selectedCanvasProjectId: "canvas-1",
+    selectedCanvasNodeId: "node-jlch47ufz",
+    canvasDocument: {
+      nodes: [{
+        id: "node-jlch47ufz",
+        type: "ai-image",
+        data: { imageUrl: "/api/storage/objects/11111111-1111-4111-8111-111111111111/content?proxy=1" },
+      }],
+    },
+  };
+  const controller = createCanvasMediaToolsController({
+    surface: {},
+    workbench: {
+      ui,
+      api: {
+        async startCanvasMediaDerivation(_canvasId, input) {
+          submissions.push(input);
+          return { derivation: { id: "derivation-url" } };
+        },
+        async createImageGenerationTask() { return { taskId: "task-url" }; },
+        async attachCanvasMediaDerivationTask() {},
+      },
+    },
+    render() {},
+  });
+  const state = ensureCanvasMediaToolsState(ui);
+  state.tool = "upscale";
+  state.generationModelCode = "image-model";
+  await controller.handleAction({ dataset: { mediaAction: "submit" } });
+  assert.equal(state.status, "running");
+  assert.equal(submissions[0].source.storageObjectId, "11111111-1111-4111-8111-111111111111");
+  controller.dispose();
+});
+
+test("cloud upscale can submit from a preview URL without a storage object id", async () => {
+  const submissions = [];
+  const ui = {
+    selectedCanvasProjectId: "canvas-1",
+    selectedCanvasNodeId: "node-jlch47ufz",
+    canvasDocument: {
+      nodes: [{
+        id: "node-jlch47ufz",
+        type: "ai-image",
+        data: { imageUrl: "https://cdn.example.com/sky.png" },
+      }],
+    },
+  };
+  const controller = createCanvasMediaToolsController({
+    surface: {},
+    workbench: {
+      ui,
+      api: {
+        async startCanvasMediaDerivation() { throw new Error("derivation_must_not_be_required"); },
+        async createImageGenerationTask(input) {
+          submissions.push(input);
+          return { taskId: "task-preview" };
+        },
+        async attachCanvasMediaDerivationTask() { throw new Error("attach_must_not_be_required"); },
+      },
+    },
+    render() {},
+  });
+  const state = ensureCanvasMediaToolsState(ui);
+  state.tool = "upscale";
+  state.generationModelCode = "image-model";
+  await controller.handleAction({ dataset: { mediaAction: "submit" } });
+  assert.equal(state.status, "running");
+  assert.deepEqual(submissions[0].parameters.referenceImages, ["https://cdn.example.com/sky.png"]);
+  assert.equal(ensureCanvasMediaToolsState(ui).open, false);
   controller.dispose();
 });
 
@@ -546,7 +659,7 @@ test("Canvas media tools include professional parameters in derivation snapshots
     ui,
     api: {
       async startCanvasMediaDerivation(_canvasId, input) {
-        snapshots.push(input.requestSnapshot);
+        snapshots.push({ derivationType: input.derivationType, requestSnapshot: input.requestSnapshot });
         return { derivation: { id: `derivation-${snapshots.length}` } };
       },
       async createImageGenerationTask() {
@@ -559,6 +672,7 @@ test("Canvas media tools include professional parameters in derivation snapshots
   const state = ensureCanvasMediaToolsState(ui);
   const cases = [
     ["remove_background", { backgroundFeatherPixels: 12, preserveShadow: false }, "removeBackground", { featherPixels: 12, preserveShadow: false }],
+    ["upscale", {}, "outpaintPixels", 0],
     ["free_view", { viewAzimuthDegrees: 35, viewElevationDegrees: -12, viewDistanceScale: 1.4 }, "camera", { azimuthDegrees: 35, elevationDegrees: -12, distanceScale: 1.4 }],
     ["camera_studio", { cameraFocalLengthMm: 85, cameraAperture: 1.8, cameraLightingPreset: "rim_light" }, "cameraStudio", {
       focalLengthMm: 85,
@@ -590,7 +704,9 @@ test("Canvas media tools include professional parameters in derivation snapshots
   for (const [tool, values, snapshotKey, expected] of cases) {
     Object.assign(state, values, { tool });
     await controller.handleAction({ dataset: { mediaAction: "submit" } });
-    assert.deepEqual(snapshots.at(-1)[snapshotKey], expected);
+    const submitted = snapshots.at(-1);
+    assert.equal(submitted.derivationType, tool === "upscale" ? "outpaint" : tool);
+    assert.deepEqual(submitted.requestSnapshot[snapshotKey], expected);
   }
 
   state.open = true;
@@ -1577,6 +1693,9 @@ test("new Canvas CSS disables workflow motion when reduced motion is requested",
   assert.match(workbenchCss, /\.canvas-x6-mount \.x6-edge:is\(\.is-canvas-edge-connecting, \.is-canvas-edge-flowing\)[\s\S]*?animation:\s*none/);
   assert.match(css, /\.new-canvas-root \.canvas-x6-generation-track > i[\s\S]*?transition:\s*none !important/);
   assert.match(css, /\.new-canvas-root \.canvas-media-tools-drawer\.is-camera-studio[\s\S]*?\.canvas-camera-studio-presets button/);
+  assert.match(css, /\.new-canvas-root\[data-workbench-theme="daylight"\][\s\S]*?--new-canvas-field: #ffffff/);
+  assert.match(css, /\.new-canvas-root\[data-runtime-media-tools-surface\][\s\S]*?background:\s*transparent/);
+  assert.match(css, /\.new-canvas-root\[data-workbench-theme="daylight"\] \.canvas-media-tools-drawer input[\s\S]*?color:\s*var\(--new-canvas-foreground/);
   assert.match(css, /\.canvas-camera-studio-prompt p[\s\S]*?color:\s*var\(--new-canvas-foreground\)/);
   assert.match(css, /\.canvas-media-slice-stage\s*\{[\s\S]*?aspect-ratio:\s*16 \/ 9/);
   assert.match(css, /\.canvas-media-slice-stage > img\s*\{[\s\S]*?position:\s*absolute/);

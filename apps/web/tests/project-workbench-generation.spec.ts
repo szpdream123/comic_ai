@@ -55,6 +55,7 @@ import {
   reconcilePromptMentionMediaItemsForTest,
   reconcileSelectedStoryboardPendingGenerationForTest,
   registerTaskCenterTaskForTest,
+  discoverActiveTaskCenterTasksForTest,
   restorePendingAssetBatchGenerationTasksForTest,
   resolvePromptEditorMentionReferences,
   resumeCanvasGenerationPollingForTest,
@@ -125,7 +126,7 @@ import {
   videoModels,
 } from "../src/features/production-workbench/video-generation-panel.js";
 import { getLibraryAssetsForImport } from "../src/features/library-team/asset-library-page.js";
-import { resolveGenerationCreditCost } from "../src/features/production-workbench/generation-control-menu.js";
+import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost, resolveGenerationCreditCost } from "../src/features/production-workbench/generation-control-menu.js";
 
 it("keeps image billing modes distinct without changing video billing", () => {
   const pricing = {
@@ -143,6 +144,50 @@ it("keeps image billing modes distinct without changing video billing", () => {
   assert.equal(resolveGenerationCreditCost("image", controls, { pricing: { ...pricing, billingMode: "duration" } }), 160);
   assert.equal(resolveGenerationCreditCost("video", controls, { pricing: { ...pricing, billingMode: "fixed" } }), 160);
   assert.equal(resolveGenerationCreditCost("video", controls, { pricing: { ...pricing, billingMode: "duration" } }), 800);
+});
+
+it("quotes canvas video credits from the selected resolution and duration", () => {
+  const model = {
+    pricing: {
+      billingMode: "duration",
+      resolutionCredits: { "720P": 120, "1080P": 180 },
+    },
+  };
+  assert.equal(resolveCanvasRuntimeNodeCreditCost({
+    type: "ai-video",
+    data: { seedanceResolution: "720p", seedanceDuration: 3 },
+  }, model), 360);
+  assert.equal(resolveCanvasRuntimeNodeCreditCost({
+    type: "ai-video",
+    data: { videoResolution: "1080P", videoDuration: 5 },
+  }, model), 900);
+  assert.equal(resolveCanvasRuntimeNodeCreditCost({
+    type: "ai-video",
+    data: { resolution: "720P", duration: 3 },
+  }, model), 360);
+});
+
+it("quotes canvas video credits from general/ picker catalog ids", () => {
+  const catalogModel = {
+    id: "comic-ai/video/video-1",
+    modelId: "video-1",
+    pricing: {
+      billingMode: "duration",
+      resolutionCredits: { "720P": 120, "1080P": 180 },
+    },
+  };
+  assert.equal(
+    matchCanvasRuntimeCatalogModel([catalogModel], "general/comic-ai/video/video-1"),
+    catalogModel,
+  );
+  assert.equal(resolveCanvasRuntimeNodeCreditCost({
+    type: "ai-video",
+    data: {
+      model: "general/comic-ai/video/video-1",
+      seedanceResolution: "720P",
+      seedanceDuration: 3,
+    },
+  }, matchCanvasRuntimeCatalogModel([catalogModel], "general/comic-ai/video/video-1")), 360);
 });
 
 it("splits plain character prompt paragraphs into the character prompt list", () => {
@@ -5564,6 +5609,87 @@ describe("workbench generation payloads and inspectors", () => {
       assert.equal(workbench.ui.generationPollingActive, true);
       assert.equal(timers.length, 4);
       assert.equal(timers.at(-1).delayMs, 15_000);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("stops task-center discovery when the server has no generating tasks", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimeout() {},
+    };
+    const taskCenterCalls = [];
+    const workbench = {
+      api: {
+        async listTaskCenterTasks(params) {
+          taskCenterCalls.push(params);
+          return { items: [], page: 1, pageSize: 50, total: 0, hasNext: false };
+        },
+      },
+      ui: {
+        taskCenterTasksById: {
+          "stale-local-task": {
+            taskId: "stale-local-task",
+            status: "running",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        generationPollingActive: true,
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      await discoverActiveTaskCenterTasksForTest(workbench);
+
+      assert.deepEqual(taskCenterCalls, [{ page: 1, pageSize: 50, status: "active" }]);
+      assert.equal(workbench.taskCenterDiscoveryTimer ?? null, null);
+      assert.equal(workbench.ui.generationPollingActive, false);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("keeps task-center discovery while the server still has generating tasks", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimeout() {},
+    };
+    const workbench = {
+      api: {
+        async listTaskCenterTasks() {
+          return {
+            items: [{ taskId: "task-running-1", status: "running", createdAt: "2026-09-12T08:00:00.000Z" }],
+            page: 1,
+            pageSize: 50,
+            total: 1,
+            hasNext: false,
+          };
+        },
+      },
+      ui: {
+        taskCenterTasksById: {},
+        generationPollingActive: false,
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      await discoverActiveTaskCenterTasksForTest(workbench);
+
+      assert.equal(typeof workbench.taskCenterDiscoveryTimer, "number");
+      assert.equal(timers.some((timer) => timer.delayMs === 15_000), true);
     } finally {
       globalThis.window = previousWindow;
     }
@@ -42833,6 +42959,41 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasServerRevision, 7);
     assert.equal(workbench.ui.canvasSaveStatus, "saved");
     assert.equal(workbench.ui.canvasRevisionConflict ?? null, null);
+  });
+
+  it("does not persist Canvas node positions until the pointer is released", async () => {
+    const positionSaves = [];
+    const workbench = {
+      canvasNodeDragActive: true,
+      api: {
+        async saveCanvasNodePositions(canvasProjectId, payload) {
+          positionSaves.push({ canvasProjectId, payload });
+          return { canvas: { canvasProjectId, serverRevision: 7 } };
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 7,
+        canvasProjects: [{ id: "canvas-main", title: "画布" }],
+      }),
+    };
+
+    await persistCanvasNodePositionsForTest(workbench, [{ nodeKey: "node-1", x: 120, y: 80 }]);
+    assert.equal(positionSaves.length, 0);
+
+    workbench.canvasNodeDragActive = false;
+    await persistCanvasNodePositionsForTest(workbench, [{ nodeKey: "node-1", x: 180, y: 240 }]);
+    assert.equal(positionSaves.length, 1);
+    assert.deepEqual(positionSaves[0].payload.positions, [{ nodeKey: "node-1", x: 180, y: 240 }]);
+
+    const x6Source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+    assert.match(x6Source, /graph\.on\("node:moving"/);
+    assert.match(x6Source, /if \(!pointerReleased\) return;/);
+    assert.match(x6Source, /const dragging = workbench\.canvasNodeDragActive === true;/);
   });
 
   it("loads the Canvas document and user session concurrently", async () => {

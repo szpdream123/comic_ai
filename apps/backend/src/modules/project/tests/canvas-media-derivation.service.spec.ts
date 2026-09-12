@@ -154,6 +154,13 @@ describe("Canvas media derivation runtime", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     const fixture = await seedCanvas(db);
     try {
+      const upscaled = await startCanvasMediaDerivation(db, {
+        canvasProjectId: fixture.canvasId, nodeKey: "image-node", derivationType: "upscale",
+        baseCanvasRevision: 1, source: { assetId: null, assetVersionId: null, storageObjectId: null },
+        actorScope: fixture.scope, now: new Date("2026-07-30T00:59:00.000Z"),
+      });
+      assert.equal(upscaled.status, "queued");
+
       const attached = await startCanvasMediaDerivation(db, {
         canvasProjectId: fixture.canvasId, nodeKey: "image-node", derivationType: "crop",
         baseCanvasRevision: 1, source: { assetId: null, assetVersionId: null, storageObjectId: null },

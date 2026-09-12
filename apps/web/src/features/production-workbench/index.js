@@ -10447,6 +10447,8 @@ async function syncNewCanvasMount(workbench) {
         onDirectorDeskOpen: (node) => directorDeskOverlay?.open(node),
         onDirectorDeskSyncFrame: (node) => directorDeskOverlay?.syncCurrentFrame(node),
         onDirectorDeskExportVideo: (node) => directorDeskOverlay?.exportReferenceVideo(node),
+        onVideoEditorOpen: (nodeId, options = {}) => workbench.openCanvasVideoEditor?.(nodeId, options),
+        onVideoEditorOpenShotlist: (params = {}) => workbench.openCanvasVideoEditorForShotlist?.(params),
       }
     : {};
   // The AI Canvas adapter owns every Canvas detail route. The legacy X6
@@ -33276,6 +33278,7 @@ async function persistCanvasNodePositions(workbench, positions = []) {
     y: Number(position?.y),
   })).filter((position) => position.nodeKey && Number.isFinite(position.x) && Number.isFinite(position.y));
   if (!normalized.length) return null;
+  if (workbench.canvasNodeDragActive === true) return null;
   if (!projectId || projectId === DEFAULT_CANVAS_PROJECT_ID) {
     scheduleProjectCanvasSave(workbench, { delayMs: 0 });
     return null;
@@ -53224,6 +53227,20 @@ function isTaskCenterActiveStatus(status) {
     .has(String(status ?? "").trim().toLowerCase());
 }
 
+function isTaskCenterSucceededWithoutMedia(task) {
+  const status = resolveWorkflowStatus(task?.status ?? task?.workflowStatus);
+  if (status !== "completed" && status !== "succeeded") return false;
+  const mediaKind = task?.kind === "audio" || task?.mediaKind === "audio"
+    ? "audio"
+    : task?.kind === "video" || task?.mediaKind === "video"
+      ? "video"
+      : task?.kind === "text" || task?.mediaKind === "text"
+        ? "text"
+        : "image";
+  if (mediaKind === "text" || mediaKind === "audio") return false;
+  return !hasGenerationTaskMediaResult(task, mediaKind);
+}
+
 function isRecentlyRegisteredTaskCenterTask(task, now = Date.now()) {
   const createdAt = Date.parse(String(task?.createdAt ?? ""));
   return Number.isFinite(createdAt) && now - createdAt < TASK_CENTER_LOCAL_TASK_GRACE_MS;
@@ -53252,6 +53269,7 @@ async function discoverActiveTaskCenterTasks(workbench) {
     return;
   }
   workbench.taskCenterDiscoveryInFlight = true;
+  let shouldContinueDiscovery = false;
   try {
     const response = await workbench.api.listTaskCenterTasks({
       page: 1,
@@ -53259,6 +53277,9 @@ async function discoverActiveTaskCenterTasks(workbench) {
       status: "active",
     });
     const items = Array.isArray(response?.items) ? response.items : [];
+    shouldContinueDiscovery = items.some((task) =>
+      isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus)
+    ) || response?.hasNext === true || Boolean(String(response?.nextCursor ?? "").trim());
     let changed = reconcileTaskCenterActiveTasks(workbench, items, {
       complete: response?.hasNext !== true && !String(response?.nextCursor ?? "").trim(),
     });
@@ -53281,10 +53302,10 @@ async function discoverActiveTaskCenterTasks(workbench) {
       scheduleTaskCenterPolling(workbench);
     }
   } catch {
-    // Task-center discovery is background-only; opening the drawer still exposes retryable errors.
+    shouldContinueDiscovery = countTaskCenterActiveTasks(workbench) > 0;
   } finally {
     workbench.taskCenterDiscoveryInFlight = false;
-    if (collectTaskCenterTrackedTaskIds(workbench).length) {
+    if (shouldContinueDiscovery) {
       scheduleTaskCenterDiscovery(workbench);
     }
   }
@@ -53292,7 +53313,10 @@ async function discoverActiveTaskCenterTasks(workbench) {
 
 function countTaskCenterActiveTasks(workbench) {
   return Object.values(workbench?.ui?.taskCenterTasksById ?? {})
-    .filter((task) => isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus))
+    .filter((task) =>
+      isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus)
+      || isTaskCenterSucceededWithoutMedia(task)
+    )
     .length;
 }
 
@@ -53483,12 +53507,21 @@ function collectTaskCenterTrackedTaskIds(workbench) {
       }
       return;
     }
-    if (taskId && !isGenerationTaskTerminalStatus(knownTask?.status ?? knownTask?.workflowStatus)) {
+    if (
+      taskId
+      && (
+        !isGenerationTaskTerminalStatus(knownTask?.status ?? knownTask?.workflowStatus)
+        || isTaskCenterSucceededWithoutMedia(knownTask)
+      )
+    ) {
       taskIds.add(taskId);
     }
   };
   Object.values(workbench.ui.taskCenterTasksById ?? {})
-    .filter((task) => isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus))
+    .filter((task) =>
+      isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus)
+      || isTaskCenterSucceededWithoutMedia(task)
+    )
     .forEach(add);
   [workbench.ui.imageGenerationResult, workbench.ui.videoGenerationResult]
     .filter((task) => isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus ?? task?.platform?.workflowStatus))
@@ -53633,25 +53666,35 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   if (!canvasTargets.length && workbench.ui.canvasDocument) {
     const targetType = String(task?.targetType ?? "").trim().toLowerCase();
     const targetNodeId = String(task?.targetId ?? task?.target?.nodeId ?? "").trim();
-    const targetNode = targetNodeId
-      ? workbench.ui.canvasDocument.nodes?.find?.((node) => String(node?.id ?? "") === targetNodeId)
-      : null;
+    const nodes = Array.isArray(workbench.ui.canvasDocument.nodes) ? workbench.ui.canvasDocument.nodes : [];
+    const generatingStatuses = ["loading", "queued", "running", "processing", "pending", "submitted"];
+    const terminalStatuses = ["completed", "succeeded", "failed", "canceled", "cancelled", "result_unknown", "manual_review_required"];
+    const loadingNodes = nodes.filter((node) =>
+      generatingStatuses.includes(String(node?.data?.status ?? "").trim().toLowerCase())
+    );
+    const unboundLoadingNodes = loadingNodes.filter((node) => !resolveCanvasNodeTaskId(workbench.ui.canvasDocument, node.id));
+    const matchedNode = nodes.find((node) => String(node?.id ?? "") === targetNodeId)
+      ?? (
+        ["canvas", "canvas_node"].includes(targetType)
+          ? unboundLoadingNodes.at(-1) ?? loadingNodes.at(-1) ?? null
+          : null
+      );
     if (
-      targetNode &&
+      matchedNode &&
       ["canvas", "canvas_node"].includes(targetType) &&
-      ["loading", "queued", "running", "processing", "completed", "succeeded", "failed", "canceled", "cancelled", "result_unknown", "manual_review_required"].includes(
-        String(targetNode.data?.status ?? "").trim().toLowerCase(),
+      [...generatingStatuses, ...terminalStatuses].includes(
+        String(matchedNode.data?.status ?? "").trim().toLowerCase(),
       )
     ) {
       canvasTargets.push({
-        nodeId: targetNodeId,
+        nodeId: String(matchedNode.id),
         taskId,
         preview: {
           ok: true,
-          nodeId: targetNodeId,
+          nodeId: String(matchedNode.id),
           mediaKind,
-          modelCode: String(targetNode.data?.modelCode ?? task?.modelCode ?? ""),
-          prompt: String(targetNode.data?.prompt ?? task?.prompt ?? ""),
+          modelCode: String(matchedNode.data?.modelCode ?? task?.modelCode ?? ""),
+          prompt: String(matchedNode.data?.prompt ?? task?.prompt ?? ""),
           taskId,
           upstreamNodeIds: [],
           upstreamTextFragments: [],
@@ -53659,7 +53702,7 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
       });
     }
   }
-  if (canvasTargets.length && workbench.ui.canvasDocument) {
+  if (canvasTargets.length && workbench.ui.canvasDocument && !isTaskCenterSucceededWithoutMedia(task)) {
     let document = workbench.ui.canvasDocument;
     canvasTargets.forEach((target) => {
       options.affectedCanvasNodeIds?.add?.(String(target.nodeId));

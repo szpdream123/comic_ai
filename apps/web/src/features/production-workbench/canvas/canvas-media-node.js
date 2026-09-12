@@ -353,9 +353,16 @@ export function resolveCanvasMediaArtifactPatch(task = null) {
   const primary = candidates[0] ?? {};
   const assetVersionId = firstText(result.assetVersionId, primary.assetVersionId, primary.versionId);
   const storageObjectId = firstText(result.storageObjectId, primary.storageObjectId);
+  const thumbnailUrl = firstText(
+    result.thumbnailUrl,
+    result.posterUrl,
+    primary.thumbnailUrl,
+    primary.posterUrl,
+  );
   return {
     ...(assetVersionId ? { assetVersionId } : {}),
     ...(storageObjectId ? { storageObjectId } : {}),
+    ...(thumbnailUrl ? { thumbnailUrl, posterUrl: firstText(result.posterUrl, primary.posterUrl, thumbnailUrl) } : {}),
   };
 }
 
@@ -373,11 +380,13 @@ export function reconcileCanvasMediaDocumentSources(document = {}, assets = []) 
     const storageObjectId = firstText(generatedAsset?.storageObjectId, identity.storageObjectId);
     const assetVersionId = firstText(generatedAsset?.assetVersionId, identity.assetVersionId);
     const mediaUrl = firstText(generatedAsset?.url, generatedAsset?.previewUrl);
-    if (!storageObjectId && !assetVersionId && !mediaUrl) return node;
+    const posterUrl = firstText(generatedAsset?.posterUrl, generatedAsset?.thumbnailUrl);
+    if (!storageObjectId && !assetVersionId && !mediaUrl && !posterUrl) return node;
     if (
       String(node?.data?.storageObjectId ?? "").trim() === storageObjectId
       && String(node?.data?.assetVersionId ?? "").trim() === assetVersionId
       && (!mediaUrl || String(node?.data?.previewUrl ?? "").trim() === mediaUrl)
+      && (!posterUrl || String(node?.data?.thumbnailUrl ?? node?.data?.posterUrl ?? "").trim() === posterUrl)
     ) return node;
     changed = true;
     return {
@@ -387,6 +396,7 @@ export function reconcileCanvasMediaDocumentSources(document = {}, assets = []) 
         ...(storageObjectId ? { storageObjectId } : {}),
         ...(assetVersionId ? { assetVersionId } : {}),
         ...(mediaUrl ? { previewUrl: mediaUrl, resultUrl: mediaUrl, url: mediaUrl } : {}),
+        ...(kind === "video" && posterUrl && posterUrl !== mediaUrl ? { posterUrl, thumbnailUrl: posterUrl } : {}),
         ...(generatedAsset ? { status: "completed" } : {}),
       },
     };

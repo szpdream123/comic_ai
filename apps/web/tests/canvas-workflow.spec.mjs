@@ -1491,6 +1491,8 @@ describe("canvas workflow document", () => {
     assert.equal(resultNode.data.status, "completed");
     assert.equal(resultNode.data.storageObjectId, "10000000-0000-4000-8000-000000000123");
     assert.equal(resultNode.data.previewUrl, "https://example.test/canvas-generated.png");
+    assert.equal(sendNode.data.imageUrl, "https://example.test/canvas-generated.png");
+    assert.equal(resultNode.data.imageUrl, "https://example.test/canvas-generated.png");
   });
 
   it("maps generation task stages to the fixed canvas progress milestones", () => {

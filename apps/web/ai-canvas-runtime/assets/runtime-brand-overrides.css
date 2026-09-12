@@ -24,11 +24,13 @@
   padding: 0 10px 0 2px;
 }
 
-.app-header .app-brand > span {
+.app-header > div:first-child > span,
+.app-header .app-brand > span:not([data-host-header-chevron]) {
   display: none;
 }
 
 /* Use the product favicon shown in the workbench for the canvas brand mark. */
+.app-header > div:first-child > div:first-child,
 .app-header .app-brand > div:first-child {
   width: 34px !important;
   height: 34px !important;
@@ -36,6 +38,7 @@
   background: url("/assets/brand/lingxi-ai-favicon.png") center / cover no-repeat !important;
 }
 
+.app-header > div:first-child > div:first-child > svg,
 .app-header .app-brand > div:first-child > svg {
   display: none;
 }
@@ -115,8 +118,47 @@
 }
 
 .app-header .app-header-create-divider,
-.app-header .app-header-create-canvas {
+.app-header .app-header-create-canvas,
+.app-header > button[aria-label="新建画布"],
+.app-header > button[aria-label="正在新建画布"] {
   display: none;
+}
+
+.app-header [data-host-header-chrome] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
+.app-header [data-host-header-chrome] [contenteditable="true"] {
+  order: 0;
+}
+
+.app-header [data-host-header-chrome] .app-header-project-switch {
+  order: 1;
+}
+
+.app-header [data-host-header-chrome] .app-header-help {
+  order: 2;
+}
+
+.app-header > span.max-w-\\[110px\\],
+.app-header > span.text-\\[11px\\].text-canvas-text-muted {
+  display: none;
+}
+
+.app-header [contenteditable="true"] {
+  min-width: 0 !important;
+  max-width: 150px !important;
+  overflow: hidden;
+  color: var(--theme-text, #f5f7fb);
+  font-size: 18px !important;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 !important;
 }
 
 /* Canvas selection is a bounded dropdown below the compact header. */
@@ -563,42 +605,33 @@
   max-height: 22px !important;
 }
 
-/* The host canvas toolbar has a compact icon-only rule for its own controls.
-   The assistant model picker is a labelled control, so give it enough room
-   for the current model name and keep the label visible. */
-.new-canvas-root .chat-panel-input-toolbar .model-selector {
-  flex: 0 1 156px !important;
-  width: 156px !important;
-  min-width: 112px !important;
-  max-width: 190px !important;
-}
-
-.new-canvas-root .chat-panel-input-toolbar .model-selector-trigger {
-  width: 100% !important;
-  min-width: 112px !important;
-  height: 32px !important;
-  justify-content: flex-start !important;
-  padding: 0 7px !important;
-  white-space: nowrap !important;
-  writing-mode: horizontal-tb !important;
-}
-
-.new-canvas-root .chat-panel-input-toolbar .model-selector-label {
-  display: block !important;
-  min-width: 0 !important;
-  max-width: none !important;
-  flex: 1 1 auto !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  white-space: nowrap !important;
-  writing-mode: horizontal-tb !important;
-}
-
-.new-canvas-root .chat-panel-input-toolbar .model-selector-trigger .caret {
-  display: block !important;
-  width: 10px !important;
-  height: 10px !important;
+.new-canvas-root .chat-panel-input-toolbar .model-selector,
+.new-canvas-root .prompt-footer > .model-selector,
+.new-canvas-root .model-selector {
   flex: 0 0 auto !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+}
+
+.new-canvas-root .chat-panel-input-toolbar .model-selector-trigger,
+.new-canvas-root .prompt-footer .model-selector-trigger,
+.new-canvas-root .model-selector-trigger {
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  justify-content: center !important;
+  gap: 0 !important;
+  padding: 0 !important;
+}
+
+.new-canvas-root .chat-panel-input-toolbar .model-selector-label,
+.new-canvas-root .prompt-footer .model-selector-label,
+.new-canvas-root .model-selector-label,
+.new-canvas-root .chat-panel-input-toolbar .model-selector-trigger .caret,
+.new-canvas-root .prompt-footer .model-selector-trigger .caret,
+.new-canvas-root .model-selector-trigger .caret {
+  display: none !important;
 }
 
 /* Keep node prompt controls at the same scale as the model glyph and avoid
@@ -617,7 +650,8 @@
    Keep this scoped to node prompts so the assistant toolbar can retain its
    wider model picker treatment. */
 .new-canvas-root .prompt-footer .model-selector-icon,
-.new-canvas-root .prompt-footer .model-selector-icon svg {
+.new-canvas-root .prompt-footer .model-selector-icon svg,
+.new-canvas-root .prompt-footer .model-selector-icon::before {
   width: 16px !important;
   height: 16px !important;
   max-width: 16px !important;
@@ -625,8 +659,8 @@
 }
 
 .new-canvas-root .prompt-footer .model-selector-trigger {
-  gap: 4px !important;
-  padding: 4px 6px !important;
+  gap: 0 !important;
+  padding: 0 !important;
   font-size: 12px !important;
 }
 
@@ -635,6 +669,16 @@
 .new-canvas-root .prompt-footer .prompt-credit-cost {
   font-size: 12px !important;
   line-height: 1.2 !important;
+}
+
+.new-canvas-root .prompt-footer .prompt-credit-cost {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 28px !important;
+  padding: 0 8px !important;
+  color: var(--new-canvas-muted, var(--text-muted, #6b7280)) !important;
+  font-weight: 650 !important;
+  white-space: nowrap !important;
 }
 
 .new-canvas-root .prompt-footer .img-pill-btn {
@@ -1180,7 +1224,7 @@
   border-radius: 16px !important;
 }
 
-.fullscreen-overlay button,
+.fullscreen-overlay button:not(.ui-btn),
 .crop-overlay button,
 .expand-overlay button,
 .composer-overlay button,
@@ -1193,6 +1237,24 @@
   min-width: 48px !important;
   font-size: 15px !important;
   line-height: 1.2 !important;
+}
+
+.fullscreen-overlay .ui-btn--lg {
+  min-width: 48px !important;
+  min-height: 48px !important;
+  width: 48px !important;
+  height: 48px !important;
+  padding: 0 !important;
+  flex: 0 0 48px !important;
+}
+
+.fullscreen-overlay [class*="justify-between"] {
+  justify-content: space-between !important;
+  gap: 0 !important;
+  left: 12px !important;
+  right: 12px !important;
+  width: auto !important;
+  transform: translateY(-50%) !important;
 }
 
 .fullscreen-overlay .crop-aspect-btn,
@@ -1394,7 +1456,9 @@
 .new-canvas-root .chat-panel-input-area,
 .ai-canvas-standalone-mount .chat-panel,
 .ai-canvas-standalone-mount .chat-panel-header,
-.ai-canvas-standalone-mount .chat-panel-input-area {
+.ai-canvas-standalone-mount .chat-panel-input-area,
+.new-canvas-root .chat-panel *,
+.ai-canvas-standalone-mount .chat-panel * {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
@@ -1405,6 +1469,226 @@
 .canvas-radial-editor,
 [data-canvas-radial-menu] {
   display: none !important;
+}
+
+/* Restore the previous four-corner chrome after the upstream runtime
+   split zoom/minimap/drawing tools into separate React Flow panels. */
+.new-canvas-root .sidebar-floating,
+.ai-canvas-standalone-mount .sidebar-floating {
+  position: absolute !important;
+  top: 12px !important;
+  left: auto !important;
+  right: 12px !important;
+  width: max-content !important;
+  max-width: calc(100% - 24px) !important;
+  height: auto !important;
+  flex-direction: row !important;
+  transform: none !important;
+}
+
+.new-canvas-root .app-shell:has(.chat-panel) .sidebar-floating,
+.ai-canvas-standalone-mount .app-shell:has(.chat-panel) .sidebar-floating {
+  right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+}
+
+.new-canvas-root .react-flow__panel.canvas-drawing-toolbar-slot.bottom.left,
+.ai-canvas-standalone-mount .react-flow__panel.canvas-drawing-toolbar-slot.bottom.left {
+  left: 50% !important;
+  bottom: 12px !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  margin: 0 !important;
+  overflow: visible !important;
+}
+
+.new-canvas-root .canvas-drawing-toolbar,
+.ai-canvas-standalone-mount .canvas-drawing-toolbar {
+  gap: 6px !important;
+  padding: 6px !important;
+}
+
+.new-canvas-root .canvas-drawing-tool,
+.ai-canvas-standalone-mount .canvas-drawing-tool {
+  width: 40px !important;
+  height: 40px !important;
+  flex: 0 0 40px !important;
+}
+
+.new-canvas-root .canvas-drawing-tool-separator,
+.ai-canvas-standalone-mount .canvas-drawing-tool-separator {
+  flex: 0 0 1px !important;
+  width: 1px !important;
+  height: 20px !important;
+  margin: 0 2px !important;
+}
+
+.new-canvas-root .canvas-drawing-toolbar-wrap,
+.ai-canvas-standalone-mount .canvas-drawing-toolbar-wrap {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  overflow: visible !important;
+}
+
+.new-canvas-root .canvas-note-style-panel-anchor,
+.ai-canvas-standalone-mount .canvas-note-style-panel-anchor {
+  position: absolute !important;
+  left: clamp(144px, calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px), calc(100% - 144px)) !important;
+  right: auto !important;
+  bottom: calc(100% + 8px) !important;
+  transform: translateX(-50%) !important;
+  z-index: 41 !important;
+  pointer-events: auto !important;
+}
+
+.new-canvas-root .canvas-note-style-panel-anchor .canvas-note-style-panel,
+.ai-canvas-standalone-mount .canvas-note-style-panel-anchor .canvas-note-style-panel {
+  max-height: min(70vh, calc(100vh - 160px));
+}
+
+.new-canvas-root .group\/series,
+.ai-canvas-standalone-mount .group\/series {
+  top: 0 !important;
+  right: 0 !important;
+  left: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+  align-items: center !important;
+  justify-content: center !important;
+  pointer-events: none !important;
+}
+
+.new-canvas-root .group\/series:has(aside[aria-hidden="false"]),
+.ai-canvas-standalone-mount .group\/series:has(aside[aria-hidden="false"]) {
+  pointer-events: auto !important;
+  background: color-mix(in srgb, var(--theme-app-background, #08111b) 42%, transparent) !important;
+}
+
+.new-canvas-root .group\/series > button,
+.ai-canvas-standalone-mount .group\/series > button {
+  display: none !important;
+}
+
+.new-canvas-root .group\/series aside,
+.ai-canvas-standalone-mount .group\/series aside {
+  position: relative !important;
+  top: auto !important;
+  right: auto !important;
+  left: auto !important;
+  --tw-translate-x: 0px !important;
+  --tw-translate-y: 0px !important;
+  transform: none !important;
+  width: min(420px, calc(100vw - 48px)) !important;
+  max-height: min(72vh, 640px) !important;
+}
+
+.new-canvas-root .group\/series aside[aria-hidden="true"],
+.ai-canvas-standalone-mount .group\/series aside[aria-hidden="true"] {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.new-canvas-root .react-flow__panel.bottom.right:has(.footer-toolbar),
+.ai-canvas-standalone-mount .react-flow__panel.bottom.right:has(.footer-toolbar) {
+  left: 12px !important;
+  right: auto !important;
+  bottom: 12px !important;
+  transform: none !important;
+  margin: 0 !important;
+}
+
+.new-canvas-root .react-flow__controls.canvas-controls,
+.ai-canvas-standalone-mount .react-flow__controls.canvas-controls {
+  position: absolute !important;
+  left: auto !important;
+  right: 12px !important;
+  bottom: 12px !important;
+  margin: 0 !important;
+  transform: none !important;
+  display: flex !important;
+  flex-direction: row !important;
+  z-index: 5 !important;
+}
+
+.new-canvas-root .app-shell:has(.chat-panel) .react-flow__controls.canvas-controls,
+.ai-canvas-standalone-mount .app-shell:has(.chat-panel) .react-flow__controls.canvas-controls {
+  right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+}
+
+.new-canvas-root .footer-toolbar .react-flow__controls.canvas-controls,
+.ai-canvas-standalone-mount .footer-toolbar .react-flow__controls.canvas-controls {
+  position: static !important;
+  inset: auto !important;
+  right: auto !important;
+  margin: 0 !important;
+  transform: none !important;
+  display: flex !important;
+  flex-direction: row !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+.new-canvas-root .react-flow__minimap,
+.ai-canvas-standalone-mount .react-flow__minimap {
+  left: 12px !important;
+  right: auto !important;
+  bottom: 72px !important;
+  transform: none !important;
+}
+
+.new-canvas-root .minimap-stats-zone,
+.ai-canvas-standalone-mount .minimap-stats-zone {
+  position: absolute !important;
+  left: 12px !important;
+  right: auto !important;
+  bottom: 72px !important;
+  width: 180px !important;
+  height: 120px !important;
+  margin: 0 !important;
+  transform: none !important;
+  overflow: visible !important;
+  z-index: 7 !important;
+}
+
+.new-canvas-root .minimap-stats-zone > .react-flow__minimap,
+.ai-canvas-standalone-mount .minimap-stats-zone > .react-flow__minimap {
+  position: relative !important;
+  inset: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  margin: 0 !important;
+}
+
+.new-canvas-root .minimap-stats-card,
+.ai-canvas-standalone-mount .minimap-stats-card {
+  position: absolute !important;
+  left: 0 !important;
+  right: auto !important;
+  bottom: calc(100% + 8px) !important;
+  min-width: 152px;
+  padding: 8px 10px;
+  border: 1px solid var(--theme-border, rgba(120, 140, 170, .28));
+  border-radius: 8px;
+  background: var(--theme-surface, #f7f8fb);
+  box-shadow: var(--glass-shadow-floating, 0 12px 28px rgba(0, 0, 0, .18));
+  color: var(--theme-text, #1f2430);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.new-canvas-root .chat-panel,
+.ai-canvas-standalone-mount .chat-panel {
+  top: 12px !important;
+  bottom: 12px !important;
+  height: auto !important;
+  width: var(--chat-panel-width, min(600px, calc(100vw - 24px))) !important;
+  max-width: calc(100vw - 24px) !important;
 }
 
 /* Match series-rail and script-workbench type/icons to the canvas header. */
@@ -1471,4 +1755,51 @@
   height: 34px !important;
   min-width: 34px !important;
   min-height: 34px !important;
+}
+
+.new-canvas-root .generation-progress-overlay,
+.ai-canvas-standalone-mount .generation-progress-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 20px;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 12px;
+  color: var(--theme-text);
+  background: color-mix(in srgb, var(--theme-card) 90%, transparent);
+}
+
+.new-canvas-root .generation-progress-overlay .spinner,
+.ai-canvas-standalone-mount .generation-progress-overlay .spinner {
+  width: 44px;
+  height: 44px;
+}
+
+.new-canvas-root .model-selector-trigger,
+.ai-canvas-standalone-mount .model-selector-trigger {
+  position: relative !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+}
+
+.new-canvas-root .model-selector-trigger::after,
+.ai-canvas-standalone-mount .model-selector-trigger::after {
+  content: "" !important;
+  position: absolute !important;
+  inset: 8px !important;
+  background-color: var(--theme-text, #111827) !important;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='6' width='12' height='12' rx='2'/><rect x='9' y='9' width='6' height='6' rx='1'/><path d='M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'/></svg>") center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='6' width='12' height='12' rx='2'/><rect x='9' y='9' width='6' height='6' rx='1'/><path d='M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'/></svg>") center / contain no-repeat;
+}
+
+.new-canvas-root .model-selector-trigger > *,
+.ai-canvas-standalone-mount .model-selector-trigger > * {
+  visibility: hidden !important;
 }

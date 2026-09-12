@@ -4,6 +4,7 @@ import {
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
 import { normalizeAiCanvasRuntimeGrouping } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
@@ -19,7 +20,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-1";
+   stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-19";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -69,32 +70,67 @@ function createAiCanvasRuntimeThemeBridge(surface, theme) {
   };
 }
 
+const AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY = "ai-canvas.mascot.visible";
+
+function shouldShowAiCanvasRuntimeMascot() {
+  try {
+    return localStorage.getItem(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function persistAiCanvasRuntimeMascotVisible(visible) {
+  try {
+    localStorage.setItem(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY, visible ? "true" : "false");
+  } catch {}
+}
+
 function createAiCanvasRuntimeConfigBridge(store, theme) {
   if (!store?.getState || !store?.setState) {
     return { update() {}, dispose() {} };
   }
   let currentTheme = normalizeAiCanvasTheme(theme);
+  let mascotHiddenByUser = shouldShowAiCanvasRuntimeMascot() === false;
   const applyConfig = () => {
     const state = store.getState();
     const config = state?.config;
     if (!config || typeof config !== "object") return;
     const canvasBackground = currentTheme === "light" ? "off-white" : "default";
-    if (config.theme === currentTheme && config.canvasBackground === canvasBackground) return;
+    const mascotVisible = mascotHiddenByUser ? false : true;
+    if (
+      config.theme === currentTheme
+      && config.canvasBackground === canvasBackground
+      && config.mascotVisible === mascotVisible
+    ) return;
     store.setState({
       config: {
         ...config,
         theme: currentTheme,
         canvasBackground,
+        mascotVisible,
       },
     });
   };
   applyConfig();
   const unsubscribe = store.subscribe?.((nextState, previousState) => {
     if (nextState?.config === previousState?.config) return;
+    if (previousState?.configHydrated !== false && nextState?.configHydrated !== false) {
+      if (previousState?.config?.mascotVisible === true && nextState?.config?.mascotVisible === false) {
+        mascotHiddenByUser = true;
+        persistAiCanvasRuntimeMascotVisible(false);
+      }
+      if (previousState?.config?.mascotVisible === false && nextState?.config?.mascotVisible === true) {
+        mascotHiddenByUser = false;
+        persistAiCanvasRuntimeMascotVisible(true);
+      }
+    }
     const expectedBackground = currentTheme === "light" ? "off-white" : "default";
+    const expectedMascotVisible = mascotHiddenByUser ? false : true;
     if (
       nextState?.config?.theme === currentTheme
       && nextState?.config?.canvasBackground === expectedBackground
+      && nextState?.config?.mascotVisible === expectedMascotVisible
     ) {
       return;
     }
@@ -109,6 +145,38 @@ function createAiCanvasRuntimeConfigBridge(store, theme) {
       unsubscribe?.();
     },
   };
+}
+
+function resolveAiCanvasRuntimeModelPricing(model = {}) {
+  const merged = {};
+  for (const value of [model?.pricing, model?.pricingJson, model?.pricing_json]) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      Object.assign(merged, value);
+    }
+  }
+  const extras = {
+    baseCredits: model?.baseCredits ?? model?.base_credits,
+    billingMode: model?.billingMode ?? model?.billing_mode,
+    resolutionCredits: model?.resolutionCredits ?? model?.resolution_credits,
+    credits: model?.credits,
+    displayBaseCost: model?.displayBaseCost,
+  };
+  for (const [key, value] of Object.entries(extras)) {
+    if (value !== undefined && merged[key] === undefined) merged[key] = value;
+  }
+  if (merged.baseCredits === undefined && extras.displayBaseCost !== undefined) {
+    merged.baseCredits = extras.displayBaseCost;
+  }
+  if (merged.base_credits === undefined && merged.baseCredits !== undefined) {
+    merged.base_credits = merged.baseCredits;
+  }
+  if (merged.billing_mode === undefined && merged.billingMode !== undefined) {
+    merged.billing_mode = merged.billingMode;
+  }
+  if (merged.resolution_credits === undefined && merged.resolutionCredits !== undefined) {
+    merged.resolution_credits = merged.resolutionCredits;
+  }
+  return Object.keys(merged).length ? merged : undefined;
 }
 
 function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
@@ -229,7 +297,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
           ...(defaults.aspectRatio != null || defaults.ratio != null ? { defaultRatio: String(defaults.aspectRatio ?? defaults.ratio) } : {}),
           ...(defaults.durationSec != null ? { defaultDuration: Number(defaults.durationSec) } : {}),
         } : undefined,
-        pricing: model?.pricing && typeof model.pricing === "object" ? sanitizeCatalogValue(model.pricing) : undefined,
+        pricing: sanitizeCatalogValue(resolveAiCanvasRuntimeModelPricing(model)),
         source: "comic-ai-backend",
       };
     })
@@ -414,7 +482,7 @@ function inferAiCanvasRuntimeNodeType(node) {
   return type || "ai-text";
 }
 
-function normalizeAiCanvasRuntimeNode(node, index = 0) {
+function normalizeAiCanvasRuntimeNode(node, index = 0, options = {}) {
   if (!node || typeof node !== "object") return null;
   const type = inferAiCanvasRuntimeNodeType(node);
   const data = node.data && typeof node.data === "object" ? { ...node.data } : {};
@@ -422,11 +490,20 @@ function normalizeAiCanvasRuntimeNode(node, index = 0) {
   const label = String(data.label ?? data.title ?? node.title ?? "").trim()
     || (type === "comment" ? "备注" : "生成节点");
   const rawStatus = String(data.status ?? "").trim().toLowerCase();
-  const status = ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus)
+  const mediaUrl = String(data.imageUrl ?? data.videoUrl ?? data.previewUrl ?? data.resultUrl ?? data.url ?? "").trim();
+  const generating = ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus);
+  const staleGenerating = options.recoverStaleGenerating === true
+    && generating
+    && !String(data.taskId ?? data.lastTaskId ?? data.generationTaskId ?? "").trim();
+  const status = staleGenerating
+    ? (mediaUrl ? "success" : "idle")
+    : generating
     ? "loading"
     : rawStatus === "ready" || rawStatus === "empty"
       ? "idle"
-      : data.status ?? "idle";
+      : rawStatus === "completed" || rawStatus === "succeeded"
+        ? "success"
+        : data.status ?? "idle";
   const nextData = {
     ...data,
     label,
@@ -480,10 +557,10 @@ function normalizeAiCanvasRuntimeEdge(edge, index = 0) {
   };
 }
 
-function normalizeAiCanvasRuntimeDocument(document, canvasProjectId = "") {
+function normalizeAiCanvasRuntimeDocument(document, canvasProjectId = "", options = {}) {
   const source = document && typeof document === "object" ? document : {};
   const nodes = (Array.isArray(source.nodes) ? source.nodes : [])
-    .map(normalizeAiCanvasRuntimeNode)
+    .map((node, index) => normalizeAiCanvasRuntimeNode(node, index, options))
     .filter(Boolean);
   const grouping = normalizeAiCanvasRuntimeGrouping(nodes, source.groups);
   const nodeIds = new Set(grouping.nodes.map((node) => String(node?.id ?? "")).filter(Boolean));
@@ -511,6 +588,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     ? normalizeAiCanvasRuntimeDocument(
         context.document ?? context.canvasDocument,
         currentProjectId,
+        { recoverStaleGenerating: true },
       )
     : null;
   const originalState = store.getState();
@@ -878,15 +956,404 @@ function shouldOpenAiCanvasRuntimeAssistant() {
   }
 }
 
+function persistAiCanvasRuntimeAssistantOpen(open) {
+  try {
+    localStorage.setItem(AI_CANVAS_CHAT_OPEN_STORAGE_KEY, open ? "true" : "false");
+  } catch {}
+}
+
+function openAiCanvasRuntimeAssistant(runtimeStore) {
+  if (!shouldOpenAiCanvasRuntimeAssistant()) return;
+  const state = runtimeStore?.getState?.();
+  state?.setChatPanelDetached?.(false);
+  state?.openChat?.();
+}
+
+function escapeAiCanvasHeaderText(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {}) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  const doc = surface?.ownerDocument ?? globalThis.document;
+  if (!root || !doc?.createElement) return () => {};
+
+  let disposed = false;
+  let openMenu = "";
+  let actionProjectId = "";
+
+  const closeMenus = () => {
+    openMenu = "";
+    actionProjectId = "";
+    root.querySelectorAll?.("[data-host-header-menu]").forEach((node) => node.remove());
+    root.querySelectorAll?.("[data-host-header-expanded]").forEach((node) => {
+      node.removeAttribute("data-host-header-expanded");
+      node.setAttribute("aria-expanded", "false");
+      node.classList.remove("is-active");
+    });
+  };
+
+  const currentState = () => runtimeStore?.getState?.() ?? {};
+  const currentProjects = () => (Array.isArray(currentState().projects) ? currentState().projects : []);
+  const currentProjectId = () => String(currentState().currentProjectId ?? context.currentProjectId ?? "").trim();
+
+  const renderBrandMenu = (header) => {
+    const menu = doc.createElement("div");
+    menu.className = "app-brand-menu";
+    menu.dataset.hostHeaderMenu = "brand";
+    menu.setAttribute("role", "menu");
+    const currentId = currentProjectId();
+    menu.innerHTML = `
+      <button type="button" role="menuitem" data-host-header-action="open-home">回到主页</button>
+      <button type="button" role="menuitem" data-host-header-action="open-projects">全部项目</button>
+      <button type="button" role="menuitem" data-host-header-action="create-project">创建新项目</button>
+      ${currentId ? `<div></div><button type="button" role="menuitem" data-host-header-action="delete-project" data-project-id="${escapeAiCanvasHeaderText(currentId)}">删除项目</button>` : ""}
+    `;
+    const brand = header.querySelector("[data-host-header-brand]");
+    if (brand) brand.after(menu);
+    else header.append(menu);
+  };
+
+  const renderProjectMenu = (header) => {
+    const projects = currentProjects();
+    const currentId = currentProjectId();
+    const creating = currentState().isCreatingProject === true;
+    const menu = doc.createElement("div");
+    menu.className = "app-canvas-project-menu";
+    menu.dataset.hostHeaderMenu = "projects";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `
+      <div class="app-canvas-project-menu-title">
+        <span>${creating ? "正在新建画布" : "画布"}</span>
+        <button type="button" class="app-canvas-project-create" data-host-header-action="create-project" ${creating ? "disabled" : ""} aria-label="${creating ? "正在新建画布" : "新建画布"}">+</button>
+      </div>
+      <div class="app-canvas-project-list">
+        ${projects.length ? projects.map((project) => {
+          const id = String(project?.id ?? "");
+          const name = String(project?.name ?? project?.title ?? "未命名画布");
+          const current = id === currentId;
+          return `<div class="app-canvas-project-row${current ? " is-current" : ""}">
+            <button type="button" class="app-canvas-project-select" data-host-header-action="switch-project" data-project-id="${escapeAiCanvasHeaderText(id)}">
+              <span>${escapeAiCanvasHeaderText(name)}</span>
+              ${current ? `<span class="app-canvas-project-check">✓</span>` : ""}
+            </button>
+            <button type="button" class="app-canvas-project-more" data-host-header-action="toggle-project-actions" data-project-id="${escapeAiCanvasHeaderText(id)}" aria-label="画布操作">⋯</button>
+          </div>`;
+        }).join("") : `<div class="app-canvas-project-empty">暂无画布</div>`}
+      </div>
+    `;
+    header.append(menu);
+    if (actionProjectId) renderProjectActionsMenu(header, actionProjectId);
+  };
+
+  const renderProjectActionsMenu = (header, projectId) => {
+    header.querySelector("[data-host-header-menu='actions']")?.remove();
+    const menu = doc.createElement("div");
+    menu.className = "app-canvas-project-actions-menu";
+    menu.dataset.hostHeaderMenu = "actions";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `
+      <button type="button" class="app-canvas-project-action" data-host-header-action="rename-project" data-project-id="${escapeAiCanvasHeaderText(projectId)}">重命名画布</button>
+      <button type="button" class="app-canvas-project-action" data-host-header-action="duplicate-project" data-project-id="${escapeAiCanvasHeaderText(projectId)}">复制画布</button>
+      <button type="button" class="app-canvas-project-action is-danger" data-host-header-action="delete-project" data-project-id="${escapeAiCanvasHeaderText(projectId)}">删除画布</button>
+    `;
+    header.append(menu);
+  };
+
+  const bindHeader = (header) => {
+    if (!header) return;
+    const brand = header.querySelector(":scope > div:first-child");
+    if (brand && !brand.dataset.hostHeaderBrand) {
+      brand.dataset.hostHeaderBrand = "true";
+      brand.classList.add("app-brand", "app-header-brand");
+      brand.setAttribute("role", "button");
+      brand.setAttribute("tabindex", "0");
+      brand.setAttribute("aria-label", "画布菜单");
+      brand.setAttribute("aria-expanded", "false");
+      if (!brand.querySelector("[data-host-header-chevron]")) {
+        const chevron = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+        chevron.setAttribute("viewBox", "0 0 24 24");
+        chevron.setAttribute("width", "14");
+        chevron.setAttribute("height", "14");
+        chevron.setAttribute("aria-hidden", "true");
+        chevron.dataset.hostHeaderChevron = "true";
+        chevron.innerHTML = '<path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />';
+        brand.append(chevron);
+      }
+    }
+    if (!header.querySelector("[data-host-header-chrome]")) {
+      const extras = doc.createElement("div");
+      extras.dataset.hostHeaderChrome = "true";
+      extras.innerHTML = `
+        <button type="button" class="app-header-project-switch" data-host-header-trigger="projects" aria-label="切换项目" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </button>
+        <button type="button" class="app-header-help" data-host-header-trigger="help" aria-label="使用帮助">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.6" /><path d="M13 3v4a2 2 0 0 0 2 2h4M8 13h8M8 17h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+          使用帮助
+        </button>
+      `;
+      const editable = header.querySelector("[contenteditable='true']");
+      (editable ?? brand)?.after(extras);
+    }
+  };
+
+  const refreshOpenMenus = () => {
+    const header = root.querySelector?.(".app-header");
+    if (!header) return;
+    header.querySelectorAll("[data-host-header-menu]").forEach((node) => node.remove());
+    if (openMenu === "brand") renderBrandMenu(header);
+    if (openMenu === "projects") renderProjectMenu(header);
+    header.querySelector("[data-host-header-brand]")?.setAttribute("aria-expanded", String(openMenu === "brand"));
+    const projectTrigger = header.querySelector("[data-host-header-trigger='projects']");
+    projectTrigger?.setAttribute("aria-expanded", String(openMenu === "projects"));
+    if (openMenu === "projects") projectTrigger?.setAttribute("data-host-header-expanded", "true");
+    const helpTrigger = header.querySelector("[data-host-header-trigger='help']");
+    helpTrigger?.classList.toggle("is-active", currentState().helpOpen === true);
+  };
+
+  const onPointerDown = (event) => {
+    const target = event.target?.closest?.("[data-host-header-action], [data-host-header-trigger], [data-host-header-brand], [data-host-header-menu]");
+    if (!target) {
+      closeMenus();
+      return;
+    }
+    if (target.closest?.("[data-host-header-brand]")) {
+      event.preventDefault();
+      event.stopPropagation();
+      openMenu = openMenu === "brand" ? "" : "brand";
+      actionProjectId = "";
+      refreshOpenMenus();
+      return;
+    }
+    const trigger = target.dataset.hostHeaderTrigger || target.closest?.("[data-host-header-trigger]")?.dataset?.hostHeaderTrigger;
+    if (trigger === "projects") {
+      event.preventDefault();
+      event.stopPropagation();
+      openMenu = openMenu === "projects" ? "" : "projects";
+      actionProjectId = "";
+      refreshOpenMenus();
+      return;
+    }
+    if (trigger === "help") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenus();
+      currentState().setHelpOpen?.(true);
+      return;
+    }
+    const actionNode = target.closest?.("[data-host-header-action]");
+    const action = actionNode?.dataset?.hostHeaderAction;
+    const projectId = String(actionNode?.dataset?.projectId ?? "").trim();
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const state = currentState();
+    if (action === "open-home") {
+      closeMenus();
+      void context.onOpenHome?.();
+      return;
+    }
+    if (action === "open-projects") {
+      closeMenus();
+      void context.onOpenProjects?.();
+      return;
+    }
+    if (action === "create-project") {
+      closeMenus();
+      void state.createProject?.();
+      return;
+    }
+    if (action === "switch-project" && projectId) {
+      closeMenus();
+      void state.switchProject?.(projectId);
+      return;
+    }
+    if (action === "toggle-project-actions" && projectId) {
+      actionProjectId = actionProjectId === projectId ? "" : projectId;
+      const header = root.querySelector?.(".app-header");
+      if (header && openMenu === "projects") renderProjectActionsMenu(header, actionProjectId);
+      if (!actionProjectId) header?.querySelector("[data-host-header-menu='actions']")?.remove();
+      return;
+    }
+    if (action === "rename-project" && projectId) {
+      const project = currentProjects().find((item) => item?.id === projectId);
+      const nextName = globalThis.prompt?.("画布名称", project?.name ?? project?.title ?? "");
+      closeMenus();
+      if (nextName?.trim()) void state.renameProject?.(projectId, nextName.trim());
+      return;
+    }
+    if (action === "duplicate-project" && projectId) {
+      closeMenus();
+      void state.duplicateProject?.(projectId);
+      return;
+    }
+    if (action === "delete-project" && projectId) {
+      closeMenus();
+      if (globalThis.confirm?.("确定删除当前项目吗？")) void state.deleteProject?.(projectId);
+    }
+  };
+
+  let syncing = false;
+  const sync = () => {
+    if (disposed || syncing) return;
+    const header = root.querySelector?.(".app-header");
+    if (!header) return;
+    syncing = true;
+    try {
+      bindHeader(header);
+    } finally {
+      syncing = false;
+    }
+  };
+
+  root.addEventListener("pointerdown", onPointerDown, true);
+  const observer = typeof MutationObserver === "function"
+    ? new MutationObserver(() => sync())
+    : null;
+  observer?.observe(root, { childList: true, subtree: true });
+  const unsubscribe = runtimeStore?.subscribe?.(() => {
+    if (disposed) return;
+    sync();
+    if (openMenu) refreshOpenMenus();
+  });
+  sync();
+  return () => {
+    disposed = true;
+    observer?.disconnect?.();
+    unsubscribe?.();
+    root.removeEventListener("pointerdown", onPointerDown, true);
+    closeMenus();
+    root.querySelectorAll?.("[data-host-header-chrome]").forEach((node) => node.remove());
+  };
+}
+
+function readAiCanvasRuntimePreferredModel(nodeType) {
+  try {
+    const prefs = JSON.parse(globalThis.localStorage?.getItem("canvas-model-prefs") || "null");
+    if (!prefs || typeof prefs !== "object" || Array.isArray(prefs)) return "";
+    const type = String(nodeType ?? "").trim();
+    return String(prefs[type] ?? (type === "ai-panorama" ? prefs["ai-image"] : "") ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function resolveAiCanvasRuntimeSelectedModel(runtimeStore, node = {}) {
+  const state = runtimeStore?.getState?.() ?? {};
+  const models = Array.isArray(state?.config?.generalModels) ? state.config.generalModels : [];
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  const selectedValue = String(data.model ?? data.modelCode ?? data.modelId ?? "").trim()
+    || readAiCanvasRuntimePreferredModel(node?.type ?? data?.type);
+  return matchCanvasRuntimeCatalogModel(models, selectedValue)
+    ?? matchCanvasRuntimeCatalogModel(models, data.modelId);
+}
+
+function installAiCanvasRuntimePromptCreditCost(surface, runtimeStore) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  const doc = surface?.ownerDocument ?? globalThis.document;
+  if (!root || !doc?.createElement || typeof MutationObserver !== "function") return () => {};
+
+  let disposed = false;
+  let nesting = false;
+  const sync = () => {
+    if (disposed || nesting) return;
+    const actions = root.querySelector?.(".prompt-footer .prompt-actions");
+    const submit = actions?.querySelector?.(".prompt-submit-btn, .prompt-stop-btn");
+    if (!actions || !submit) {
+      root.querySelectorAll?.(".prompt-credit-cost").forEach((node) => node.remove());
+      return;
+    }
+    const state = runtimeStore?.getState?.() ?? {};
+    const nodeId = String(state.activeNodeId ?? "").trim();
+    const node = (Array.isArray(state.nodes) ? state.nodes : []).find((item) => String(item?.id ?? "") === nodeId) ?? null;
+    const selectedModel = resolveAiCanvasRuntimeSelectedModel(runtimeStore, node);
+    const cost = resolveCanvasRuntimeNodeCreditCost(node, selectedModel);
+    nesting = true;
+    try {
+      let label = actions.querySelector?.(".prompt-credit-cost");
+      if (!Number.isFinite(Number(cost)) || Number(cost) <= 0) {
+        label?.remove();
+        return;
+      }
+      if (!label) {
+        label = doc.createElement("span");
+        label.className = "prompt-credit-cost";
+        label.setAttribute("aria-label", "预计消耗积分");
+        actions.insertBefore(label, submit.closest(".prompt-submit-wrap") ?? submit);
+      }
+      const nextText = `${Math.round(Number(cost))} 积分`;
+      if (label.textContent !== nextText) label.textContent = nextText;
+    } finally {
+      nesting = false;
+    }
+  };
+
+  const observer = new MutationObserver(() => sync());
+  observer.observe(root, { childList: true, subtree: true });
+  const unsubscribe = typeof runtimeStore?.subscribe === "function"
+    ? runtimeStore.subscribe(() => sync())
+    : () => {};
+  sync();
+  return () => {
+    disposed = true;
+    observer.disconnect();
+    unsubscribe?.();
+    root.querySelectorAll?.(".prompt-credit-cost").forEach((node) => node.remove());
+  };
+}
+
+function installAiCanvasRuntimeFooterZoomControls(surface) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  if (!root || typeof MutationObserver !== "function") return () => {};
+
+  let disposed = false;
+  let nesting = false;
+  const nest = () => {
+    if (disposed || nesting) return;
+    const toolbar = root.querySelector?.(".footer-toolbar");
+    const controls = root.querySelector?.(".react-flow__controls.canvas-controls");
+    if (!toolbar || !controls || controls.parentElement === toolbar) return;
+    nesting = true;
+    try {
+      toolbar.append(controls);
+    } finally {
+      nesting = false;
+    }
+  };
+
+  const observer = new MutationObserver(() => nest());
+  observer.observe(root, { childList: true, subtree: true });
+  nest();
+  return () => {
+    disposed = true;
+    observer.disconnect();
+  };
+}
+
+function subscribeAiCanvasRuntimeAssistantPreference(runtimeStore) {
+  if (typeof runtimeStore?.subscribe !== "function") return () => {};
+  let previousOpen = runtimeStore.getState?.()?.chatOpen;
+  return runtimeStore.subscribe((nextState) => {
+    const nextOpen = nextState?.chatOpen;
+    if (nextOpen === previousOpen) return;
+    previousOpen = nextOpen;
+    persistAiCanvasRuntimeAssistantOpen(nextOpen !== false);
+  });
+}
+
 async function ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context = {}) {
   const initialState = runtimeStore?.getState?.();
   // New Canvas opens the embedded assistant by default, but preserves the
   // user's explicit close/open preference across page entries.
   // Clear a stale detached-window flag left by a previous runtime session.
   initialState?.setChatPanelDetached?.(false);
-  if (shouldOpenAiCanvasRuntimeAssistant()) {
-    initialState?.openChat?.();
-  }
+  openAiCanvasRuntimeAssistant(runtimeStore);
 
   const currentProjectId = String(
     initialState?.currentProjectId ?? context.currentProjectId ?? context.canvasProjectId ?? "",
@@ -910,39 +1377,79 @@ async function ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context = 
       && resolveAiCanvasRuntimeConversationProjectId(state?.projects, conversation?.projectId) === normalizedProjectId
   );
   const activeConversation = conversations.find((conversation) => conversation?.id === state?.activeConversationId);
-  if (belongsToCurrentProject(activeConversation)) return;
+  if (belongsToCurrentProject(activeConversation)) {
+    openAiCanvasRuntimeAssistant(runtimeStore);
+    return;
+  }
 
   const firstProjectConversation = conversations.find(belongsToCurrentProject);
   if (firstProjectConversation?.id) {
     state?.setActiveConversation?.(firstProjectConversation.id);
+    openAiCanvasRuntimeAssistant(runtimeStore);
     return;
   }
 
   state?.createConversation?.(settledProjectId);
+  openAiCanvasRuntimeAssistant(runtimeStore);
 }
 
 function isAiCanvasAssistantTaskTerminal(task) {
   const status = String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase();
-  if (["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status)) {
-    return true;
-  }
-  if (status !== "completed" && status !== "succeeded") return false;
-  return Boolean(resolveAiCanvasAssistantTaskMedia(task).url);
+  return [
+    "completed",
+    "succeeded",
+    "failed",
+    "canceled",
+    "cancelled",
+    "manual_review_required",
+    "result_unknown",
+  ].includes(status);
+}
+
+function readAiCanvasAssistantMediaCandidate(value) {
+  return String(value ?? "").trim();
 }
 
 function resolveAiCanvasAssistantTaskMedia(task) {
-  const videoUrl = String(
-    task?.result?.videoUrl
-      ?? task?.fixedVideos?.[0]?.url
-      ?? "",
-  ).trim();
-  const imageUrl = String(
-    task?.result?.imageUrl
-      ?? task?.result?.sourceUrl
-      ?? task?.result?.downloadUrl
-      ?? task?.fixedImages?.[0]?.url
-      ?? "",
-  ).trim();
+  const result = task?.result && typeof task.result === "object" ? task.result : {};
+  const items = [
+    ...(Array.isArray(task?.generatedOutputItems) ? task.generatedOutputItems : []),
+    ...(Array.isArray(result.generatedOutputItems) ? result.generatedOutputItems : []),
+    ...(Array.isArray(task?.resultAssets) ? task.resultAssets : []),
+    ...(Array.isArray(result.images) ? result.images : []),
+    ...(Array.isArray(result.videos) ? result.videos : []),
+    ...(Array.isArray(task?.fixedImages) ? task.fixedImages : []),
+    ...(Array.isArray(task?.fixedVideos) ? task.fixedVideos : []),
+  ];
+  const itemUrl = items
+    .flatMap((item) => [
+      item?.url,
+      item?.imageUrl,
+      item?.videoUrl,
+      item?.previewUrl,
+      item?.sourceUrl,
+      item?.downloadUrl,
+      item?.src,
+    ])
+    .map(readAiCanvasAssistantMediaCandidate)
+    .find(Boolean) ?? "";
+  const videoUrl = [
+    result.videoUrl,
+    task?.videoUrl,
+    task?.fixedVideos?.[0]?.url,
+    itemUrl,
+  ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
+  const imageUrl = [
+    result.imageUrl,
+    result.previewUrl,
+    result.sourceUrl,
+    result.downloadUrl,
+    result.url,
+    task?.imageUrl,
+    task?.url,
+    task?.fixedImages?.[0]?.url,
+    itemUrl,
+  ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
   const kind = task?.kind === "video" || task?.mediaKind === "video" || videoUrl ? "video" : "image";
   return { kind, url: kind === "video" ? videoUrl || imageUrl : imageUrl || videoUrl };
 }
@@ -963,6 +1470,27 @@ function createAiCanvasAssistantTaskResponse(task) {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+function resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context = {}, taskId = "") {
+  const store = context.runtimeStore;
+  const nodes = Array.isArray(store?.getState?.()?.nodes) ? store.getState().nodes : [];
+  const generating = nodes.filter((node) => {
+    const status = String(node?.data?.status ?? "").trim().toLowerCase();
+    return ["loading", "running", "queued", "processing", "pending", "submitted"].includes(status);
+  });
+  const wanted = String(taskId ?? "").trim();
+  if (wanted) {
+    const matched = generating.find((node) =>
+      String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? "").trim() === wanted
+    );
+    if (matched) return String(matched.id ?? "").trim();
+  }
+  const unbound = generating.filter((node) =>
+    !String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? "").trim()
+  );
+  const pick = (unbound.length ? unbound : generating).at(-1);
+  return String(pick?.id ?? "").trim();
 }
 
 function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
@@ -998,6 +1526,9 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
   const notifyWaiters = (task) => {
     const taskId = String(task?.taskId ?? task?.generationTaskId ?? task?.id ?? "").trim();
     if (!taskId || !isAiCanvasAssistantTaskTerminal(task)) return;
+    const status = String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase();
+    const isSuccess = status === "completed" || status === "succeeded";
+    if (isSuccess && !resolveAiCanvasAssistantTaskMedia(task).url) return;
     terminalTasks.set(taskId, task);
     const pending = waiters.get(taskId);
     if (!pending?.size) return;
@@ -1058,7 +1589,13 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
         const taskId = String(payload?.data?.[0]?.task_id ?? payload?.[0]?.task_id ?? "").trim();
         if (taskId) {
           const mediaKind = generationsMatch[1] === "videos" ? "video" : "image";
-          const nodeId = String(body?.canvasNodeId ?? body?.nodeKey ?? body?.nodeId ?? "").trim();
+          const nodeId = String(
+            body?.canvasNodeId
+              ?? body?.nodeKey
+              ?? body?.nodeId
+              ?? resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context)
+              ?? "",
+          ).trim();
           void Promise.resolve(context.onGenerationTaskCreated(taskId, {
             kind: mediaKind,
             mediaKind,
@@ -1075,9 +1612,11 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
     }
     if (method === "GET" && tasksMatch) {
       const taskId = decodeURIComponent(tasksMatch[1]);
+      const nodeId = resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context, taskId);
       void Promise.resolve(context.onGenerationTaskCreated?.(taskId, {
-        targetType: "canvas",
-        targetId: context.currentProjectId || context.canvasProjectId,
+        ...(nodeId
+          ? { targetType: "canvas_node", targetId: nodeId }
+          : {}),
       })).catch(() => undefined);
       return waitForTaskCenter(taskId, init?.signal ?? input?.signal);
     }
@@ -1111,7 +1650,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-      const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-1";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-19";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -1267,6 +1806,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           height: 40px !important;
           flex-basis: 40px !important;
         }
+        .new-canvas-root .canvas-drawing-tool-separator {
+          flex: 0 0 1px !important;
+          width: 1px !important;
+          height: 20px !important;
+          margin: 0 2px !important;
+        }
         .new-canvas-root .canvas-drawing-tool svg {
           width: 22px !important;
           height: 22px !important;
@@ -1278,6 +1823,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           width: max-content !important;
           height: auto !important;
           margin: 0 !important;
+          overflow: visible !important;
         }
         .new-canvas-root .canvas-drawing-toolbar-wrap {
           position: relative !important;
@@ -1286,9 +1832,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .canvas-note-style-panel-anchor {
           position: absolute !important;
-          left: calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px) !important;
+          left: clamp(144px, calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px), calc(100% - 144px)) !important;
           right: auto !important;
-          bottom: calc(100% + 10px) !important;
+          bottom: calc(100% + 8px) !important;
           transform: translateX(-50%) !important;
           z-index: 41 !important;
           pointer-events: auto !important;
@@ -1305,7 +1851,8 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .chat-panel,
         .new-canvas-root .chat-panel-header,
-        .new-canvas-root .chat-panel-input-area {
+        .new-canvas-root .chat-panel-input-area,
+        .new-canvas-root .chat-panel * {
           -webkit-backdrop-filter: none !important;
           backdrop-filter: none !important;
         }
@@ -1331,6 +1878,56 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           left: 12px !important;
           right: auto !important;
           bottom: 72px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .minimap-stats-zone {
+          position: absolute !important;
+          left: 12px !important;
+          right: auto !important;
+          bottom: 72px !important;
+          width: 180px !important;
+          height: 120px !important;
+          margin: 0 !important;
+          transform: none !important;
+          overflow: visible !important;
+          z-index: 7 !important;
+        }
+        .new-canvas-root .minimap-stats-zone > .react-flow__minimap {
+          position: relative !important;
+          inset: auto !important;
+          margin: 0 !important;
+        }
+        .new-canvas-root .minimap-stats-card {
+          position: absolute !important;
+          left: 0 !important;
+          bottom: calc(100% + 8px) !important;
+          min-width: 152px;
+          pointer-events: none;
+        }
+        .new-canvas-root .react-flow__panel.bottom.right:has(.footer-toolbar) {
+          left: 12px !important;
+          right: auto !important;
+          bottom: 12px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .react-flow__controls.canvas-controls {
+          position: absolute !important;
+          left: auto !important;
+          right: 12px !important;
+          bottom: 12px !important;
+          margin: 0 !important;
+          transform: none !important;
+          display: flex !important;
+          flex-direction: row !important;
+        }
+        .new-canvas-root .app-shell:has(.chat-panel) .react-flow__controls.canvas-controls {
+          right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+        }
+        .new-canvas-root .footer-toolbar .react-flow__controls.canvas-controls {
+          position: static !important;
+          inset: auto !important;
+          right: auto !important;
+          margin: 0 !important;
           transform: none !important;
         }
         .new-canvas-root .canvas-controls .react-flow__controls-button {
@@ -1485,6 +2082,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           height: 40px !important;
           flex-basis: 40px !important;
         }
+        .new-canvas-root .canvas-drawing-tool-separator {
+          flex: 0 0 1px !important;
+          width: 1px !important;
+          height: 20px !important;
+          margin: 0 2px !important;
+        }
         .new-canvas-root .canvas-drawing-tool svg {
           width: 22px !important;
           height: 22px !important;
@@ -1496,6 +2099,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           width: max-content !important;
           height: auto !important;
           margin: 0 !important;
+          overflow: visible !important;
         }
         .new-canvas-root .canvas-drawing-toolbar-wrap {
           position: relative !important;
@@ -1504,9 +2108,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .canvas-note-style-panel-anchor {
           position: absolute !important;
-          left: calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px) !important;
+          left: clamp(144px, calc(6px + 40px + 6px + 5px + 6px + (var(--canvas-note-tool-index, 1) - 1) * 46px + 20px), calc(100% - 144px)) !important;
           right: auto !important;
-          bottom: calc(100% + 10px) !important;
+          bottom: calc(100% + 8px) !important;
           transform: translateX(-50%) !important;
           z-index: 41 !important;
           pointer-events: auto !important;
@@ -1523,7 +2127,8 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .chat-panel,
         .new-canvas-root .chat-panel-header,
-        .new-canvas-root .chat-panel-input-area {
+        .new-canvas-root .chat-panel-input-area,
+        .new-canvas-root .chat-panel * {
           -webkit-backdrop-filter: none !important;
           backdrop-filter: none !important;
         }
@@ -1549,6 +2154,56 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           left: 12px !important;
           right: auto !important;
           bottom: 72px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .minimap-stats-zone {
+          position: absolute !important;
+          left: 12px !important;
+          right: auto !important;
+          bottom: 72px !important;
+          width: 180px !important;
+          height: 120px !important;
+          margin: 0 !important;
+          transform: none !important;
+          overflow: visible !important;
+          z-index: 7 !important;
+        }
+        .new-canvas-root .minimap-stats-zone > .react-flow__minimap {
+          position: relative !important;
+          inset: auto !important;
+          margin: 0 !important;
+        }
+        .new-canvas-root .minimap-stats-card {
+          position: absolute !important;
+          left: 0 !important;
+          bottom: calc(100% + 8px) !important;
+          min-width: 152px;
+          pointer-events: none;
+        }
+        .new-canvas-root .react-flow__panel.bottom.right:has(.footer-toolbar) {
+          left: 12px !important;
+          right: auto !important;
+          bottom: 12px !important;
+          transform: none !important;
+        }
+        .new-canvas-root .react-flow__controls.canvas-controls {
+          position: absolute !important;
+          left: auto !important;
+          right: 12px !important;
+          bottom: 12px !important;
+          margin: 0 !important;
+          transform: none !important;
+          display: flex !important;
+          flex-direction: row !important;
+        }
+        .new-canvas-root .app-shell:has(.chat-panel) .react-flow__controls.canvas-controls {
+          right: calc(var(--chat-panel-width, 600px) + 24px) !important;
+        }
+        .new-canvas-root .footer-toolbar .react-flow__controls.canvas-controls {
+          position: static !important;
+          inset: auto !important;
+          right: auto !important;
+          margin: 0 !important;
           transform: none !important;
         }
         .new-canvas-root .canvas-controls .react-flow__controls-button {
@@ -1631,6 +2286,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
             document: normalizeAiCanvasRuntimeDocument(
               context.document ?? context.canvasDocument,
               context.currentProjectId ?? context.canvasProjectId,
+              { recoverStaleGenerating: true },
             ),
           }
         : {}),
@@ -1651,6 +2307,8 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       onDirectorDeskOpen: context.onDirectorDeskOpen,
       onDirectorDeskSyncFrame: context.onDirectorDeskSyncFrame,
       onDirectorDeskExportVideo: context.onDirectorDeskExportVideo,
+      onVideoEditorOpen: context.onVideoEditorOpen,
+      onVideoEditorOpenShotlist: context.onVideoEditorOpenShotlist,
       onDocumentChange: (document, metadata = {}) => context.syncDocument?.(document, metadata),
       onGenerationTaskCreated: context.onGenerationTaskCreated,
       taskCenterActiveCount: Number(context.taskCenterActiveCount ?? 0) || 0,
@@ -1682,7 +2340,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const taskCenterBridge = installAiCanvasAssistantTaskCenterBridge(runtimeWindow, {
       ...context,
       ...runtimeContext,
+      runtimeStore,
     });
+    let unsubscribeAssistantPreference = () => {};
+    let disposeHeaderChrome = () => {};
+    let disposeFooterZoomControls = () => {};
+    let disposePromptCreditCost = () => {};
     const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
         ...context,
         ...runtimeContext,
@@ -1690,6 +2353,11 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     return projectBridgePromise.then((projectBridge) => mountAiCanvasRuntime(surface, runtimeContext).then(async (runtimeHandle) => {
       hostProjectGuard.enableSaves?.();
       await ensureAiCanvasRuntimeDefaultConversation(runtimeStore, runtimeContext);
+      openAiCanvasRuntimeAssistant(runtimeStore);
+      unsubscribeAssistantPreference = subscribeAiCanvasRuntimeAssistantPreference(runtimeStore);
+      disposeHeaderChrome = installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, runtimeContext);
+      disposeFooterZoomControls = installAiCanvasRuntimeFooterZoomControls(surface);
+      disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost(surface, runtimeStore);
       return ({
       ...runtimeHandle,
       async update(next = {}) {
@@ -1705,6 +2373,10 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       },
       async dispose() {
         try {
+          unsubscribeAssistantPreference();
+          disposeHeaderChrome();
+          disposeFooterZoomControls();
+          disposePromptCreditCost();
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
           taskCenterBridge.dispose();
           projectBridge.dispose();
@@ -1720,11 +2392,17 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       },
       });
     }).catch((error) => {
+      unsubscribeAssistantPreference();
+      disposeHeaderChrome();
+      disposeFooterZoomControls();
       runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
       taskCenterBridge.dispose();
       projectBridge.dispose();
       throw error;
     })).catch((error) => {
+      unsubscribeAssistantPreference();
+      disposeHeaderChrome();
+      disposeFooterZoomControls();
       taskCenterBridge.dispose();
       hostProjectGuard.dispose();
       themeBridge.dispose();

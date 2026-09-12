@@ -11,6 +11,7 @@ const MEDIA_TOOLS = [
   { id: "crop", label: "裁剪" },
   { id: "outpaint", label: "扩图" },
   { id: "remove_background", label: "抠图" },
+  { id: "upscale", label: "高清超分" },
   { id: "free_view", label: "自由视角" },
   { id: "camera_studio", label: "Camera Studio" },
   { id: "slice", label: "切片" },
@@ -19,7 +20,37 @@ const MEDIA_TOOLS = [
   { id: "batch_grid", label: "宫格" },
 ];
 
-const MEDIA_TOOLS_WITH_INSTRUCTION = new Set(["outpaint", "remove_background", "free_view"]);
+const MEDIA_TOOLS_WITH_INSTRUCTION = new Set(["outpaint", "remove_background", "upscale", "free_view"]);
+const MEDIA_GENERATION_TOOLS = new Set(["outpaint", "remove_background", "upscale", "free_view", "camera_studio"]);
+const RUNTIME_CLOUD_MEDIA_TOOLS = Object.freeze({
+  "act-hd": "upscale",
+  "act-auto-subject": "remove_background",
+});
+
+export function resolveRuntimeCloudMediaTool(target) {
+  const classList = target?.classList;
+  if (classList && typeof classList.contains === "function") {
+    for (const [className, tool] of Object.entries(RUNTIME_CLOUD_MEDIA_TOOLS)) {
+      if (classList.contains(className)) return tool;
+    }
+  }
+  const className = String(target?.className ?? "");
+  for (const [token, tool] of Object.entries(RUNTIME_CLOUD_MEDIA_TOOLS)) {
+    if (className.split(/\s+/).includes(token)) return tool;
+  }
+  const label = String(target?.getAttribute?.("aria-label") ?? target?.getAttribute?.("data-tooltip") ?? "").trim();
+  if (label === "高清超分" || label === "超分处理中...") return "upscale";
+  if (label === "自动识别主体" || label === "主体识别中...") return "remove_background";
+  return "";
+}
+
+export function findRuntimeCloudMediaToolTarget(event) {
+  const path = event?.composedPath?.() ?? [];
+  for (const candidate of path) {
+    if (resolveRuntimeCloudMediaTool(candidate)) return candidate;
+  }
+  return event?.target?.closest?.(".act-hd, .act-auto-subject, [aria-label='高清超分'], [aria-label='自动识别主体']") ?? null;
+}
 
 const CANVAS_ANNOTATION_UPLOAD_LIMITS = {
   image: {
@@ -200,7 +231,7 @@ export function renderCanvasMediaToolsShell(ui = {}) {
         </section>
         ${renderMediaLimits(ui, state, selected)}
         <footer>
-          ${["outpaint", "remove_background", "free_view", "camera_studio"].includes(state.tool)
+          ${MEDIA_GENERATION_TOOLS.has(state.tool)
             ? renderMediaModelField(state, imageModelOptions)
             : ""}
           <div class="canvas-media-submit-controls">
@@ -235,6 +266,13 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
     const next = template.content.firstElementChild;
     if (!next) {
       current.remove?.();
+      const result = render?.();
+      if (result && typeof result.then === "function") {
+        return result.then((value) => {
+          void bindCameraStudioViewport();
+          return value;
+        });
+      }
       void bindCameraStudioViewport();
       return true;
     }
@@ -806,7 +844,7 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         commitAnnotationTextEdit();
         state.tool = MEDIA_TOOLS.some((tool) => tool.id === target.dataset.mediaTool) ? target.dataset.mediaTool : "crop";
         state.error = "";
-        if (["outpaint", "remove_background", "free_view", "camera_studio"].includes(state.tool)
+        if (MEDIA_GENERATION_TOOLS.has(state.tool)
           && typeof workbench.ensureCanvasGenerationConfig === "function") {
           await workbench.ensureCanvasGenerationConfig({ mediaType: "image" }).catch((error) => {
             state.error = `模型列表加载失败：${friendlyError(error)}`;
@@ -926,6 +964,7 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         else if (state.tool === "batch_grid") await submitBatchGroup(workbench, state, rerender);
         else await submitDerivation(workbench, state, rerender);
         await persistCanvasMediaRecoveryState(workbench, state);
+        if (["running", "completed"].includes(state.status)) await closeAndRestoreFocus();
         return true;
       }
       if (action === "select-batch-artifact") {
@@ -1203,9 +1242,11 @@ function mediaDrawerFocusableElements(drawer) {
 async function submitDerivation(workbench, state, rerender) {
   const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
   const selectedNodeId = String(workbench.ui?.selectedCanvasNodeId ?? "");
-  let node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === selectedNodeId);
+  let node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === selectedNodeId)
+    ?? workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === state.recoveryNodeId);
   let source = sourceBinding(node);
-  if (!canvasId || !node || !Object.values(source).some(Boolean)) {
+  const previewUrl = resolveMediaSourcePreviewUrl(node);
+  if (!canvasId || !node || (!Object.values(source).some(Boolean) && !(state.tool === "upscale" && previewUrl))) {
     state.error = "请选择包含云端资产的图片节点。";
     rerender();
     return;
@@ -1218,7 +1259,7 @@ async function submitDerivation(workbench, state, rerender) {
   const imageModelOptions = resolveMediaImageModelOptions(workbench.ui);
   syncMediaGenerationModelCode(workbench.ui, state, node, imageModelOptions);
   const modelCode = String(state.generationModelCode ?? "").trim();
-  if (state.tool === "outpaint" && !modelCode) {
+  if ((state.tool === "outpaint" || state.tool === "upscale") && !modelCode) {
     state.error = "请选择生成模型。";
     rerender();
     return;
@@ -1237,39 +1278,46 @@ async function submitDerivation(workbench, state, rerender) {
     if (typeof workbench.refreshCanvasAfterAgentPatch === "function") {
       await workbench.refreshCanvasAfterAgentPatch().catch(() => null);
     }
-    node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === selectedNodeId);
+    node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === selectedNodeId)
+      ?? workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === state.recoveryNodeId)
+      ?? node;
     source = sourceBinding(node);
-    if (!node || !Object.values(source).some(Boolean)) throw new Error("canvas_derivation_source_missing");
+    const livePreviewUrl = resolveMediaSourcePreviewUrl(node);
+    const canUpscaleFromPreview = state.tool === "upscale" && Boolean(livePreviewUrl);
+    if (!node || (!Object.values(source).some(Boolean) && !canUpscaleFromPreview)) throw new Error("canvas_derivation_source_missing");
     const baseCanvasRevision = Number(workbench.ui?.canvasServerRevision ?? 1) || 1;
     const requestSnapshot = buildRequestSnapshot(state);
-    const derivationInput = {
-      nodeKey: node.id,
-      derivationType: state.tool,
-      baseCanvasRevision,
-      source,
-      requestSnapshot,
-    };
-    let startedPayload;
-    try {
-      startedPayload = await api.startCanvasMediaDerivation(canvasId, derivationInput);
-    } catch (error) {
-      const code = String(error?.errorCode ?? error?.code ?? "");
-      if (Number(error?.status) !== 409 || !/(stale|mismatch)/i.test(code)) throw error;
-      if (typeof workbench.refreshCanvasAfterAgentPatch !== "function") throw error;
-      await workbench.refreshCanvasAfterAgentPatch().catch(() => null);
-      startedPayload = await api.startCanvasMediaDerivation(canvasId, {
-        ...derivationInput,
-        baseCanvasRevision: Number(workbench.ui?.canvasServerRevision ?? baseCanvasRevision) || baseCanvasRevision,
-      });
-    }
-    const derivation = startedPayload?.derivation ?? startedPayload;
-    const derivationId = String(derivation?.id ?? "");
-    if (!derivationId) throw new Error("canvas_derivation_missing");
-    state.derivationId = derivationId;
-    state.recoveryNodeId = node.id;
-    const generationPrompt = ["camera_studio", "free_view"].includes(state.tool)
-      ? [state.instruction.trim(), state.tool === "camera_studio" ? requestSnapshot.cameraStudio?.prompt : buildFreeViewPrompt(state)].filter(Boolean).join(", ")
+    const generationPrompt = ["camera_studio", "free_view", "upscale"].includes(state.tool)
+      ? [state.instruction.trim(), state.tool === "camera_studio" ? requestSnapshot.cameraStudio?.prompt : state.tool === "upscale" ? buildUpscalePrompt(state) : buildFreeViewPrompt(state)].filter(Boolean).join(", ")
       : state.instruction.trim() || MEDIA_TOOLS.find((tool) => tool.id === state.tool)?.label || "媒体编辑";
+    let derivationId = "";
+    if (Object.values(source).some(Boolean)) {
+      const derivationInput = {
+        nodeKey: node.id,
+        derivationType: state.tool === "upscale" ? "outpaint" : state.tool,
+        baseCanvasRevision,
+        source,
+        requestSnapshot,
+      };
+      let startedPayload;
+      try {
+        startedPayload = await api.startCanvasMediaDerivation(canvasId, derivationInput);
+      } catch (error) {
+        const code = String(error?.errorCode ?? error?.code ?? "");
+        if (Number(error?.status) !== 409 || !/(stale|mismatch)/i.test(code)) throw error;
+        if (typeof workbench.refreshCanvasAfterAgentPatch !== "function") throw error;
+        await workbench.refreshCanvasAfterAgentPatch().catch(() => null);
+        startedPayload = await api.startCanvasMediaDerivation(canvasId, {
+          ...derivationInput,
+          baseCanvasRevision: Number(workbench.ui?.canvasServerRevision ?? baseCanvasRevision) || baseCanvasRevision,
+        });
+      }
+      const derivation = startedPayload?.derivation ?? startedPayload;
+      derivationId = String(derivation?.id ?? "");
+      if (!derivationId) throw new Error("canvas_derivation_missing");
+      state.derivationId = derivationId;
+    }
+    state.recoveryNodeId = node.id;
     const generationPayload = await api.createImageGenerationTask({
       target: { kind: "canvas", canvasProjectId: canvasId, nodeId: node.id },
       targetType: "canvas",
@@ -1278,13 +1326,13 @@ async function submitDerivation(workbench, state, rerender) {
       prompt: generationPrompt,
       parameters: {
         ...requestSnapshot,
-        derivationId,
+        ...(derivationId ? { derivationId } : {}),
         referenceImages: buildGenerationReferenceImages(node),
       },
     });
     const taskId = String(generationPayload?.taskId ?? generationPayload?.task?.id ?? "");
     if (!taskId) throw new Error("canvas_derivation_task_missing");
-    await api.attachCanvasMediaDerivationTask(canvasId, derivationId, taskId);
+    if (derivationId) await api.attachCanvasMediaDerivationTask(canvasId, derivationId, taskId);
     workbench.registerCanvasMediaGenerationTask?.(generationPayload?.task ?? generationPayload, {
       taskId,
       status: "queued",
@@ -1316,7 +1364,12 @@ async function submitDerivation(workbench, state, rerender) {
 function buildGenerationReferenceImages(node) {
   const data = node?.data ?? {};
   const url = resolveMediaSourcePreviewUrl(node);
-  const storageObjectId = String(data.storageObjectId ?? data.sourceStorageObjectId ?? data.resultStorageObjectId ?? "").trim();
+  const storageObjectId = firstBindingId(
+    data.storageObjectId,
+    data.sourceStorageObjectId,
+    data.resultStorageObjectId,
+    storageObjectIdFromPreviewUrl(url),
+  );
   if (storageObjectId) return [{ storageObjectId, ...(url ? { url } : {}) }];
   return url ? [url] : [];
 }
@@ -2503,6 +2556,7 @@ function buildRequestSnapshot(state) {
     ...(state.tool === "crop" ? { crop: { x: Number(state.cropX), y: Number(state.cropY), width: Number(state.cropWidth), height: Number(state.cropHeight), unit: "percent" } } : {}),
     ...(state.tool === "outpaint" ? { outpaintPixels: Number(state.outpaintPixels) } : {}),
     ...(state.tool === "remove_background" ? { removeBackground: { featherPixels: Number(state.backgroundFeatherPixels), preserveShadow: state.preserveShadow === true } } : {}),
+    ...(state.tool === "upscale" ? { outpaintPixels: 0 } : {}),
     ...(state.tool === "free_view" ? { camera: { azimuthDegrees: Number(state.viewAzimuthDegrees), elevationDegrees: Number(state.viewElevationDegrees), distanceScale: Number(state.viewDistanceScale) } } : {}),
     ...(state.tool === "camera_studio" ? { cameraStudio: {
       focalLengthMm: Number(state.cameraFocalLengthMm),
@@ -2542,6 +2596,13 @@ function buildRequestSnapshot(state) {
   };
 }
 
+function buildUpscalePrompt(state) {
+  const extra = String(state?.instruction ?? "").trim();
+  return extra
+    ? `Upscale the reference image only. Preserve the same subject, composition, and details. Increase resolution and sharpness without changing content. ${extra}`
+    : "Upscale the reference image only. Preserve the same subject, composition, and details. Increase resolution and sharpness without changing content.";
+}
+
 function buildFreeViewPrompt(state) {
   const yaw = Math.round(clamp(Number(state.viewAzimuthDegrees) || 0, -180, 180));
   const pitch = Math.round(clamp(Number(state.viewElevationDegrees) || 0, -90, 90));
@@ -2555,6 +2616,9 @@ function renderProfessionalControls(state, artifacts = [], sourcePreviewUrl = ""
       ${numberField("边缘羽化", "backgroundFeatherPixels", state.backgroundFeatherPixels, 0, 64)}
       ${checkboxField("保留投影", "preserveShadow", state.preserveShadow)}
     </div>`;
+  }
+  if (state.tool === "upscale") {
+    return `<p class="canvas-media-tool-hint">使用云端模型提高分辨率，保留原图主体与构图。</p>`;
   }
   if (state.tool === "free_view") {
     return `<div class="canvas-media-parameter-grid">
@@ -2896,11 +2960,42 @@ function recoveredBatchStatus(group) {
 
 function sourceBinding(node) {
   const data = node?.data ?? {};
+  const previewUrl = resolveMediaSourcePreviewUrl(node);
   return {
-    assetId: data.assetId ?? data.sourceAssetId ?? null,
-    assetVersionId: data.assetVersionId ?? data.sourceAssetVersionId ?? null,
-    storageObjectId: data.storageObjectId ?? data.sourceStorageObjectId ?? data.resultStorageObjectId ?? null,
+    assetId: firstBindingId(data.assetId, data.sourceAssetId, data.asset?.id) || null,
+    assetVersionId: firstBindingId(data.assetVersionId, data.sourceAssetVersionId, data.assetVersionId, data.asset?.latestVersion?.id) || null,
+    storageObjectId: firstBindingId(
+      data.storageObjectId,
+      data.sourceStorageObjectId,
+      data.resultStorageObjectId,
+      data.storage_object_id,
+      data.asset?.storageObjectId,
+      data.asset?.latestVersion?.storageObjectId,
+      data.latestVersion?.storageObjectId,
+      data.artifact?.storageObjectId,
+      data.result?.storageObjectId,
+      storageObjectIdFromPreviewUrl(previewUrl),
+    ) || null,
   };
+}
+
+function firstBindingId(...values) {
+  return values.map((value) => String(value ?? "").trim()).find(Boolean) || "";
+}
+
+function storageObjectIdFromPreviewUrl(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const match = raw.match(/\/api\/storage\/objects\/([^/?#]+)\/content/i);
+  if (!match?.[1]) return "";
+  try {
+    const storageObjectId = decodeURIComponent(match[1]);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(storageObjectId)
+      ? storageObjectId
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 function numberField(label, field, value, min, max, step = 1) {

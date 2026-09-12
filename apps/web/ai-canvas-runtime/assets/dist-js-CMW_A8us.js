@@ -1,1 +1,0 @@
-import{ko as e}from"./main-HU-iJRKR.js";async function t(){await e(`plugin:process|restart`)}export{t as relaunch};

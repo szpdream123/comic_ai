@@ -7,7 +7,7 @@ import { queryOne } from "../shared/db/sql.ts";
 import { appendCanvasNodeArtifact, selectCanvasNodeArtifact } from "./creator-canvas-record.service.ts";
 
 const derivationTypes = new Set([
-  "crop", "outpaint", "slice", "composite", "remove_background", "free_view", "camera_studio", "screenshot",
+  "crop", "outpaint", "slice", "composite", "remove_background", "upscale", "free_view", "camera_studio", "screenshot",
 ]);
 
 export interface CanvasSourceBinding {

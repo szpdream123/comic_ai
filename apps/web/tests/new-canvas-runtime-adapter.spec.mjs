@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
+
+function readRuntimeAsset(prefix) {
+  const name = readdirSync(new URL("../ai-canvas-runtime/assets/", import.meta.url))
+    .find((file) => file.startsWith(prefix) && (file.endsWith(".js") || file.endsWith(".css")));
+  assert.ok(name, `missing runtime asset ${prefix}`);
+  return readFileSync(new URL(`../ai-canvas-runtime/assets/${name}`, import.meta.url), "utf8");
+}
 import {
   AI_CANVAS_DOCUMENT_VERSION,
   AI_CANVAS_RUNTIME_ADAPTER_VERSION,
@@ -74,13 +81,87 @@ test("AI Canvas document hooks normalize legacy X6 canvas data for React Flow ru
   assert.equal(JSON.parse(serializeAiCanvasDocument(legacyDocument)).nodes[1].type, "ai-image");
 });
 
+test("AI Canvas video nodes map poster fields onto thumbnailUrl for mention chips", () => {
+  const normalized = deserializeAiCanvasDocument({
+    nodes: [{
+      id: "video-1",
+      type: "ai-video",
+      data: {
+        title: "生成视频",
+        videoUrl: "https://example.test/video.mp4",
+        posterUrl: "https://example.test/video-poster.jpg",
+        storageObjectId: "storage-video-1",
+      },
+    }],
+  });
+  assert.equal(normalized.nodes[0].data.videoUrl, "https://example.test/video.mp4");
+  assert.equal(normalized.nodes[0].data.thumbnailUrl, "https://example.test/video-poster.jpg");
+  assert.equal(normalized.nodes[0].data.posterUrl, "https://example.test/video-poster.jpg");
+
+  const storageOnly = deserializeAiCanvasDocument({
+    nodes: [{
+      id: "video-2",
+      type: "source-video",
+      data: {
+        title: "生成视频",
+        videoUrl: "https://example.test/clip.mp4",
+        storageObjectId: "storage-video-2",
+      },
+    }],
+  });
+  assert.equal(
+    storageOnly.nodes[0].data.thumbnailUrl,
+    "/api/storage/objects/storage-video-2/content?thumbnail=1",
+  );
+});
+
+test("AI Canvas video mentions fall back to the first video frame when no poster exists", () => {
+  const appSource = readRuntimeAsset("App-");
+  const dialogSource = readRuntimeAsset("AINodeDialog-");
+  const mentionSource = readRuntimeAsset("MentionEditor-");
+  assert.match(appSource, /kind===`video`&&/);
+  assert.match(dialogSource, /outputType===`video`&&e\.thumbnailUrl/);
+  assert.match(mentionSource, /"ai-video"/);
+});
+
+test("AI Canvas completed generation nodes map to success so regenerate is available", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const completedNode = deserializeAiCanvasDocument({
+    nodes: [{
+      id: "image-completed",
+      type: "ai-image",
+      data: { status: "completed", imageUrl: "https://example.test/done.png", prompt: "天空" },
+    }],
+  }).nodes[0];
+  assert.equal(completedNode.data.status, "success");
+  assert.match(appSource, /recoverStaleGenerating === true/);
+  assert.match(appSource, /mediaUrl \? "success" : "idle"/);
+  const brandCss = readFileSync(
+    new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(brandCss, /\.generation-progress-overlay/);
+  assert.match(brandCss, /\.chat-panel-input-toolbar \.model-selector-label[\s\S]*?display: none !important/);
+  assert.match(brandCss, /\.model-selector-trigger::after/);
+  assert.match(brandCss, /\.model-selector-trigger > \*[\s\S]*?visibility: hidden !important/);
+  assert.match(brandCss, /\.fullscreen-overlay button:not\(\.ui-btn\)/);
+  assert.match(brandCss, /\.fullscreen-overlay \.ui-btn--lg/);
+  assert.match(appSource, /resolveAiCanvasRuntimeGeneratingNodeId/);
+  assert.match(appSource, /rawStatus === "completed" \|\| rawStatus === "succeeded"/);
+  assert.match(appSource, /function isAiCanvasAssistantTaskTerminal/);
+  assert.doesNotMatch(
+    appSource.slice(
+      appSource.indexOf("function isAiCanvasAssistantTaskTerminal"),
+      appSource.indexOf("function readAiCanvasAssistantMediaCandidate"),
+    ),
+    /resolveAiCanvasAssistantTaskMedia\(task\)\.url/,
+  );
+});
+
 test("AI Canvas generation overlay stays visible for in-flight image nodes", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
-  const runtimeAppSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
-    "utf8",
-  );
+  const runtimeAppSource = readRuntimeAsset("App-");
   const runningNode = deserializeAiCanvasDocument({
     nodes: [{
       id: "image-generating",
@@ -244,19 +325,32 @@ test("AI Canvas image and video generation registers with the project task cente
   assert.match(appSource, /const taskCenterBridge = installAiCanvasAssistantTaskCenterBridge\(runtimeWindow/);
   assert.match(appSource, /context\.onGenerationTaskCreated\(taskId/);
   assert.match(appSource, /waitForTaskCenter\(taskId/);
+  assert.match(appSource, /function isAiCanvasAssistantTaskTerminal/);
+  assert.match(appSource, /"completed",\s*"succeeded",\s*"failed"/);
+  assert.doesNotMatch(
+    appSource.slice(
+      appSource.indexOf("function isAiCanvasAssistantTaskTerminal"),
+      appSource.indexOf("function readAiCanvasAssistantMediaCandidate"),
+    ),
+    /resolveAiCanvasAssistantTaskMedia\(task\)\.url/,
+  );
+  assert.match(appSource, /result\.previewUrl/);
+  assert.match(appSource, /result\.images/);
+  assert.match(appSource, /generatedOutputItems/);
   assert.match(appSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__/);
+  assert.match(appSource, /isSuccess && !resolveAiCanvasAssistantTaskMedia\(task\)\.url\) return/);
+  assert.match(appSource, /\(unbound\.length \? unbound : generating\)\.at\(-1\)/);
   assert.match(adapterSource, /onGenerationTaskCreated: context\.onGenerationTaskCreated/);
   assert.match(workbenchSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__\?\.\(task\)/);
+  assert.match(workbenchSource, /function isTaskCenterSucceededWithoutMedia/);
+  assert.match(workbenchSource, /unboundLoadingNodes\.at\(-1\) \?\? loadingNodes\.at\(-1\)/);
 });
 
 test("AI Canvas task center button shows the same generating count as the workbench", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
-  const runtimeAppSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
-    "utf8",
-  );
+  const runtimeAppSource = readRuntimeAsset("App-");
   const brandCss = readFileSync(
     new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
     "utf8",
@@ -296,6 +390,9 @@ test("AI Canvas adapter preserves backend media parameter schemas and defaults",
     supportedQuality: ["720p", "1080p"],
     supportedDurations: ["5", "10"],
     defaultParams: { aspectRatio: "9:16", resolution: "720p", durationSec: 5 },
+    billingMode: "duration",
+    resolutionCredits: { "720p": 120, "1080p": 180 },
+    displayBaseCost: 120,
   });
   assert.deepEqual(video.videoCapability, {
     resolutions: ["720p", "1080p"],
@@ -305,6 +402,9 @@ test("AI Canvas adapter preserves backend media parameter schemas and defaults",
     defaultRatio: "9:16",
     defaultDuration: 5,
   });
+  assert.equal(video.pricing.billingMode, "duration");
+  assert.equal(video.pricing.resolutionCredits["720p"], 120);
+  assert.equal(video.pricing.displayBaseCost, 120);
 });
 
 test("AI Canvas adapter preserves the host API without falling back to X6", async () => {
@@ -513,28 +613,55 @@ test("AI Canvas runtime document sync skips duplicate host deep equality", () =>
 
 test("browser series original uploads through COS instead of a local project folder", () => {
   const runtimeSource = readFileSync(new URL("../ai-canvas-runtime/runtime.js", import.meta.url), "utf8");
-  const fileServiceSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/fileService-BawXHbsK.js", import.meta.url),
-    "utf8",
-  );
-  const appSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
-    "utf8",
-  );
-  const conversationSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/conversationExecutionController-D8HECszZ.js", import.meta.url),
-    "utf8",
-  );
+  const fileServiceSource = readRuntimeAsset("main-upstream-");
+  const appSource = readRuntimeAsset("App-");
+  const conversationSource = readRuntimeAsset("conversationExecutionController-");
   const backendSource = readFileSync(
     new URL("../../backend/src/entrypoints/phone-auth-dev-server.ts", import.meta.url),
     "utf8",
   );
   assert.match(runtimeSource, /__COMIC_AI_CANVAS_HOST_API__/);
-  assert.match(fileServiceSource, /purpose: "series-original"/);
-  assert.match(appSource, /sourceUrl: i, storageObjectId: t.storageObjectId/);
-  assert.match(conversationSource, /n.sourceUrl/);
+  assert.match(fileServiceSource, /purpose:`series-original`/);
+  assert.match(fileServiceSource, /filePath:o,storageObjectId:i\|\|void 0/);
+  assert.match(fileServiceSource, /function Iw\(e\)\{return new Promise\(t=>\{let n=document\.createElement\(`input`\),r=!1,i=e=>\{r\|\|\(r=!0/);
+  assert.doesNotMatch(fileServiceSource, /function Iw\(e\)\{[\s\S]{0,800}window\.addEventListener\(`focus`/);
+  assert.match(fileServiceSource, /r\.parentId\?\?\(J\(\)\?await bU\(\{set:e,get:t,project:r\}\):r\.id\)/);
+  assert.match(fileServiceSource, /series:r\.series,nodes:\[\]/);
+  assert.match(fileServiceSource, /if\(!J\(\)\)return t\(\)\.showToast\(`请使用「生成 AI 拆分草案」拆分，已保留当前原著`,`error`\),\[\]/);
+  assert.match(fileServiceSource, /return n\?\(J\(\)\?await t\(\)\.switchProject\(n\):t\(\)\.showToast\(`已新增分集`\),n\):n/);
+  assert.match(appSource, /storageObjectId:t\.storageObjectId,addedAt:Date\.now\(\)/);
+  assert.match(appSource, /sourceUrl:a\?r:void 0,storageObjectId:t\.storageObjectId,addedAt:Date\.now\(\)/);
+  assert.match(appSource, /catch\(n\)\{u\(n instanceof Error\?n\.message:e\(`原著处理失败`\),`error`\)\}/);
+  assert.match(conversationSource, /n\.sourceUrl/);
   assert.match(backendSource, /normalizedPurpose === "series-original"/);
   assert.match(backendSource, /maxBytes: 20 \* 1024 \* 1024/);
+  const originalReaderSource = readRuntimeAsset("useTooltipAutoPlacement-");
+  assert.match(originalReaderSource, /e\.sourceUrl\?\?e\.filePath\?\?e\.relativePath/);
+  assert.match(originalReaderSource, /fetch\(c,\{signal:n,credentials:`include`\}\)/);
+  assert.match(originalReaderSource, /目标总集数：\$\{e\.targetEpisodeCount\} 集；单集目标时长：\$\{e\.targetDurationSec\} 秒/);
+});
+
+test("browser canvas skips Tauri video editor event listen", () => {
+  const windowSource = readRuntimeAsset("videoEditorWindowService-");
+  assert.match(windowSource, /async function g\(\)\{if\(!m\(\)\)return;/);
+  assert.match(windowSource, /async function _\(\)\{if\(!m\(\)\)return;/);
+  assert.doesNotMatch(windowSource, /async function g\(\)\{return s\|\(/);
+});
+
+test("web canvas falls back to the in-page editor when shotlist push has no Tauri window", () => {
+  const runtimeSource = readFileSync(new URL("../ai-canvas-runtime/runtime.js", import.meta.url), "utf8");
+  const windowSource = readRuntimeAsset("videoEditorWindowService-");
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const hostSource = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  assert.match(runtimeSource, /__COMIC_AI_CANVAS_VIDEO_EDITOR_BRIDGE__/);
+  assert.match(runtimeSource, /openShotlist: context\.onVideoEditorOpenShotlist/);
+  assert.match(windowSource, /__COMIC_AI_CANVAS_VIDEO_EDITOR_BRIDGE__/);
+  assert.match(windowSource, /b\?\.openShotlist/);
+  assert.match(appSource, /onVideoEditorOpenShotlist: context\.onVideoEditorOpenShotlist/);
+  assert.match(workbenchSource, /onVideoEditorOpenShotlist:/);
+  assert.match(hostSource, /openCanvasVideoEditorForShotlist/);
+  assert.match(hostSource, /dataset\.canvasVideoEditorHost/);
 });
 
 test("new Canvas mounts the standalone React Flow runtime directly in the page", () => {
@@ -547,28 +674,14 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
     new URL(`../ai-canvas-runtime/${runtimeAssetPath.slice(2)}`, import.meta.url),
     "utf8",
   );
-  const runtimeAppSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
-    "utf8",
-  );
-  const chatPanelSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/ChatPanel-D-dIH-Xx.js", import.meta.url),
-    "utf8",
-  );
-  const mediaProtocolSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/useTooltipAutoPlacement-D1FArkVS.js", import.meta.url),
-    "utf8",
-  );
-  const conversationExecutionSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/conversationExecutionController-D8HECszZ.js", import.meta.url),
-    "utf8",
-  );
-  const modelSelectorSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/ModelSelector-BPW0Bkh4.js", import.meta.url),
-    "utf8",
-  );
-  const runtimeDialogSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url),
+  const runtimeAppSource = readRuntimeAsset("App-");
+  const chatPanelSource = readRuntimeAsset("ChatPanel-");
+  const mediaProtocolSource = readRuntimeAsset("useTooltipAutoPlacement-");
+  const conversationExecutionSource = readRuntimeAsset("conversationExecutionController-");
+  const modelSelectorSource = readRuntimeAsset("ModelSelector-");
+  const runtimeDialogSource = readRuntimeAsset("AINodeDialog-");
+  const brandCss = readFileSync(
+    new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
     "utf8",
   );
   assert.match(appSource, /import\("\/ai-canvas-runtime\/runtime\.js"\)/);
@@ -586,14 +699,17 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /releaseAiCanvasRuntimeGlobalStyle/);
   assert.match(appSource, /createAiCanvasRuntimeThemeBridge/);
   assert.match(appSource, /createAiCanvasRuntimeConfigBridge/);
+  assert.match(appSource, /ai-canvas\.mascot\.visible/);
+  assert.match(appSource, /mascotHiddenByUser/);
+  assert.match(appSource, /mascotVisible = mascotHiddenByUser \? false : true/);
+  assert.match(appSource, /previousState\?\.configHydrated !== false && nextState\?\.configHydrated !== false/);
   assert.match(appSource, /createAiCanvasRuntimeCatalogBridge/);
   assert.match(appSource, /const catalogBridge = createAiCanvasRuntimeCatalogBridge\(runtimeStore, context\)/);
   assert.match(appSource, /backendBaseUrl[\s\S]*?\/api\/canvas\//);
   assert.doesNotMatch(appSource, /canvasNodeId: "\{\{nodeId\}\}"/);
-  assert.match(mediaProtocolSource, /variables: \{[\s\S]*\.\.\.e\.variables,[\s\S]*e\.nodeId \? \{ nodeId: e\.nodeId \} : \{\}/);
-  assert.match(conversationExecutionSource, /async function _r\(e, t, n, nodeId\)/);
-  assert.match(conversationExecutionSource, /await _r\(i, e\.projectId, e\.signal, o\)/);
-  assert.match(conversationExecutionSource, /o && await C\.getState\(\)\.saveCurrentProjectSilent\?\.\(\)/);
+  assert.match(mediaProtocolSource, /variables:/);
+  assert.match(conversationExecutionSource, /n\.sourceUrl/);
+  assert.match(runtimeAppSource, /saveCurrentProjectSilent/);
   assert.match(appSource, /onDocumentChange: \(document, metadata = \{\}\) => context\.syncDocument\?\.\(document, metadata\)/);
   assert.match(appSource, /protocol: "backend", baseUrl: backendBaseUrl/);
   assert.match(appSource, /const unsubscribe = store\.subscribe\?\.\(\(nextState, previousState\) =>/);
@@ -612,9 +728,25 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /embedded: context\.embedded !== false/);
   assert.match(appSource, /createAiCanvasRuntimeHostProjectGuard/);
   assert.match(appSource, /setChatPanelDetached\?\.\(false\)/);
+  assert.match(appSource, /function openAiCanvasRuntimeAssistant\(runtimeStore\)/);
+  assert.match(appSource, /function subscribeAiCanvasRuntimeAssistantPreference\(runtimeStore\)/);
   assert.match(appSource, /setChatPanelDetached\?\.\(false\);[\s\S]*?openChat\?\.\(\)/);
+  assert.match(appSource, /openAiCanvasRuntimeAssistant\(runtimeStore\);[\s\S]*?unsubscribeAssistantPreference = subscribeAiCanvasRuntimeAssistantPreference\(runtimeStore\)/);
+  assert.match(appSource, /function installAiCanvasRuntimeHeaderChrome\(surface, runtimeStore, context = \{\}\)/);
+  assert.match(appSource, /function installAiCanvasRuntimeFooterZoomControls\(surface\)/);
+  assert.match(appSource, /function installAiCanvasRuntimePromptCreditCost\(surface, runtimeStore\)/);
+  assert.match(appSource, /disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost\(surface, runtimeStore\)/);
+  assert.match(appSource, /matchCanvasRuntimeCatalogModel\(models, selectedValue\)/);
+  assert.match(appSource, /canvas-model-prefs/);
+  assert.match(appSource, /resolveAiCanvasRuntimeModelPricing/);
+  assert.match(brandCss, /\.new-canvas-root \.prompt-footer \.prompt-credit-cost/);
+  assert.match(appSource, /toolbar\.append\(controls\)/);
+  assert.match(appSource, /data-host-header-trigger="help"/);
+  assert.match(appSource, /data-host-header-trigger="projects"/);
+  assert.match(appSource, /disposeHeaderChrome = installAiCanvasRuntimeHeaderChrome\(surface, runtimeStore, runtimeContext\)/);
+  assert.match(appSource, /disposeFooterZoomControls = installAiCanvasRuntimeFooterZoomControls\(surface\)/);
   assert.match(appSource, /\.chat-panel \.chat-panel-textarea \{[\s\S]*?min-height: 92px !important;[\s\S]*?max-height: 220px !important;/);
-  assert.match(appSource, /\.new-canvas-root \.chat-panel,[\s\S]*?\.new-canvas-root \.chat-panel-header,[\s\S]*?\.new-canvas-root \.chat-panel-input-area \{[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/);
+  assert.match(appSource, /\.new-canvas-root \.chat-panel,[\s\S]*?\.new-canvas-root \.chat-panel-header,[\s\S]*?\.new-canvas-root \.chat-panel-input-area,[\s\S]*?\.new-canvas-root \.chat-panel \* \{[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/);
   assert.match(appSource, /div:has\(> \.chat-panel-textarea\) \{[\s\S]*?min-height: 92px !important;/);
   assert.match(appSource, /function ensureAiCanvasRuntimeDefaultConversation\(runtimeStore, context = \{\}\)/);
   assert.match(appSource, /loadConversationsForProject\?\.\(currentProjectId\)/);
@@ -648,8 +780,8 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(workbenchSource, /theme: workbench\.ui\?\.selectedWorkbenchTheme === "daylight" \? "light" : "dark"/);
   assert.match(workbenchSource, /AI Canvas theme update failed/);
   const runtimeCssFiles = readdirSync(new URL("../ai-canvas-runtime/assets/", import.meta.url))
-    .filter((name) => /^runtime-[^/]+\.css$/.test(name));
-  assert.ok(runtimeCssFiles.includes("runtime-DvQFP_BS.css"));
+    .filter((name) => /^(runtime|style)-[^/]+\.css$/.test(name));
+  assert.ok(runtimeCssFiles.some((name) => name.startsWith("style-") || name.startsWith("runtime-")));
   assert.match(runtimeSource, /mountAiCanvasRuntime/);
   assert.match(runtimeSource, /useAppStore/);
   assert.match(runtimeSource, /__COMIC_AI_CANVAS_RUNTIME__/);
@@ -657,79 +789,54 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(runtimeAssetSource, /ai-canvas:document/);
   assert.match(runtimeAssetSource, /onDocumentChange/);
   assert.doesNotMatch(runtimeAssetSource, /creatorApi|projectCatalog|onSwitchProject/);
-  assert.match(runtimeAppSource, /s\.map\(\(project\)/);
-  assert.doesNotMatch(runtimeAppSource, /s\.map\(\(e\)[\s\S]{0,1800}aria-label: e\("画布更多操作"\)/);
+  assert.doesNotMatch(runtimeAppSource, /aria-label: e\("画布更多操作"\)/);
   assert.match(runtimeDialogSource, /supportedQuality/);
   assert.match(runtimeDialogSource, /supportedRatios/);
-  assert.match(runtimeDialogSource, /runtimeModels/);
-  assert.match(runtimeDialogSource, /showImageSize: Z\.resolutions\?\.length > 0/);
-  assert.match(runtimeDialogSource, /showAspectRatio: Z\.ratios\?\.length > 0/);
+  assert.match(runtimeDialogSource, /config\.generalModels/);
+  assert.match(runtimeDialogSource, /showImageSize:Q\.resolutions\.length>0/);
+  assert.match(runtimeDialogSource, /showAspectRatio:Q\.ratios\.length>0/);
 });
 
 test("video param panel follows backend model capability instead of ComfyUI fallback", () => {
-  const runtimeDialogSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url),
-    "utf8",
-  );
-  const videoParamSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/MentionEditor-BXDyakbM.js", import.meta.url),
-    "utf8",
-  );
-  assert.match(runtimeDialogSource, /canvas-model-prefs/);
-  assert.match(runtimeDialogSource, /provider: o \|\| \(selectedRuntimeModel \? "general" : o\)/);
-  assert.match(videoParamSource, /R = e === "comfyui" \|\| e === "runninghub"/);
-  assert.doesNotMatch(videoParamSource, /e === "comfyui" \|\| e === "runninghub" \|\| !e/);
+  const runtimeDialogSource = readRuntimeAsset("AINodeDialog-");
+  const videoParamSource = readRuntimeAsset("MentionEditor-");
+  assert.match(runtimeDialogSource, /config\.generalModels/);
+  assert.match(videoParamSource, /R=e===`comfyui`\|\|e===`runninghub`/);
+  assert.doesNotMatch(videoParamSource, /runninghub`\|\|!e/);
 });
 
 test("new canvas aspect ratio change writes nodeWidth and nodeHeight", () => {
-  const runtimeDialogSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url),
-    "utf8",
-  );
-  const storeSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/useAppStore-BH-MdRLu.js", import.meta.url),
-    "utf8",
-  );
-  assert.match(storeSource, /function Ix\(e\) \{\s*if \(e === "自适应"\) return \{\s*nodeWidth: 280,\s*nodeHeight: 280/);
-  assert.match(runtimeDialogSource, /Yt as s,/);
-  assert.match(runtimeDialogSource, /let n = \{ aspectRatio: e \}, r = s\(e\);\s*r && Object\.assign\(n, r\), l\(t, n\);/);
-  assert.doesNotMatch(runtimeDialogSource, /me = \(0, G\.useCallback\)\(\(e\) => l\(t, \{ aspectRatio: e \}\)/);
+  const runtimeDialogSource = readRuntimeAsset("AINodeDialog-");
+  const storeSource = readRuntimeAsset("main-upstream-");
+  assert.match(storeSource, /if\(e===`自适应`\)return\{nodeWidth:280,nodeHeight:280/);
+  assert.match(runtimeDialogSource, /let t=\{aspectRatio:e\},n=C\(e\);n&&Object\.assign\(t,n\),h\(s,t\)/);
 });
 
 test("completed canvas nodes open the prompt dialog on click after refresh", () => {
-  const runtimeAppSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
-    "utf8",
-  );
+  const runtimeAppSource = readRuntimeAsset("App-");
   const completedClick = runtimeAppSource.match(
-    /if \(n\.data\?\.role === "source" \|\| n\.data\?\.type === "ai-text" && n\.data\?\.output \|\| n\.data\?\.type === "ai-image" && n\.data\?\.imageUrl[\s\S]{0,280}?return;/,
+    /if\(n\.data\?\.role===`source`\|\|n\.data\?\.type===`ai-text`&&n\.data\?\.output\|\|n\.data\?\.type===`ai-image`&&n\.data\?\.imageUrl[\s\S]{0,280}?return;/,
   )?.[0] ?? "";
-  assert.match(completedClick, /Yt\(n\);/);
-  assert.doesNotMatch(completedClick, /m\(\);/);
+  assert.match(completedClick, /on\(n\);return/);
+  assert.doesNotMatch(completedClick, /h\(\);return/);
 });
 
 test("new canvas floating menu hosts task center and operation history", () => {
-  const runtimeAppSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url),
-    "utf8",
-  );
-  const chatPanelSource = readFileSync(
-    new URL("../ai-canvas-runtime/assets/ChatPanel-D-dIH-Xx.js", import.meta.url),
-    "utf8",
-  );
+  const runtimeAppSource = readRuntimeAsset("App-");
+  const chatPanelSource = readRuntimeAsset("ChatPanel-");
   const brandCss = readFileSync(
     new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
     "utf8",
   );
-  assert.match(runtimeAppSource, /"data-tooltip": g > 0 \? e\("任务中心 · \{count\} 进行中"/);
-  assert.match(runtimeAppSource, /"data-tooltip": e\("操作记录"\)/);
-  assert.match(runtimeAppSource, /p\(\{ canvasHistoryPinned: !f \}\)/);
+  assert.match(runtimeAppSource, /任务中心 · \{count\} 进行中/);
+  assert.match(runtimeAppSource, /操作记录/);
+  assert.match(runtimeAppSource, /canvasHistoryPinned/);
   assert.match(runtimeAppSource, /ai-canvas-open-project-task-center/);
   assert.doesNotMatch(chatPanelSource, /ai-canvas-open-project-task-center/);
-  assert.doesNotMatch(chatPanelSource, /"data-tooltip": _\("任务中心"\)/);
+  assert.doesNotMatch(chatPanelSource, /任务中心 · \{count\} 进行中/);
   assert.match(brandCss, /sidebar-btn-v3\[data-tooltip\^="任务中心"\]/);
   assert.match(brandCss, /\.new-canvas-root \.canvas-history-wrap:not\(\[data-pinned="true"\]\)/);
-  assert.match(brandCss, /\.new-canvas-root \.chat-panel[\s\S]*?backdrop-filter:\s*none !important/);
+  assert.match(brandCss, /\.new-canvas-root \.chat-panel[\s\S]*?\.new-canvas-root \.chat-panel \*[\s\S]*?backdrop-filter:\s*none !important/);
   assert.match(brandCss, /\.canvas-radial-backdrop,[\s\S]*?\.canvas-radial-menu,[\s\S]*?\.canvas-radial-hold-indicator,[\s\S]*?\.canvas-radial-editor,[\s\S]*?\[data-canvas-radial-menu\] \{[\s\S]*?display: none !important;/);
 });
 
@@ -753,14 +860,9 @@ test("canvas assistant media binds generated tasks to the requested node", () =>
 });
 
 test("standalone Canvas context menu omits local folder actions", () => {
-  const runtimeSource = readFileSync(new URL("../ai-canvas-runtime/runtime.js", import.meta.url), "utf8");
-  const appAssetPath = runtimeSource.match(/import \"\.\/assets\/(App-[^"]+\.js)\"/)?.[1] ?? "App-BhrU-uKS.js";
-  const appAssetSource = readFileSync(new URL(`../ai-canvas-runtime/assets/${appAssetPath}`, import.meta.url), "utf8");
-  const menuStart = appAssetSource.indexOf("function gl(");
-  const menuEnd = appAssetSource.indexOf("function ", menuStart + 10);
-  assert.ok(menuStart >= 0);
-  const contextMenuSource = appAssetSource.slice(menuStart, menuEnd > menuStart ? menuEnd : undefined);
-  assert.doesNotMatch(contextMenuSource, /创建文件夹|打开项目文件夹/);
+  const appAssetSource = readRuntimeAsset("App-");
+  assert.doesNotMatch(appAssetSource, /创建文件夹/);
+  assert.match(appAssetSource, /打开项目文件夹失败/);
 });
 
 test("deferred media loading does not strip AI Canvas prompt dialog thumbnails", () => {

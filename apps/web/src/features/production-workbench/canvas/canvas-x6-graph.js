@@ -2028,17 +2028,20 @@ function wireGraphSync(graph, workbench, mount) {
   const stage = mount?.closest?.(".canvas-stage");
   const sync = (options = {}) => {
     if (graph.__comicAiReconciling === true) return;
+    const dragging = workbench.canvasNodeDragActive === true;
     const syncOptions = options?.edge ? { ...options, immediateSave: true } : options;
-    const pendingPositionNodeIds = syncOptions.positionNodeIds ?? workbench.canvasPendingPositionNodeIds;
-    workbench.canvasPendingPositionNodeIds = null;
-    const document = syncCanvasGraphDocument(graph, workbench, pendingPositionNodeIds?.length
+    const pendingPositionNodeIds = dragging
+      ? null
+      : (syncOptions.positionNodeIds ?? workbench.canvasPendingPositionNodeIds);
+    if (!dragging) workbench.canvasPendingPositionNodeIds = null;
+    const document = syncCanvasGraphDocument(graph, workbench, pendingPositionNodeIds?.length || dragging
       ? { ...syncOptions, scheduleSave: false }
       : syncOptions);
     const edgeTargetNodeId = syncOptions.edge?.getTargetCellId?.();
     if (edgeTargetNodeId) {
       refreshCanvasWorkflowNode(workbench, String(edgeTargetNodeId), { skipDocumentSync: true });
     }
-    if (pendingPositionNodeIds?.length && typeof workbench.persistCanvasNodePositions === "function") {
+    if (!dragging && pendingPositionNodeIds?.length && typeof workbench.persistCanvasNodePositions === "function") {
       const ids = new Set(pendingPositionNodeIds.map((id) => String(id)));
       const positions = (document?.nodes ?? [])
         .filter((node) => ids.has(String(node?.id ?? "")))
@@ -2168,13 +2171,19 @@ function wireGraphSync(graph, workbench, mount) {
     }
   });
   graph.on("node:move", ({ node } = {}) => {
+    workbench.canvasNodeDragActive = true;
     if (activeDraggedNode === node) return;
     if (activeDraggedNode) setNodeDragMotion(activeDraggedNode, false);
     activeDraggedNode = node ?? null;
     stage?.classList?.add?.("is-node-dragging");
     setNodeDragMotion(node, true);
   });
+  graph.on("node:moving", () => {
+    workbench.canvasNodeDragActive = true;
+  });
   graph.on("node:moved", (event) => {
+    const pointerReleased = isCanvasNodeMovePointerReleased(event);
+    if (pointerReleased) workbench.canvasNodeDragActive = false;
     stage?.classList?.remove?.("is-node-dragging");
     setNodeDragMotion(event?.node, false);
     activeDraggedNode = null;
@@ -2201,6 +2210,7 @@ function wireGraphSync(graph, workbench, mount) {
       event?.node,
     ]);
     workbench.canvasPendingPositionNodeIds = positionNodeIds;
+    if (!pointerReleased) return;
     scheduleGraphCommit({ clearToast: true });
   });
   graph.on("node:resized", ({ node } = {}) => {
@@ -2255,11 +2265,15 @@ function wireGraphSync(graph, workbench, mount) {
   };
   graph.on("node:click", ({ node }) => selectGraphNode(node));
   graph.on("node:mouseup", ({ node }) => {
+    workbench.canvasNodeDragActive = false;
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
     setNodeDragMotion(node, false);
     restoreDragSnapline();
     refreshCanvasConnectedEdgeMotion(graph);
     selectGraphNode(node);
+    if (workbench.canvasPendingPositionNodeIds?.length) {
+      scheduleGraphCommit({ clearToast: true });
+    }
   });
   graph.on("cell:click", ({ cell }) => {
     if (cell?.isNode?.()) selectGraphNode(cell);
@@ -2299,10 +2313,12 @@ function wireGraphSync(graph, workbench, mount) {
   });
   selectionPlugin?.on?.("box:mousemove", ({ e } = {}) => {
     if (!isCanvasSelectionTranslationEvent(e)) return;
+    workbench.canvasNodeDragActive = true;
     mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
     constrainCanvasGraphSelectionToGroups(graph.getSelectedCells?.() ?? []);
   });
   selectionPlugin?.on?.("box:mouseup", () => {
+    workbench.canvasNodeDragActive = false;
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
     refreshCanvasConnectedEdgeMotion(graph);
     requestFrame(() => refreshCanvasSelectionActionToolbar(graph, workbench, mount));
@@ -2354,6 +2370,16 @@ function refreshCanvasConnectedEdgeMotion(graph, nodeIds = []) {
     edgeView?.container?.classList?.toggle?.("is-canvas-edge-flowing", flowing);
     if (flowing) edgeView?.container?.querySelector?.("path:nth-child(3)")?.setAttribute?.("pathLength", "100");
   }
+}
+
+function isCanvasNodeMovePointerReleased(event = {}) {
+  const pointerEvent = event?.e ?? event;
+  const type = String(pointerEvent?.type ?? "").toLowerCase();
+  if (["mouseup", "pointerup", "pointercancel", "touchend", "touchcancel"].includes(type)) return true;
+  if (["mousemove", "pointermove", "touchmove"].includes(type)) return false;
+  if (typeof pointerEvent?.buttons === "number") return Number(pointerEvent.buttons) === 0;
+  if (typeof pointerEvent?.touches?.length === "number") return pointerEvent.touches.length === 0;
+  return true;
 }
 
 export function canvasGraphCellAndDescendantIds(cells = []) {

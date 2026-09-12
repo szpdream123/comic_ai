@@ -1,0 +1,1 @@
+import{Ks as e}from"./main-upstream-665b2cc.js";async function t(){await e(`plugin:process|restart`)}export{t as relaunch};

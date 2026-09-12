@@ -821,6 +821,16 @@ export const skillFileUploadLimits = {
   blockedExtensions: defaultUploadLimits.blockedExtensions,
 };
 
+export const seriesOriginalUploadLimits = {
+  document: {
+    label: "原著文件",
+    maxBytes: 20 * 1024 * 1024,
+    mimeTypes: ["text/plain", "text/markdown", "text/x-markdown", "application/octet-stream"],
+    extensions: [".txt", ".md", ".markdown"],
+  },
+  blockedExtensions: defaultUploadLimits.blockedExtensions,
+};
+
 function buildUploadId(file, options = {}) {
   return [
     "upload",
@@ -872,7 +882,11 @@ export function validateUploadFile(file, limits = defaultUploadLimits) {
   }
   const kind = resolveUploadLimitKind(file, limits);
   if (!kind) {
-    const error = new Error("仅支持图片、视频或音频文件");
+    const error = new Error(
+      limits?.document?.label === "原著文件"
+        ? "仅支持 txt 或 md 原著文件"
+        : "仅支持图片、视频或音频文件",
+    );
     error.errorCode = "upload_type_not_allowed";
     error.details = { extension };
     throw error;
@@ -2511,12 +2525,22 @@ export const creatorApi = {
   },
 
   async uploadFile(file, options = {}) {
-    validateUploadFile(file, options.uploadLimits ?? defaultUploadLimits);
+    const documentLabel = options.uploadLimits?.document?.label;
+    const purpose = documentLabel === "原著文件"
+      ? "series-original"
+      : documentLabel === "剧本文档"
+        ? "script-documents"
+        : (options.purpose ?? options.category ?? "misc");
+    validateUploadFile(
+      file,
+      options.uploadLimits
+        ?? (purpose === "series-original" ? seriesOriginalUploadLimits : defaultUploadLimits),
+    );
     return this.prepareUpload(
       {
         projectId: options.projectId ?? null,
         canvasProjectId: options.canvasProjectId ?? null,
-        purpose: options.purpose ?? options.category ?? "misc",
+        purpose,
         fileName: file.name,
         contentType: file.type || "application/octet-stream",
         sizeBytes: file.size,

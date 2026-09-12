@@ -37,7 +37,9 @@ import {
 import { createDirectorDeskOverlay } from "./director-desk-overlay.js";
 import {
   createCanvasMediaToolsController,
+  findRuntimeCloudMediaToolTarget,
   renderCanvasMediaToolsShell,
+  resolveRuntimeCloudMediaTool,
 } from "./media-tools-drawer.js";
 import {
   createCanvasMinimapController,
@@ -80,6 +82,40 @@ function canvasOperationHistoryLabel(commands = []) {
   if (events.some((event) => event.includes("size"))) return "调整节点大小";
   if (events.some((event) => event.includes("data") || event.includes("attrs"))) return "编辑节点内容";
   return "画布修改";
+}
+
+function eventPathTarget(event, selector) {
+  return (event.composedPath?.() ?? [])
+    .find((candidate) => candidate?.matches?.(selector))
+    ?? event.target?.closest?.(selector);
+}
+
+function eventPathContains(event, node) {
+  return Boolean(node && (event.composedPath?.() ?? []).includes(node));
+}
+
+function resolveRuntimeImageNodeId(event, workbench) {
+  const path = event?.composedPath?.() ?? [];
+  const nodes = workbench?.ui?.canvasDocument?.nodes ?? [];
+  for (const candidate of path) {
+    const nodeId = String(
+      candidate?.dataset?.id
+      ?? candidate?.dataset?.nodeId
+      ?? candidate?.getAttribute?.("data-id")
+      ?? candidate?.getAttribute?.("data-node-id")
+      ?? "",
+    ).trim();
+    if (!nodeId) continue;
+    const node = nodes.find?.((item) => String(item?.id ?? "") === nodeId);
+    if (node) return nodeId;
+  }
+  const selectedId = String(workbench?.ui?.selectedCanvasNodeId ?? "").trim();
+  if (selectedId && nodes.some?.((item) => String(item?.id ?? "") === selectedId)) return selectedId;
+  const imageNodes = nodes.filter?.((item) => {
+    const type = String(item?.type ?? item?.data?.type ?? "").toLowerCase();
+    return type.includes("image") || Boolean(item?.data?.imageUrl || item?.data?.previewUrl || item?.data?.url || item?.data?.storageObjectId);
+  }) ?? [];
+  return imageNodes.length === 1 ? String(imageNodes[0].id ?? "") : selectedId;
 }
 
 function isCanvasNodeInteractiveTarget(event) {
@@ -150,7 +186,7 @@ function normalizeStyleHrefs(styleHrefs) {
   return [...new Set(values.map((href) => String(href ?? "").trim()).filter(Boolean))];
 }
 
-function appendStyles(root, styleHrefs) {
+function appendStyles(root, styleHrefs, options = {}) {
   const fragment = document.createDocumentFragment();
   const criticalStyle = document.createElement("style");
   criticalStyle.dataset.newCanvasCriticalStyle = "true";
@@ -190,8 +226,10 @@ function appendStyles(root, styleHrefs) {
     loadingLabel.textContent = "正在加载自由会话…";
     loadingGate.append(loadingLabel);
   }
-  fragment.append(criticalStyle);
-  fragment.append(loadingGate);
+  if (options.revealImmediately !== true) {
+    fragment.append(criticalStyle);
+    fragment.append(loadingGate);
+  }
   const links = [];
   const pendingLinks = new Set();
   const retryTimers = new Set();
@@ -322,7 +360,14 @@ function createProductionCanvasAdapter(dependencies = {}) {
       const minimapController = createCanvasMinimapController({ surface, workbench });
       const characterLibraryController = createCanvasCharacterLibraryController({ surface, workbench });
       const panoramaViewerController = createCanvasPanoramaViewerController({ surface });
-      const videoEditorController = createCanvasVideoEditorController({ surface, workbench, render: () => render() });
+      const videoEditorController = typeof workbench.openCanvasVideoEditor === "function"
+        ? {
+          open: (nodeId, openOptions = {}) => workbench.openCanvasVideoEditor(nodeId, openOptions),
+          openShotlist: (params = {}) => workbench.openCanvasVideoEditorForShotlist?.(params),
+          handleAction: () => false,
+          handleChange: () => false,
+        }
+        : createCanvasVideoEditorController({ surface, workbench, render: () => render() });
       let mediaToolsController = null;
       let panoramaDrag = null;
       let canvasAgentResize = null;
@@ -369,6 +414,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
       workbench.onDirectorDeskOpen = (node) => directorDeskOverlay.open(node);
       workbench.onDirectorDeskSyncFrame = (node) => directorDeskOverlay.syncCurrentFrame(node);
       workbench.onDirectorDeskExportVideo = (node) => directorDeskOverlay.exportReferenceVideo(node);
+      if (typeof workbench.openCanvasVideoEditor !== "function") {
+        workbench.openCanvasVideoEditor = (nodeId, options = {}) => videoEditorController.open(nodeId, options);
+        workbench.openCanvasVideoEditorForShotlist = (params = {}) => videoEditorController.openShotlist(params);
+      }
       workbench.onDirectorDeskNotify = (message, tone) => {
         context.onDirectorDeskNotify?.({ message, tone }, { workbench, surface });
       };
@@ -387,7 +436,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           api: workbench.api,
         }),
         renderUi,
-        `${renderCanvasMediaToolsShell(renderUi)}${renderCanvasConfigLibraryShell(renderUi)}${renderCanvasCharacterLibraryShell(renderUi)}${renderCanvasVideoEditorShell(renderUi)}`,
+        `${renderCanvasMediaToolsShell(renderUi)}${renderCanvasConfigLibraryShell(renderUi)}${renderCanvasCharacterLibraryShell(renderUi)}${typeof workbench.openCanvasVideoEditor === "function" ? "" : renderCanvasVideoEditorShell(renderUi)}`,
         renderCanvasMinimap(renderUi),
         { agentOnly: context.agentOnly === true },
       );
@@ -769,7 +818,23 @@ function createProductionCanvasAdapter(dependencies = {}) {
           }
         }
       };
+      const interceptRuntimeCloudMediaTool = (event, { open = false } = {}) => {
+        const runtimeCloudToolTarget = canvasEventPathTarget(event, ".act-hd, .act-auto-subject, [aria-label='高清超分'], [aria-label='自动识别主体']");
+        const runtimeCloudTool = resolveRuntimeCloudMediaTool(runtimeCloudToolTarget);
+        if (!runtimeCloudTool) return false;
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        event.stopImmediatePropagation?.();
+        if (open) {
+          void mediaToolsController?.handleAction({
+            dataset: { mediaAction: "open", mediaTool: runtimeCloudTool },
+            focus: runtimeCloudToolTarget?.focus ? () => runtimeCloudToolTarget.focus() : undefined,
+          }, event);
+        }
+        return true;
+      };
       const onClick = (event) => {
+        if (interceptRuntimeCloudMediaTool(event, { open: true })) return;
         const videoEditorActionTarget = event.target?.closest?.("[data-video-editor-action]");
         if (videoEditorActionTarget) {
           event.preventDefault?.();
@@ -1161,6 +1226,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         agentController.handleKeydown(event, event.target);
       };
       const onPointerDown = (event) => {
+        if (interceptRuntimeCloudMediaTool(event, { open: true })) return;
         const storyboardCell = canvasEventPathTarget(
           event,
           "[data-storyboard-drag-source][data-node-id][data-storyboard-cell-index]",
@@ -1908,6 +1974,159 @@ export async function mountNewCanvas(target, options = {}) {
   surface.innerHTML = `<div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布"><span class="new-canvas-loading-skeleton__rail"></span><div class="new-canvas-loading-skeleton__stage"><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--one" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--two" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--three" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--four" aria-hidden="true"></span><div class="new-canvas-loading-skeleton__copy"><span class="new-canvas-loading-skeleton__spinner" aria-hidden="true"></span><strong>正在打开画布</strong><small>正在载入节点与连接</small></div></div><span class="new-canvas-loading-skeleton__panel"></span></div>`;
   host.dataset.newCanvasMounted = "pending";
   const adapter = options.adapter ?? createProductionCanvasAdapter(options.dependencies);
+  const sourceWorkbench = options.workbench;
+  const videoEditorHost = document.createElement("div");
+  videoEditorHost.dataset.canvasVideoEditorHost = "true";
+  videoEditorHost.style.cssText = "position:fixed;inset:0;z-index:80;pointer-events:none;";
+  const renderVideoEditorHost = () => {
+    if (!videoEditorHost.isConnected) document.body.append(videoEditorHost);
+    const markup = renderCanvasVideoEditorShell(sourceWorkbench?.ui ?? options.ui ?? {});
+    videoEditorHost.innerHTML = markup;
+    videoEditorHost.style.pointerEvents = markup ? "auto" : "none";
+  };
+  const videoEditorController = sourceWorkbench
+    ? createCanvasVideoEditorController({
+      surface,
+      workbench: sourceWorkbench,
+      render: renderVideoEditorHost,
+    })
+    : null;
+  const onVideoEditorHostClick = (event) => {
+    const actionTarget = event.target?.closest?.("[data-video-editor-action]");
+    if (!actionTarget) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    videoEditorController?.handleAction(actionTarget);
+  };
+  const onVideoEditorHostChange = (event) => {
+    if (videoEditorController?.handleChange(event.target)) event.stopPropagation?.();
+  };
+  if (videoEditorController && sourceWorkbench) {
+    sourceWorkbench.openCanvasVideoEditor = (nodeId, openOptions = {}) => videoEditorController.open(nodeId, openOptions);
+    sourceWorkbench.openCanvasVideoEditorForShotlist = (params = {}) => videoEditorController.openShotlist(params);
+    videoEditorHost.addEventListener("click", onVideoEditorHostClick, true);
+    videoEditorHost.addEventListener("change", onVideoEditorHostChange);
+  }
+  const runtimeMediaToolsHost = document.createElement("div");
+  runtimeMediaToolsHost.dataset.runtimeMediaToolsHost = "true";
+  runtimeMediaToolsHost.style.cssText = "position:fixed;inset:0;z-index:90;pointer-events:none;";
+  const runtimeMediaToolsRoot = runtimeMediaToolsHost.attachShadow?.({ mode: "open" }) ?? runtimeMediaToolsHost;
+  const runtimeMediaToolsSurface = document.createElement("div");
+  runtimeMediaToolsSurface.className = "new-canvas-root";
+  runtimeMediaToolsSurface.dataset.newCanvasSurface = "true";
+  runtimeMediaToolsSurface.dataset.runtimeMediaToolsSurface = "true";
+  const workbenchTheme = String(sourceWorkbench?.ui?.selectedWorkbenchTheme ?? document.body?.dataset?.workbenchTheme ?? "").trim() || "daylight";
+  runtimeMediaToolsHost.dataset.workbenchTheme = workbenchTheme;
+  runtimeMediaToolsSurface.dataset.workbenchTheme = workbenchTheme;
+  const themeSource = document.body ?? document.documentElement;
+  if (themeSource && typeof getComputedStyle === "function") {
+    const styles = getComputedStyle(themeSource);
+    for (const name of styles) {
+      if (name.startsWith("--theme-") || name.startsWith("--text-") || name.startsWith("--color-") || name.startsWith("--login-")) {
+        runtimeMediaToolsHost.style.setProperty(name, styles.getPropertyValue(name));
+      }
+    }
+  }
+  const disposeRuntimeMediaToolsStyles = appendStyles(runtimeMediaToolsRoot, DEFAULT_STYLE_HREFS, { revealImmediately: true });
+  runtimeMediaToolsRoot.append(runtimeMediaToolsSurface);
+  const renderRuntimeMediaToolsHost = () => {
+    const markup = renderCanvasMediaToolsShell(sourceWorkbench?.ui ?? {});
+    if (!markup) {
+      runtimeMediaToolsSurface.innerHTML = "";
+      runtimeMediaToolsHost.style.pointerEvents = "none";
+      runtimeMediaToolsHost.hidden = true;
+      runtimeMediaToolsHost.remove();
+      return;
+    }
+    if (!runtimeMediaToolsHost.isConnected) document.body.append(runtimeMediaToolsHost);
+    runtimeMediaToolsHost.hidden = false;
+    runtimeMediaToolsSurface.innerHTML = markup;
+    runtimeMediaToolsHost.style.pointerEvents = "auto";
+  };
+  const runtimeMediaToolsController = sourceWorkbench
+    ? createCanvasMediaToolsController({
+      surface: runtimeMediaToolsSurface,
+      workbench: sourceWorkbench,
+      render: renderRuntimeMediaToolsHost,
+    })
+    : null;
+  const interceptRuntimeCloudMediaTool = (event, { open = false } = {}) => {
+    const runtimeCloudToolTarget = findRuntimeCloudMediaToolTarget(event)
+      ?? eventPathTarget(event, ".act-hd, .act-auto-subject, [aria-label='高清超分'], [aria-label='自动识别主体']");
+    const runtimeCloudTool = resolveRuntimeCloudMediaTool(runtimeCloudToolTarget);
+    if (!runtimeCloudTool || !runtimeMediaToolsController) return false;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    event.stopImmediatePropagation?.();
+    const nodeId = resolveRuntimeImageNodeId(event, sourceWorkbench);
+    if (nodeId && sourceWorkbench?.ui) sourceWorkbench.ui.selectedCanvasNodeId = nodeId;
+    if (open) {
+      void runtimeMediaToolsController.handleAction({
+        dataset: { mediaAction: "open", mediaTool: runtimeCloudTool },
+        focus: runtimeCloudToolTarget?.focus ? () => runtimeCloudToolTarget.focus() : undefined,
+      }, event);
+    }
+    return true;
+  };
+  const onRuntimeMediaPointerDown = (event) => {
+    if (!runtimeMediaToolsHost.isConnected || runtimeMediaToolsHost.hidden) {
+      if (interceptRuntimeCloudMediaTool(event, { open: true })) return;
+      return;
+    }
+    if (eventPathContains(event, runtimeMediaToolsSurface)) return;
+    if (interceptRuntimeCloudMediaTool(event, { open: true })) return;
+    if (runtimeMediaToolsController?.handlePointerDown(event, event.target)) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    }
+  };
+  const onRuntimeMediaClick = (event) => {
+    if (!runtimeMediaToolsHost.isConnected || runtimeMediaToolsHost.hidden) {
+      if (interceptRuntimeCloudMediaTool(event, { open: true })) return;
+      return;
+    }
+    const mediaActionTarget = eventPathTarget(event, "[data-media-action]");
+    if (eventPathContains(event, runtimeMediaToolsSurface)) {
+      if (!mediaActionTarget) return;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      void runtimeMediaToolsController?.handleAction(mediaActionTarget, event);
+      return;
+    }
+    if (interceptRuntimeCloudMediaTool(event, { open: true })) return;
+  };
+  const onRuntimeMediaInput = (event) => {
+    if (!eventPathContains(event, runtimeMediaToolsSurface)) return;
+    runtimeMediaToolsController?.handleInput(event.target);
+  };
+  const onRuntimeMediaChange = (event) => {
+    if (!eventPathContains(event, runtimeMediaToolsSurface)) return;
+    runtimeMediaToolsController?.handleInput(event.target);
+    void runtimeMediaToolsController?.handleChange?.(event.target);
+  };
+  const onRuntimeMediaKeydown = (event) => {
+    if (!eventPathContains(event, runtimeMediaToolsSurface) && event.key !== "Escape") return;
+    if (runtimeMediaToolsController?.handleKeydown(event, event.target)) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    }
+  };
+  const onRuntimeMediaPointerMove = (event) => {
+    runtimeMediaToolsController?.handlePointerMove?.(event, event.target);
+  };
+  const onRuntimeMediaPointerUp = (event) => {
+    runtimeMediaToolsController?.handlePointerUp?.(event, event.target);
+  };
+  if (runtimeMediaToolsController) {
+    document.addEventListener("pointerdown", onRuntimeMediaPointerDown, true);
+    document.addEventListener("click", onRuntimeMediaClick, true);
+    runtimeMediaToolsSurface.addEventListener("input", onRuntimeMediaInput, true);
+    runtimeMediaToolsSurface.addEventListener("change", onRuntimeMediaChange, true);
+    document.addEventListener("keydown", onRuntimeMediaKeydown, true);
+    document.addEventListener("pointermove", onRuntimeMediaPointerMove, true);
+    document.addEventListener("pointerup", onRuntimeMediaPointerUp, true);
+    document.addEventListener("pointercancel", onRuntimeMediaPointerUp, true);
+  }
   let adapterHandle;
   try {
     adapterHandle = await adapter.mount(surface, {
@@ -1915,6 +2134,8 @@ export async function mountNewCanvas(target, options = {}) {
       surface,
       shadowRoot: mountRoot,
       mountRoot,
+      onVideoEditorOpen: (nodeId, openOptions = {}) => sourceWorkbench?.openCanvasVideoEditor?.(nodeId, openOptions),
+      onVideoEditorOpenShotlist: (params = {}) => sourceWorkbench?.openCanvasVideoEditorForShotlist?.(params),
     });
     const instance = {
       host,
@@ -1925,6 +2146,21 @@ export async function mountNewCanvas(target, options = {}) {
       adapter,
       adapterHandle,
       disposeStyles,
+      videoEditorHost,
+      hostWorkbench: sourceWorkbench,
+      runtimeMediaToolsController,
+      runtimeMediaToolsHost,
+      runtimeMediaToolsSurface,
+      disposeRuntimeMediaToolsStyles,
+      onVideoEditorHostClick,
+      onVideoEditorHostChange,
+      onRuntimeMediaPointerDown,
+      onRuntimeMediaClick,
+      onRuntimeMediaInput,
+      onRuntimeMediaChange,
+      onRuntimeMediaKeydown,
+      onRuntimeMediaPointerMove,
+      onRuntimeMediaPointerUp,
       async update(next = {}) {
         return adapterHandle?.update?.(next);
       },
@@ -1944,6 +2180,26 @@ export async function mountNewCanvas(target, options = {}) {
   } catch (error) {
     host.dataset.newCanvasMounted = "failed";
     disposeStyles();
+    videoEditorHost.removeEventListener("click", onVideoEditorHostClick, true);
+    videoEditorHost.removeEventListener("change", onVideoEditorHostChange);
+    if (runtimeMediaToolsController) {
+      document.removeEventListener("pointerdown", onRuntimeMediaPointerDown, true);
+      document.removeEventListener("click", onRuntimeMediaClick, true);
+      runtimeMediaToolsSurface.removeEventListener("input", onRuntimeMediaInput, true);
+      runtimeMediaToolsSurface.removeEventListener("change", onRuntimeMediaChange, true);
+      document.removeEventListener("keydown", onRuntimeMediaKeydown, true);
+      document.removeEventListener("pointermove", onRuntimeMediaPointerMove, true);
+      document.removeEventListener("pointerup", onRuntimeMediaPointerUp, true);
+      document.removeEventListener("pointercancel", onRuntimeMediaPointerUp, true);
+      runtimeMediaToolsController.dispose();
+      disposeRuntimeMediaToolsStyles?.();
+      runtimeMediaToolsHost.remove();
+    }
+    videoEditorHost.remove();
+    if (sourceWorkbench) {
+      delete sourceWorkbench.openCanvasVideoEditor;
+      delete sourceWorkbench.openCanvasVideoEditorForShotlist;
+    }
     adapterHandle?.dispose?.();
     if (lightDom) {
       host.replaceChildren();
@@ -1962,6 +2218,26 @@ export async function unmountNewCanvas(target) {
   }
   instances.delete(host);
   instance.disposeStyles?.();
+  instance.videoEditorHost?.removeEventListener?.("click", instance.onVideoEditorHostClick, true);
+  instance.videoEditorHost?.removeEventListener?.("change", instance.onVideoEditorHostChange);
+  if (instance.runtimeMediaToolsController) {
+    document.removeEventListener("pointerdown", instance.onRuntimeMediaPointerDown, true);
+    document.removeEventListener("click", instance.onRuntimeMediaClick, true);
+    instance.runtimeMediaToolsSurface?.removeEventListener?.("input", instance.onRuntimeMediaInput, true);
+    instance.runtimeMediaToolsSurface?.removeEventListener?.("change", instance.onRuntimeMediaChange, true);
+    document.removeEventListener("keydown", instance.onRuntimeMediaKeydown, true);
+    document.removeEventListener("pointermove", instance.onRuntimeMediaPointerMove, true);
+    document.removeEventListener("pointerup", instance.onRuntimeMediaPointerUp, true);
+    document.removeEventListener("pointercancel", instance.onRuntimeMediaPointerUp, true);
+    instance.runtimeMediaToolsController.dispose();
+    instance.disposeRuntimeMediaToolsStyles?.();
+    instance.runtimeMediaToolsHost?.remove?.();
+  }
+  instance.videoEditorHost?.remove?.();
+  if (instance.hostWorkbench) {
+    delete instance.hostWorkbench.openCanvasVideoEditor;
+    delete instance.hostWorkbench.openCanvasVideoEditorForShotlist;
+  }
   await instance.adapterHandle?.dispose?.();
   if (instance.lightDom) {
     host.replaceChildren();
@@ -1981,6 +2257,11 @@ export function getNewCanvasInstance(target) {
 }
 
 export { createProductionCanvasAdapter, createDirectorDeskOverlay };
+export {
+  buildCanvasVideoEditorShotlistSession,
+  resolveCanvasShotlistTimelineRows,
+  resolveCanvasShotlistVoiceoverNodes,
+} from "./canvas-video-editor.js";
 export {
   AI_CANVAS_DOCUMENT_VERSION,
   AI_CANVAS_RUNTIME_ADAPTER_VERSION,

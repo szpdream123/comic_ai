@@ -68,6 +68,7 @@ test("Canvas assets preserve storage references when inserted as source nodes", 
     url: "https://example.test/video.mp4",
     previewUrl: "https://example.test/video.mp4",
     posterUrl: "https://example.test/video-poster.jpg",
+    thumbnailUrl: "https://example.test/video-poster.jpg",
   });
 });
 

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
+
+function readRuntimeAsset(prefix) {
+  const name = readdirSync(new URL("../ai-canvas-runtime/assets/", import.meta.url))
+    .find((file) => file.startsWith(prefix) && (file.endsWith(".js") || file.endsWith(".css")));
+  assert.ok(name, `missing runtime asset ${prefix}`);
+  return readFileSync(new URL(`../ai-canvas-runtime/assets/${name}`, import.meta.url), "utf8");
+}
 import {
   CANVAS_ASSET_DRAG_TYPE,
   CANVAS_STORYBOARD_CELL_DRAG_TYPE,
@@ -52,6 +59,12 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /showCanvasGraphMountFailure\(surface\)/);
   assert.match(source, /action === "retry-canvas-x6-mount"[\s\S]*?void render\(\)/);
   assert.match(source, /createCanvasAgentController/);
+  assert.match(source, /resolveRuntimeCloudMediaTool/);
+  assert.match(source, /findRuntimeCloudMediaToolTarget/);
+  assert.match(source, /function resolveRuntimeImageNodeId/);
+  assert.match(source, /createCanvasMediaToolsController\(\{[\s\S]*?workbench: sourceWorkbench/);
+  assert.match(source, /document\.addEventListener\("pointerdown", onRuntimeMediaPointerDown, true\)/);
+  assert.match(source, /interceptRuntimeCloudMediaTool\(event, \{ open: true \}\)/);
   assert.match(source, /data-agent-media-composer-resize/);
   assert.match(source, /mediaComposerResize\.startHeight \+ mediaComposerResize\.startY - Number\(event\.clientY \?\? 0\)/);
   assert.match(source, /"--canvas-agent-media-composer-height", `\$\{nextHeight\}px`/);
@@ -83,6 +96,14 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /event\.target\?\.closest\?\.\("\.canvas-node-editor"\)/);
   assert.match(source, /event\.target\?\.closest\?\.\("input, textarea, select, \[contenteditable='true'\], \[role='textbox'\], \.canvas-prompt-mention-menu"\)[\s\S]*?event\.stopPropagation\(\)[\s\S]*?return/);
   assert.match(source, /__canvasDirectorHandled/);
+  assert.match(source, /dataset\.runtimeMediaToolsHost/);
+  assert.match(source, /runtimeMediaToolsSurface\.className = "new-canvas-root"/);
+  assert.match(source, /dataset\.runtimeMediaToolsSurface = "true"/);
+  assert.match(source, /appendStyles\(runtimeMediaToolsRoot, DEFAULT_STYLE_HREFS, \{ revealImmediately: true \}\)/);
+  assert.match(source, /eventPathContains\(event, runtimeMediaToolsSurface\)/);
+  assert.match(source, /runtimeMediaToolsHost\.remove\(\)/);
+  assert.match(source, /if \(!runtimeMediaToolsHost\.isConnected \|\| runtimeMediaToolsHost\.hidden\)/);
+  assert.match(source, /document\.addEventListener\("pointerdown", onRuntimeMediaPointerDown, true\)/);
 });
 
 test("new-canvas light-DOM mount does not throw on style bootstrap", async () => {
@@ -104,6 +125,8 @@ test("new-canvas light-DOM mount does not throw on style bootstrap", async () =>
         remove() {},
         innerHTML: "",
         textContent: "",
+        style: {},
+        querySelector() { return null; },
       };
     },
     createDocumentFragment() {
@@ -136,19 +159,31 @@ test("AI Canvas initializes the browser process shim before the runtime bridge i
 
 test("canvas grid toggle does not leave the off-white theme texture visible", () => {
   const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
-  const appSource = readFileSync(new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url), "utf8");
+  const appSource = readRuntimeAsset("App-");
   assert.match(source, /\.canvas-bg-off-white::after\s*\{[\s\S]*display:\s*none\s*!important/);
   assert.match(source, /\.app-canvas-viewport \.react-flow__background circle\s*\{[\s\S]*fill:\s*color-mix\(in srgb, var\(--theme-text\) 32%, transparent\)/);
-  assert.match(appSource, /color: "color-mix\(in srgb, var\(--theme-text\) 28%, transparent\)"/);
+  assert.match(appSource, /color:`color-mix\(in srgb, var\(--theme-text\) 28%, transparent\)`/);
 });
 
 test("expand editor toasts budget errors above the fullscreen overlay", () => {
-  const expandSource = readFileSync(new URL("../ai-canvas-runtime/assets/ExpandEditor-DGeOoZRf.js", import.meta.url), "utf8");
-  const appSource = readFileSync(new URL("../ai-canvas-runtime/assets/App-BhrU-uKS.js", import.meta.url), "utf8");
-  assert.match(expandSource, /useAppStore-BH-MdRLu\.js/);
-  assert.match(expandSource, /if \(K\) \{\s*F\(K\);\s*We\.getState\(\)\.showToast\(K, "error"\);\s*return;\s*\}/);
-  assert.match(appSource, /className: "fixed top-16 left-1\/2 z-\[300\]"/);
-  assert.match(appSource, /zIndex:\s*10000/);
+  const expandSource = readRuntimeAsset("ExpandEditor-");
+  const appSource = readRuntimeAsset("App-");
+  assert.match(expandSource, /showToast\(J,`error`\)/);
+  assert.match(appSource, /className:`fixed top-16 left-1\/2 z-\[300\]`/);
+  assert.match(appSource, /zIndex:1e4/);
+});
+
+test("expand editor submits injected general image models through host generation", () => {
+  const expandSource = readRuntimeAsset("ExpandEditor-");
+  const appSource = readRuntimeAsset("App-");
+  assert.match(expandSource, /config\?\.generalModels\?\?\[\]\)\.find\(e=>e\.category===`image`\)/);
+  assert.match(expandSource, /return e\?`general\/\$\{e\.id\}`:`apimart\/gemini-3\.1-flash-image-preview`/);
+  assert.match(expandSource, /defaultExpandedGroupIds:\[`general-models`,`apimart`\]/);
+  assert.match(appSource, /i\.provider!==`apimart`&&i\.provider!==`general`/);
+  assert.match(appSource, /__COMIC_AI_CANVAS_HOST_API__/);
+  assert.match(appSource, /hostApi\.uploadFile\(new File\(\[refBlob\],`canvas-expand-\$\{Date\.now\(\)\}\.png`/);
+  assert.match(appSource, /await er\(\{prompt:Eo\(i\.prompt\),model:i\.model,provider:`general`,aspectRatio:i\.size,image_urls:\[refUrl\],nodeId:u\}\)/);
+  assert.doesNotMatch(appSource, /try\{let e;if\(i\.provider===`general`\)/);
 });
 
 test("series rail and script workbench match the canvas header type size", () => {
@@ -157,6 +192,57 @@ test("series rail and script workbench match the canvas header type size", () =>
   assert.match(source, /\[aria-label="剧本创作工作台"\][\s\S]*font-size:\s*18px\s*!important/);
   assert.match(source, /\.group\\\/series aside\[role="dialog"\] svg[\s\S]*width:\s*18px\s*!important/);
   assert.match(source, /\[aria-label="剧本创作工作台"\] svg[\s\S]*width:\s*18px\s*!important/);
+});
+
+test("canvas header restores project switch and help after upstream chrome split", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /function installAiCanvasRuntimeHeaderChrome/);
+  assert.match(appSource, /data-host-header-trigger="projects"/);
+  assert.match(appSource, /data-host-header-trigger="help"/);
+  assert.match(appSource, /使用帮助/);
+  assert.match(appSource, /切换项目/);
+});
+
+test("canvas drawing toolbar restores the pan hand tool before drawing tools", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  const toolbar = appRuntime.match(/function lu\(\{activeTool:e,imageReady:t,interactionMode:n[\s\S]*?var uu=\(0,Z\.memo\)\(lu\)/)?.[0] ?? "";
+  assert.match(toolbar, /canvas-drawing-tool canvas-interaction-tool/);
+  assert.match(toolbar, /a\(`抓手工具`\)/);
+  assert.match(toolbar, /canvas-drawing-tool-separator/);
+  assert.match(toolbar, /cu\.map\(\(\{id:n,label:r,icon:o\}\)/);
+  assert.match(appRuntime, /interactionMode:g===`classic`\?`classic`:`default`/);
+  assert.match(appRuntime, /Hg\(\{interactionMode:g===`classic`\?`default`:`classic`\}\),Yg\(\)/);
+});
+
+test("AI Canvas App runtime keeps the series rail button props inside one jsx object", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(appRuntime, /\(0,Q\.jsx\)\(`button`,\{type:`button`,"aria-label":e\(`展开剧集栏（双击打开项目资产）`\)/);
+  assert.doesNotMatch(appRuntime, /\(0,Q\.jsx\)\(`button`,\{type:`button`\},"aria-label"/);
+});
+
+test("canvas chrome keeps the previous four-corner layout after upstream runtime split", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(source, /\.new-canvas-root \.sidebar-floating,[\s\S]*?top: 12px !important;[\s\S]*?right: 12px !important;[\s\S]*?flex-direction: row !important/);
+  assert.match(source, /\.react-flow__panel\.canvas-drawing-toolbar-slot\.bottom\.left[\s\S]*?left: 50% !important;[\s\S]*?transform: translateX\(-50%\) !important/);
+  assert.match(source, /\.new-canvas-root \.group\\\/series[\s\S]*?align-items: center !important;[\s\S]*?justify-content: center !important/);
+  assert.match(source, /\.canvas-note-style-panel-anchor[\s\S]*?bottom: calc\(100% \+ 8px\) !important;[\s\S]*?transform: translateX\(-50%\) !important/);
+  assert.match(appRuntime, /className:`canvas-drawing-toolbar-wrap`[\s\S]*canvas-note-style-panel-anchor/);
+  assert.match(appRuntime, /className:`canvas-drawing-tool canvas-interaction-tool/);
+  assert.match(appRuntime, /className:`canvas-drawing-tool-separator`/);
+  assert.match(appRuntime, /onToggleInteractionMode:Wg/);
+  assert.match(appRuntime, /interactionMode:g===`classic`\?`classic`:`default`/);
+  assert.match(appRuntime, /Hg\(\{interactionMode:g===`classic`\?`default`:`classic`\}\),Yg\(\)/);
+  assert.match(appRuntime, /e\.target===e\.currentTarget&&p&&m\(!1\)/);
+  assert.match(source, /\.react-flow__panel\.bottom\.right:has\(\.footer-toolbar\)[\s\S]*?left: 12px !important;[\s\S]*?bottom: 12px !important/);
+  assert.match(source, /\.react-flow__controls\.canvas-controls[\s\S]*?position: absolute !important;[\s\S]*?right: 12px !important;[\s\S]*?bottom: 12px !important/);
+  assert.match(source, /\.footer-toolbar \.react-flow__controls\.canvas-controls[\s\S]*?position: static !important/);
+  assert.match(source, /\.react-flow__minimap,[\s\S]*?left: 12px !important;[\s\S]*?bottom: 72px !important/);
+  assert.match(source, /\.minimap-stats-zone[\s\S]*?position: absolute !important;[\s\S]*?bottom: 72px !important/);
+  assert.match(source, /\.minimap-stats-card[\s\S]*?bottom: calc\(100% \+ 8px\) !important/);
+  assert.match(source, /\.new-canvas-root \.chat-panel,[\s\S]*?top: 12px !important;[\s\S]*?bottom: 12px !important/);
+  assert.match(source, /> button\[aria-label="新建画布"\][\s\S]*?display: none/);
+  assert.match(source, /\[data-host-header-chrome\][\s\S]*?display: inline-flex/);
 });
 
 test("node and overlay popover buttons match the floating canvas menu size", () => {
@@ -175,12 +261,9 @@ test("node and overlay popover buttons match the floating canvas menu size", () 
 });
 
 test("AI node dialog declares runtime models before using the model fallback", () => {
-  const source = readFileSync(new URL("../ai-canvas-runtime/assets/AINodeDialog-DcjHokJW.js", import.meta.url), "utf8");
-  const dialogStart = source.indexOf("function pt() {");
-  const dialogBody = source.slice(dialogStart, source.indexOf("//#endregion", dialogStart));
-  const declaration = dialogBody.indexOf("runtimeModels = g((e) => e.config.generalModels)");
-  const firstUse = dialogBody.search(/runtimeModels\?\./);
-  assert.ok(dialogStart >= 0);
+  const source = readRuntimeAsset("AINodeDialog-");
+  const declaration = source.indexOf("e.config.generalModels");
+  const firstUse = source.indexOf("supportedQuality");
   assert.ok(declaration >= 0);
   assert.ok(firstUse >= 0);
   assert.ok(declaration < firstUse);
@@ -1730,6 +1813,14 @@ test("new Canvas injects the outer project catalog and delegates runtime project
   assert.match(appSource, /\.new-canvas-root \.sidebar-floating \{[\s\S]*?transition: none !important;/);
   assert.match(appSource, /\.new-canvas-root \.chat-panel \{[\s\S]*?top: 12px !important;[\s\S]*?width: var\(--chat-panel-width, min\(600px, calc\(100vw - 24px\)\)\) !important;/);
   assert.doesNotMatch(appSource, /\.new-canvas-root \.chat-panel \{[\s\S]*?top: 72px !important;/);
+  assert.match(appSource, /\.new-canvas-root \.react-flow__minimap \{[\s\S]*?left: 12px !important;[\s\S]*?bottom: 72px !important;/);
+  assert.match(appSource, /\.new-canvas-root \.minimap-stats-zone \{[\s\S]*?position: absolute !important;[\s\S]*?bottom: 72px !important;/);
+  assert.match(appSource, /\.new-canvas-root \.minimap-stats-card \{[\s\S]*?bottom: calc\(100% \+ 8px\) !important;/);
+  assert.match(appSource, /\.new-canvas-root \.react-flow__panel\.bottom\.right:has\(\.footer-toolbar\) \{[\s\S]*?left: 12px !important;[\s\S]*?bottom: 12px !important;/);
+  assert.match(appSource, /\.new-canvas-root \.react-flow__controls\.canvas-controls \{[\s\S]*?position: absolute !important;[\s\S]*?right: 12px !important;[\s\S]*?bottom: 12px !important;/);
+  assert.match(appSource, /\.new-canvas-root \.footer-toolbar \.react-flow__controls\.canvas-controls \{[\s\S]*?position: static !important;/);
+  assert.match(appSource, /\.new-canvas-root \.canvas-drawing-toolbar-slot \{[\s\S]*?left: 50% !important;[\s\S]*?bottom: 12px !important;[\s\S]*?transform: translateX\(-50%\) !important;/);
+  assert.match(appSource, /\.new-canvas-root \.canvas-note-style-panel-anchor \{[\s\S]*?bottom: calc\(100% \+ 8px\) !important;[\s\S]*?transform: translateX\(-50%\) !important;/);
   assert.match(appSource, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)::after \{[\s\S]*?opacity: 0 !important;/);
   assert.match(appSource, /\.ai-canvas-standalone-mount \.app-shell--glass-frame::before,[\s\S]*?\.app-shell--glass-frame::after \{[\s\S]*?opacity: 0 !important;/);
 });

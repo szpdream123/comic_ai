@@ -2,7 +2,7 @@
 
 Generated from `package-lock.json`. Run `npm run legal:generate` after dependency changes.
 
-The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri) at commit `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` (v0.9.2) under the upstream source-available license and the separately archived author authorization. See `docs/legal/ai-canvas-tauri-provenance.md`.
+The AI Canvas behavior is adapted from [Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri) at commit `665b2ccc54e81f9763b278f8d2007fd333d75050` (v0.9.8) under the upstream source-available license and the separately archived author authorization. See `docs/legal/ai-canvas-tauri-provenance.md`.
 
 | Package | Version | Declared license |
 | --- | --- | --- |

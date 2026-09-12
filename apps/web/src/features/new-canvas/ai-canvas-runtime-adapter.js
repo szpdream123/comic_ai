@@ -45,6 +45,38 @@ function sanitizeRuntimeCatalogValue(value) {
     .map(([key, nested]) => [key, sanitizeRuntimeCatalogValue(nested)]));
 }
 
+function resolveRuntimeModelPricing(model = {}) {
+  const merged = {};
+  for (const value of [model.pricing, model.pricingJson, model.pricing_json]) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      Object.assign(merged, sanitizeRuntimeCatalogValue(value));
+    }
+  }
+  const extras = {
+    baseCredits: model.baseCredits ?? model.base_credits,
+    billingMode: model.billingMode ?? model.billing_mode,
+    resolutionCredits: model.resolutionCredits ?? model.resolution_credits,
+    credits: model.credits,
+    displayBaseCost: model.displayBaseCost,
+  };
+  for (const [key, value] of Object.entries(extras)) {
+    if (value !== undefined && merged[key] === undefined) merged[key] = value;
+  }
+  if (merged.baseCredits === undefined && extras.displayBaseCost !== undefined) {
+    merged.baseCredits = extras.displayBaseCost;
+  }
+  if (merged.base_credits === undefined && merged.baseCredits !== undefined) {
+    merged.base_credits = merged.baseCredits;
+  }
+  if (merged.billing_mode === undefined && merged.billingMode !== undefined) {
+    merged.billing_mode = merged.billingMode;
+  }
+  if (merged.resolution_credits === undefined && merged.resolutionCredits !== undefined) {
+    merged.resolution_credits = merged.resolutionCredits;
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
 export function normalizeAiCanvasRuntimeModel(model = {}, category = "text") {
   const modelCode = String(model.modelCode ?? model.model_code ?? model.modelId ?? model.model_id ?? model.code ?? model.id ?? "").trim();
   if (!modelCode) return null;
@@ -91,7 +123,7 @@ export function normalizeAiCanvasRuntimeModel(model = {}, category = "text") {
       ? sanitizeRuntimeCatalogValue(model.defaultParams)
       : undefined,
     videoCapability,
-    pricing: model.pricing && typeof model.pricing === "object" ? sanitizeRuntimeCatalogValue(model.pricing) : undefined,
+    pricing: resolveRuntimeModelPricing(model),
     inputModalities: Array.isArray(model.inputModalities)
       ? model.inputModalities.map((value) => String(value).trim()).filter(Boolean)
       : undefined,
@@ -219,8 +251,46 @@ function normalizeRuntimeNodeData(node, nextType) {
       if (audioUrl != null) next.audioUrl = audioUrl;
     }
   }
-  if (previousType !== "send" && ["loading", "running", "queued", "processing", "pending", "submitted"].includes(String(next.status ?? "").trim().toLowerCase())) {
+  if (nextType === "ai-video" || nextType === "source-video") {
+    Object.assign(next, normalizeRuntimeVideoPoster(next));
+  }
+  const rawStatus = String(next.status ?? "").trim().toLowerCase();
+  if (previousType !== "send" && ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus)) {
     next.status = "loading";
+  } else if (rawStatus === "completed" || rawStatus === "succeeded") {
+    next.status = "success";
+  }
+  return next;
+}
+
+function looksLikeCanvasVideoUrl(value) {
+  const url = String(value ?? "").trim();
+  if (!url) return false;
+  if (/\.(mp4|webm|mov|m4v|mkv)(?:$|[?#])/i.test(url)) return true;
+  if (/[?&]thumbnail=1(?:&|$)/i.test(url)) return false;
+  return false;
+}
+
+function normalizeRuntimeVideoPoster(data = {}) {
+  const videoUrl = String(data.videoUrl ?? data.url ?? data.sourceUrl ?? "").trim();
+  const previewUrl = String(data.previewUrl ?? "").trim();
+  const next = {};
+  if (!String(data.videoUrl ?? "").trim() && videoUrl) next.videoUrl = videoUrl;
+  else if (!String(data.videoUrl ?? "").trim() && looksLikeCanvasVideoUrl(previewUrl)) next.videoUrl = previewUrl;
+  const poster = String(
+    data.thumbnailUrl
+    ?? data.posterUrl
+    ?? data.coverImageUrl
+    ?? data.videoPosterUrl
+    ?? "",
+  ).trim();
+  if (poster && poster !== videoUrl && !looksLikeCanvasVideoUrl(poster)) {
+    next.thumbnailUrl = poster;
+    if (!String(data.posterUrl ?? "").trim()) next.posterUrl = poster;
+  } else if (data.storageObjectId) {
+    next.thumbnailUrl = `/api/storage/objects/${encodeURIComponent(String(data.storageObjectId).trim())}/content?thumbnail=1`;
+  } else if (looksLikeCanvasVideoUrl(data.thumbnailUrl) || String(data.thumbnailUrl ?? "").trim() === videoUrl) {
+    next.thumbnailUrl = "";
   }
   return next;
 }

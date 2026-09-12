@@ -1441,6 +1441,9 @@ export function applyCanvasRunResult(document, preview, task = null) {
                   previewUrl: mediaUrl,
                   resultUrl: mediaUrl,
                   url: mediaUrl,
+                  ...(resultKind === "image" ? { imageUrl: mediaUrl } : {}),
+                  ...(resultKind === "video" ? { videoUrl: mediaUrl } : {}),
+                  ...(resultKind === "audio" ? { audioUrl: mediaUrl } : {}),
                 }
               : {}),
             ...mediaArtifactPatch,
@@ -1470,6 +1473,9 @@ export function applyCanvasRunResult(document, preview, task = null) {
                   previewUrl: mediaUrl,
                   resultUrl: mediaUrl,
                   url: mediaUrl,
+                  ...(resultKind === "image" ? { imageUrl: mediaUrl } : {}),
+                  ...(resultKind === "video" ? { videoUrl: mediaUrl } : {}),
+                  ...(resultKind === "audio" ? { audioUrl: mediaUrl } : {}),
                 }
               : {}),
             ...mediaArtifactPatch,

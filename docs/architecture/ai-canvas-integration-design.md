@@ -2,7 +2,7 @@
 
 > 状态：设计基线
 >
-> 对比来源：[Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri)，`origin/master` `236be2f`（v0.9.2，2026-09-06）；上一轮基线为 `8773129`。
+> 对比来源：[Tenney95/AI-Canvas-tauri](https://github.com/Tenney95/AI-Canvas-tauri)，`origin/master` `665b2cc`（v0.9.8，2026-09-11）；上一轮基线为 `236be2f`（v0.9.2）。
 >
 > 目标：在现有项目内重构一个完整的 AI 多模态画布。画布是独立业务实体，一个主用户可以拥有多个画布；画布不关联漫画项目。子用户只能访问主用户分配给他的画布。
 

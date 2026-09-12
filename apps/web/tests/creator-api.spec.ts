@@ -2120,6 +2120,52 @@ test("uploadFile rejects disallowed files before preparing an upload", async () 
   assert.equal(prepared, false);
 });
 
+test("uploadFile allows series original txt documents", async () => {
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  let preparedPurpose = "";
+  creatorApi.prepareUpload = async (input) => {
+    preparedPurpose = String(input?.purpose ?? "");
+    throw new Error("stop-before-transfer");
+  };
+
+  await assert.rejects(
+    () => creatorApi.uploadFile(
+      {
+        name: "novel.txt",
+        type: "text/plain",
+        size: 128,
+        lastModified: 1,
+      },
+      { purpose: "series-original" },
+    ),
+    /stop-before-transfer/,
+  );
+  assert.equal(preparedPurpose, "series-original");
+});
+
+test("uploadFile infers series-original purpose from original-work upload limits", async () => {
+  const { creatorApi, seriesOriginalUploadLimits } = await import("../src/shared/creator-api.js");
+  let preparedPurpose = "";
+  creatorApi.prepareUpload = async (input) => {
+    preparedPurpose = String(input?.purpose ?? "");
+    throw new Error("stop-before-transfer");
+  };
+
+  await assert.rejects(
+    () => creatorApi.uploadFile(
+      {
+        name: "novel.txt",
+        type: "text/plain",
+        size: 128,
+        lastModified: 1,
+      },
+      { purpose: "canvas-assets", uploadLimits: seriesOriginalUploadLimits },
+    ),
+    /stop-before-transfer/,
+  );
+  assert.equal(preparedPurpose, "series-original");
+});
+
 test("uploadFile rejects files that exceed configured limits before upload", async () => {
   const { creatorApi } = await import("../src/shared/creator-api.js");
   let prepared = false;

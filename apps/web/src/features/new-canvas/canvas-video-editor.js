@@ -9,6 +9,9 @@ import {
 } from "../../../vendor/mediabunny.mjs";
 
 const MAX_CLIPS = 32;
+const VIDEO_NODE_TYPES = new Set(["ai-video", "source-video", "video"]);
+const AUDIO_NODE_TYPES = new Set(["ai-audio", "source-audio", "audio"]);
+const SHOTLIST_TRANSITION_DURATION = 0.5;
 
 function text(value) {
   return String(value ?? "").trim();
@@ -53,6 +56,80 @@ function resolveStorageObjectId(value) {
     ?? value.latestVersion?.storageObject?.id);
 }
 
+function storageProxyUrl(storageObjectId) {
+  const id = text(storageObjectId);
+  return id ? `/api/storage/objects/${encodeURIComponent(id)}/content?proxy=1` : "";
+}
+
+function resolveNodeMediaUrl(node, kind = mediaKind(node)) {
+  const data = node?.data ?? {};
+  if (kind === "video") {
+    return text(data.videoUrl ?? data.url ?? data.previewUrl ?? data.sourceUrl) || storageProxyUrl(resolveStorageObjectId(data));
+  }
+  if (kind === "image") {
+    return text(data.imageUrl ?? data.url ?? data.previewUrl ?? data.thumbnailUrl ?? data.sourceUrl) || storageProxyUrl(resolveStorageObjectId(data));
+  }
+  return text(data.audioUrl ?? data.url ?? data.previewUrl ?? data.sourceUrl) || storageProxyUrl(resolveStorageObjectId(data));
+}
+
+function isShotRowBlank(row) {
+  if (row?.frame?.url || row?.frame?.previewUrl || row?.frame?.nodeId) return false;
+  return ![row?.shotSize, row?.camera, row?.content, row?.dialogue, row?.audio, row?.note].some((value) => text(value));
+}
+
+function shotTransitionKind(value) {
+  const raw = text(value);
+  if (/叠化|dissolve/i.test(raw)) return "dissolve";
+  if (/淡入|fade/i.test(raw)) return "fade";
+  return "none";
+}
+
+export function resolveCanvasShotlistTimelineRows(rows = [], nodes = []) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const frame = row?.frame && typeof row.frame === "object" ? row.frame : null;
+    if (!frame) return row;
+    const source = list.find((node) => text(node?.id) === text(frame.nodeId));
+    if (!source) return row;
+    const kind = VIDEO_NODE_TYPES.has(text(source.type)) ? "video" : "image";
+    const url = resolveNodeMediaUrl(source, kind) || text(frame.url || frame.previewUrl || frame.thumbnailUrl);
+    return {
+      ...row,
+      frame: {
+        ...frame,
+        kind,
+        url,
+        previewUrl: url,
+        storageObjectId: resolveStorageObjectId(source.data) || resolveStorageObjectId(frame),
+      },
+    };
+  });
+}
+
+export function resolveCanvasShotlistVoiceoverNodes(nodeId, nodes = []) {
+  const targetId = text(nodeId);
+  return (Array.isArray(nodes) ? nodes : []).filter((node) => {
+    const type = text(node?.type);
+    const source = node?.data?.shotlistProductionSource;
+    return AUDIO_NODE_TYPES.has(type)
+      && text(source?.nodeId) === targetId
+      && text(source?.kind) === "voiceover";
+  });
+}
+
+function createEditorDefaults(overrides = {}) {
+  return {
+    open: true,
+    exportFormat: "webm",
+    exportStatus: "idle",
+    aiTransitionPrompt: "自然衔接前后镜头",
+    aiTransitionDuration: 3,
+    aiTransitionBusy: false,
+    aiTransitionStatus: "",
+    ...overrides,
+  };
+}
+
 const TRANSITION_KINDS = Object.freeze(["none", "dissolve", "fade"]);
 const VIDEO_EDITOR_ENCODINGS = Object.freeze([
   { codec: "vp9", format: "webm" },
@@ -67,27 +144,89 @@ export function normalizeCanvasVideoEditorTransition(value = {}) {
   return { kind, duration };
 }
 
+function buildShotlistClips(rows = [], nodes = []) {
+  const resolved = resolveCanvasShotlistTimelineRows(rows, nodes).filter((row) => !isShotRowBlank(row));
+  return resolved.filter((row) => text(row?.frame?.url || row?.frame?.previewUrl || row?.frame?.thumbnailUrl)).slice(0, MAX_CLIPS).map((row, index) => {
+    const frame = row.frame;
+    const duration = Math.max(0, number(row.duration, 3));
+    const transitionKind = index > 0 ? shotTransitionKind(row.transition) : "none";
+    return {
+      id: `shot-${text(row.id) || index + 1}`,
+      nodeId: text(frame.nodeId),
+      label: `镜头 ${text(row.shotNo) || index + 1}`,
+      kind: text(frame.kind) === "video" ? "video" : "image",
+      source: text(frame.url || frame.previewUrl || frame.thumbnailUrl),
+      storageObjectId: resolveStorageObjectId(frame),
+      sourceIn: 0,
+      sourceOut: duration,
+      duration,
+      transitionIn: normalizeCanvasVideoEditorTransition({
+        kind: transitionKind,
+        duration: transitionKind === "none" ? 0 : Math.min(SHOTLIST_TRANSITION_DURATION, duration),
+      }),
+    };
+  });
+}
+
+function buildShotlistAudioTracks(nodeId, rows = [], nodes = []) {
+  const resolvedRows = resolveCanvasShotlistTimelineRows(rows, nodes).filter((row) => !isShotRowBlank(row));
+  const sources = resolveCanvasShotlistVoiceoverNodes(nodeId, nodes);
+  let timelineIn = 0;
+  const tracks = [];
+  resolvedRows.forEach((row, index) => {
+    const duration = Math.max(0, number(row.duration, 3));
+    const matches = sources.filter((node) => text(node?.data?.shotlistProductionSource?.rowId) === text(row.id));
+    if (matches.length > 1) throw new Error("同一镜头有多个配音节点，请先核对来源");
+    const source = matches[0];
+    const url = source ? resolveNodeMediaUrl(source, "audio") : "";
+    if (url) {
+      tracks.push({
+        id: `voiceover-${text(row.id) || index + 1}`,
+        nodeId: text(source.id),
+        label: text(source.data?.label || source.data?.title || source.data?.fileName) || `配音 ${text(row.shotNo) || index + 1}`,
+        source: url,
+        storageObjectId: resolveStorageObjectId(source.data),
+        sourceIn: 0,
+        sourceOut: duration,
+        volume: 1,
+        timelineIn,
+        fadeIn: 0,
+        fadeOut: 0,
+      });
+    }
+    timelineIn += duration;
+  });
+  return tracks.slice(0, 8);
+}
+
+export function buildCanvasVideoEditorShotlistSession({
+  document,
+  nodeId,
+  rows,
+  voiceoverNodes,
+  label,
+} = {}) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const node = nodes.find((item) => text(item?.id) === text(nodeId));
+  const shotRows = Array.isArray(rows) ? rows : (Array.isArray(node?.data?.shotlistRows) ? node.data.shotlistRows : []);
+  const clips = buildShotlistClips(shotRows, nodes);
+  const audioTracks = buildShotlistAudioTracks(nodeId, shotRows, Array.isArray(voiceoverNodes) ? voiceoverNodes : nodes);
+  return createEditorDefaults({
+    nodeId: text(nodeId),
+    title: text(label || node?.data?.label || node?.data?.title) || "分镜表",
+    clips,
+    audioTracks,
+    aiTransitionModel: text(node?.data?.modelCode || node?.data?.model || ""),
+  });
+}
+
 function resolveEditorClips(document, nodeId) {
   const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
   const edges = Array.isArray(document?.edges) ? document.edges : [];
   const target = nodes.find((node) => text(node?.id) === text(nodeId));
   const storedRows = Array.isArray(target?.data?.shotlistRows) ? target.data.shotlistRows : [];
   if (target?.type === "ai-shotlist" && storedRows.length) {
-    return storedRows.filter((row) => row?.frame?.url || row?.frame?.previewUrl).slice(0, MAX_CLIPS).map((row, index) => {
-      const frame = row.frame;
-      const duration = Math.max(0, number(row.duration, 3));
-      return {
-        id: `shot-${text(row.id) || index + 1}`,
-        nodeId: text(frame.nodeId),
-        label: `镜头 ${text(row.shotNo) || index + 1}`,
-        kind: text(frame.kind) === "video" ? "video" : "image",
-        source: text(frame.url || frame.previewUrl || frame.thumbnailUrl),
-        storageObjectId: resolveStorageObjectId(frame),
-        sourceIn: 0,
-        sourceOut: duration,
-        duration,
-      };
-    });
+    return buildShotlistClips(storedRows, nodes);
   }
   const connectedIds = new Set(edges
     .filter((edge) => text(edge?.targetNodeId) === text(nodeId))
@@ -642,14 +781,45 @@ export function createCanvasVideoEditorController({ surface, workbench, render }
       workbench.sourceWorkbench.ui.canvasDocument = nextDocument;
     }
   };
-  const open = (nodeId) => {
+  const open = (nodeId, options = {}) => {
     const document = workbench.ui?.canvasDocument;
     const node = document?.nodes?.find?.((item) => text(item?.id) === text(nodeId));
     if (!node) return false;
+    if (options.rebuild === true && node.type === "ai-shotlist") {
+      workbench.ui.canvasVideoEditor = buildCanvasVideoEditorShotlistSession({
+        document,
+        nodeId,
+        rows: options.rows,
+        voiceoverNodes: options.voiceoverNodes,
+        label: options.label || node.data?.label || node.data?.title,
+      });
+      void render?.();
+      return true;
+    }
     const stored = Array.isArray(node.data?.videoEditorTimeline) ? node.data.videoEditorTimeline : [];
     const clips = stored.length ? stored.map(normalizeCanvasVideoEditorClip) : resolveEditorClips(document, nodeId);
     const storedAudioTracks = Array.isArray(node.data?.videoEditorAudioTracks) ? node.data.videoEditorAudioTracks : [];
-    workbench.ui.canvasVideoEditor = { open: true, nodeId: text(nodeId), title: text(node.data?.title) || "当前剪辑", clips, audioTracks: storedAudioTracks.length ? storedAudioTracks : resolveEditorAudioTracks(document, nodeId), exportFormat: "webm", exportStatus: "idle", aiTransitionPrompt: "自然衔接前后镜头", aiTransitionModel: text(node.data?.modelCode || node.data?.model || ""), aiTransitionDuration: 3, aiTransitionBusy: false, aiTransitionStatus: "" };
+    workbench.ui.canvasVideoEditor = createEditorDefaults({
+      nodeId: text(nodeId),
+      title: text(options.label || node.data?.label || node.data?.title) || "当前剪辑",
+      clips,
+      audioTracks: storedAudioTracks.length ? storedAudioTracks : resolveEditorAudioTracks(document, nodeId),
+      aiTransitionModel: text(node.data?.modelCode || node.data?.model || ""),
+    });
+    void render?.();
+    return true;
+  };
+  const openShotlist = (params = {}) => {
+    const nodeId = text(params.nodeId);
+    const document = workbench.ui?.canvasDocument;
+    if (!nodeId || !document) return false;
+    workbench.ui.canvasVideoEditor = buildCanvasVideoEditorShotlistSession({
+      document,
+      nodeId,
+      rows: params.rows,
+      voiceoverNodes: params.voiceoverNodes,
+      label: params.label,
+    });
     void render?.();
     return true;
   };
@@ -1005,5 +1175,5 @@ export function createCanvasVideoEditorController({ surface, workbench, render }
     clip[field] = field === "sourceOut" ? Math.max(value, number(clip.sourceIn, 0)) : Math.min(value, number(clip.sourceOut, value));
     return true;
   };
-  return { open, close, save, exportTimeline, exportMedia, cancelExport, generateAiTransition, handleAction, handleChange };
+  return { open, openShotlist, close, save, exportTimeline, exportMedia, cancelExport, generateAiTransition, handleAction, handleChange };
 }

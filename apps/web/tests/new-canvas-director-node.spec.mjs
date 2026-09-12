@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
+
+function readRuntimeAsset(prefix) {
+  const name = readdirSync(new URL("../ai-canvas-runtime/assets/", import.meta.url))
+    .find((file) => file.startsWith(prefix) && file.endsWith(".js"));
+  assert.ok(name, `missing runtime asset ${prefix}`);
+  return readFileSync(new URL(`../ai-canvas-runtime/assets/${name}`, import.meta.url), "utf8");
+}
 
 import { handleWorkbenchActionForTest } from "../src/features/production-workbench/index.js";
 
@@ -149,13 +156,9 @@ test("renders the Director node actions and recent stable previews", () => {
 });
 
 test("runtime Director node renders the persisted reference video", () => {
-  const runtimeNode = readFileSync(
-    new URL("../ai-canvas-runtime/assets/DirectorDeskNode-DaZvhFp1.js", import.meta.url),
-    "utf8",
-  );
-  assert.match(runtimeNode, /videoSource = typeof t\.videoUrl == "string" \? t\.videoUrl\.trim\(\) : ""/);
-  assert.match(runtimeNode, /videoSource \? \/\* @__PURE__ \*\/ \(0, D\.jsx\)\("video"/);
-  assert.match(runtimeNode, /src: videoSource,[\s\S]*?controls: !0,[\s\S]*?preload: "metadata"/);
+  const runtimeNode = readRuntimeAsset("DirectorDeskNode-");
+  assert.match(runtimeNode, /typeof d\.videoUrl==`string`\?d\.videoUrl\.trim\(\):``/);
+  assert.match(runtimeNode, /jsx\)\(`video`,\{src:e,controls:!0,playsInline:!0,preload:`metadata`/);
 });
 
 function createDirectorDeleteWorkbench(document, saveStandaloneCanvas) {

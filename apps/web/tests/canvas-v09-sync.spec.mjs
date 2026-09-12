@@ -13,6 +13,7 @@ import {
   buildCanvasVideoEditorExportPayload,
   buildCanvasVideoEditorAiTransitionPayload,
   buildCanvasVideoEditorServerExportPayload,
+  buildCanvasVideoEditorShotlistSession,
   canCanvasVideoEditorUseServerExport,
   createCanvasVideoEditorFramePlan,
   computeCanvasVideoEditorDuration,
@@ -23,6 +24,8 @@ import {
   normalizeCanvasVideoEditorAudioTrack,
   normalizeCanvasVideoEditorTransition,
   renderCanvasVideoEditorShell,
+  resolveCanvasShotlistTimelineRows,
+  resolveCanvasShotlistVoiceoverNodes,
   resolveCanvasVideoEditorExportFormat,
   selectCanvasVideoEditorEncoding,
 } from "../src/features/new-canvas/canvas-video-editor.js";
@@ -250,6 +253,43 @@ test("video editor selects requested WebM or MP4 codec using browser capability 
   assert.deepEqual(mp4, { codec: "avc", format: "mp4", bitrate: 4_000_000 });
   assert.equal(resolveCanvasVideoEditorExportFormat("MOV"), "auto");
   assert.equal(resolveCanvasVideoEditorExportFormat("webm"), "webm");
+});
+
+test("shotlist timeline push maps live node media and voiceover tracks without Tauri paths", () => {
+  const nodes = [
+    { id: "image-1", type: "ai-image", data: { imageUrl: "/img-1.png", storageObjectId: "storage-image-1" } },
+    { id: "video-1", type: "ai-video", data: { videoUrl: "/clip-1.mp4", storageObjectId: "storage-video-1" } },
+    {
+      id: "audio-1",
+      type: "ai-audio",
+      data: {
+        audioUrl: "/voice-1.mp3",
+        storageObjectId: "storage-audio-1",
+        shotlistProductionSource: { nodeId: "shotlist-1", kind: "voiceover", rowId: "shot-2" },
+      },
+    },
+  ];
+  const rows = [
+    { id: "shot-1", shotNo: 1, duration: 2, transition: "切", frame: { nodeId: "image-1" } },
+    { id: "shot-2", shotNo: 2, duration: 4, transition: "叠化", frame: { nodeId: "video-1" }, dialogue: "跟上" },
+  ];
+  const resolved = resolveCanvasShotlistTimelineRows(rows, nodes);
+  assert.equal(resolved[0].frame.url, "/img-1.png");
+  assert.equal(resolved[1].frame.kind, "video");
+  assert.equal(resolveCanvasShotlistVoiceoverNodes("shotlist-1", nodes)[0].id, "audio-1");
+  const session = buildCanvasVideoEditorShotlistSession({
+    document: { nodes: [{ id: "shotlist-1", type: "ai-shotlist", data: { label: "第一集分镜", shotlistRows: rows } }, ...nodes] },
+    nodeId: "shotlist-1",
+    rows,
+  });
+  assert.equal(session.open, true);
+  assert.equal(session.title, "第一集分镜");
+  assert.deepEqual(session.clips.map((clip) => [clip.kind, clip.source, clip.transitionIn.kind]), [
+    ["image", "/img-1.png", "none"],
+    ["video", "/clip-1.mp4", "dissolve"],
+  ]);
+  assert.equal(session.audioTracks[0].source, "/voice-1.mp3");
+  assert.equal(session.audioTracks[0].timelineIn, 2);
 });
 
 test("video editor media encoder fails explicitly when a frame renderer is unavailable", async () => {

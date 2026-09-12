@@ -81,7 +81,11 @@ export function canvasAssetNodeData(asset) {
   const source = asRecord(asset);
   const kind = text(source.kind) || "image";
   const url = text(source.url ?? source.sourceUrl ?? source.previewUrl);
-  const previewUrl = text(source.previewUrl ?? source.thumbnailUrl ?? url);
+  const previewUrl = text(source.previewUrl ?? (kind === "video" ? url : source.thumbnailUrl ?? url));
+  const posterUrl = text(source.posterUrl ?? (kind === "video" ? source.thumbnailUrl : ""));
+  const thumbnailUrl = kind === "video"
+    ? posterUrl || (text(source.storageObjectId) ? `/api/storage/objects/${encodeURIComponent(text(source.storageObjectId))}/content?thumbnail=1` : "")
+    : text(source.thumbnailUrl);
   return {
     source: "canvas_artifact",
     status: "ready",
@@ -95,6 +99,7 @@ export function canvasAssetNodeData(asset) {
     ...(url ? { url } : {}),
     ...(previewUrl ? { previewUrl } : {}),
     ...(text(source.sourceUrl) ? { sourceUrl: text(source.sourceUrl) } : {}),
-    ...(text(source.posterUrl) ? { posterUrl: text(source.posterUrl) } : {}),
+    ...(posterUrl ? { posterUrl } : {}),
+    ...(thumbnailUrl && thumbnailUrl !== url ? { thumbnailUrl } : {}),
   };
 }

@@ -254,6 +254,128 @@ describe("production workbench task center", () => {
     assert.equal(node.data.lastTaskId, "task-media-1");
   });
 
+  it("projects a completed canvas task onto the generating node when the target is the canvas", async () => {
+    const document = {
+      version: 1,
+      nodes: [{
+        id: "node-zts5tsxsm",
+        type: "ai-image",
+        data: {
+          status: "loading",
+          prompt: "生成一片草原，其中有各种奇形怪状的异兽",
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-47",
+        canvasProjects: [{ id: "canvas-47" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-47": document },
+        canvasGenerationHistoryItems: [],
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "51e4070c-b62b-4c67-8d4d-0412ad71e250",
+      kind: "image",
+      mediaKind: "image",
+      status: "succeeded",
+      targetType: "canvas",
+      targetId: "canvas-47",
+      result: { imageUrl: "/storyboard-sheet.png" },
+      updatedAt: "2026-09-12T11:49:19.000Z",
+    });
+
+    const node = workbench.ui.canvasDocument.nodes[0];
+    assert.equal(node.data.status, "completed");
+    assert.equal(node.data.previewUrl, "/storyboard-sheet.png");
+    assert.equal(node.data.imageUrl, "/storyboard-sheet.png");
+    assert.equal(node.data.lastTaskId, "51e4070c-b62b-4c67-8d4d-0412ad71e250");
+  });
+
+  it("projects a completed canvas expand task onto the newest unbound loading node", async () => {
+    const document = {
+      version: 1,
+      nodes: [
+        {
+          id: "node-old-loading",
+          type: "ai-image",
+          data: { status: "loading", prompt: "旧图" },
+        },
+        {
+          id: "node-expand",
+          type: "ai-image",
+          data: { status: "loading", label: "生成图像 扩图" },
+        },
+      ],
+      edges: [],
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-47",
+        canvasProjects: [{ id: "canvas-47" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-47": document },
+        canvasGenerationHistoryItems: [],
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "586e7908-df8d-4a64-a954-f9c7d279db9a",
+      kind: "image",
+      mediaKind: "image",
+      status: "succeeded",
+      targetType: "canvas",
+      targetId: "canvas-47",
+      result: { imageUrl: "/expanded.png" },
+      updatedAt: "2026-09-12T10:33:04.000Z",
+    });
+
+    const oldNode = workbench.ui.canvasDocument.nodes[0];
+    const expandNode = workbench.ui.canvasDocument.nodes[1];
+    assert.equal(oldNode.data.status, "loading");
+    assert.equal(oldNode.data.lastTaskId, undefined);
+    assert.equal(expandNode.data.status, "completed");
+    assert.equal(expandNode.data.imageUrl, "/expanded.png");
+    assert.equal(expandNode.data.lastTaskId, "586e7908-df8d-4a64-a954-f9c7d279db9a");
+  });
+
+  it("keeps polling a succeeded canvas task until the media URL arrives", async () => {
+    const calls = [];
+    const workbench = {
+      ui: {
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+      },
+      api: {
+        async getGenerationTasks(taskIds) {
+          calls.push([...taskIds]);
+          return {
+            items: taskIds.map((taskId) => ({
+              taskId,
+              status: "succeeded",
+              kind: "image",
+              updatedAt: "2026-09-12T10:33:04.000Z",
+            })),
+          };
+        },
+      },
+    };
+    registerTaskCenterTaskForTest(workbench, "task-expand-pending-url", {
+      status: "succeeded",
+      kind: "image",
+      mediaKind: "image",
+      updatedAt: "2026-09-12T10:33:04.000Z",
+    });
+    await runTaskCenterPollingForTest(workbench);
+    assert.deepEqual(calls[0], ["task-expand-pending-url"]);
+    assert.equal(workbench.ui.taskCenterTasksById["task-expand-pending-url"].status, "completed");
+  });
+
   it("shows storage retry and manual storage review states instead of generation progress", () => {
     const html = renderProjectDetail({
       state: {},
@@ -429,10 +551,21 @@ describe("production workbench task center", () => {
     assert.equal(dom.getBadge()?.className, "task-center-action-count");
     assert.equal(dom.getBadge()?.textContent, "1");
 
-    registerTaskCenterTaskForTest(workbench, "task-video-live", { status: "completed", kind: "video" });
+    registerTaskCenterTaskForTest(workbench, "task-video-live", {
+      status: "completed",
+      kind: "video",
+      result: { videoUrl: "/done.mp4" },
+    });
 
       assert.equal(dom.attributes.get("aria-label"), "任务中心");
       assert.equal(dom.getBadge(), null);
+
+    registerTaskCenterTaskForTest(workbench, "task-expand-pending-url", {
+      status: "succeeded",
+      kind: "image",
+    });
+    assert.equal(dom.attributes.get("aria-label"), "任务中心，1 个任务进行中");
+    assert.equal(dom.getBadge()?.textContent, "1");
     });
 
     it("keeps the generating badge after an empty discovery and continues discovering later", async () => {
@@ -526,6 +659,7 @@ describe("production workbench task center", () => {
             taskId: "task-background-poll",
             kind: "image",
             status: "completed",
+            result: { imageUrl: "/done.png" },
             updatedAt: "2026-08-27T08:00:00.000Z",
           };
         },
@@ -656,6 +790,7 @@ describe("production workbench task center", () => {
               taskId: "task-deduplicated",
               status: "completed",
               kind: "image",
+              result: { imageUrl: "/done.png" },
               updatedAt: "2026-07-14T08:00:18.000Z",
             }],
             page: 1,

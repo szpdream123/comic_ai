@@ -284,12 +284,9 @@ export function renderGenerationSubmitButton({
 }
 
 export function resolveGenerationCreditCost(mediaMode, generationControls = {}, selectedModel = null) {
-  const pricingCost = resolveModelPricingCost(mediaMode, generationControls, selectedModel);
+  const pricingCost = resolveConfiguredGenerationCreditCost(mediaMode, generationControls, selectedModel);
   if (pricingCost !== null) {
     return pricingCost;
-  }
-  if (Number.isFinite(Number(selectedModel?.credits)) && Number(selectedModel.credits) > 0) {
-    return Number(selectedModel.credits);
   }
   if (mediaMode === "video") {
     return Number(generationControls.videoCreditCost ?? 120);
@@ -299,6 +296,56 @@ export function resolveGenerationCreditCost(mediaMode, generationControls = {}, 
     return Number(generationControls.multiReferenceCreditCost ?? 50);
   }
   return Number(generationControls.imageCreditCost ?? 90);
+}
+
+export function resolveConfiguredGenerationCreditCost(mediaMode, generationControls = {}, selectedModel = null) {
+  const pricingCost = resolveModelPricingCost(mediaMode, generationControls, selectedModel);
+  if (pricingCost !== null) {
+    return pricingCost;
+  }
+  if (Number.isFinite(Number(selectedModel?.credits)) && Number(selectedModel.credits) > 0) {
+    return Number(selectedModel.credits);
+  }
+  if (Number.isFinite(Number(selectedModel?.displayBaseCost)) && Number(selectedModel.displayBaseCost) > 0) {
+    return Number(selectedModel.displayBaseCost);
+  }
+  return null;
+}
+
+export function matchCanvasRuntimeCatalogModel(models = [], selectedValue = "") {
+  const normalize = (value) => String(value ?? "").trim().replace(/^general\//, "");
+  const selectedCode = normalize(selectedValue);
+  if (!selectedCode) return null;
+  return (Array.isArray(models) ? models : []).find((model) => {
+    const modelId = normalize(model?.modelId ?? model?.modelCode ?? model?.id);
+    const catalogId = normalize(model?.id);
+    return Boolean(
+      (modelId && (modelId === selectedCode || selectedCode.endsWith(`/${modelId}`)))
+      || (catalogId && (catalogId === selectedCode || catalogId.endsWith(`/${selectedCode}`) || selectedCode.endsWith(`/${catalogId}`))),
+    );
+  }) ?? null;
+}
+
+export function resolveCanvasRuntimeNodeCreditCost(node = {}, selectedModel = null) {
+  const data = node?.data && typeof node.data === "object" ? node.data : node;
+  const type = String(node?.type ?? data?.type ?? "").trim();
+  const mediaKind = type === "ai-video" || data?.mediaKind === "video"
+    ? "video"
+    : type === "ai-audio" || data?.mediaKind === "audio"
+      ? "audio"
+      : type === "ai-text" || type === "ai-markdown" || type === "ai-shotlist"
+        ? "text"
+        : "image";
+  if (mediaKind !== "image" && mediaKind !== "video") {
+    return null;
+  }
+  return resolveConfiguredGenerationCreditCost(mediaKind, {
+    parameterValues: data && typeof data === "object" ? data : {},
+    imageAspectRatio: data?.aspectRatio ?? data?.imageAspectRatio ?? data?.seedanceRatio,
+    imageResolution: data?.imageSize ?? data?.imageResolution ?? data?.quality,
+    videoResolution: data?.seedanceResolution ?? data?.videoResolution ?? data?.resolution,
+    videoDurationSec: data?.seedanceDuration ?? data?.videoDuration ?? data?.durationSec ?? data?.videoDurationSec ?? data?.duration,
+  }, selectedModel);
 }
 
 function resolveModelPricingCost(mediaMode, generationControls = {}, selectedModel = null) {
@@ -312,12 +359,12 @@ function resolveModelPricingCost(mediaMode, generationControls = {}, selectedMod
     selectedModel?.displayBaseCost,
     selectedModel?.credits,
   );
-  if (baseCredits === null) return null;
   const parameters = resolveGenerationPricingParameters(mediaMode, generationControls, selectedModel);
   const billingMode = normalizePricingBillingMode(pricing.billingMode ?? pricing.billing_mode ?? pricing.mode);
   const unitCredits = mediaMode === "image" && billingMode !== "duration"
     ? baseCredits
     : readParameterUnitCredits(pricing, parameters) ?? baseCredits;
+  if (unitCredits === null) return null;
   const cost = billingMode === "duration" && mediaMode === "video"
     ? unitCredits * (readPositiveCredit(parameters.durationSec) ?? 1)
     : unitCredits;
@@ -407,6 +454,7 @@ function resolveGenerationPricingParameters(mediaMode, generationControls = {}, 
       resolution: firstGenerationValue(
         parameterValues.resolution,
         parameterValues.videoResolution,
+        parameterValues.seedanceResolution,
         generationControls.videoResolution,
         selectedModel?.defaultParams?.resolution,
         selectedModel?.defaultParams?.quality,
@@ -430,15 +478,17 @@ function resolveGenerationPricingParameters(mediaMode, generationControls = {}, 
       durationSec: firstGenerationValue(
         parameterValues.durationSec,
         parameterValues.videoDurationSec,
+        parameterValues.seedanceDuration,
+        parameterValues.videoDuration,
         generationControls.videoDurationSec,
         selectedModel?.defaultParams?.durationSec,
       ),
     };
   }
   return {
-    size: firstGenerationValue(parameterValues.size, parameterValues.resolution, parameterValues.quality, generationControls.imageResolution, selectedModel?.defaultParams?.size),
-    resolution: firstGenerationValue(parameterValues.resolution, parameterValues.imageResolution, generationControls.imageResolution, selectedModel?.defaultParams?.resolution),
-    quality: firstGenerationValue(parameterValues.quality, parameterValues.imageResolution, generationControls.imageResolution, selectedModel?.defaultParams?.quality),
+    size: firstGenerationValue(parameterValues.size, parameterValues.imageSize, parameterValues.resolution, parameterValues.quality, generationControls.imageResolution, selectedModel?.defaultParams?.size),
+    resolution: firstGenerationValue(parameterValues.resolution, parameterValues.imageResolution, parameterValues.imageSize, generationControls.imageResolution, selectedModel?.defaultParams?.resolution),
+    quality: firstGenerationValue(parameterValues.quality, parameterValues.imageResolution, parameterValues.imageSize, generationControls.imageResolution, selectedModel?.defaultParams?.quality),
     ratio: firstGenerationValue(parameterValues.ratio, parameterValues.aspectRatio, parameterValues.imageAspectRatio, generationControls.imageAspectRatio, selectedModel?.defaultParams?.ratio),
     aspectRatio: firstGenerationValue(parameterValues.aspectRatio, parameterValues.imageAspectRatio, generationControls.imageAspectRatio, selectedModel?.defaultParams?.aspectRatio),
     count: firstGenerationValue(parameterValues.count, generationControls.imageCount, selectedModel?.defaultParams?.count),
@@ -450,10 +500,11 @@ function readParameterUnitCredits(pricing = {}, parameters = {}) {
     ? pricing.resolutionCredits
     : null;
   if (!table) return null;
+  const lookup = new Map(Object.entries(table).map(([key, value]) => [String(key).trim().toLowerCase(), value]));
   for (const key of ["size", "resolution", "quality", "ratio", "aspectRatio"]) {
     const parameterValue = String(parameters[key] ?? "").trim();
     if (!parameterValue) continue;
-    const configuredCredits = Number(table[parameterValue]);
+    const configuredCredits = Number(lookup.get(parameterValue.toLowerCase()) ?? table[parameterValue]);
     if (Number.isFinite(configuredCredits) && configuredCredits >= 0) return configuredCredits;
   }
   return null;

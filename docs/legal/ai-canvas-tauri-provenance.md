@@ -3,9 +3,9 @@
 ## Source
 
 - Upstream: `https://github.com/Tenney95/AI-Canvas-tauri`
-- Latest upstream checked: `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` (v0.9.2, 2026-09-06)
-- Reviewed baseline: `87731295a121be601b1d4fa8616b0f2d1a38a3bb` (v0.6.7, 2026-07-26)
-- Previous reviewed baselines: `0f3ca1c`, `bded37f` (v0.6.6), `d7f3a3d`
+- Latest upstream checked: `665b2ccc54e81f9763b278f8d2007fd333d75050` (v0.9.8, 2026-09-11)
+- Reviewed baseline: `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` (v0.9.2, 2026-09-06)
+- Previous reviewed baselines: `8773129` (v0.6.7), `0f3ca1c`, `bded37f` (v0.6.6), `d7f3a3d`
 - Integration design: `docs/architecture/ai-canvas-integration-design.md`
 - Authorization: the product owner reports that the upstream author approved this use. The signed or otherwise durable authorization record must remain in the company's legal archive; this file does not replace that record or add terms to it.
 
@@ -40,9 +40,11 @@ No direct upstream source file is currently declared as copied verbatim. The imp
 
 ## Release checks
 
-## v0.9.2 Web runtime sync
+## v0.9.8 Web runtime sync
 
-The browser runtime was rebuilt from upstream `236be2f0aec59b3ec0b623bcf563e65fb223d7f4` using the project-owned `vite.runtime.config.ts` shape and embedded document bridge. Tauri-only window, filesystem, process, native plugin-window, and desktop permission code remains excluded from the Web product.
+The browser runtime was rebuilt from upstream `665b2ccc54e81f9763b278f8d2007fd333d75050` (v0.9.8) using the project-owned embedded document bridge. Existing Web host chrome, brand CSS, COS upload, task-center, and assistant-toolbar product patches are preserved. Tauri-only window, filesystem, process, native plugin-window, and desktop permission code remains excluded from the Web product.
+
+New v0.9.3–v0.9.8 Web-safe capabilities now included: distant-node LOD and progressive restore, Mac mouse-wheel zoom with trackpad gestures, minimap node-stat overlay, sidebar asset library with node preview connections, unified resource video preview, shotlist production/storyboard/revision flows, and assistant empty-reply recovery. Plugin sandbox, Blender native runtime, ComfyUI/RunningHub/AutoDL desktop workflow hosts, and credential stores remain excluded.
 
 ## v0.9.2 comparison and Web adaptation status
 

@@ -250,6 +250,18 @@ test("Canvas media Artifact patches preserve stable version and storage IDs", ()
     assetVersionId: "version-video-1",
     storageObjectId: "storage-video-1",
   });
+  assert.deepEqual(resolveCanvasMediaArtifactPatch({
+    result: {
+      assetVersionId: "version-video-2",
+      storageObjectId: "storage-video-2",
+      thumbnailUrl: "https://example.test/video-poster.jpg",
+    },
+  }), {
+    assetVersionId: "version-video-2",
+    storageObjectId: "storage-video-2",
+    thumbnailUrl: "https://example.test/video-poster.jpg",
+    posterUrl: "https://example.test/video-poster.jpg",
+  });
 });
 
 test("Canvas media toolbar actions find the requested X6 media body and controls stop node dragging", () => {

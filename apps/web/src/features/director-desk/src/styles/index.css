@@ -2892,6 +2892,7 @@ textarea:focus-visible {
   display: grid;
   gap: 4px;
   width: 132px;
+  overflow: auto;
   padding: 6px;
   border: 1px solid rgb(var(--border-rgb) / 0.35);
   border-radius: 14px;
@@ -2950,6 +2951,7 @@ textarea:focus-visible {
   display: grid;
   gap: 4px;
   width: 112px;
+  overflow: auto;
   padding: 6px;
   border: 1px solid rgb(var(--border-rgb) / 0.35);
   border-radius: 14px;
@@ -2965,6 +2967,7 @@ textarea:focus-visible {
   display: grid;
   gap: 16px;
   width: 260px;
+  overflow: auto;
   padding: 16px;
   border: 1px solid rgb(var(--border-rgb) / 0.35);
   border-radius: 22px;
@@ -3383,7 +3386,7 @@ textarea:focus-visible {
   left: 50%;
   bottom: calc(100% + 10px);
   z-index: 35;
-  width: min(500px, calc(100vw - 40px));
+  width: min(500px, calc(100% - 32px));
   height: 360px;
   border: 1px solid rgb(var(--border-rgb) / 0.35);
   border-radius: 12px;

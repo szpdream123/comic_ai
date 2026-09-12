@@ -1,4 +1,4 @@
-import "./assets/main-upstream-236be2f0.js";
+import "./assets/main-upstream-665b2cc.js";
 
 const runtime = globalThis.__COMIC_AI_CANVAS_RUNTIME__;
 
@@ -8,6 +8,7 @@ if (!runtime) {
 
 export function mountAiCanvasRuntime(surface, context = {}) {
   const previousBridge = globalThis.__COMIC_AI_CANVAS_DIRECTOR_DESK_BRIDGE__;
+  const previousVideoEditorBridge = globalThis.__COMIC_AI_CANVAS_VIDEO_EDITOR_BRIDGE__;
   const previousHostApi = globalThis.__COMIC_AI_CANVAS_HOST_API__;
   const previousCanvasProjectId = globalThis.__COMIC_AI_CANVAS_PROJECT_ID__;
   const bridge = {
@@ -15,12 +16,20 @@ export function mountAiCanvasRuntime(surface, context = {}) {
     syncFrame: context.onDirectorDeskSyncFrame,
     exportVideo: context.onDirectorDeskExportVideo,
   };
+  const videoEditorBridge = {
+    open: context.onVideoEditorOpen,
+    openShotlist: context.onVideoEditorOpenShotlist,
+  };
   globalThis.__COMIC_AI_CANVAS_DIRECTOR_DESK_BRIDGE__ = bridge;
+  globalThis.__COMIC_AI_CANVAS_VIDEO_EDITOR_BRIDGE__ = videoEditorBridge;
   globalThis.__COMIC_AI_CANVAS_HOST_API__ = context.api ?? context.creatorApi ?? previousHostApi;
   globalThis.__COMIC_AI_CANVAS_PROJECT_ID__ = context.canvasProjectId ?? context.projectId ?? previousCanvasProjectId;
   const restoreHostBridge = () => {
     if (globalThis.__COMIC_AI_CANVAS_DIRECTOR_DESK_BRIDGE__ === bridge) {
       globalThis.__COMIC_AI_CANVAS_DIRECTOR_DESK_BRIDGE__ = previousBridge;
+    }
+    if (globalThis.__COMIC_AI_CANVAS_VIDEO_EDITOR_BRIDGE__ === videoEditorBridge) {
+      globalThis.__COMIC_AI_CANVAS_VIDEO_EDITOR_BRIDGE__ = previousVideoEditorBridge;
     }
     if (globalThis.__COMIC_AI_CANVAS_HOST_API__ === (context.api ?? context.creatorApi)) {
       globalThis.__COMIC_AI_CANVAS_HOST_API__ = previousHostApi;
