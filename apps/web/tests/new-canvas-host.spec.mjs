@@ -257,6 +257,7 @@ test("canvas chrome keeps the previous four-corner layout after upstream runtime
   assert.match(source, /\.minimap-stats-card[\s\S]*?bottom: calc\(100% \+ 8px\) !important/);
   assert.match(source, /\.new-canvas-root \.chat-panel,[\s\S]*?top: 12px !important;[\s\S]*?bottom: 12px !important/);
   assert.match(source, /> button\[aria-label="新建画布"\][\s\S]*?display: none/);
+  assert.match(source, /\.new-canvas-root \.group\\\/session[\s\S]*?display: none !important/);
   assert.match(source, /\[data-host-header-chrome\][\s\S]*?display: inline-flex/);
 });
 

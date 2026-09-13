@@ -413,6 +413,8 @@ function normalizeAiCanvasRuntimeProject(project) {
   };
   const createdAt = normalizeDate(project?.createdAt, Date.now());
   const updatedAt = normalizeDate(project?.updatedAt, createdAt);
+  const parentId = String(project?.parentId ?? "").trim();
+  const episodeNo = Number(project?.episodeNo);
   return {
     id,
     name,
@@ -421,6 +423,15 @@ function normalizeAiCanvasRuntimeProject(project) {
     updatedAt,
     status: String(project?.status ?? "草稿"),
     externalCanvasProject: true,
+    ...(parentId ? { parentId } : {}),
+    ...(Number.isFinite(episodeNo) && episodeNo > 0 ? { episodeNo } : {}),
+    ...(project?.episodeOutline != null ? { episodeOutline: String(project.episodeOutline) } : {}),
+    ...(project?.episodeScript != null ? { episodeScript: String(project.episodeScript) } : {}),
+    ...(project?.episodeCreative && typeof project.episodeCreative === "object"
+      ? { episodeCreative: project.episodeCreative }
+      : {}),
+    ...(project?.series && typeof project.series === "object" ? { series: project.series } : {}),
+    ...(project?.settings && typeof project.settings === "object" ? { settings: project.settings } : {}),
   };
 }
 
@@ -443,12 +454,20 @@ function mergeAiCanvasRuntimeProjects(catalogProjects, existingProjects) {
     return {
       ...previous,
       ...project,
-      ...(previous.series ? { series: previous.series } : {}),
-      ...(previous.parentId ? { parentId: previous.parentId } : {}),
-      ...(previous.episodeNo != null ? { episodeNo: previous.episodeNo } : {}),
-      ...(previous.episodeOutline != null ? { episodeOutline: previous.episodeOutline } : {}),
-      ...(previous.episodeScript != null ? { episodeScript: previous.episodeScript } : {}),
-      ...(previous.episodeCreative != null ? { episodeCreative: previous.episodeCreative } : {}),
+      ...(previous.series || project.series ? { series: project.series ?? previous.series } : {}),
+      ...(previous.parentId || project.parentId ? { parentId: project.parentId ?? previous.parentId } : {}),
+      ...(previous.episodeNo != null || project.episodeNo != null
+        ? { episodeNo: project.episodeNo ?? previous.episodeNo }
+        : {}),
+      ...(previous.episodeOutline != null || project.episodeOutline != null
+        ? { episodeOutline: project.episodeOutline ?? previous.episodeOutline }
+        : {}),
+      ...(previous.episodeScript != null || project.episodeScript != null
+        ? { episodeScript: project.episodeScript ?? previous.episodeScript }
+        : {}),
+      ...(previous.episodeCreative || project.episodeCreative
+        ? { episodeCreative: project.episodeCreative ?? previous.episodeCreative }
+        : {}),
       ...(previous.settings || project.settings
         ? { settings: project.settings ?? previous.settings }
         : {}),
@@ -919,7 +938,9 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       openProjects: context.onOpenProjects,
       addEpisodes: isAiCanvasRuntimeNativeHost()
         ? undefined
-        : (episodes) => addAiCanvasRuntimeEpisodes(store, episodes),
+        : (episodes) => (typeof context.onAddEpisodes === "function"
+          ? context.onAddEpisodes(episodes)
+          : addAiCanvasRuntimeEpisodes(store, episodes)),
     };
     const applyCatalog = (next = {}) => {
       if (next.projectCatalog !== undefined) {
@@ -973,6 +994,9 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
         applying = true;
         try {
           applyCatalog({ projectCatalog, currentProjectId });
+          if (typeof context.onProjectsChange === "function") {
+            context.onProjectsChange(nextState.projects);
+          }
         } finally {
           applying = false;
         }

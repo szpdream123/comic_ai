@@ -30,6 +30,19 @@ test("Agent Center keeps package upload behind the Tauri IPC capability check", 
   assert.match(source, /智能体上传需在桌面客户端完成/);
 });
 
+test("Canvas Agent drops lifetime token cap and compresses by model context", () => {
+  const main = readRuntimeAsset("main-upstream-");
+  const executor = readRuntimeAsset("agentRoundExecutor-");
+  const chat = readRuntimeAsset("ChatPanel-");
+  assert.match(main, /maxTotalTokens:1\/0/);
+  assert.doesNotMatch(main, /任务累计 token 已达上限/);
+  assert.match(executor, /compressLiveTaskContext/);
+  assert.match(executor, /已按当前模型上下文自动压缩任务记录/);
+  assert.match(executor, /已按当前模型上下文自动压缩较早对话/);
+  assert.match(executor, /At\(r\)>b\.inputBudget\*\.75/);
+  assert.match(chat, /该任务累计消耗（轮次 \/ 工具调用 \/ 继续次数）已达上限/);
+});
+
 test("Canvas Agent timeline collapses lifecycle events by step", () => {
   const events = [
     { id: "task-started", sequence: 1, eventType: "task.started", event: {} },

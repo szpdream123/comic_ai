@@ -2996,6 +2996,7 @@ export function renderWorkbenchRail(activeNavTab, session = {}, ui = {}) {
   const isAnonymous = !hasActiveSessionUser(session);
   const railTabs = NAV_TABS.filter((tab) => {
     if (isTeamMember && tab.id === "team") return false;
+    if (tab.id === "tools") return false;
     return tab.id !== "new-canvas" || session?.features?.newCanvas !== false;
   });
   return `
@@ -8825,6 +8826,23 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
   `;
 }
 
+const DEFAULT_SKILL_MARKDOWN = `输入 Skill 内容，或上传 SKILL.md 文件直接替换
+
+## 做什么
+（一句话说明用途）例：把一句话故事想法做成一条短漫剧成片
+
+## 需要什么输入
+（最少提供什么）例：一句话想法，可选画风、时长、主角设定
+
+## 怎么做
+（写你在意的环节和要求，不用写全）例：脚本要反转多，画风固定成韩漫
+
+## 产出什么
+（最终交付什么）例：成片，附脚本和分镜
+
+## 什么时候问你
+（什么情况下停下来问你）例：拿不准题材或风格时问一次，其余自己定`;
+
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
   if (["home", "free-generation"].includes(activeNavTab)) {
     return `
@@ -8855,7 +8873,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "skills") {
     return renderScrollableWorkbenchSurface("skills", `
-      ${renderSkillPlazaPage(ui)}
+      ${ui.skillCreateOpen ? renderSkillCreatePage(ui) : renderSkillPlazaPage(ui)}
       ${renderInlineStatusToast(ui)}
     `);
   }
@@ -8919,6 +8937,114 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     return renderScrollableWorkbenchSurface("toolbox", renderToolboxPage(ui));
   }
 
+function renderSkillCreatePage(ui = {}) {
+  return `<section class="skill-create-page" aria-label="创建 Skill">
+    <form id="skill-create-form" class="skill-create-page-form">
+      <header class="skill-create-page-header">
+        <h1 id="skill-create-title">创建Skill</h1>
+        <button class="skill-create-save" type="button" data-action="create-skill">保存</button>
+      </header>
+      <div class="skill-create-page-body">
+        <label class="skill-create-field">
+          <span>Skill 名称 <em>*</em></span>
+          <input name="name" required minlength="2" maxlength="80" placeholder="给你的 Skill 起个名字" />
+        </label>
+        <input type="hidden" name="category" value="general" />
+        <label class="skill-create-field">
+          <span>一句话介绍 <em>*</em></span>
+          <span class="skill-create-counter-field">
+            <input name="summary" required maxlength="30" placeholder="简短描述该 Skill 的能力" data-skill-create-summary />
+            <small data-skill-create-summary-count>0/30</small>
+          </span>
+        </label>
+        <section class="skill-create-content">
+          <div class="skill-create-content-head">
+            <span>Skill 内容 <em>*</em></span>
+            <div class="skill-create-content-tools">
+              <div class="skill-create-mode-toggle" role="tablist" aria-label="Skill 内容视图">
+                <button type="button" data-action="set-skill-create-editor-mode" data-mode="preview">预览</button>
+                <button class="active" type="button" data-action="set-skill-create-editor-mode" data-mode="code">代码</button>
+              </div>
+              <div class="skill-create-upload-menu-wrap">
+                <button type="button" data-action="toggle-skill-create-upload-menu">上传</button>
+                <div class="skill-create-upload-menu" data-skill-create-upload-menu hidden>
+                  <label>上传文件<input name="skillFiles" type="file" multiple accept="image/*,video/*,audio/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" /></label>
+                  <label>上传文件夹<input name="skillFolderFiles" type="file" multiple webkitdirectory directory accept=".md,.markdown,.txt,.csv,.json,.pdf,.docx,image/*,video/*,audio/*" /></label>
+                </div>
+              </div>
+              <button class="skill-create-icon-button" type="button" data-action="toggle-skill-create-editor-expand" title="放大" aria-label="放大">${renderCanvasIcon("fullscreen")}</button>
+            </div>
+          </div>
+          <div class="skill-create-editor" data-skill-create-editor data-mode="code">
+            <aside class="skill-create-tree">
+              <header>
+                <span>目录</span>
+                <span class="skill-create-tree-actions">
+                  <button class="skill-create-icon-button" type="button" data-action="add-skill-create-folder" title="新建文件夹" aria-label="新建文件夹">${renderCanvasIcon("plus")}</button>
+                  <button class="skill-create-icon-button" type="button" data-action="add-skill-create-markdown" title="新建MD文件" aria-label="新建MD文件">${renderCanvasIcon("markdown")}</button>
+                </span>
+              </header>
+              <div class="skill-create-tree-list" data-skill-create-tree>
+                <div class="skill-create-tree-row is-file is-active" data-tree-kind="file" data-file-name="SKILL.md">
+                  <button type="button" data-action="set-skill-create-file" data-file-name="SKILL.md"><span class="skill-create-tree-icon is-file"></span><span>SKILL.md</span></button>
+                  <span class="skill-create-tree-pin" title="入口文件" aria-hidden="true"></span>
+                </div>
+              </div>
+              <div class="skill-create-folders" data-skill-create-folders hidden></div>
+              <div class="skill-create-tree-menu" data-skill-create-tree-menu hidden>
+                <button type="button" data-action="rename-skill-create-tree-item">重命名</button>
+                <button type="button" data-action="delete-skill-create-tree-item">删除</button>
+              </div>
+            </aside>
+            <div class="skill-create-editor-main">
+              <div class="skill-create-markdown-files" data-skill-create-markdown-files>
+                <article class="skill-create-markdown-item is-active" data-skill-create-markdown-item data-file-name="SKILL.md">
+                  <input name="skillMarkdownName" maxlength="240" value="SKILL.md" hidden />
+                  <textarea name="skillMarkdownContent" required maxlength="20000" rows="16" data-skill-create-markdown-content placeholder="${escapeAttr(DEFAULT_SKILL_MARKDOWN)}"></textarea>
+                </article>
+              </div>
+              <div class="skill-create-preview skill-detail-file-markdown" data-skill-create-preview hidden></div>
+              <p class="skill-create-editor-empty" data-skill-create-empty hidden>请选择左侧文件进行编辑</p>
+              <small class="skill-create-editor-count" data-skill-create-content-count>0/20000</small>
+            </div>
+          </div>
+        </section>
+        <label class="skill-create-field">
+          <span>使用场景 <em>*</em></span>
+          <textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息"></textarea>
+        </label>
+        <label class="skill-create-field">
+          <span>如何使用 <em>*</em></span>
+          <textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息（例如：剧本内容、故事梗概或任何叙事素材）"></textarea>
+        </label>
+        <label class="skill-create-field">
+          <span>输出内容 <em>*</em></span>
+          <textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么（例如：90秒超现实主义数字片头视频）"></textarea>
+        </label>
+        <label class="skill-create-field">
+          <span>选择类型</span>
+          <select name="coverType" data-skill-create-cover-type>
+            <option value="image" selected>图片</option>
+            <option value="video">视频</option>
+            <option value="audio">音频</option>
+            <option value="text">文本</option>
+          </select>
+        </label>
+        <section class="skill-create-cover" data-skill-create-cover>
+          <span>上传封面（选填）</span>
+          <label class="skill-create-cover-upload" data-skill-create-media data-dropzone="skill-create-media">
+            <input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" />
+            <span class="skill-create-cover-plus" data-skill-create-media-placeholder>+</span>
+            <span class="skill-create-media-preview" data-skill-create-media-preview hidden></span>
+            <span class="skill-create-media-replace" data-skill-create-media-replace>替换封面</span>
+          </label>
+        </section>
+        <ul class="skill-create-file-list" data-skill-create-file-list hidden></ul>
+      </div>
+    </form>
+  </section>`;
+}
+
 function renderSkillPlazaPage(ui = {}) {
   const categories = [
     ["recommended", "推荐"], ["professional-film", "专业影视"], ["commercial-ad", "商业广告"],
@@ -8968,7 +9094,6 @@ function renderSkillPlazaPage(ui = {}) {
         : `<p>暂无文件内容</p>`;
     return `<section class="skill-detail-files skill-detail-files-browser"><header class="skill-detail-files-header"><div><h3>Skill</h3><span>${detailFiles.length} 个文件</span></div><div class="skill-detail-file-picker"><button type="button" data-action="toggle-skill-detail-file-menu" aria-expanded="${ui.skillDetailFileMenuOpen ? "true" : "false"}">${escapeHtml(fileName)} <span aria-hidden="true">⌃</span></button>${ui.skillDetailFileMenuOpen ? `<div class="skill-detail-file-menu" role="menu">${detailFiles.map((file, index) => `<button type="button" role="menuitem" class="${index === selectedFileIndex ? "active" : ""}" data-action="set-skill-detail-file" data-file-index="${index}">${escapeHtml(file.name ?? file.fileName ?? "未命名文件")}</button>`).join("")}</div>` : ""}</div></header>${fileBody}</section>`;
   };
-  const createPanel = ui.skillCreateOpen ? `<div class="skill-detail-overlay skill-create-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-create-title"><section class="skill-detail-panel skill-create-modal"><header class="skill-create-header"><div><span class="skill-create-eyebrow">SKILL PLAZA</span><h2 id="skill-create-title">创建 Skill</h2><p>整理你的创作方法，让团队和社区可以复用。</p></div><button class="skill-detail-close" type="button" data-action="close-skill-create" aria-label="关闭">×</button></header><form id="skill-create-form" class="skill-create-form"><div class="skill-create-body"><section class="skill-create-section"><h3>基础信息</h3><div class="skill-create-grid"><label><span>名称 <em>*</em></span><input name="name" required minlength="2" maxlength="80" placeholder="例如：短剧分镜导演" /></label><label><span>分类</span><select name="category"><option value="general">通用技能</option><option value="professional-film">专业影视</option><option value="commercial-ad">商业广告</option><option value="short-drama">短剧漫剧</option><option value="animation-game">动漫游戏</option><option value="music-video">音乐MV</option><option value="creator">自媒体创作</option></select></label><label class="is-wide"><span>简介 <em>*</em></span><textarea name="summary" required maxlength="240" rows="2" placeholder="用一句话说明这个 Skill 能解决什么问题"></textarea></label></div></section><section class="skill-create-section"><h3>使用说明</h3><div class="skill-create-grid"><label class="is-wide"><span>介绍</span><textarea name="introduction" maxlength="4000" rows="3" placeholder="补充 Skill 的定位、特点和适用对象"></textarea></label><label><span>使用场景</span><textarea name="usageScene" maxlength="4000" rows="4" placeholder="描述适合在什么创作环节使用"></textarea></label><label><span>使用方法</span><textarea name="howToUse" maxlength="4000" rows="4" placeholder="按步骤说明如何调用"></textarea></label><label class="is-wide"><span>输出内容</span><textarea name="outputContent" maxlength="4000" rows="3" placeholder="说明使用后会得到什么结果"></textarea></label></div></section><section class="skill-create-section"><h3>效果媒体</h3><label class="skill-create-media-upload" data-skill-create-media data-dropzone="skill-create-media"><input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,video/mp4,video/webm,video/quicktime,.jpg,.jpeg,.png,.webp,.avif,.mp4,.webm,.mov" /><span class="skill-create-media-picker"><span class="skill-create-media-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span><strong class="skill-create-media-placeholder" data-skill-create-media-placeholder>点击或拖拽上传效果图或视频</strong><small>自动上传到云端，支持 JPG、PNG、WEBP、MP4、WEBM、MOV</small></span><span class="skill-create-media-preview" data-skill-create-media-preview hidden></span><span class="skill-create-media-replace" data-skill-create-media-replace>替换媒体</span></label><p class="skill-create-media-hint">只能上传一个效果媒体，支持图片或视频。</p></section><section class="skill-create-section"><div class="skill-create-section-heading"><div><h3>Skill 文件</h3><p>可选。上传模型读取所需的说明、模板或示例。</p></div><span class="skill-create-file-limit">最多 5 MB / 个</span></div><label class="skill-create-upload"><input name="skillFiles" type="file" multiple accept=".md,.markdown,.txt,.json,text/markdown,text/plain,application/json" /><span class="skill-create-upload-icon">↑</span><strong>选择文件</strong><small data-skill-create-file-name>未选择文件 · 支持 Markdown、TXT、JSON</small></label><label class="skill-create-visibility-toggle"><input name="fileListPublic" type="checkbox" /><span>公开文件清单</span></label><p class="skill-create-media-hint">关闭后，其他用户只能看到 Skill 基本信息，作者本人仍可查看文件。</p></section></div><footer class="skill-create-footer"><p><span class="skill-create-required">*</span> 为必填项</p><div class="skill-detail-actions"><button type="button" data-action="close-skill-create">取消</button><button class="primary" type="button" data-action="create-skill">提交审核</button></div></footer></form></section></div>` : "";
   const section = (label, value) => value ? `<section class="skill-detail-section"><h3>${label}</h3><p>${escapeHtml(String(value))}</p></section>` : "";
   const renderCard = (item) => {
     const cover = String(item.coverUrl ?? "").trim();
@@ -8991,7 +9116,6 @@ function renderSkillPlazaPage(ui = {}) {
     ${ui.skillPlazaError ? `<p class="skill-plaza-error">${escapeHtml(ui.skillPlazaError)}</p>` : ""}
     <div class="skill-plaza-grid">${ui.skillPlazaLoading ? `<div class="skill-plaza-empty">正在加载 Skill...</div>` : items.length ? items.map(renderCard).join("") : `<div class="skill-plaza-empty">暂无公开 Skill</div>`}</div>
     ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div><div class="skill-detail-actions"><button type="button" aria-label="分享 Skill" title="分享 Skill">↗</button>${detail.isMine ? "" : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${section("简介", detailText.introduction)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
-    ${createPanel}
   </section>`;
 }
 

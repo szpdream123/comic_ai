@@ -269,7 +269,7 @@ export async function runCanvasTextNode(
       : null;
     const rawResult = String(await input.gateway.completeJson({
       model: modelCode,
-      prompt: buildCanvasTextPrompt(source.text, format, resolvedSkill),
+      prompt: buildCanvasTextPrompt(source.text, format, resolvedSkill, input.canvas.document.nodes.find((item) => item.id === input.nodeKey)?.type),
       createdByUserId: input.userId,
       responseFormat: "text",
       maxTokens: 8_192,
@@ -405,6 +405,7 @@ function collectCanvasTextInput(
     const upstream = canvas.document.nodes.find((candidate) => candidate.id === upstreamNodeId);
     if (!upstream) continue;
     addUnique(sourceFragments, upstream.data?.resultText);
+    addUnique(sourceFragments, upstream.data?.output);
     addUnique(sourceFragments, upstream.data?.text);
     addUnique(sourceFragments, stripHtml(upstream.data?.textHtml));
     addUnique(sourceFragments, upstream.data?.markdown);
@@ -429,12 +430,17 @@ function buildCanvasTextPrompt(
   sourceText: string,
   format: "text" | "markdown",
   skill: CanvasTextPromptSkill | null = null,
+  nodeType = "",
 ) {
+  const shotlistFormat = nodeType === "ai-shotlist"
+    ? "根据输入拆成逐镜分镜表。只返回 JSON，不要解释。格式为 {\"shots\":[{\"shotNo\":\"1\",\"shotSize\":\"\",\"camera\":\"\",\"content\":\"\",\"dialogue\":\"\",\"audio\":\"\",\"transition\":\"\",\"duration\":3,\"note\":\"\"}]}。"
+    : "";
   return [
     buildCanvasTextSkillInstructions(skill),
-    format === "markdown"
-      ? "根据输入生成或改写 Markdown 文档。直接返回 Markdown 正文，不要使用包裹全文的代码围栏。"
-      : "根据输入生成或改写文本。直接返回最终正文，不要解释生成过程。",
+    shotlistFormat
+      || (format === "markdown"
+        ? "根据输入生成或改写 Markdown 文档。直接返回 Markdown 正文，不要使用包裹全文的代码围栏。"
+        : "根据输入生成或改写文本。直接返回最终正文，不要解释生成过程。"),
     "不要声称已经生成、上传或保存任何图片、视频、音频或文件。",
     sourceText,
   ].filter(Boolean).join("\n\n");

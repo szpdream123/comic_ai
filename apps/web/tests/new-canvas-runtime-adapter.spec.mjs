@@ -645,6 +645,24 @@ test("browser series original uploads through COS instead of a local project fol
   assert.doesNotMatch(appSource, /max:100,value:D/);
 });
 
+test("browser text-node uploads keep file bytes instead of showing the storage path", () => {
+  const fileServiceSource = readRuntimeAsset("main-upstream-");
+  const appSource = readRuntimeAsset("App-");
+  const brandCss = readFileSync(
+    new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(fileServiceSource, /if\(c\)\{let l=Hv\(await n\.arrayBuffer\(\)\)/);
+  assert.match(fileServiceSource, /dataUrl:`data:\$\{Lv\(n\.name\.split\(`\.`\)\.pop\(\)\?\.toLowerCase\(\)\|\|``\)\};base64,\$\{l\}`/);
+  assert.match(fileServiceSource, /filePath:o,storageObjectId:i\|\|void 0/);
+  assert.match(appSource, /t\.dataUrl\.startsWith\(`data:`\)&&t\.dataUrl\.includes\(`,`\)/);
+  assert.equal(appSource.includes("else if(/^\\/api\\/storage\\/objects\\//.test(t.dataUrl))"), true);
+  assert.equal(appSource.includes("let n=String(t.output||``).trim();if(!/^\\/api\\/storage\\/objects\\//.test(n))return;"), true);
+  assert.match(brandCss, /\.new-canvas-root \.node-floating-toolbar \{/);
+  assert.match(brandCss, /--toolbar-offset-x: -50%/);
+  assert.match(brandCss, /bottom: calc\(100% \+ 32px\) !important/);
+});
+
 test("browser AI assistant can split the current series into episode canvases", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const fileServiceSource = readRuntimeAsset("main-upstream-");
@@ -655,9 +673,18 @@ test("browser AI assistant can split the current series into episode canvases", 
   assert.match(appSource, /function mergeAiCanvasRuntimeProjects/);
   assert.match(appSource, /function addAiCanvasRuntimeEpisodes/);
   assert.match(appSource, /addEpisodes: isAiCanvasRuntimeNativeHost\(\)[\s\S]*addAiCanvasRuntimeEpisodes\(store, episodes\)/);
+  assert.match(appSource, /typeof context\.onAddEpisodes === "function"/);
+  assert.match(appSource, /typeof context\.onProjectsChange === "function"/);
+  assert.match(appSource, /\.\.\.\(parentId \? \{ parentId \} : \{\}\)/);
   assert.match(appSource, /if \(id && project\.parentId && !catalogIds\.has\(id\)\) merged\.push\(project\)/);
   assert.match(appSource, /const projects = mergeAiCanvasRuntimeProjects\(projectCatalog, existingProjects\)/);
   assert.match(appSource, /const projects = mergeAiCanvasRuntimeProjects\(projectCatalog, store\.getState\(\)\?\.projects\)/);
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  assert.match(workbenchSource, /onAddEpisodes: \(episodes\) => addAiCanvasRuntimeEpisodesForWorkbench\(workbench, episodes\)/);
+  assert.match(workbenchSource, /onProjectsChange: \(projects\) => \{/);
+  assert.match(workbenchSource, /if \(parentId\) record\.parentId = parentId;/);
+  const canvasStateSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-state.js", import.meta.url), "utf8");
+  assert.match(canvasStateSource, /node\.data\?\.text \|\| node\.data\?\.output/);
 });
 
 test("browser canvas skips Tauri video editor event listen", () => {
@@ -829,6 +856,14 @@ test("new canvas aspect ratio change writes nodeWidth and nodeHeight", () => {
   const storeSource = readRuntimeAsset("main-upstream-");
   assert.match(storeSource, /if\(e===`自适应`\)return\{nodeWidth:280,nodeHeight:280/);
   assert.match(runtimeDialogSource, /let t=\{aspectRatio:e\},n=C\(e\);n&&Object\.assign\(t,n\),h\(s,t\)/);
+});
+
+test("node prompt composer stays below the selected node instead of overlapping it", () => {
+  const runtimeDialogSource = readRuntimeAsset("AINodeDialog-");
+  assert.match(runtimeDialogSource, /nt=R\.audioPurpose\?\?\(R\.model\?_e\(R\.model\)\?\.audioPurpose:void 0\),rt=16,/);
+  assert.doesNotMatch(runtimeDialogSource, /R\.imageUrl\|\|R\.thumbnailUrl\|\|R\.videoUrl\|\|R\.audioUrl\?12:-20/);
+  assert.equal(runtimeDialogSource.includes("let be=ye.bottom+16-t.top;_<be&&(_=be)"), true);
+  assert.match(runtimeDialogSource, /style:W\?void 0:\{left:d\?`\$\{d\.x\}px`:`50%`,top:d\?`\$\{d\.y\+rt\}px`:`50%`/);
 });
 
 test("completed canvas nodes open the prompt dialog on click after refresh", () => {

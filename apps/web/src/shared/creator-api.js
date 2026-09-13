@@ -812,11 +812,38 @@ export const defaultUploadLimits = {
 };
 
 export const skillFileUploadLimits = {
+  image: {
+    label: "图片",
+    maxBytes: 30 * 1024 * 1024,
+    mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
+    extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
+  },
+  video: {
+    label: "视频",
+    maxBytes: 50 * 1024 * 1024,
+    mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
+    extensions: [".mp4", ".webm", ".mov"],
+  },
+  audio: {
+    label: "音频",
+    maxBytes: 15 * 1024 * 1024,
+    mimeTypes: ["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"],
+    extensions: [".mp3", ".m4a", ".ogg", ".wav", ".webm"],
+  },
   document: {
     label: "Skill 文件",
-    maxBytes: 5 * 1024 * 1024,
-    mimeTypes: ["text/plain", "text/markdown", "text/x-markdown", "application/json", "application/octet-stream"],
-    extensions: [".txt", ".md", ".markdown", ".json"],
+    maxBytes: 10 * 1024 * 1024,
+    mimeTypes: [
+      "text/plain",
+      "text/markdown",
+      "text/x-markdown",
+      "text/csv",
+      "application/json",
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/octet-stream",
+    ],
+    extensions: [".txt", ".md", ".markdown", ".csv", ".json", ".pdf", ".docx"],
   },
   blockedExtensions: defaultUploadLimits.blockedExtensions,
 };
@@ -840,6 +867,16 @@ function buildUploadId(file, options = {}) {
     Number(file?.size ?? 0),
     Number(file?.lastModified ?? 0),
   ].join(":");
+}
+
+export function normalizeSkillFileName(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/")
+    .slice(0, 240);
 }
 
 function extensionOfFileName(fileName) {

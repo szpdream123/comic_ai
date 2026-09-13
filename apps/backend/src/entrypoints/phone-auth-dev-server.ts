@@ -4112,11 +4112,28 @@ function resolveUploadLimitsForPurpose(purpose: unknown) {
   const normalizedPurpose = String(purpose ?? "").trim();
   if (normalizedPurpose === "skill-files") {
     return {
+      image: episodeUploadLimits.image,
+      video: episodeUploadLimits.video,
+      audio: {
+        label: "音频",
+        maxBytes: 15 * 1024 * 1024,
+        mimeTypes: ["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"],
+        extensions: [".mp3", ".m4a", ".ogg", ".wav", ".webm"],
+      },
       document: {
         label: "Skill 文件",
-        maxBytes: 5 * 1024 * 1024,
-        mimeTypes: ["text/plain", "text/markdown", "text/x-markdown", "application/json", "application/octet-stream"],
-        extensions: [".txt", ".md", ".markdown", ".json"],
+        maxBytes: 10 * 1024 * 1024,
+        mimeTypes: [
+          "text/plain",
+          "text/markdown",
+          "text/x-markdown",
+          "text/csv",
+          "application/json",
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "application/octet-stream",
+        ],
+        extensions: [".txt", ".md", ".markdown", ".csv", ".json", ".pdf", ".docx"],
       },
       blockedExtensions: episodeUploadLimits.blockedExtensions,
     };

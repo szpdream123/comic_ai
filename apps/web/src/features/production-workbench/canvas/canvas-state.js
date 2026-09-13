@@ -2149,7 +2149,7 @@ function upstreamTextFragments(document, nodeId) {
     .map((node) => ({
       nodeId: String(node.id ?? ""),
       title: String(node.data?.title ?? "鏂囨湰鐗囨"),
-      text: normalizeUpstreamText(node.data?.text || stripUpstreamHtml(node.data?.textHtml)),
+      text: normalizeUpstreamText(node.data?.text || node.data?.output || stripUpstreamHtml(node.data?.textHtml)),
     }))
     .filter((fragment) => fragment.text);
 }

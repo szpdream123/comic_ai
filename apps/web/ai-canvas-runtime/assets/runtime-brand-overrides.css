@@ -378,6 +378,11 @@
   display: none;
 }
 
+.new-canvas-root .group\/session,
+.ai-canvas-standalone-mount .group\/session {
+  display: none !important;
+}
+
 /* Keep the floating canvas navigation self-describing at a glance. The
    runtime already exposes each action through data-tooltip/aria-label; reuse
    those labels as the compact text shown beneath every icon. */
@@ -1175,11 +1180,15 @@
 /* Match node and overlay editor controls to the floating canvas menu
    (48×58 hit area, 22px icons) so selected-node popovers stay usable. */
 .new-canvas-root .node-floating-toolbar {
+  --toolbar-offset-x: -50%;
   min-height: 58px !important;
   align-items: center !important;
   gap: 2px !important;
   padding: 4px !important;
   border-radius: 14px !important;
+  left: 50% !important;
+  top: auto !important;
+  bottom: calc(100% + 32px) !important;
 }
 
 .new-canvas-root .node-floating-toolbar .ftb-btn,

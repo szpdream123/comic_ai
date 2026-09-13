@@ -31,6 +31,16 @@ function skillUrl(id: string) {
   return `/api/creator/skills/${encodeURIComponent(id)}`;
 }
 
+function normalizeSkillFileName(value: unknown) {
+  const normalized = String(value ?? "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+  return normalized.slice(0, 240);
+}
+
 function mapSkill(row: Record<string, unknown>) {
   const detail = row.detail_json && typeof row.detail_json === "object" && !Array.isArray(row.detail_json)
     ? row.detail_json as Record<string, unknown>
@@ -322,7 +332,7 @@ export function createSkillPlazaService(deps: { db: SqlDatabase }) {
     const skill = await queryOne<{ id: string }>(deps.db, "SELECT id FROM skills WHERE id = $1 AND owner_user_id = $2", [input.skillId, input.userId]);
     const object = await queryOne<{ id: string }>(deps.db, "SELECT id FROM storage_objects WHERE id = $1 AND created_by_user_id = $2 AND status = 'available'", [input.storageObjectId, input.userId]);
     if (!skill || !object) throw new SkillPlazaError(404, "skill_file_scope_invalid", "Skill 文件对象不可用");
-    const fileName = String(input.fileName ?? "").trim();
+    const fileName = normalizeSkillFileName(input.fileName);
     if (!fileName) throw new SkillPlazaError(400, "skill_file_name_required", "Skill 文件名不能为空");
     const fileKind = ["instruction", "template", "example", "script", "other"].includes(String(input.fileKind)) ? String(input.fileKind) : "instruction";
     await deps.db.query(

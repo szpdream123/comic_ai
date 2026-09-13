@@ -1079,8 +1079,9 @@ describe("production workbench home shell", () => {
     });
 
     assert.match(html, /data-action="set-nav-tab"/);
-    assert.ok(html.indexOf('<span class="rail-label">首页</span>') < html.indexOf('<span class="rail-label">画布</span>'));
-    assert.ok(html.indexOf('<span class="rail-label">画布</span>') < html.indexOf('<span class="rail-label">剧本</span>'));
+    assert.doesNotMatch(html, /<span class="rail-label">画布<\/span>/);
+    assert.ok(html.indexOf('<span class="rail-label">首页</span>') < html.indexOf('<span class="rail-label">新画布</span>'));
+    assert.ok(html.indexOf('<span class="rail-label">新画布</span>') < html.indexOf('<span class="rail-label">剧本</span>'));
     assert.doesNotMatch(html, /<span class="rail-label">工具箱<\/span>/);
     assert.match(html, /data-action="open-create-modal"/);
     assert.match(html, /data-liquid-ether-root/);

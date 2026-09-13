@@ -39,7 +39,7 @@ test("workbench exposes legacy and new Canvas rail entries", () => {
     session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1", phone: "13800138000" } },
     ui: { activeNavTab: "home", canvasProjectView: "list" },
   });
-  assert.match(html, /data-action="set-nav-tab"\s+data-tab="tools"/);
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="tools"/);
   assert.match(html, /data-action="set-nav-tab"\s+data-tab="new-canvas"/);
 });
 
@@ -194,7 +194,7 @@ test("Canvas remains available when the legacy feature flag is disabled", () => 
     session,
     ui: { activeNavTab: "home", canvasProjectView: "list" },
   });
-  assert.match(html, /data-tab="tools"/);
+  assert.doesNotMatch(html, /data-tab="tools"/);
   assert.doesNotMatch(html, /data-tab="new-canvas"/);
   assert.equal(deriveInitialNavTabForTest("#tools-canvas", session), "tools");
   assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "tools");
