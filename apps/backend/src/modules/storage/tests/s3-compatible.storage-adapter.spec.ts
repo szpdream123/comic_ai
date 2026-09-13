@@ -62,6 +62,32 @@ describe("S3 compatible storage adapter", () => {
     }
   });
 
+  it("reads object body bytes from GetObject", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/markdown" });
+      response.end("# from COS");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.equal(typeof address, "object");
+    try {
+      const adapter = new S3CompatibleStorageAdapter({
+        endpoint: `http://127.0.0.1:${address!.port}`,
+        region: "ap-guangzhou",
+        accessKeyId: "test-access-key",
+        secretAccessKey: "test-secret-key",
+        forcePathStyle: true,
+      });
+      const result = await adapter.getObject({
+        bucket: "creator-test",
+        objectKey: "skill-files/SKILL.md",
+      });
+      assert.equal(Buffer.from(result.bytes).toString("utf8"), "# from COS");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("uploads unknown-length streams through the bounded multipart uploader", async () => {
     let capturedLength = "";
     let capturedBody = "";

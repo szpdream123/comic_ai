@@ -78,3 +78,76 @@ test("new Canvas minimap focuses nodes, fits content, and releases graph listene
   assert.equal(listeners.filter(([action]) => action === "on").length, 4);
   assert.equal(listeners.filter(([action]) => action === "off").length, 4);
 });
+
+test("new Canvas minimap coalesces graph move refreshes onto one animation frame", () => {
+  const originalRaf = globalThis.requestAnimationFrame;
+  const originalCancel = globalThis.cancelAnimationFrame;
+  const queued = [];
+  globalThis.requestAnimationFrame = (callback) => {
+    queued.push(callback);
+    return queued.length;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    queued[id - 1] = null;
+  };
+  try {
+    let refreshCount = 0;
+    const graph = {
+      on(name, handler) { graph[name] = handler; },
+      off() {},
+    };
+    const current = { replaced: 0 };
+    const controller = createCanvasMinimapController({
+      surface: {
+        querySelector(selector) {
+          if (selector !== "[data-canvas-minimap]") return null;
+          refreshCount += 1;
+          return {
+            replaceWith() { current.replaced += 1; },
+          };
+        },
+      },
+      workbench: {
+        ui: {
+          canvasDocument: { nodes: [{ id: "node-1", position: { x: 0, y: 0 }, size: { width: 120, height: 80 } }] },
+        },
+      },
+    });
+    controller.bind(graph);
+    const bindRefreshes = refreshCount;
+    graph["node:moved"]();
+    graph["node:moved"]();
+    graph["node:moved"]();
+    assert.equal(refreshCount, bindRefreshes);
+    assert.equal(queued.filter(Boolean).length, 1);
+    queued.filter(Boolean).forEach((callback) => callback());
+    assert.equal(refreshCount, bindRefreshes + 1);
+    queued.length = 0;
+    const dragWorkbench = {
+      canvasNodeDragActive: true,
+      ui: {
+        canvasDocument: { nodes: [{ id: "node-1", position: { x: 0, y: 0 }, size: { width: 120, height: 80 } }] },
+      },
+    };
+    const dragController = createCanvasMinimapController({
+      surface: {
+        querySelector(selector) {
+          if (selector !== "[data-canvas-minimap]") return null;
+          refreshCount += 1;
+          return { replaceWith() {} };
+        },
+      },
+      workbench: dragWorkbench,
+    });
+    dragController.bind(graph);
+    const afterDragBind = refreshCount;
+    graph["node:moved"]();
+    assert.equal(refreshCount, afterDragBind);
+    assert.equal(queued.filter(Boolean).length, 0);
+    dragController.dispose();
+    controller.dispose();
+  } finally {
+    globalThis.requestAnimationFrame = originalRaf;
+    globalThis.cancelAnimationFrame = originalCancel;
+  }
+});

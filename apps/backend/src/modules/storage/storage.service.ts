@@ -71,6 +71,13 @@ export interface StorageAdapter {
     checksum?: string | null;
     versionId?: string | null;
   }>;
+  getObject?(input: {
+    bucket: string;
+    objectKey: string;
+  }): Promise<{
+    bytes: Uint8Array;
+    contentType?: string | null;
+  }>;
   copyObject?(input: {
     sourceBucket: string;
     sourceObjectKey: string;

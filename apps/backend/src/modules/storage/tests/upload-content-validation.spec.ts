@@ -7,9 +7,14 @@ test("accepts known Canvas media signatures and rejects MIME, extension, and con
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   const mp4 = Buffer.from([0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
   const json = Buffer.from(JSON.stringify({ version: 1, strokes: [] }));
+  const markdown = Buffer.from("# SKILL.md\n\n把小说转成分镜。");
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n");
   assert.deepEqual(validateUploadContentBoundary({ fileName: "frame.png", contentType: "image/png", bytes: png }), { ok: true });
   assert.deepEqual(validateUploadContentBoundary({ fileName: "clip.mp4", contentType: "video/mp4", bytes: mp4 }), { ok: true });
   assert.deepEqual(validateUploadContentBoundary({ fileName: "annotation.json", contentType: "application/json", bytes: json }), { ok: true });
+  assert.deepEqual(validateUploadContentBoundary({ fileName: "SKILL.md", contentType: "text/markdown", bytes: markdown }), { ok: true });
+  assert.deepEqual(validateUploadContentBoundary({ fileName: "references/scene-extract.md", contentType: "application/octet-stream", bytes: markdown }), { ok: true });
+  assert.deepEqual(validateUploadContentBoundary({ fileName: "guide.pdf", contentType: "application/pdf", bytes: pdf }), { ok: true });
 
   for (const input of [
     { fileName: "frame.png", contentType: "image/png", bytes: Buffer.from("<script>alert(1)</script>") },

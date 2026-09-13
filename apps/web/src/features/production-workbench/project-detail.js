@@ -17,8 +17,10 @@ import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-
 import {
   EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
+  normalizePlazaEpisodeSkills,
   renderEpisodePromptSkillControl,
   renderEpisodePromptSkillModal,
+  resolvePlazaSelectedSkills,
   sumEpisodePromptSkillCredits,
 } from "./episode-prompt-skill-modal.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
@@ -1351,11 +1353,12 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderScriptConversionSkillModal(ui)}
     ${renderEpisodePromptSkillModal({
       show: ui.episodePromptSkillModalOpen === true && ui.isSingleEpisodeModalOpen === true,
+      variant: "plaza",
       sourceTab: ui.episodePromptSkillSourceTab,
       activeCategory: ui.episodePromptSkillCategory,
-      officialSkills: ui.episodePromptOfficialSkills,
-      privateSkills: ui.episodePromptPrivateSkills,
-      draftSelections: ui.episodePromptSkillDraftIds,
+      officialSkills: ui.episodePlazaOfficialSkills,
+      privateSkills: ui.episodePlazaPrivateSkills,
+      draftPlazaSkillIds: ui.episodePromptSkillDraftPlazaIds,
       loading: ui.episodePromptSkillLoading,
     })}
     ${renderCanvasTextSkillModal({
@@ -3933,9 +3936,10 @@ function renderSingleEpisodeModal(ui, state = {}) {
               ${renderSingleEpisodeTextModelControl(ui)}
               <div class="${guideTargetKey === "prompt-skill-selector" ? "first-login-guide-target" : ""}" data-first-login-target="prompt-skill-selector">
                 ${renderEpisodePromptSkillControl({
-                  skills: resolveEpisodePromptSkillItems(ui),
-                  selectedByCategory: ui.selectedEpisodePromptSkillIds,
+                  skills: resolveEpisodePlazaSkillItems(ui),
+                  selectedPlazaSkillIds: ui.selectedEpisodePlazaSkillIds,
                   loading: ui.episodePromptSkillLoading,
+                  variant: "plaza",
                 })}
               </div>
             </div>
@@ -4349,18 +4353,22 @@ function renderSingleEpisodeScriptEpisodeItem(episode = {}, picker = {}) {
 
 function resolveSingleEpisodeAiActionLabel(ui = {}) {
   const modelCredits = Number(resolveSingleEpisodeModelCreditsByCode(ui, resolveSingleEpisodeTextModelCode(ui))) || 0;
-  const selectedSkills = resolveSelectedEpisodePromptSkills(ui);
+  const selectedSkills = resolveSelectedEpisodePlazaSkills(ui);
   const selectedSkillCount = selectedSkills.length;
   if (!modelCredits || !selectedSkillCount) {
     return "AI 小说分镜";
   }
   const skillCredits = selectedSkills.reduce((sum, skill) => sum + Math.max(0, Number(skill.priceCredits) || 0), 0);
-  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits * selectedSkillCount, skillCredits)}`;
+  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits * 5, skillCredits)}`;
 }
 
 function resolveSelectedEpisodePromptSkills(ui = {}) {
   const selectedIds = new Set(Object.values(ui.selectedEpisodePromptSkillIds ?? {}).map(String).filter(Boolean));
   return resolveEpisodePromptSkillItems(ui).filter((skill) => selectedIds.has(String(skill.id)));
+}
+
+function resolveSelectedEpisodePlazaSkills(ui = {}) {
+  return resolvePlazaSelectedSkills(resolveEpisodePlazaSkillItems(ui), ui.selectedEpisodePlazaSkillIds);
 }
 
 function resolveSingleEpisodeTextModels(ui = {}) {
@@ -5744,6 +5752,13 @@ function resolveEpisodePromptSkillItems(ui = {}) {
   return [
     ...normalizeEpisodePromptSkills(ui.episodePromptOfficialSkills, "official"),
     ...normalizeEpisodePromptSkills(ui.episodePromptPrivateSkills, "private"),
+  ];
+}
+
+function resolveEpisodePlazaSkillItems(ui = {}) {
+  return [
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaPrivateSkills, "private"),
   ];
 }
 
@@ -8938,22 +8953,30 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
 function renderSkillCreatePage(ui = {}) {
-  return `<section class="skill-create-page" aria-label="创建 Skill">
-    <form id="skill-create-form" class="skill-create-page-form">
+  const draft = ui.skillCreateDraft && typeof ui.skillCreateDraft === "object" ? ui.skillCreateDraft : null;
+  const draftDetail = draft?.detail && typeof draft.detail === "object" ? draft.detail : {};
+  const draftCoverUrl = String(draftDetail.effectImageUrl || draft?.coverUrl || "").trim();
+  const draftPreviewUrl = String(draftDetail.effectVideoUrl || draft?.previewUrl || "").trim();
+  const draftCoverType = draftPreviewUrl ? "video" : draftCoverUrl ? "image" : "image";
+  const draftFiles = Array.isArray(draft?.files) && draft.files.length
+    ? draft.files.map((file) => ({ name: String(file.name || file.fileName || "SKILL.md"), content: String(file.content || "") }))
+    : [{ name: "SKILL.md", content: String(draftDetail.introduction || "") }];
+  return `<section class="skill-create-page" aria-label="${draft ? "编辑 Skill" : "创建 Skill"}">
+    <form id="skill-create-form" class="skill-create-page-form" ${draft?.id ? `data-skill-id="${escapeAttr(draft.id)}"` : ""}>
       <header class="skill-create-page-header">
-        <h1 id="skill-create-title">创建Skill</h1>
+        <h1 id="skill-create-title">${draft ? "编辑Skill" : "创建Skill"}</h1>
         <button class="skill-create-save" type="button" data-action="create-skill">保存</button>
       </header>
       <div class="skill-create-page-body">
         <label class="skill-create-field">
           <span>Skill 名称 <em>*</em></span>
-          <input name="name" required minlength="2" maxlength="80" placeholder="给你的 Skill 起个名字" />
+          <input name="name" required minlength="2" maxlength="80" placeholder="给你的 Skill 起个名字" value="${escapeAttr(draft?.name || draft?.title || "")}" />
         </label>
-        <input type="hidden" name="category" value="general" />
+        <input type="hidden" name="category" value="${escapeAttr(draft?.category || "general")}" />
         <label class="skill-create-field">
           <span>一句话介绍 <em>*</em></span>
           <span class="skill-create-counter-field">
-            <input name="summary" required maxlength="30" placeholder="简短描述该 Skill 的能力" data-skill-create-summary />
+            <input name="summary" required maxlength="30" placeholder="简短描述该 Skill 的能力" data-skill-create-summary value="${escapeAttr(draft?.summary || "")}" />
             <small data-skill-create-summary-count>0/30</small>
           </span>
         </label>
@@ -8984,12 +9007,7 @@ function renderSkillCreatePage(ui = {}) {
                   <button class="skill-create-icon-button" type="button" data-action="add-skill-create-markdown" title="新建MD文件" aria-label="新建MD文件">${renderCanvasIcon("markdown")}</button>
                 </span>
               </header>
-              <div class="skill-create-tree-list" data-skill-create-tree>
-                <div class="skill-create-tree-row is-file is-active" data-tree-kind="file" data-file-name="SKILL.md">
-                  <button type="button" data-action="set-skill-create-file" data-file-name="SKILL.md"><span class="skill-create-tree-icon is-file"></span><span>SKILL.md</span></button>
-                  <span class="skill-create-tree-pin" title="入口文件" aria-hidden="true"></span>
-                </div>
-              </div>
+              <div class="skill-create-tree-list" data-skill-create-tree></div>
               <div class="skill-create-folders" data-skill-create-folders hidden></div>
               <div class="skill-create-tree-menu" data-skill-create-tree-menu hidden>
                 <button type="button" data-action="rename-skill-create-tree-item">重命名</button>
@@ -8998,44 +9016,46 @@ function renderSkillCreatePage(ui = {}) {
             </aside>
             <div class="skill-create-editor-main">
               <div class="skill-create-markdown-files" data-skill-create-markdown-files>
-                <article class="skill-create-markdown-item is-active" data-skill-create-markdown-item data-file-name="SKILL.md">
-                  <input name="skillMarkdownName" maxlength="240" value="SKILL.md" hidden />
-                  <textarea name="skillMarkdownContent" required maxlength="20000" rows="16" data-skill-create-markdown-content placeholder="${escapeAttr(DEFAULT_SKILL_MARKDOWN)}"></textarea>
-                </article>
+                ${draftFiles.map((file, index) => `<article class="skill-create-markdown-item ${index === 0 ? "is-active" : ""}" data-skill-create-markdown-item data-file-name="${escapeAttr(file.name)}"><input name="skillMarkdownName" maxlength="240" value="${escapeAttr(file.name)}" hidden /><div class="skill-create-code-pane"><pre class="skill-create-line-numbers" data-skill-create-line-numbers aria-hidden="true">1</pre><textarea name="skillMarkdownContent" ${file.name === "SKILL.md" ? "required " : ""}maxlength="20000" rows="16" data-skill-create-markdown-content spellcheck="false" placeholder="${escapeAttr(DEFAULT_SKILL_MARKDOWN)}">${escapeHtml(file.content)}</textarea></div></article>`).join("")}
               </div>
               <div class="skill-create-preview skill-detail-file-markdown" data-skill-create-preview hidden></div>
               <p class="skill-create-editor-empty" data-skill-create-empty hidden>请选择左侧文件进行编辑</p>
               <small class="skill-create-editor-count" data-skill-create-content-count>0/20000</small>
             </div>
+            <span class="skill-create-editor-resize" data-skill-create-resize title="拖拽调整高度"></span>
           </div>
         </section>
         <label class="skill-create-field">
           <span>使用场景 <em>*</em></span>
-          <textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息"></textarea>
+          <textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息">${escapeHtml(draftDetail.usageScene || "")}</textarea>
         </label>
         <label class="skill-create-field">
           <span>如何使用 <em>*</em></span>
-          <textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息（例如：剧本内容、故事梗概或任何叙事素材）"></textarea>
+          <textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息（例如：剧本内容、故事梗概或任何叙事素材）">${escapeHtml(draftDetail.howToUse || "")}</textarea>
         </label>
         <label class="skill-create-field">
           <span>输出内容 <em>*</em></span>
-          <textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么（例如：90秒超现实主义数字片头视频）"></textarea>
+          <textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么（例如：90秒超现实主义数字片头视频）">${escapeHtml(draftDetail.outputContent || "")}</textarea>
+        </label>
+        <label class="skill-create-toggle">
+          <input name="fileListPublic" type="checkbox" ${draftDetail.fileListPublic === true ? "checked" : ""} />
+          <span>公开 Skill 文件给其他用户查看</span>
         </label>
         <label class="skill-create-field">
           <span>选择类型</span>
           <select name="coverType" data-skill-create-cover-type>
-            <option value="image" selected>图片</option>
-            <option value="video">视频</option>
+            <option value="image" ${draftCoverType === "image" ? "selected" : ""}>图片</option>
+            <option value="video" ${draftCoverType === "video" ? "selected" : ""}>视频</option>
             <option value="audio">音频</option>
             <option value="text">文本</option>
           </select>
         </label>
         <section class="skill-create-cover" data-skill-create-cover>
           <span>上传封面（选填）</span>
-          <label class="skill-create-cover-upload" data-skill-create-media data-dropzone="skill-create-media">
-            <input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" />
-            <span class="skill-create-cover-plus" data-skill-create-media-placeholder>+</span>
-            <span class="skill-create-media-preview" data-skill-create-media-preview hidden></span>
+          <label class="skill-create-cover-upload ${draftCoverUrl || draftPreviewUrl ? "has-media" : ""}" data-skill-create-media data-dropzone="skill-create-media">
+            <input name="effectMediaFile" type="file" accept="${draftCoverType === "video" ? "video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" : "image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif"}" />
+            <span class="skill-create-cover-plus" data-skill-create-media-placeholder ${draftCoverUrl || draftPreviewUrl ? "hidden" : ""}>+</span>
+            <span class="skill-create-media-preview" data-skill-create-media-preview ${draftCoverUrl || draftPreviewUrl ? "" : "hidden"}>${draftCoverUrl ? `<img src="${escapeAttr(resolveApiUrl(draftCoverUrl))}" alt="封面预览" />` : draftPreviewUrl ? `<video src="${escapeAttr(resolveApiUrl(draftPreviewUrl))}" muted playsinline preload="metadata"></video>` : ""}</span>
             <span class="skill-create-media-replace" data-skill-create-media-replace>替换封面</span>
           </label>
         </section>
@@ -9066,19 +9086,21 @@ function renderSkillPlazaPage(ui = {}) {
   const detail = ui.skillDetailItem;
   const mediaUrl = String(detail?.previewUrl ?? "").trim();
   const detailText = detail?.detail ?? {};
-  const effectImageUrl = String(detailText.effectImageUrl || detail?.coverUrl || "").trim();
-  const effectVideoUrl = String(detailText.effectVideoUrl || mediaUrl).trim();
+  const effectImageUrl = String(detail?.coverUrl || detailText.effectImageUrl || "").trim();
+  const effectVideoUrl = String(detail?.previewUrl || detailText.effectVideoUrl || mediaUrl).trim();
+  const detailImageSrc = effectImageUrl.includes("/api/storage/objects/") ? `${resolveApiUrl(effectImageUrl)}&v=${encodeURIComponent(String(detail?.id || ""))}` : resolveApiUrl(effectImageUrl);
+  const detailVideoSrc = effectVideoUrl.includes("/api/storage/objects/") ? `${resolveApiUrl(effectVideoUrl)}&v=${encodeURIComponent(String(detail?.id || ""))}` : resolveApiUrl(effectVideoUrl);
   const detailMedia = effectImageUrl
-    ? `<img class="skill-detail-preview skill-detail-preview-image" src="${escapeAttr(resolveApiUrl(effectImageUrl))}" alt="Skill 效果图" loading="lazy" />`
+    ? `<img class="skill-detail-preview skill-detail-preview-image" src="${escapeAttr(detailImageSrc)}" alt="Skill 效果图" />`
     : effectVideoUrl
-      ? `<video class="skill-detail-preview" src="${escapeAttr(resolveApiUrl(effectVideoUrl))}" controls playsinline preload="metadata"></video>`
+      ? `<video class="skill-detail-preview" src="${escapeAttr(detailVideoSrc)}" controls playsinline preload="metadata"></video>`
       : "";
   const detailFiles = Array.isArray(detail?.files) ? detail.files : [];
   const selectedFileIndex = detailFiles.length
     ? Math.max(0, Math.min(detailFiles.length - 1, Number(ui.skillDetailFileIndex) || 0))
     : 0;
   const selectedFile = detailFiles[selectedFileIndex] ?? null;
-  const filesVisible = Boolean(detail?.isMine || detailText.fileListPublic !== false);
+  const filesVisible = Boolean(detailText.fileListPublic === true);
   const renderFileSection = () => {
     if (!filesVisible) {
       return `<section class="skill-detail-files"><h3>Skill 文件</h3><p>作者未公开文件清单</p></section>`;
@@ -9102,12 +9124,12 @@ function renderSkillPlazaPage(ui = {}) {
       ? "效果图"
       : (item.detail?.effectVideoUrl || item.previewUrl) ? "效果视频" : "文本";
     const statusLabel = item.isMine
-      ? (item.status === "published" ? "已发布" : item.status === "disabled" ? "已下架" : "待审核")
+      ? (item.status === "published" ? "已发布" : item.status === "disabled" ? "已下架" : item.status === "rejected" ? "已驳回" : "待审核")
       : "";
     return `<article class="skill-plaza-card" data-action="open-skill-detail" data-skill-id="${escapeAttr(item.id)}" tabindex="0" role="button">
       <div class="skill-plaza-card-cover">${cover ? `<img src="${escapeAttr(resolveApiUrl(cover))}" alt="" loading="lazy" />` : preview ? `<video src="${escapeAttr(resolveApiUrl(preview))}" muted playsinline preload="metadata" aria-label="Skill 效果视频"></video>` : `<span class="skill-plaza-card-cover-fallback">Skill</span>`}</div>
-      <div class="skill-plaza-card-body"><div class="skill-plaza-card-head"><h2>${escapeHtml(item.title ?? item.name ?? "未命名 Skill")}</h2><span class="skill-plaza-card-type">${escapeHtml(statusLabel || mediaLabel)}</span></div>
-      <p>${escapeHtml(item.summary ?? "")}</p><footer><span>${escapeHtml(item.author?.name ?? item.authorName ?? "官方")}</span><span>♧ ${Number(item.usageCount ?? 0).toLocaleString("zh-CN")}</span></footer></div>
+      <div class="skill-plaza-card-body"><div class="skill-plaza-card-head"><h2>${escapeHtml(item.title ?? item.name ?? "未命名 Skill")}</h2><span class="skill-plaza-card-type">${escapeHtml(statusLabel || mediaLabel)}</span></div>${item.isMine ? `<button class="skill-plaza-edit" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(item.id)}">编辑</button>` : ""}
+      <p>${escapeHtml(item.summary ?? "")}</p>${item.isMine && item.reviewComment ? `<p class="skill-plaza-review">${escapeHtml(item.reviewComment)}</p>` : ""}<footer><span>${escapeHtml(item.author?.name ?? item.authorName ?? "官方")}</span><span>♧ ${Number(item.usageCount ?? 0).toLocaleString("zh-CN")}</span></footer></div>
     </article>`;
   };
   return `<section class="skill-plaza-page" aria-label="Skill 广场">
@@ -9115,7 +9137,7 @@ function renderSkillPlazaPage(ui = {}) {
     <nav class="skill-plaza-categories" aria-label="Skill 分类">${categories.map(([id, label]) => `<button type="button" class="${activeCategory === id ? "active" : ""}" data-action="set-skill-plaza-category" data-skill-category="${id}">${label}</button>`).join("")}</nav>
     ${ui.skillPlazaError ? `<p class="skill-plaza-error">${escapeHtml(ui.skillPlazaError)}</p>` : ""}
     <div class="skill-plaza-grid">${ui.skillPlazaLoading ? `<div class="skill-plaza-empty">正在加载 Skill...</div>` : items.length ? items.map(renderCard).join("") : `<div class="skill-plaza-empty">暂无公开 Skill</div>`}</div>
-    ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div><div class="skill-detail-actions"><button type="button" aria-label="分享 Skill" title="分享 Skill">↗</button>${detail.isMine ? "" : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${section("简介", detailText.introduction)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
+    ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div>        <div class="skill-detail-actions"><button type="button" aria-label="分享 Skill" title="分享 Skill">↗</button>${detail.isMine ? `<button class="primary" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(detail.id)}">编辑</button>` : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${detail.isMine && detail.reviewComment ? section("审核意见", detail.reviewComment) : ""}${section("简介", detail.summary || detailText.summary)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
   </section>`;
 }
 
@@ -10366,12 +10388,14 @@ function hasTeamAssetLibraryAccess(ui = {}) {
 
 function normalizeCanvasProjectCards(ui = {}) {
   const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
-  return projects.map((project, index) => ({
-    id: String(project?.id ?? `canvas-project-${index + 1}`),
-    title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
-    createdAt: String(project?.createdAt ?? "2026/06/10"),
-    status: String(project?.status ?? "草稿"),
-  }));
+  return projects
+    .filter((project) => !String(project?.parentId ?? "").trim())
+    .map((project, index) => ({
+      id: String(project?.id ?? `canvas-project-${index + 1}`),
+      title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
+      createdAt: String(project?.createdAt ?? "2026/06/10"),
+      status: String(project?.status ?? "草稿"),
+    }));
 }
 
 function normalizeCanvasProjectCardStatus(value) {

@@ -2060,6 +2060,7 @@ function wireGraphSync(graph, workbench, mount) {
   };
   let selectionMovePending = false;
   let dragSnaplineSuspended = false;
+  let zoomedOutDragAsync = false;
   let graphCommitFrame = null;
   let selectionPresentationFrame = null;
   let viewportCommitTimer = null;
@@ -2094,8 +2095,10 @@ function wireGraphSync(graph, workbench, mount) {
       viewportFrame = requestFrame(() => {
         viewportFrame = null;
         applyCanvasGraphViewportStyles(graph, workbench);
-        positionCanvasSelectionActionToolbar(graph, mount);
-        positionCanvasNodeActionToolbar(graph, mount);
+        if (workbench.canvasNodeDragActive !== true) {
+          positionCanvasSelectionActionToolbar(graph, mount);
+          positionCanvasNodeActionToolbar(graph, mount);
+        }
       });
     }
     if (viewportCommitTimer != null) globalThis.clearTimeout?.(viewportCommitTimer);
@@ -2107,9 +2110,11 @@ function wireGraphSync(graph, workbench, mount) {
     }, CANVAS_VIEWPORT_COMMIT_DELAY_MS);
   };
   const scheduleGraphCommit = (options = {}) => {
+    if (workbench.canvasNodeDragActive === true) return;
     if (graphCommitFrame != null) return;
     graphCommitFrame = requestFrame(() => {
       graphCommitFrame = null;
+      if (workbench.canvasNodeDragActive === true) return;
       sync(options);
     });
   };
@@ -2124,6 +2129,16 @@ function wireGraphSync(graph, workbench, mount) {
     if (!dragSnaplineSuspended) return;
     dragSnaplineSuspended = false;
     if (snapEnabled()) graph.getPlugin?.("snapline")?.enable?.();
+  };
+  const beginZoomedOutDragAsync = () => {
+    if (zoomedOutDragAsync || !stage?.classList?.contains?.("is-zoomed-out") || !graph.options) return;
+    if (graph.options.embedding) graph.options.embedding.enabled = false;
+    zoomedOutDragAsync = true;
+  };
+  const endZoomedOutDragAsync = () => {
+    if (!zoomedOutDragAsync || !graph.options) return;
+    if (graph.options.embedding) graph.options.embedding.enabled = true;
+    zoomedOutDragAsync = false;
   };
   const updateStoryboardReturnTarget = (event) => {
     const target = resolveCanvasStoryboardReturnTarget(mount, event?.node, event);
@@ -2140,9 +2155,19 @@ function wireGraphSync(graph, workbench, mount) {
   };
   graph.on("node:change:position", (event) => {
     if (graph.__comicAiReconciling === true) return;
+    if (event?.options?.ui || event?.options?.selection) {
+      const alreadyDragging = workbench.canvasNodeDragActive === true;
+      workbench.canvasNodeDragActive = true;
+      stage?.classList?.add?.("is-node-dragging");
+      beginZoomedOutDragAsync();
+      if (!alreadyDragging) {
+        workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([event?.node]);
+      }
+    }
     if (
       event?.node?.getData?.()?.canvasNode?.type === "group"
       && event?.options?.canvasGroupMove !== true
+      && zoomedOutDragAsync !== true
     ) {
       const groupId = String(event.node.id ?? "");
       const documentNodes = workbench.ui.canvasDocument?.nodes ?? [];
@@ -2172,19 +2197,30 @@ function wireGraphSync(graph, workbench, mount) {
   });
   graph.on("node:move", ({ node } = {}) => {
     workbench.canvasNodeDragActive = true;
+    stage?.classList?.add?.("is-node-dragging");
+    beginZoomedOutDragAsync();
     if (activeDraggedNode === node) return;
     if (activeDraggedNode) setNodeDragMotion(activeDraggedNode, false);
     activeDraggedNode = node ?? null;
-    stage?.classList?.add?.("is-node-dragging");
     setNodeDragMotion(node, true);
   });
   graph.on("node:moving", () => {
     workbench.canvasNodeDragActive = true;
+    stage?.classList?.add?.("is-node-dragging");
+    beginZoomedOutDragAsync();
   });
   graph.on("node:moved", (event) => {
-    const pointerReleased = isCanvasNodeMovePointerReleased(event);
-    if (pointerReleased) workbench.canvasNodeDragActive = false;
+    const pointerReleased = isCanvasNodeMovePointerReleased(event, workbench.canvasNodeDragActive === true);
+    if (!pointerReleased) {
+      if (workbench.canvasNodeDragActive === true) {
+        stage?.classList?.add?.("is-node-dragging");
+        workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([event?.node]);
+      }
+      return;
+    }
+    workbench.canvasNodeDragActive = false;
     stage?.classList?.remove?.("is-node-dragging");
+    endZoomedOutDragAsync();
     setNodeDragMotion(event?.node, false);
     activeDraggedNode = null;
     draggedGroupChildIds.delete(String(event?.node?.id ?? ""));
@@ -2205,12 +2241,10 @@ function wireGraphSync(graph, workbench, mount) {
     refreshCanvasConnectedEdgeMotion(graph);
     positionCanvasSelectionActionToolbar(graph, mount);
     positionCanvasNodeActionToolbar(graph, mount);
-    const positionNodeIds = canvasGraphCellAndDescendantIds([
+    workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([
       ...canvasSelectedGraphCells(graph),
       event?.node,
     ]);
-    workbench.canvasPendingPositionNodeIds = positionNodeIds;
-    if (!pointerReleased) return;
     scheduleGraphCommit({ clearToast: true });
   });
   graph.on("node:resized", ({ node } = {}) => {
@@ -2251,6 +2285,7 @@ function wireGraphSync(graph, workbench, mount) {
   });
   graph.on("cell:change:data", (event = {}) => {
     if (event?.options?.canvasNodeRefresh) return;
+    if (workbench.canvasNodeDragActive === true) return;
     sync();
   });
   graph.on("cell:removed", ({ cell, options } = {}) => {
@@ -2265,13 +2300,24 @@ function wireGraphSync(graph, workbench, mount) {
   };
   graph.on("node:click", ({ node }) => selectGraphNode(node));
   graph.on("node:mouseup", ({ node }) => {
+    const wasDragging = workbench.canvasNodeDragActive === true
+      || stage?.classList?.contains?.("is-node-dragging");
     workbench.canvasNodeDragActive = false;
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    endZoomedOutDragAsync();
     setNodeDragMotion(node, false);
     restoreDragSnapline();
     refreshCanvasConnectedEdgeMotion(graph);
+    syncCanvasGraphEditorOverlay(graph, node);
+    positionCanvasSelectionActionToolbar(graph, mount);
+    positionCanvasNodeActionToolbar(graph, mount);
     selectGraphNode(node);
-    if (workbench.canvasPendingPositionNodeIds?.length) {
+    if (wasDragging && workbench.canvasPendingPositionNodeIds?.length) {
+      workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([
+        ...canvasSelectedGraphCells(graph),
+        node,
+      ]);
+      snapCanvasGraphNodesToGrid([node], snapEnabled());
       scheduleGraphCommit({ clearToast: true });
     }
   });
@@ -2315,11 +2361,13 @@ function wireGraphSync(graph, workbench, mount) {
     if (!isCanvasSelectionTranslationEvent(e)) return;
     workbench.canvasNodeDragActive = true;
     mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
+    beginZoomedOutDragAsync();
     constrainCanvasGraphSelectionToGroups(graph.getSelectedCells?.() ?? []);
   });
   selectionPlugin?.on?.("box:mouseup", () => {
     workbench.canvasNodeDragActive = false;
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    endZoomedOutDragAsync();
     refreshCanvasConnectedEdgeMotion(graph);
     requestFrame(() => refreshCanvasSelectionActionToolbar(graph, workbench, mount));
     if (selectionMovePending) {
@@ -2372,14 +2420,13 @@ function refreshCanvasConnectedEdgeMotion(graph, nodeIds = []) {
   }
 }
 
-function isCanvasNodeMovePointerReleased(event = {}) {
-  const pointerEvent = event?.e ?? event;
+function isCanvasNodeMovePointerReleased(event = {}, dragActive = false) {
+  const pointerEvent = event?.e?.originalEvent ?? event?.e ?? event;
   const type = String(pointerEvent?.type ?? "").toLowerCase();
   if (["mouseup", "pointerup", "pointercancel", "touchend", "touchcancel"].includes(type)) return true;
-  if (["mousemove", "pointermove", "touchmove"].includes(type)) return false;
-  if (typeof pointerEvent?.buttons === "number") return Number(pointerEvent.buttons) === 0;
-  if (typeof pointerEvent?.touches?.length === "number") return pointerEvent.touches.length === 0;
-  return true;
+  if (dragActive === true) return false;
+  if (["mousemove", "pointermove", "touchmove", "mousedown", "pointerdown", "touchstart"].includes(type)) return false;
+  return false;
 }
 
 export function canvasGraphCellAndDescendantIds(cells = []) {
@@ -2638,6 +2685,7 @@ export function clearCanvasGraphEditorOverlay(graph) {
 }
 
 function syncCanvasGraphEditorOverlay(graph, node) {
+  if (graph?.__comicAiCanvasMount?.closest?.(".canvas-stage")?.classList?.contains?.("is-node-dragging")) return false;
   const editor = graph?.getCellById?.(CANVAS_EDITOR_OVERLAY_ID);
   if (!editor || String(editor.getData?.()?.parentNodeId ?? "") !== String(node?.id ?? "")) return false;
   const size = node.getSize?.() ?? { width: 360, height: 170 };
@@ -2922,6 +2970,7 @@ function applyCanvasGraphViewportStyles(graph, workbench, viewport = null) {
   const visualZoom = Math.max(0.1, normalizedZoom);
   const gridSize = Math.max(CANVAS_GRID_SIZE, Math.round(CANVAS_GRID_SIZE * visualZoom * 100) / 100);
   const gridDotMix = Math.min(14, Math.max(2, Math.round(14 * visualZoom * 100) / 100));
+  stage?.classList?.toggle?.("is-zoomed-out", visualZoom < 0.5);
   stage?.style?.setProperty?.("--canvas-grid-size", `${gridSize}px`);
   stage?.style?.setProperty?.("--canvas-grid-major-size", `${gridSize * 5}px`);
   stage?.style?.setProperty?.("--canvas-grid-dot-mix", `${gridDotMix}%`);
@@ -3018,6 +3067,9 @@ export function mountCanvasGraphNodeActionToolbar(graph, nodeId, toolbarHtml, mo
 }
 
 function positionCanvasNodeActionToolbar(graph, mount = graph?.__comicAiCanvasMount) {
+  if (mount?.closest?.(".canvas-stage")?.classList?.contains?.("is-node-dragging")) {
+    return Boolean(mount?.querySelector?.("[data-canvas-node-action-toolbar]"));
+  }
   const toolbar = mount?.querySelector?.("[data-canvas-node-action-toolbar]");
   if (!toolbar) return false;
   const bounds = resolveCanvasNodeMountBounds(graph, mount, toolbar.dataset?.nodeId);

@@ -2931,6 +2931,10 @@ export const creatorApi = {
     return postJson("/api/creator/skills", input);
   },
 
+  updateSkill(skillId, input) {
+    return patchJson(`/api/creator/skills/${encodeURIComponent(skillId)}`, input);
+  },
+
   addSkillToLibrary(skillId) {
     return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/library`, {});
   },

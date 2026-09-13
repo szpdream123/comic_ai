@@ -13,6 +13,7 @@ export function renderCanvasMinimap(ui = {}) {
 
 export function createCanvasMinimapController({ surface, workbench }) {
   let graph = null;
+  let refreshFrame = null;
   const refresh = () => {
     const current = surface?.querySelector?.("[data-canvas-minimap]");
     const markup = renderCanvasMinimap(workbench.ui);
@@ -22,10 +23,27 @@ export function createCanvasMinimapController({ surface, workbench }) {
     current.replaceWith(template.content.firstElementChild);
     return true;
   };
-  const graphRefresh = () => refresh();
+  const cancelRefreshFrame = () => {
+    if (refreshFrame == null) return;
+    if (typeof globalThis.cancelAnimationFrame === "function") globalThis.cancelAnimationFrame(refreshFrame);
+    else globalThis.clearTimeout?.(refreshFrame);
+    refreshFrame = null;
+  };
+  const graphRefresh = () => {
+    if (workbench?.canvasNodeDragActive === true) return;
+    if (refreshFrame != null) return;
+    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis)
+      ?? ((callback) => globalThis.setTimeout?.(callback, 16));
+    refreshFrame = requestFrame(() => {
+      refreshFrame = null;
+      if (workbench?.canvasNodeDragActive === true) return;
+      refresh();
+    });
+  };
   return {
     bind(nextGraph) {
       if (graph === nextGraph) return;
+      cancelRefreshFrame();
       if (graph?.off) {
         for (const name of ["node:moved", "node:resized", "node:added", "node:removed"]) graph.off(name, graphRefresh);
       }
@@ -70,6 +88,7 @@ export function createCanvasMinimapController({ surface, workbench }) {
     },
     refresh,
     dispose() {
+      cancelRefreshFrame();
       if (graph?.off) {
         for (const name of ["node:moved", "node:resized", "node:added", "node:removed"]) graph.off(name, graphRefresh);
       }

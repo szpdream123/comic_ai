@@ -30,6 +30,30 @@ test("Agent Center keeps package upload behind the Tauri IPC capability check", 
   assert.match(source, /智能体上传需在桌面客户端完成/);
 });
 
+test("Canvas Agent reads truncated node text via canvas_read_node instead of looping 继续读", () => {
+  const controller = readRuntimeAsset("conversationExecutionController-");
+  const executor = readRuntimeAsset("agentRoundExecutor-");
+  assert.match(controller, /id:`canvas_read_node`/);
+  assert.match(controller, /readTool:`canvas_read_node`/);
+  assert.match(controller, /不要在对话里写「继续读」/);
+  assert.match(controller, /function collapseContinueReadLoop/);
+  assert.match(controller, /content:collapseContinueReadLoop\(e\)/);
+  assert.match(executor, /canvas_read_node 按 nextOffset 续读/);
+  assert.match(executor, /已读取\(原著\|剧本\|节点\)/);
+  assert.match(executor, /canvas_read_node\(\{nodeId:"\$\{n\.nodeId\}",offset:\$\{n\.end\}\}\)/);
+});
+
+test("Canvas Agent auto-resumes a failed response up to 5 times", () => {
+  const controller = readRuntimeAsset("conversationExecutionController-");
+  assert.match(controller, /agentAutoResumeLimit=5/);
+  assert.match(controller, /function scheduleAgentAutoResume/);
+  assert.match(controller, /\[`queued`,`error`,`interrupted`\]\.includes\(a\.status\)/);
+  assert.match(controller, /r\?\.status===`completed`\|\|r\?\.status===`stopped`/);
+  assert.match(controller, /\.catch\(r=>\{console\.error\(`\[AgentRuntime\] failed to execute chat task:`,r\),scheduleAgentAutoResume\(e,n\)\}\)/);
+  assert.match(controller, /e\.pausedReason!==`user_paused`/);
+  assert.doesNotMatch(controller, /scheduleAgentAutoResume\(e,n\)\}\)\}\)/);
+});
+
 test("Canvas Agent drops lifetime token cap and compresses by model context", () => {
   const main = readRuntimeAsset("main-upstream-");
   const executor = readRuntimeAsset("agentRoundExecutor-");
@@ -37,8 +61,7 @@ test("Canvas Agent drops lifetime token cap and compresses by model context", ()
   assert.match(main, /maxTotalTokens:1\/0/);
   assert.doesNotMatch(main, /任务累计 token 已达上限/);
   assert.match(executor, /compressLiveTaskContext/);
-  assert.match(executor, /已按当前模型上下文自动压缩任务记录/);
-  assert.match(executor, /已按当前模型上下文自动压缩较早对话/);
+  assert.match(executor, /已自动压缩上下文/);
   assert.match(executor, /At\(r\)>b\.inputBudget\*\.75/);
   assert.match(chat, /该任务累计消耗（轮次 \/ 工具调用 \/ 继续次数）已达上限/);
 });

@@ -823,6 +823,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20261103-canvas-media-derivation-upscale.sql",
       sql: await readFile(join(rootDir, "packages/db/migrations/20261103-canvas-media-derivation-upscale.sql"), "utf8"),
     },
+    {
+      name: "20261104-skill-plaza-review.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261104-skill-plaza-review.sql"), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

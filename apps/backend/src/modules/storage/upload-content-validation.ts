@@ -13,7 +13,11 @@ const mimeExtensions: Record<string, readonly string[]> = {
   "audio/mp4": [".m4a"],
   "audio/x-m4a": [".m4a"],
   "application/json": [".json"],
-  "text/plain": [".txt"],
+  "text/plain": [".txt", ".md", ".markdown", ".csv"],
+  "text/markdown": [".md", ".markdown"],
+  "text/x-markdown": [".md", ".markdown"],
+  "text/csv": [".csv"],
+  "application/pdf": [".pdf"],
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
   "font/ttf": [".ttf"],
   "font/otf": [".otf"],
@@ -50,7 +54,10 @@ function matchesContent(contentType: string, extension: string, bytes: Uint8Arra
   }
   if (contentType === "audio/mp4" || contentType === "audio/x-m4a") return isIsoBaseMedia(bytes);
   if (contentType === "application/json") return isJson(bytes);
-  if (contentType === "text/plain") return isPlainText(bytes);
+  if (contentType === "text/plain" || contentType === "text/markdown" || contentType === "text/x-markdown" || contentType === "text/csv") {
+    return isPlainText(bytes);
+  }
+  if (contentType === "application/pdf") return ascii(bytes, 0, 4) === "%PDF";
   if (contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     return startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]) || startsWith(bytes, [0x50, 0x4b, 0x05, 0x06]);
   }
@@ -63,6 +70,9 @@ function matchesContent(contentType: string, extension: string, bytes: Uint8Arra
   if (contentType === "application/vnd.ms-fontobject") return bytes.byteLength >= 82;
   if (contentType === "application/octet-stream") {
     if (extension === ".docx") return startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]);
+    if (extension === ".pdf") return ascii(bytes, 0, 4) === "%PDF";
+    if (extension === ".json") return isJson(bytes);
+    if (extension === ".md" || extension === ".markdown" || extension === ".txt" || extension === ".csv") return isPlainText(bytes);
     if (extension === ".ttf") return startsWith(bytes, [0x00, 0x01, 0x00, 0x00]) || ascii(bytes, 0, 4) === "true";
     if (extension === ".otf") return ascii(bytes, 0, 4) === "OTTO";
     if (extension === ".woff") return ascii(bytes, 0, 4) === "wOFF";

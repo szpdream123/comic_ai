@@ -5744,6 +5744,33 @@ function promptReverseReservationTokenLimit(
   return maxTokens + imageCount * 4096;
 }
 
+function canvasAssistantReservationTokenLimit(
+  model: {
+    capabilities: Record<string, unknown>;
+    snapshot?: { capabilities?: Record<string, unknown>; limits?: Record<string, unknown> };
+  },
+  body: Record<string, unknown>,
+  messages: unknown[],
+) {
+  const configured = [
+    model.capabilities.contextWindow,
+    model.snapshot?.capabilities?.contextWindow,
+    model.snapshot?.limits?.contextWindow,
+    model.snapshot?.limits?.maxPromptTokens,
+    model.snapshot?.limits?.maxPromptLength,
+  ].map(Number).find((value) => Number.isFinite(value) && value > 0) ?? 0;
+  const requestMaxTokens = Number(body.max_tokens);
+  const completionBudget = Number.isFinite(requestMaxTokens) && requestMaxTokens > 0
+    ? Math.ceil(requestMaxTokens)
+    : 2_048;
+  return Math.max(configured, estimateCanvasAssistantPromptTokens(messages, body.tools) + completionBudget);
+}
+
+function estimateCanvasAssistantPromptTokens(messages: unknown[], tools: unknown) {
+  const serialized = JSON.stringify({ messages, ...(tools ? { tools } : {}) });
+  return Math.max(1, serialized.length * 2);
+}
+
 function isPromptReverseModel(model: AiModelConfigRecord) {
   return model.status === "active"
     && model.mediaType === "text"
@@ -18068,6 +18095,54 @@ function resolveLocalStorageObjectPath(bucket: string, objectKey: string) {
   return absolutePath;
 }
 
+async function readSkillStorageObjectText(input: {
+  db: Awaited<ReturnType<typeof createDevDb>>;
+  storageObjectId: string;
+  adapter: {
+    getObject?: (input: { bucket: string; objectKey: string }) => Promise<{ bytes: Uint8Array; contentType?: string | null }>;
+    createSignedReadUrl: (input: { bucket: string; objectKey: string; expiresAt: Date }) => Promise<{ url: string; expiresAt: Date }>;
+  };
+}) {
+  const object = await findStorageObject(input.db, input.storageObjectId);
+  if (!object || object.status !== "available") return null;
+  if (typeof input.adapter.getObject === "function") {
+    try {
+      const result = await input.adapter.getObject({ bucket: object.bucket, objectKey: object.objectKey });
+      const text = Buffer.from(result.bytes).toString("utf8").trim();
+      if (text) return text;
+    } catch (error) {
+      console.error("[skill-plaza] storage getObject failed", {
+        storageObjectId: input.storageObjectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  try {
+    const signed = await input.adapter.createSignedReadUrl({
+      bucket: object.bucket,
+      objectKey: object.objectKey,
+      expiresAt: new Date(Date.now() + 60 * 1000),
+    });
+    if (/^https?:\/\//i.test(signed.url)) {
+      const response = await fetch(signed.url);
+      if (response.ok) {
+        const text = (await response.text()).trim();
+        if (text) return text;
+      }
+    }
+  } catch (error) {
+    console.error("[skill-plaza] storage signed read failed", {
+      storageObjectId: input.storageObjectId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    return (await readFile(resolveLocalStorageObjectPath(object.bucket, object.objectKey))).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function readBinaryBody(
   request: AsyncIterable<Buffer | string>,
   maximumBytes: number,
@@ -22062,7 +22137,7 @@ export function createPhoneAuthDevServer(
         });
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
         const body = (await readJsonBody(request)) as Record<string, unknown>;
-        const service = createSkillPlazaService({ db });
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
         try {
           return writeJson(response, { status: 201, body: { data: await service.createOfficial({
             name: String(body.name ?? body.title ?? ""),
@@ -22085,7 +22160,7 @@ export function createPhoneAuthDevServer(
           requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
         });
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
-        const service = createSkillPlazaService({ db });
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
         try {
           return writeJson(response, { status: 200, body: { data: await service.listAdmin({
             status: url.searchParams.get("status"),
@@ -22099,11 +22174,22 @@ export function createPhoneAuthDevServer(
 
       const adminSkillStatusMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)\/status$/);
       const adminSkillMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)$/);
+      if (request.method === "GET" && adminSkillMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.storyboardPromptWrite] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.getAdminDetail(decodeURIComponent(adminSkillMatch[1])) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
       if (request.method === "PATCH" && adminSkillMatch) {
         const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.storyboardPromptWrite] });
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
         const body = (await readJsonBody(request)) as Record<string, unknown>;
-        const service = createSkillPlazaService({ db });
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
         try {
           return writeJson(response, { status: 200, body: { data: await service.updateOfficial({
             skillId: decodeURIComponent(adminSkillMatch[1]), name: String(body.name ?? body.title ?? ""), summary: body.summary, category: body.category, detail: body.detail, status: body.status, files: body.files,
@@ -22121,11 +22207,12 @@ export function createPhoneAuthDevServer(
         });
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
         const body = (await readJsonBody(request)) as Record<string, unknown>;
-        const service = createSkillPlazaService({ db });
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
         try {
           return writeJson(response, { status: 200, body: { data: await service.updateStatus({
             skillId: decodeURIComponent(adminSkillStatusMatch[1]),
             status: body.status,
+            reviewComment: body.reviewComment ?? body.review_comment ?? body.comment,
           }) } });
         } catch (error) {
           if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
@@ -26534,7 +26621,7 @@ export function createPhoneAuthDevServer(
 
       if (pathname === "/api/creator/skills" || pathname.startsWith("/api/creator/skills/")) {
         const authenticated = await findAuthenticatedUser(db, request.headers.cookie, new Date(), authSessionCache, { includeCredit: false });
-        const service = createSkillPlazaService({ db });
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
         try {
           if (request.method === "GET" && pathname === "/api/creator/skills") {
             if (url.searchParams.get("scope") === "mine") {
@@ -26571,6 +26658,19 @@ export function createPhoneAuthDevServer(
           const skillMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)$/);
           if (request.method === "GET" && skillMatch) {
             return writeJson(response, { status: 200, body: await service.getDetail({ skillId: decodeURIComponent(skillMatch[1]), userId: authenticated.user.id }) });
+          }
+          if (request.method === "PATCH" && skillMatch) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, { status: 200, body: await service.updateMine({
+              userId: authenticated.user.id,
+              skillId: decodeURIComponent(skillMatch[1]),
+              name: String(body.name ?? body.title ?? ""),
+              summary: String(body.summary ?? ""),
+              category: body.category,
+              detail: body.detail,
+              coverStorageObjectId: body.coverStorageObjectId ? String(body.coverStorageObjectId) : null,
+              previewStorageObjectId: body.previewStorageObjectId ? String(body.previewStorageObjectId) : null,
+            }) });
           }
           const addMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)\/library$/);
           if (request.method === "POST" && addMatch) {
@@ -27130,6 +27230,42 @@ export function createPhoneAuthDevServer(
             const signed = await storageRuntime.adapter.createSignedReadUrl({
               bucket: publishedPromptCover.bucket,
               objectKey: publishedPromptCover.object_key,
+              expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+              responseContentDisposition: "inline",
+            });
+            response.statusCode = 307;
+            response.setHeader("location", signed.url);
+            response.setHeader("cache-control", "private, no-store");
+            response.setHeader("referrer-policy", "no-referrer");
+            response.end();
+            return;
+          }
+          const publishedSkillCover = isUuid(previewStorageObjectId)
+            && url.searchParams.get("proxy") === "1"
+            && url.searchParams.get("download") !== "1"
+            && url.searchParams.get("thumbnail") !== "1"
+            ? await queryOne<{ bucket: string; object_key: string; content_type: string }>(db, `
+                SELECT storage.bucket, storage.object_key, storage.content_type
+                FROM storage_objects storage
+                WHERE storage.id = $1
+                  AND storage.bucket = $2
+                  AND storage.status = 'available'
+                  AND storage.deleted_at IS NULL
+                  AND (storage.content_type LIKE 'image/%' OR storage.content_type LIKE 'video/%')
+                  AND EXISTS (
+                    SELECT 1 FROM skills skill
+                    WHERE (skill.cover_storage_object_id = storage.id OR skill.preview_storage_object_id = storage.id)
+                      AND (
+                        skill.status = 'published'
+                        OR skill.owner_user_id = $3
+                      )
+                  )
+              `, [previewStorageObjectId, storageBucket, authenticated?.user.id ?? null])
+            : undefined;
+          if (publishedSkillCover) {
+            const signed = await storageRuntime.adapter.createSignedReadUrl({
+              bucket: publishedSkillCover.bucket,
+              objectKey: publishedSkillCover.object_key,
               expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
               responseContentDisposition: "inline",
             });
@@ -28892,7 +29028,7 @@ export function createPhoneAuthDevServer(
               amount: billing.estimateRound({
                 pricing: model.pricing,
                 maxTokens: Number(body.max_tokens) || undefined,
-                contextWindow: Number(model.capabilities.contextWindow) || undefined,
+                contextWindow: canvasAssistantReservationTokenLimit(model, body, messages),
               }),
               reason: CANVAS_AGENT_CREDIT_REASON,
               metadata: billingMetadata,
@@ -34142,6 +34278,8 @@ export function createPhoneAuthDevServer(
               props?: Array<Record<string, unknown>> | null;
             } | null;
             skills?: Partial<Record<"script" | "shot" | "prop_extract" | "character_extract" | "scene_extract", string | null>> | null;
+            plazaSkillId?: string | null;
+            plazaSkillIds?: string[] | null;
             packages?: {
               genrePackageId?: string | null;
               emotionPackageId?: string | null;
@@ -34207,6 +34345,11 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(400, "workflow_stage_invalid", "script stage cannot be skipped and selected"));
           }
           const skillId = String(body.skillId ?? "").trim();
+          const plazaSkillIds = [...new Set([
+            String(body.plazaSkillId ?? "").trim(),
+            ...(Array.isArray(body.plazaSkillIds) ? body.plazaSkillIds.map((item) => String(item ?? "").trim()) : []),
+          ].filter(Boolean))];
+          const plazaSkillId = plazaSkillIds[0] ?? "";
           const workflowSkillCategories = ["script", "shot", "prop_extract", "character_extract", "scene_extract"] as const;
           const requestedSkillIds = Object.fromEntries(
             workflowSkillCategories
@@ -34241,14 +34384,18 @@ export function createPhoneAuthDevServer(
           if (Object.values(requestedSkillIds).some((itemId) => !isUuid(itemId))) {
             return writeJson(response, envelopedError(400, "workflow_prompt_skill_invalid", "workflow prompt skill id is invalid"));
           }
-          const usesLegacyPackages = !skipScriptStage && !requestedSkillIds.script && Object.keys(requestedSkillIds).length === 0;
+          const usesPlazaSkill = Boolean(plazaSkillId);
+          if (usesPlazaSkill && plazaSkillIds.some((itemId) => !isUuid(itemId))) {
+            return writeJson(response, envelopedError(400, "workflow_plaza_skill_invalid", "plaza skill id is invalid"));
+          }
+          const usesLegacyPackages = !skipScriptStage && !requestedSkillIds.script && Object.keys(requestedSkillIds).length === 0 && !usesPlazaSkill;
           if (usesLegacyPackages && (
             (!isUuid(genrePackageId) && !isAutomaticStoryboardPromptPackageSelection(genrePackageId)) ||
             (!isUuid(emotionPackageId) && !isAutomaticStoryboardPromptPackageSelection(emotionPackageId))
           )) {
             return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
           }
-          if (!usesLegacyPackages && !useDefaultWorkflowStages && Object.keys(requestedSkillIds).length === 0) {
+          if (!usesLegacyPackages && !useDefaultWorkflowStages && Object.keys(requestedSkillIds).length === 0 && !usesPlazaSkill) {
             return writeJson(response, envelopedError(400, "workflow_prompt_skill_required", "at least one workflow prompt skill is required"));
           }
           let workflowSkills: Array<Awaited<ReturnType<ReturnType<typeof createPromptMarketplaceService>["resolveWorkflowPromptSkill"]>>> = [];
@@ -34271,7 +34418,24 @@ export function createPhoneAuthDevServer(
             throw error;
           }
           const workflowSkillByCategory = new Map(workflowSkills.map((item) => [item.category, item]));
-          if (usesLegacyPackages || useDefaultWorkflowStages) {
+          let plazaSkills: Array<Awaited<ReturnType<ReturnType<typeof createSkillPlazaService>["resolveWorkflowSkill"]>>> = [];
+          try {
+            if (usesPlazaSkill) {
+              const skillPlaza = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
+              plazaSkills = await Promise.all(plazaSkillIds.map((itemId) => skillPlaza.resolveWorkflowSkill({
+                userId: authenticated.user.id,
+                skillId: itemId,
+                now: new Date(),
+              })));
+            }
+          } catch (error) {
+            if (error instanceof SkillPlazaError) {
+              return writeJson(response, envelopedError(error.status, error.code, error.message));
+            }
+            throw error;
+          }
+          const plazaSkillContent = plazaSkills.map((item) => String(item.content ?? "").trim()).filter(Boolean).join("\n\n");
+          if (usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill) {
             await Promise.all([
               ensureDefaultStoryboardPromptData(db),
               ensureDefaultScenePromptTemplates(db),
@@ -34280,7 +34444,7 @@ export function createPhoneAuthDevServer(
               ensureDefaultShotPromptTemplates(db),
             ]);
           }
-          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = usesLegacyPackages || useDefaultWorkflowStages
+          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill
             ? await Promise.all([
                 findDefaultScenePromptTemplateForPreview(db),
                 findDefaultCharacterPromptTemplateForPreview(db),
@@ -34288,7 +34452,7 @@ export function createPhoneAuthDevServer(
                 findDefaultShotPromptTemplateForPreview(db),
               ])
             : [null, null, null, null];
-          if ((usesLegacyPackages || useDefaultWorkflowStages) && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
+          if ((usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill) && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
           const [genrePackage, emotionPackage, tabooPackages] = usesLegacyPackages
@@ -34301,7 +34465,7 @@ export function createPhoneAuthDevServer(
           if (usesLegacyPackages && (!genrePackage || !emotionPackage)) {
             return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
           }
-          const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages
+          const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill
             ? (requestedStages.length || (skipScriptStage ? 4 : 5))
             : workflowSkills.length + (resolvedIntent ? 1 : 0);
           const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
@@ -34310,10 +34474,10 @@ export function createPhoneAuthDevServer(
             0,
           );
           const creditCost = modelCreditCost + skillCreditCost;
-          const skillSelectionKey = workflowSkills
-            .map((item) => `${item.category}:${item.id}`)
-            .sort()
-            .join("|");
+          const skillSelectionKey = [
+            ...workflowSkills.map((item) => `${item.category}:${item.id}`),
+            ...plazaSkills.map((item) => `plaza:${item.id}`),
+          ].sort().join("|");
           const billingMetadata = {
             projectId: billingProjectId,
             canvasProjectId: billingProjectId ? null : projectId,
@@ -34321,7 +34485,10 @@ export function createPhoneAuthDevServer(
             modelCreditCost,
             modelRunCount,
             skillId: skillSelectionKey || null,
-            skills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title, priceCredits: item.priceCredits })),
+            skills: [
+              ...workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title, priceCredits: item.priceCredits })),
+              ...plazaSkills.map((item) => ({ id: item.id, category: item.category, title: item.title, priceCredits: item.priceCredits, source: "plaza" })),
+            ],
             skillCreditCost,
             creditCost,
             taskType: "ai_storyboard_preview",
@@ -34392,7 +34559,7 @@ export function createPhoneAuthDevServer(
             teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
             modelCode: resolvedModelCode,
-            selectedStages: usesLegacyPackages || useDefaultWorkflowStages
+            selectedStages: usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill
               ? (requestedStages.length
                   ? requestedStages as Array<"script" | "scene" | "character" | "prop" | "shot">
                   : undefined)
@@ -34410,16 +34577,16 @@ export function createPhoneAuthDevServer(
               props: Array.isArray(body.context?.props) ? body.context.props.slice(0, 500) : [],
             },
             packages: {
-              skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
+              skillPrompt: [plazaSkillContent, workflowSkillByCategory.get("script")?.content ?? ""].filter(Boolean).join("\n\n"),
               genrePrompt: genrePackage ? formatStoryboardPromptPackageContents([genrePackage]) : "",
               emotionPrompt: emotionPackage ? formatStoryboardPromptPackageContents([emotionPackage]) : "",
               tabooPrompt: formatStoryboardPromptPackageContents(tabooPackages),
             },
             templates: {
-              scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? "",
-              characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? "",
-              propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? "",
-              shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? "",
+              scenePrompt: [plazaSkillContent, workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
+              characterPrompt: [plazaSkillContent, workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
+              propPrompt: [plazaSkillContent, workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
+              shotPrompt: [plazaSkillContent, workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
             },
           };
           const previewService = createAiStoryboardPreviewService({ gateway: aiStoryboardTextChatGateway });

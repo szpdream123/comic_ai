@@ -58,6 +58,17 @@ test("canvas project gallery filters archived projects and exposes reversible ar
   assert.match(archivedHtml, /data-action="toggle-canvas-project-archive"[^>]*data-canvas-project-status="active"/);
 });
 
+test("canvas project gallery hides episode canvases from the series project list", () => {
+  const html = renderCanvasProjectGallery({
+    canvasProjects: [
+      { id: "canvas-47", title: "画布项目=47", status: "active" },
+      { id: "episode-30", title: "第30集 真相与新的起点", status: "active", parentId: "canvas-47" },
+    ],
+  });
+  assert.match(html, /画布项目=47/);
+  assert.doesNotMatch(html, /第30集 真相与新的起点/);
+});
+
 test("canvas project gallery searches titles and exposes an input bridge", () => {
   const html = renderCanvasProjectGallery({
     canvasProjects: [

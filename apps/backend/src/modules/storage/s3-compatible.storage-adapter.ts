@@ -142,6 +142,28 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     };
   }
 
+  async getObject(input: { bucket: string; objectKey: string }) {
+    try {
+      const result = await this.client.send(
+        new GetObjectCommand({
+          Bucket: input.bucket,
+          Key: input.objectKey,
+        }),
+      );
+      return {
+        bytes: await readObjectBody(result.Body),
+        contentType: result.ContentType ?? null,
+      };
+    } catch (error) {
+      console.error("[storage][s3-compatible] getObject failed", {
+        bucket: input.bucket,
+        objectKey: input.objectKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
   async headObject(input: { bucket: string; objectKey: string }) {
     try {
       const result = await this.client.send(
@@ -319,6 +341,19 @@ function resolveUploadBody(
 
 function isWebReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
   return Boolean(value && typeof value === "object" && typeof (value as ReadableStream).getReader === "function");
+}
+
+async function readObjectBody(body: unknown) {
+  if (!body) return new Uint8Array();
+  if (body instanceof Uint8Array) return body;
+  if (typeof (body as { transformToByteArray?: () => Promise<Uint8Array> }).transformToByteArray === "function") {
+    return await (body as { transformToByteArray: () => Promise<Uint8Array> }).transformToByteArray();
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<Buffer | Uint8Array | string>) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Uint8Array.from(Buffer.concat(chunks));
 }
 
 async function withTimeout<T>(

@@ -12,7 +12,7 @@ import {
   renderCanvasMarkdownPreview,
   normalizeCanvasLibraryAsset,
   WORKBENCH_THEME_OPTIONS,
-} from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&canvas-inline-prompt-editor=1&skill-media-upload=5";
+} from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&canvas-inline-prompt-editor=1&skill-media-upload=8";
 import { buildProjectCreateRequest } from "./project-create-request.js";
 import {
   advanceFirstLoginGuide,
@@ -78,9 +78,13 @@ import {
 } from "./result-image-annotation.js";
 import { syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
 import {
+  EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
+  normalizePlazaEpisodeSkills,
+  normalizePlazaSkillIds,
   syncEpisodePromptSkillDraft,
+  togglePlazaSkillId,
 } from "./episode-prompt-skill-modal.js";
 import {
   CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES,
@@ -2493,7 +2497,7 @@ function prepareDeferredMediaElements(root) {
     if (image.closest?.(".asset-generator-backdrop")) continue;
     // Picker dialogs have their own scroll container; native lazy loading is
     // more reliable there than observing against the workbench root.
-    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer, .ai-dialog-float, .connected-nodes-float, .connected-node-thumb")) continue;
+    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer, .ai-dialog-float, .connected-nodes-float, .connected-node-thumb, .skill-detail-overlay, .skill-create-cover-upload")) continue;
     const source = String(image.getAttribute?.("src") ?? "").trim();
     if (!isDeferredMediaSource(source)) continue;
     image.dataset.deferredMediaManaged = "true";
@@ -2553,7 +2557,7 @@ function syncDeferredMediaLoading(workbench) {
       loadImage(entry.target);
       observer.unobserve(entry.target);
     }
-  }, { root, rootMargin: "320px 0px" });
+  }, { rootMargin: "320px 0px" });
   images.forEach((image) => observer.observe(image));
   workbench.disposeDeferredMediaLoading = () => observer.disconnect();
 }
@@ -3354,8 +3358,12 @@ export async function initProductionWorkbench({
       episodePromptSkillLoading: false,
       episodePromptSkillModalOpen: false,
       episodePromptSkillSourceTab: "official",
-      episodePromptSkillCategory: "script",
+      episodePromptSkillCategory: "recommended",
       episodePromptSkillDraftIds: {},
+      episodePromptSkillDraftPlazaIds: [],
+      episodePlazaOfficialSkills: [],
+      episodePlazaPrivateSkills: [],
+      selectedEpisodePlazaSkillIds: [],
       canvasTextOfficialSkills: [],
       canvasTextPrivateSkills: [],
       canvasTextSkillsLoading: false,
@@ -3579,6 +3587,7 @@ export async function initProductionWorkbench({
       skillPlazaFavorites: [],
       skillPlazaMine: [],
       skillCreateOpen: false,
+      skillCreateDraft: null,
       skillCreateEditorMode: "code",
       skillPlazaLoading: false,
       skillPlazaError: "",
@@ -3682,6 +3691,7 @@ export async function initProductionWorkbench({
   workbench.updateCanvasViewport = (canvasDocument) => {
     const updated = updateActiveCanvasDocument(workbench, canvasDocument, {
       delayMs: CANVAS_VIEWPORT_SAVE_DELAY_MS,
+      scheduleSave: false,
     });
     void persistCanvasSession(
       workbench,
@@ -3726,6 +3736,11 @@ export async function initProductionWorkbench({
     if (isCanvasX6InteractionTarget(eventTarget)) {
       return;
     }
+    const skillCreateResize = eventTarget?.closest?.("[data-skill-create-resize]");
+    if (skillCreateResize) {
+      startSkillCreateEditorResize(workbench, event, skillCreateResize);
+      return;
+    }
     const quickAssetToggle = eventTarget?.closest?.(".episode-replica-right-toggle.is-expand");
     if (quickAssetToggle) {
       startEpisodeQuickAssetToggleDrag(workbench, event, quickAssetToggle);
@@ -3738,6 +3753,10 @@ export async function initProductionWorkbench({
     }
   });
   root.addEventListener("pointermove", (event) => {
+    if (workbench.skillCreateEditorResize) {
+      applySkillCreateEditorResize(workbench, event);
+      return;
+    }
     if (updateToolboxWatermarkRemovalMaskPaint(workbench, event)) return;
     if (
       isAiCanvasRuntimeActive(workbench)
@@ -3781,16 +3800,21 @@ export async function initProductionWorkbench({
   });
   root.addEventListener("focusout", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (eventTarget?.matches?.("[data-skill-create-name-input]")) {
+      commitSkillCreateNameInput(eventTarget);
+    }
     const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
     if (messageAttachment) hideCanvasAgentMessageAttachmentPreview();
     const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
     if (videoAttachment) stopHomeAgentVideoPreview(videoAttachment);
   });
   root.addEventListener("pointerup", (event) => {
+    finishSkillCreateEditorResize(workbench);
     finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, event);
     finishCanvasRightPanGesture(workbench, event);
   });
   root.addEventListener("pointercancel", (event) => {
+    finishSkillCreateEditorResize(workbench);
     finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, event);
     workbench.canvasRightPanGesture = null;
   });
@@ -3847,6 +3871,13 @@ export async function initProductionWorkbench({
     if (event.__newCanvasHandled === true) return;
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const actionTarget = eventTarget?.closest?.("[data-action]");
+    const skillCreateForm = workbench.root?.querySelector?.("#skill-create-form");
+    if (skillCreateForm && !eventTarget?.closest?.("[data-skill-create-tree-menu], [data-action='open-skill-create-tree-menu']")) {
+      toggleSkillCreateMenu(skillCreateForm.querySelector("[data-skill-create-tree-menu]"), false);
+    }
+    if (skillCreateForm && !eventTarget?.closest?.(".skill-create-upload-menu-wrap")) {
+      toggleSkillCreateMenu(skillCreateForm.querySelector("[data-skill-create-upload-menu]"), false);
+    }
     const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
     if (imagePreviewTarget) {
       const imageUrl = String(imagePreviewTarget.dataset.imagePreviewUrl ?? "").trim();
@@ -4130,6 +4161,10 @@ export async function initProductionWorkbench({
       actionTarget.matches?.(".team-asset-local-upload-input")
     ) {
       return;
+    }
+    if (actionTarget.dataset.action === "open-skill-edit") {
+      event.preventDefault();
+      event.stopPropagation();
     }
     collectEpisodeWorkbenchEvent(workbench, "click", {
       action: actionTarget.dataset.action ?? "",
@@ -4552,6 +4587,13 @@ export async function initProductionWorkbench({
     render(workbench, { preserveLibraryScroll: true });
   });
 
+  root.addEventListener("scroll", (event) => {
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (!target?.matches?.("[data-skill-create-markdown-content]")) return;
+    const gutter = target.closest?.(".skill-create-code-pane")?.querySelector?.("[data-skill-create-line-numbers]");
+    if (gutter) gutter.scrollTop = target.scrollTop;
+  }, true);
+
   root.addEventListener("change", (event) => {
     const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!isAudioAssetImportFileInput(target)) {
@@ -4607,8 +4649,8 @@ export async function initProductionWorkbench({
       }
       const form = target.closest?.("#skill-create-form");
       if (target.matches?.('input[name="skillFiles"], input[name="skillFolderFiles"]')) {
-        void ingestSkillCreateUploadedMarkdown(form);
-        form?.querySelector?.("[data-skill-create-upload-menu]")?.setAttribute("hidden", "");
+        await ingestSkillCreateUploadedMarkdown(form);
+        toggleSkillCreateMenu(form?.querySelector?.("[data-skill-create-upload-menu]"), false);
       }
       refreshSkillCreateFileList(form);
       refreshSkillCreateTree(form);
@@ -5378,6 +5420,7 @@ export async function initProductionWorkbench({
     if (target?.matches?.("[data-skill-create-markdown-content]")) {
       const form = target.closest?.("#skill-create-form");
       updateSkillCreateContentCount(form);
+      updateSkillCreateLineNumbers(form);
       if (form?.querySelector?.("[data-skill-create-editor]")?.dataset.mode === "preview") updateSkillCreatePreview(form);
       return;
     }
@@ -8299,17 +8342,44 @@ async function syncScriptConversionSkills(workbench) {
 async function syncEpisodePromptSkills(workbench) {
   if (
     typeof workbench.api?.getPromptSkills !== "function"
+    && typeof workbench.api?.getPromptMarketplace !== "function"
+    && typeof workbench.api?.getSkills !== "function"
   ) {
     workbench.ui.episodePromptOfficialSkills = [];
     workbench.ui.episodePromptPrivateSkills = [];
+    workbench.ui.episodePlazaOfficialSkills = [];
+    workbench.ui.episodePlazaPrivateSkills = [];
     workbench.ui.episodePromptSkillLoading = false;
     return;
   }
   workbench.ui.episodePromptSkillLoading = true;
   try {
-    const [catalog, library] = await Promise.all([
-      workbench.api.getPromptSkills({ source: "official", category: "all", page: 1, pageSize: 100 }),
-      workbench.api.getPromptSkills({ source: "private", category: "all", page: 1, pageSize: 100 }),
+    const loadPromptCatalog = (source) => {
+      if (typeof workbench.api?.getPromptSkills === "function") {
+        return workbench.api.getPromptSkills({ source, category: "all", page: 1, pageSize: 100 });
+      }
+      if (source === "private" && typeof workbench.api?.getPromptMarketplaceLibrary === "function") {
+        return workbench.api.getPromptMarketplaceLibrary({ category: "all", page: 1, pageSize: 100 });
+      }
+      if (typeof workbench.api?.getPromptMarketplace === "function") {
+        return workbench.api.getPromptMarketplace({ category: "all", page: 1, pageSize: 100 });
+      }
+      return Promise.resolve({ items: [] });
+    };
+    const promptSkillRequests = [
+      loadPromptCatalog("official"),
+      loadPromptCatalog("private"),
+    ];
+    const plazaSkillRequests = typeof workbench.api?.getSkills === "function"
+      ? [
+          workbench.api.getSkills({ category: "all", page: 1, pageSize: 50 }),
+          typeof workbench.api.getMySkills === "function" ? workbench.api.getMySkills() : Promise.resolve({ items: [] }),
+          typeof workbench.api.getSkillLibrary === "function" ? workbench.api.getSkillLibrary() : Promise.resolve({ items: [] }),
+        ]
+      : [Promise.resolve({ items: [] }), Promise.resolve({ items: [] }), Promise.resolve({ items: [] })];
+    const [catalog, library, plazaCatalog, plazaMine, plazaLibrary] = await Promise.all([
+      ...promptSkillRequests,
+      ...plazaSkillRequests,
     ]);
     const categoryIds = new Set(EPISODE_PROMPT_SKILL_CATEGORIES.map((item) => item.id));
     const officialSkills = normalizeEpisodePromptSkills(catalog?.items, "official")
@@ -8334,10 +8404,25 @@ async function syncEpisodePromptSkills(workbench) {
         return [category.id, selected?.id ?? fallback?.id ?? ""];
       })),
     };
+    const plazaOfficial = normalizePlazaEpisodeSkills(plazaCatalog?.items, "official");
+    const plazaPrivate = normalizePlazaEpisodeSkills([
+      ...(Array.isArray(plazaMine?.items) ? plazaMine.items : []),
+      ...(Array.isArray(plazaLibrary?.items) ? plazaLibrary.items : []),
+    ], "private");
+    const plazaAll = [...plazaOfficial, ...plazaPrivate];
+    const currentPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds)
+      .filter((id) => plazaAll.some((item) => item.id === id));
+    workbench.ui.episodePlazaOfficialSkills = plazaOfficial;
+    workbench.ui.episodePlazaPrivateSkills = plazaPrivate;
+    workbench.ui.selectedEpisodePlazaSkillIds = currentPlazaIds.length
+      ? currentPlazaIds
+      : plazaOfficial.slice(0, 1).map((item) => item.id);
   } catch (error) {
     workbench.ui.episodePromptOfficialSkills = [];
     workbench.ui.episodePromptPrivateSkills = [];
-    workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "创作技能加载失败";
+    workbench.ui.episodePlazaOfficialSkills = [];
+    workbench.ui.episodePlazaPrivateSkills = [];
+    workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "技能skill加载失败";
   } finally {
     workbench.ui.episodePromptSkillLoading = false;
   }
@@ -10280,13 +10365,42 @@ async function addAiCanvasRuntimeEpisodesForWorkbench(workbench, episodes = []) 
       episodeNo,
       ...(outline ? { episodeOutline: outline } : {}),
     });
+    const documentsByProject = {
+      ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+        ? workbench.ui.canvasDocumentsByProject
+        : {}),
+    };
+    documentsByProject[createdId] = attachCanvasProjectMetaToDocument(
+      workbench,
+      createdId,
+      documentsByProject[createdId] ?? createStandaloneCanvasDocument({ canvasProjectId: createdId }),
+    );
+    workbench.ui.canvasDocumentsByProject = documentsByProject;
     createdIds.push(createdId);
   }
   if (!createdIds.length) return [];
-  updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
   persistWorkbenchState(workbench);
-  const switchId = createdIds.at(-1);
-  if (switchId) await switchAiCanvasRuntimeProject(workbench, switchId);
+  if (typeof workbench.api?.saveStandaloneCanvas === "function") {
+    await Promise.all(createdIds.map(async (createdId) => {
+      const document = attachCanvasProjectMetaToDocument(
+        workbench,
+        createdId,
+        workbench.ui.canvasDocumentsByProject?.[createdId]
+          ?? createStandaloneCanvasDocument({ canvasProjectId: createdId }),
+      );
+      try {
+        await workbench.api.saveStandaloneCanvas(createdId, {
+          clientRevision: 1,
+          document,
+          events: [],
+        });
+      } catch {
+        // Keep locally attached episode metadata even if the first save fails.
+      }
+    }));
+  }
+  await updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+  persistWorkbenchState(workbench);
   return createdIds;
 }
 
@@ -10405,17 +10519,46 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
       if (!Array.isArray(projects)) return;
       const current = normalizeCanvasProjects(workbench.ui);
       const currentById = new Map(current.map((project) => [project.id, project]));
-      const next = projects.map((project) => createDefaultCanvasProjectRecord({
-        ...(currentById.get(String(project?.id ?? "")) ?? {}),
-        ...project,
-        title: project?.title ?? project?.name,
-      }));
+      const next = projects.map((project) => {
+        const existing = currentById.get(String(project?.id ?? "")) ?? {};
+        return createDefaultCanvasProjectRecord({
+          ...existing,
+          ...project,
+          title: project?.title ?? project?.name ?? existing.title,
+          ...(existing.parentId || project?.parentId
+            ? { parentId: project?.parentId ?? existing.parentId }
+            : {}),
+          ...(existing.episodeNo != null || project?.episodeNo != null
+            ? { episodeNo: project?.episodeNo ?? existing.episodeNo }
+            : {}),
+          ...(existing.episodeOutline != null || project?.episodeOutline != null
+            ? { episodeOutline: project?.episodeOutline ?? existing.episodeOutline }
+            : {}),
+          ...(existing.episodeScript != null || project?.episodeScript != null
+            ? { episodeScript: project?.episodeScript ?? existing.episodeScript }
+            : {}),
+          ...(existing.episodeCreative || project?.episodeCreative
+            ? { episodeCreative: project?.episodeCreative ?? existing.episodeCreative }
+            : {}),
+          ...(existing.series || project?.series
+            ? { series: project?.series ?? existing.series }
+            : {}),
+        });
+      });
       const nextIds = new Set(next.map((project) => project.id));
       workbench.ui.canvasProjects = [
         ...next,
         ...current.filter((project) => project.parentId && !nextIds.has(project.id)),
       ];
       persistWorkbenchState(workbench);
+      const selectedId = String(workbench.ui?.selectedCanvasProjectId ?? "").trim();
+      if (selectedId && workbench.ui?.canvasDocument && typeof workbench.ui.canvasDocument === "object") {
+        updateActiveCanvasDocument(
+          workbench,
+          attachCanvasProjectMetaToDocument(workbench, selectedId, workbench.ui.canvasDocument),
+          { immediateSave: true },
+        );
+      }
     },
     onRenameProject: (projectId, name) => renameAiCanvasRuntimeProject(workbench, projectId, name),
     onDeleteProject: (projectId) => deleteAiCanvasRuntimeProject(workbench, projectId),
@@ -10762,7 +10905,7 @@ function updateMountedNewCanvasSurface(workbench, options = {}) {
     || options.nodeOnly === true
     || Object.prototype.hasOwnProperty.call(options, "document")
     || Object.prototype.hasOwnProperty.call(options, "canvasDocument");
-  void workbench.newCanvasInstance.update({
+  const pending = workbench.newCanvasInstance.update({
     state: workbench.state,
     session: workbench.session,
     api: workbench.api,
@@ -10783,7 +10926,7 @@ function updateMountedNewCanvasSurface(workbench, options = {}) {
   }).then(() => syncCanvasPromptEditor(workbench, host.shadowRoot)).catch((error) => {
     console.warn("[creator-app] new canvas surface update failed", error);
   });
-  return true;
+  return pending;
 }
 
 function updateNewCanvasSurfaceForHostAction(workbench) {
@@ -16307,12 +16450,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const zoomPercent = Number(target.dataset.viewportValue ?? target.value ?? 100);
       if (Number.isFinite(zoomPercent)) {
         const zoom = Math.min(8, Math.max(0.1, Math.round(zoomPercent) / 100));
-        updateActiveCanvasDocument(workbench, {
-          ...canvasDocument,
-          viewport: { ...viewport, zoom },
-        });
-        applyCanvasGraphViewport(workbench);
-        render(workbench);
+        updateCanvasViewportAndRender(workbench, { zoom }, { render: false });
       }
       return;
     }
@@ -20408,21 +20546,38 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-skill-create") {
     workbench.ui.skillCreateOpen = true;
+    workbench.ui.skillCreateDraft = null;
     workbench.ui.skillCreateEditorMode = "code";
     render(workbench, { preserveNavigationShell: true });
     return;
   }
 
+  if (action === "open-skill-edit") {
+    const skillId = String(target.dataset.skillId ?? workbench.ui.skillDetailItem?.id ?? "").trim();
+    if (!skillId || typeof workbench.api?.getSkillDetail !== "function") return;
+    await runAction(workbench, "正在加载 Skill...", async () => {
+      const result = await workbench.api.getSkillDetail(skillId);
+      const skill = result?.skill ? { ...result.skill, files: result.files ?? [] } : result;
+      workbench.ui.skillCreateDraft = skill;
+      workbench.ui.skillCreateOpen = true;
+      workbench.ui.skillCreateEditorMode = "code";
+      workbench.ui.skillDetailItem = null;
+    });
+    return;
+  }
+
   if (action === "close-skill-create") {
     workbench.ui.skillCreateOpen = false;
+    workbench.ui.skillCreateDraft = null;
     render(workbench, { preserveNavigationShell: true });
     return;
   }
 
   if (action === "toggle-skill-create-upload-menu") {
-    const menu = (target.closest?.(".skill-create-upload-menu-wrap") ?? workbench.root)?.querySelector?.("[data-skill-create-upload-menu]");
+    const wrap = target.closest?.(".skill-create-upload-menu-wrap");
+    const menu = wrap?.querySelector?.("[data-skill-create-upload-menu]");
     if (!menu) return;
-    menu.hidden = !menu.hidden;
+    toggleSkillCreateMenu(menu, menu.hidden);
     return;
   }
 
@@ -20434,7 +20589,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "toggle-skill-create-editor-expand") {
     const editor = (target.closest?.("form") ?? workbench.root)?.querySelector?.("[data-skill-create-editor]");
-    editor?.classList.toggle("is-expanded");
+    if (!editor) return;
+    editor.classList.toggle("is-expanded");
+    if (editor.classList.contains("is-expanded")) editor.style.height = "";
     return;
   }
 
@@ -20460,17 +20617,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const kind = String(target.dataset.kind ?? "file");
     const name = String(target.dataset.name ?? "");
     if (!name || name === "SKILL.md") return;
-    menu.hidden = false;
+    const same = !menu.hidden && menu.dataset.kind === kind && menu.dataset.name === name;
+    if (same) {
+      toggleSkillCreateMenu(menu, false);
+      return;
+    }
     menu.dataset.kind = kind;
     menu.dataset.name = name;
-    const row = target.closest?.(".skill-create-tree-row");
-    const tree = form.querySelector?.("[data-skill-create-tree]");
-    if (row && tree) {
-      const treeBox = tree.getBoundingClientRect();
-      const rowBox = row.getBoundingClientRect();
-      menu.style.top = `${rowBox.bottom - treeBox.top + 4}px`;
-      menu.style.left = `${Math.min(rowBox.left - treeBox.left + 28, treeBox.width - 108)}px`;
-    }
+    toggleSkillCreateMenu(menu, true, target, form.querySelector(".skill-create-tree"));
     return;
   }
 
@@ -20478,7 +20632,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const form = target.closest?.("form") ?? workbench.root?.querySelector?.("#skill-create-form");
     const menu = form?.querySelector?.("[data-skill-create-tree-menu]");
     startSkillCreateRename(form, menu?.dataset.kind, menu?.dataset.name, false);
-    if (menu) menu.hidden = true;
+    toggleSkillCreateMenu(menu, false);
     return;
   }
 
@@ -20486,7 +20640,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const form = target.closest?.("form") ?? workbench.root?.querySelector?.("#skill-create-form");
     const menu = form?.querySelector?.("[data-skill-create-tree-menu]");
     deleteSkillCreateTreeItem(form, menu?.dataset.kind, menu?.dataset.name);
-    if (menu) menu.hidden = true;
+    toggleSkillCreateMenu(menu, false);
     return;
   }
 
@@ -20511,7 +20665,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "create-skill") {
     const form = target.closest?.("form") ?? workbench.root?.querySelector?.("#skill-create-form");
+    const editingSkillId = String(form?.dataset.skillId ?? workbench.ui.skillCreateDraft?.id ?? "").trim();
     if (!form || typeof workbench.api?.createSkill !== "function") return;
+    if (editingSkillId && typeof workbench.api?.updateSkill !== "function") return;
     if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
     const data = new FormData(form);
     const coverType = String(data.get("coverType") ?? "image");
@@ -20520,10 +20676,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const hasImage = Boolean(hasMedia && (String(effectMediaFile.type || "").startsWith("image/") || /\.(?:jpe?g|png|webp|avif)$/i.test(String(effectMediaFile.name || ""))));
     const skillMarkdown = Array.from(form.querySelectorAll?.("[data-skill-create-markdown-item]") ?? []).find((item) => String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "").replace(/\\/g, "/") === "SKILL.md")
       ?? form.querySelector?.("[data-skill-create-markdown-item]");
-    const introduction = String(skillMarkdown?.querySelector?.('textarea[name="skillMarkdownContent"]')?.value ?? data.get("introduction") ?? "").trim();
+    const markdownFiles = await collectSkillCreateMarkdownFiles(form);
+    const uploadFiles = collectSkillCreateUploadFiles(form, { includeEditorMarkdown: false });
+    const introduction = String(markdownFiles.find((file) => file.name === "SKILL.md")?.content ?? skillMarkdown?.querySelector?.('textarea[name="skillMarkdownContent"]')?.value ?? data.get("introduction") ?? "").trim();
     await runAction(workbench, "正在提交 Skill 审核...", async () => {
-      let effectImageUrl = "";
-      let effectVideoUrl = "";
+      const existingImageUrl = String(workbench.ui.skillCreateDraft?.detail?.effectImageUrl || workbench.ui.skillCreateDraft?.coverUrl || "").trim();
+      const existingVideoUrl = String(workbench.ui.skillCreateDraft?.detail?.effectVideoUrl || workbench.ui.skillCreateDraft?.previewUrl || "").trim();
+      let effectImageUrl = coverType === "text" ? "" : existingImageUrl;
+      let effectVideoUrl = coverType === "text" ? "" : existingVideoUrl;
       let coverStorageObjectId = null;
       let previewStorageObjectId = null;
       const mediaFile = hasMedia ? effectMediaFile : null;
@@ -20539,14 +20699,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         const storageObjectId = String(upload.storageObjectId ?? uploaded?.storageObject?.id ?? "").trim();
         if (!mediaUrl || !storageObjectId) throw new Error(`效果媒体“${mediaFile.name}”上传后未返回后台地址`);
         if (hasImage) {
-          effectImageUrl = mediaUrl;
+          effectImageUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+          effectVideoUrl = "";
           coverStorageObjectId = storageObjectId;
         } else {
-          effectVideoUrl = mediaUrl;
+          effectVideoUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+          effectImageUrl = "";
           previewStorageObjectId = storageObjectId;
         }
       }
-      const created = await workbench.api.createSkill({
+      const payload = {
         name: String(data.get("name") ?? "").trim(),
         category: String(data.get("category") ?? "general"),
         summary: String(data.get("summary") ?? "").trim(),
@@ -20558,12 +20720,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           effectImageUrl,
           effectVideoUrl,
           fileListPublic: data.get("fileListPublic") === "on",
+          files: markdownFiles,
         },
         coverStorageObjectId,
         previewStorageObjectId,
-      });
-      const skillId = String(created?.id ?? created?.data?.id ?? "").trim();
-      const files = collectSkillCreateUploadFiles(form);
+      };
+      const saved = editingSkillId
+        ? await workbench.api.updateSkill(editingSkillId, payload)
+        : await workbench.api.createSkill(payload);
+      const skillId = String(saved?.id ?? saved?.data?.id ?? editingSkillId).trim();
+      const files = uploadFiles;
       if (files.length && (!skillId || typeof workbench.api.uploadFile !== "function" || typeof workbench.api.attachSkillFile !== "function")) {
         throw new Error("当前环境暂不支持 Skill 文件上传，请稍后重试");
       }
@@ -20584,11 +20750,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         });
       }
       workbench.ui.skillCreateOpen = false;
+      workbench.ui.skillCreateDraft = null;
       workbench.ui.skillPlazaSection = "mine";
       workbench.ui.skillPlazaCategory = "recommended";
       workbench.ui.skillPlazaQuery = "";
       await syncSkillPlaza(workbench);
-    }, { successToast: "Skill 已提交审核，审核通过后会出现在 Skill 广场。" });
+    }, { successToast: editingSkillId ? "Skill 已重新提交审核。" : "Skill 已提交审核，审核通过后会出现在 Skill 广场。" });
     return;
   }
 
@@ -25475,8 +25642,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.episodePromptSkillDraftIds = {
       ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
     };
+    workbench.ui.episodePromptSkillDraftPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds);
     workbench.ui.episodePromptSkillSourceTab = "official";
-    workbench.ui.episodePromptSkillCategory = "script";
+    workbench.ui.episodePromptSkillCategory = "recommended";
     workbench.ui.episodePromptSkillModalOpen = true;
     workbench.ui.singleEpisodeScriptImportMenu = "";
     render(workbench);
@@ -25563,6 +25731,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-episode-prompt-skill-modal") {
     workbench.ui.episodePromptSkillModalOpen = false;
     workbench.ui.episodePromptSkillDraftIds = {};
+    workbench.ui.episodePromptSkillDraftPlazaIds = [];
     render(workbench);
     return;
   }
@@ -25575,7 +25744,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-episode-prompt-skill-category") {
     const category = String(target.dataset.skillCategory ?? "");
-    if (EPISODE_PROMPT_SKILL_CATEGORIES.some((item) => item.id === category)) {
+    if (EPISODE_PLAZA_SKILL_CATEGORIES.some((item) => item.id === category)) {
       workbench.ui.episodePromptSkillCategory = category;
       if (target.dataset.skillSource === "private" || target.dataset.skillSource === "official") {
         workbench.ui.episodePromptSkillSourceTab = target.dataset.skillSource;
@@ -25586,44 +25755,38 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "select-episode-prompt-skill-draft") {
-    const category = String(target.dataset.skillCategory ?? "");
     const skillId = String(target.dataset.episodeSkillId ?? "");
     const skills = [
-      ...normalizeEpisodePromptSkills(workbench.ui.episodePromptOfficialSkills, "official"),
-      ...normalizeEpisodePromptSkills(workbench.ui.episodePromptPrivateSkills, "private"),
+      ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaOfficialSkills, "official"),
+      ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaPrivateSkills, "private"),
     ];
-    if (!skills.some((item) => item.id === skillId && item.category === category)) {
+    if (!skills.some((item) => item.id === skillId)) {
       return;
     }
-    workbench.ui.episodePromptSkillDraftIds = {
-      ...(workbench.ui.episodePromptSkillDraftIds ?? {}),
-      [category]: skillId,
-    };
+    workbench.ui.episodePromptSkillDraftPlazaIds = togglePlazaSkillId(workbench.ui.episodePromptSkillDraftPlazaIds, skillId);
     syncEpisodePromptSkillDraft(workbench.root, {
-      category,
-      selectedId: skillId,
+      category: workbench.ui.episodePromptSkillCategory,
       skills,
-      draftSelections: workbench.ui.episodePromptSkillDraftIds,
+      draftPlazaSkillIds: workbench.ui.episodePromptSkillDraftPlazaIds,
+      variant: "plaza",
     });
     return;
   }
 
   if (action === "clear-episode-prompt-skill-draft") {
-    const category = String(target.dataset.skillCategory ?? "");
-    workbench.ui.episodePromptSkillDraftIds = {
-      ...(workbench.ui.episodePromptSkillDraftIds ?? {}),
-      [category]: "",
-    };
+    const skillId = String(target.dataset.episodeSkillId ?? "").trim();
+    workbench.ui.episodePromptSkillDraftPlazaIds = skillId
+      ? normalizePlazaSkillIds(workbench.ui.episodePromptSkillDraftPlazaIds).filter((id) => id !== skillId)
+      : [];
     render(workbench);
     return;
   }
 
   if (action === "confirm-episode-prompt-skills") {
-    workbench.ui.selectedEpisodePromptSkillIds = {
-      ...(workbench.ui.episodePromptSkillDraftIds ?? {}),
-    };
+    workbench.ui.selectedEpisodePlazaSkillIds = normalizePlazaSkillIds(workbench.ui.episodePromptSkillDraftPlazaIds);
     workbench.ui.episodePromptSkillModalOpen = false;
     workbench.ui.episodePromptSkillDraftIds = {};
+    workbench.ui.episodePromptSkillDraftPlazaIds = [];
     render(workbench);
     return;
   }
@@ -25656,12 +25819,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const skillId = isManualScriptAnalysis
       ? String(workbench.ui.selectedScriptConversionSkillId ?? "").trim()
       : "";
+    const episodePlazaSkillIds = !isManualScriptAnalysis
+      ? normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds)
+      : [];
+    const episodePlazaSkillId = episodePlazaSkillIds[0] ?? "";
     const episodeSkills = !isManualScriptAnalysis && workbench.ui.selectedEpisodePromptSkillIds && typeof workbench.ui.selectedEpisodePromptSkillIds === "object"
       ? Object.fromEntries(Object.entries(workbench.ui.selectedEpisodePromptSkillIds)
           .map(([category, id]) => [category, String(id ?? "").trim()])
           .filter(([, id]) => Boolean(id)))
       : {};
-    const hasEpisodeSkills = Object.keys(episodeSkills).length > 0;
+    const hasEpisodeSkills = episodePlazaSkillIds.length > 0 || Object.keys(episodeSkills).length > 0;
     const singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
     const hasLegacyPromptPackages = Array.isArray(workbench.ui.storyboardPromptPackages)
       && workbench.ui.storyboardPromptPackages.length > 0;
@@ -25682,7 +25849,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           ? "请先选择小说转剧本技能后再开始分析。"
           : "请先选择文本模型后再开始分析。";
       } else {
-        showWorkbenchToast(workbench, hasEpisodeSkills ? "请先选择文本模型。" : "请先选择至少一项创作技能。", { tone: "error" });
+        showWorkbenchToast(workbench, hasEpisodeSkills ? "请先选择文本模型。" : "请先选择至少一项技能skill。", { tone: "error" });
       }
       render(workbench);
       return;
@@ -25706,6 +25873,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       packages,
       skillId: skillId || null,
       skills: episodeSkills,
+      plazaSkillIds: episodePlazaSkillIds,
       selectedStages: isHomeWorkflowAnalysis ? ["scene", "character", "prop", "shot"] : null,
       modelCode: singleEpisodeTextModelCode || (!isManualScriptAnalysis && !hasEpisodeSkills ? "deepseek-script" : ""),
       projectId,
@@ -25774,9 +25942,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         } : {}),
         ...(isManualScriptAnalysis
           ? { skillId, modelCode: singleEpisodeTextModelCode }
-          : hasEpisodeSkills
-            ? { skills: episodeSkills, modelCode: singleEpisodeTextModelCode }
-            : { packages }),
+          : episodePlazaSkillId
+            ? { plazaSkillId: episodePlazaSkillId, plazaSkillIds: episodePlazaSkillIds, modelCode: singleEpisodeTextModelCode }
+            : hasEpisodeSkills
+              ? { skills: episodeSkills, modelCode: singleEpisodeTextModelCode }
+              : { packages }),
       };
       let preview = null;
       const previewStream = isManualScriptAnalysis
@@ -29329,6 +29499,89 @@ function createDefaultCanvasProjectRecord(input = {}) {
   return record;
 }
 
+function persistableCanvasOriginalWork(originalWork) {
+  if (!originalWork || typeof originalWork !== "object") return undefined;
+  const storageObjectId = String(originalWork.storageObjectId ?? "").trim();
+  const sourceUrl = String(originalWork.sourceUrl ?? originalWork.filePath ?? "").trim();
+  const persistableUrl = /^https?:\/\//i.test(sourceUrl) || sourceUrl.startsWith("/api/storage/")
+    ? sourceUrl
+    : "";
+  const filePath = /^https?:\/\//i.test(String(originalWork.filePath ?? "")) || String(originalWork.filePath ?? "").startsWith("/api/storage/")
+    ? String(originalWork.filePath)
+    : persistableUrl;
+  if (!storageObjectId && !persistableUrl && !filePath) return undefined;
+  const fileName = String(originalWork.fileName ?? "").trim();
+  const addedAt = Number(originalWork.addedAt);
+  return {
+    ...(fileName ? { fileName } : {}),
+    ...(filePath ? { filePath } : {}),
+    ...(persistableUrl ? { sourceUrl: persistableUrl } : {}),
+    ...(storageObjectId ? { storageObjectId } : {}),
+    addedAt: Number.isFinite(addedAt) && addedAt > 0 ? addedAt : Date.now(),
+  };
+}
+
+function persistableCanvasSeries(series) {
+  if (!series || typeof series !== "object") return undefined;
+  const originalWork = persistableCanvasOriginalWork(series.originalWork);
+  const script = typeof series.script === "string" ? series.script : "";
+  const next = { ...series };
+  delete next.originalWork;
+  delete next.script;
+  delete next.dataUrl;
+  if (originalWork) next.originalWork = originalWork;
+  if (script) next.script = script;
+  return Object.keys(next).length ? next : undefined;
+}
+
+function attachCanvasProjectMetaToDocument(workbench, canvasProjectId, document) {
+  if (!document || typeof document !== "object") return document;
+  const projectId = String(canvasProjectId ?? "").trim();
+  const projects = normalizeCanvasProjects(workbench?.ui);
+  const current = projects.find((project) => project.id === projectId);
+  if (!current) return document;
+  const seriesRoot = projects.find((project) => project.id === String(current.parentId ?? current.id)) ?? current;
+  const series = persistableCanvasSeries(seriesRoot?.series ?? current.series);
+  return {
+    ...document,
+    ...(current.parentId ? { parentId: current.parentId } : {}),
+    ...(current.episodeNo != null ? { episodeNo: current.episodeNo } : {}),
+    ...(current.episodeOutline != null ? { episodeOutline: current.episodeOutline } : {}),
+    ...(current.episodeScript != null ? { episodeScript: current.episodeScript } : {}),
+    ...(current.episodeCreative ? { episodeCreative: current.episodeCreative } : {}),
+    ...(series ? { series } : {}),
+  };
+}
+
+function applyCanvasProjectMetaFromDocument(workbench, canvasProjectId, document) {
+  const projectId = String(canvasProjectId ?? "").trim();
+  if (!workbench?.ui || !projectId || !document || typeof document !== "object") return;
+  const projects = normalizeCanvasProjects(workbench.ui);
+  if (!projects.some((project) => project.id === projectId)) return;
+  const current = projects.find((project) => project.id === projectId);
+  const seriesId = String(document.parentId ?? current?.parentId ?? projectId).trim();
+  const series = document.series && typeof document.series === "object" ? document.series : null;
+  workbench.ui.canvasProjects = projects.map((project) => {
+    if (project.id === projectId) {
+      return createDefaultCanvasProjectRecord({
+        ...project,
+        ...(document.parentId ? { parentId: String(document.parentId) } : {}),
+        ...(document.episodeNo != null ? { episodeNo: document.episodeNo } : {}),
+        ...(document.episodeOutline != null ? { episodeOutline: document.episodeOutline } : {}),
+        ...(document.episodeScript != null ? { episodeScript: document.episodeScript } : {}),
+        ...(document.episodeCreative && typeof document.episodeCreative === "object"
+          ? { episodeCreative: document.episodeCreative }
+          : {}),
+        ...(series && project.id === seriesId ? { series } : {}),
+      });
+    }
+    if (series && project.id === seriesId) {
+      return createDefaultCanvasProjectRecord({ ...project, series });
+    }
+    return project;
+  });
+}
+
 function normalizeCanvasProjects(ui = {}) {
   const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
   return projects.map((project, index) => createDefaultCanvasProjectRecord({
@@ -32722,6 +32975,7 @@ function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
       : {}),
     [selectedProjectId]: canvasDocument,
   };
+  applyCanvasProjectMetaFromDocument(workbench, selectedProjectId, canvasDocument);
   if (options.scheduleSave !== false) {
     if (positionChanges) {
       if (positionChanges.length) {
@@ -33095,6 +33349,7 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
     [projectId]: document,
   };
   workbench.ui.canvasDocument = document;
+  applyCanvasProjectMetaFromDocument(workbench, projectId, document);
   rememberLoadedCanvasDocument(workbench, projectId, document);
   applyCanvasGraphViewport(workbench);
   if (restoreRefreshDraft) {
@@ -33410,6 +33665,7 @@ function syncCanvasLiveSubscription(workbench) {
 }
 
 function scheduleProjectCanvasSave(workbench, options = {}) {
+  if (workbench.canvasNodeDragActive === true) return;
   const projectId = resolveCanvasSaveProjectId(workbench);
   if (typeof workbench.api?.saveStandaloneCanvas !== "function") {
     return;
@@ -33612,7 +33868,15 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
     projectId = await createStandaloneCanvasForSave(workbench, projectId);
   }
   let revision = Number(workbench.ui.canvasServerRevision ?? 1) || 1;
-  let documentToSave = await materializeCanvasDocumentMediaForSave(workbench, normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId), projectId);
+  let documentToSave = await materializeCanvasDocumentMediaForSave(
+    workbench,
+    attachCanvasProjectMetaToDocument(
+      workbench,
+      projectId,
+      normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId),
+    ),
+    projectId,
+  );
   if (shouldSkipEmptyCanvasSave(workbench, documentToSave)) {
     workbench.ui.canvasSaveStatus = "idle";
     console.warn("[canvas] skipped empty canvas overwrite");
@@ -33636,7 +33900,15 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
       }
       projectId = await createStandaloneCanvasForSave(workbench, projectId);
       revision = 1;
-      documentToSave = await materializeCanvasDocumentMediaForSave(workbench, normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId), projectId);
+      documentToSave = await materializeCanvasDocumentMediaForSave(
+        workbench,
+        attachCanvasProjectMetaToDocument(
+          workbench,
+          projectId,
+          normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId),
+        ),
+        projectId,
+      );
       savePromise = saveCanvas.call(workbench.api, projectId, {
         clientRevision: revision,
         document: documentToSave,
@@ -33657,6 +33929,7 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
           : {}),
         [projectId]: workbench.ui.canvasDocument,
       };
+      applyCanvasProjectMetaFromDocument(workbench, projectId, workbench.ui.canvasDocument);
     }
     workbench.ui.activeCanvasProjectId = canvas?.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? projectId;
     workbench.ui.canvasServerRevision = Number(canvas?.serverRevision ?? revision) || revision;
@@ -34575,7 +34848,6 @@ function zoomCanvasAtPoint(workbench, direction, options = {}) {
   }
   graph.zoomTo(nextZoom, options.center ? { center: options.center } : undefined);
   syncCanvasGraphViewport(graph, workbench);
-  render(workbench);
 }
 
 function cssEscape(value) {
@@ -37005,6 +37277,14 @@ export function saveProjectCanvasNowForTest(workbench) {
   return saveProjectCanvasNow(workbench);
 }
 
+export function attachCanvasProjectMetaToDocumentForTest(workbench, canvasProjectId, document) {
+  return attachCanvasProjectMetaToDocument(workbench, canvasProjectId, document);
+}
+
+export function applyCanvasProjectMetaFromDocumentForTest(workbench, canvasProjectId, document) {
+  return applyCanvasProjectMetaFromDocument(workbench, canvasProjectId, document);
+}
+
 export function materializeCanvasDocumentMediaForSaveForTest(workbench, document, canvasProjectId) {
   return materializeCanvasDocumentMediaForSave(workbench, document, canvasProjectId);
 }
@@ -37075,6 +37355,10 @@ export function resolveCanvasGenerationPollDelayForTest(startedAt, immediate = f
 
 export async function syncCanvasProjectsFromApiForTest(workbench) {
   return syncCanvasProjectsFromApi(workbench);
+}
+
+export async function addAiCanvasRuntimeEpisodesForWorkbenchForTest(workbench, episodes = []) {
+  return addAiCanvasRuntimeEpisodesForWorkbench(workbench, episodes);
 }
 
 export async function syncAnnouncementsFromApiForTest(workbench) {
@@ -37421,7 +37705,9 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
   workbench.ui.episodePromptSkillModalOpen = false;
   workbench.ui.episodePromptSkillDraftIds = {};
+  workbench.ui.episodePromptSkillDraftPlazaIds = [];
   workbench.ui.selectedEpisodePromptSkillIds = {};
+  workbench.ui.selectedEpisodePlazaSkillIds = [];
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
   workbench.ui.uploadNotice = "";
   await Promise.all([
@@ -58832,6 +59118,11 @@ async function ensureStoryboardShot(workbench, storyboardId) {
 }
 
 function applyPostRenderEffects(workbench) {
+  const skillCreateForm = workbench.root?.querySelector?.("#skill-create-form");
+  if (skillCreateForm) {
+    refreshSkillCreateTree(skillCreateForm);
+    updateSkillCreateLineNumbers(skillCreateForm);
+  }
   syncEpisodeWorkbenchLayoutVars(workbench);
   positionPromptMentionSurface(workbench);
   scheduleSelectedAssetGenerationPolling(workbench, "image");
@@ -63690,6 +63981,9 @@ async function syncCanvasProjectsFromApi(workbench) {
           title: project?.title ?? project?.name ?? local?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`),
           createdAt: project?.createdAt ?? local?.createdAt ?? "2026/06/11",
           status: project?.status ?? local?.status ?? "草稿",
+          ...(local?.parentId ? { parentId: local.parentId } : {}),
+          ...(local?.episodeNo != null ? { episodeNo: local.episodeNo } : {}),
+          ...(local?.episodeOutline != null ? { episodeOutline: local.episodeOutline } : {}),
         });
       })
       : [];
@@ -64789,57 +65083,335 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
   render(workbench);
 }
 
-function renderSkillCreateMarkdownItem(fileName, content = "") {
-  return `<article class="skill-create-markdown-item" data-skill-create-markdown-item data-file-name="${escapeHtmlAttribute(fileName)}"><input name="skillMarkdownName" maxlength="240" value="${escapeHtmlAttribute(fileName)}" hidden /><textarea name="skillMarkdownContent" rows="16" data-skill-create-markdown-content>${escapeHtmlText(content)}</textarea></article>`;
+function skillCreateMarkdownPlaceholder() {
+  return "输入 Skill 内容，或上传 SKILL.md 文件直接替换\n\n## 做什么\n（一句话说明用途）例：把一句话故事想法做成一条短漫剧成片\n\n## 需要什么输入\n（最少提供什么）例：一句话想法，可选画风、时长、主角设定\n\n## 怎么做\n（写你在意的环节和要求，不用写全）例：脚本要反转多，画风固定成韩漫\n\n## 产出什么\n（最终交付什么）例：成片，附脚本和分镜\n\n## 什么时候问你\n（什么情况下停下来问你）例：拿不准题材或风格时问一次，其余自己定";
 }
 
-function nextSkillCreateMarkdownName(host) {
-  const names = new Set(Array.from(host?.querySelectorAll?.('input[name="skillMarkdownName"]') ?? []).map((input) => String(input.value ?? "").trim()));
-  if (!names.has("SKILL.md")) return "SKILL.md";
-  let index = 2;
-  while (names.has(`notes-${index}.md`)) index += 1;
-  return `notes-${index}.md`;
+function renderSkillCreateMarkdownItem(fileName, content = "") {
+  return `<article class="skill-create-markdown-item" data-skill-create-markdown-item data-file-name="${escapeHtmlAttribute(fileName)}"><input name="skillMarkdownName" maxlength="240" value="${escapeHtmlAttribute(fileName)}" hidden /><div class="skill-create-code-pane"><pre class="skill-create-line-numbers" data-skill-create-line-numbers aria-hidden="true">1</pre><textarea name="skillMarkdownContent" ${fileName === "SKILL.md" ? "required " : ""}maxlength="20000" rows="16" data-skill-create-markdown-content spellcheck="false" placeholder="${escapeHtmlAttribute(skillCreateMarkdownPlaceholder())}">${escapeHtmlText(content)}</textarea></div></article>`;
+}
+
+function listSkillCreateFiles(form) {
+  return Array.from(form?.querySelectorAll?.("[data-skill-create-markdown-item]") ?? []).map((item) => {
+    const name = String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? item.dataset.fileName ?? "").replace(/\\/g, "/").trim();
+    return name || "SKILL.md";
+  });
+}
+
+function findSkillCreateFolder(form, folderName) {
+  return Array.from(form?.querySelectorAll?.("[data-skill-folder]") ?? []).find((el) => String(el.dataset.folderName || el.value) === folderName) ?? null;
+}
+
+function ensureSkillCreateFolder(form, folderName, collapsed = false) {
+  const host = form?.querySelector?.("[data-skill-create-folders]");
+  const name = normalizeSkillFileName(folderName);
+  if (!host || !name) return null;
+  const existing = findSkillCreateFolder(form, name);
+  if (existing) return existing;
+  host.insertAdjacentHTML("beforeend", `<input type="hidden" data-skill-folder data-folder-name="${escapeHtmlAttribute(name)}" value="${escapeHtmlAttribute(name)}" data-collapsed="${collapsed ? "true" : "false"}" />`);
+  return findSkillCreateFolder(form, name);
+}
+
+function listSkillCreateFolders(form) {
+  const stored = Array.from(form?.querySelectorAll?.("[data-skill-folder]") ?? []).map((el) => ({
+    name: normalizeSkillFileName(el.dataset.folderName || el.value),
+    collapsed: el.dataset.collapsed === "true",
+  })).filter((item) => item.name);
+  const fromFiles = listSkillCreateFiles(form).map((name) => name.includes("/") ? name.split("/")[0] : "").filter(Boolean);
+  const collapsed = new Map(stored.map((item) => [item.name, item.collapsed]));
+  return [...new Set([...stored.map((item) => item.name), ...fromFiles])].map((name) => {
+    ensureSkillCreateFolder(form, name, collapsed.get(name) === true);
+    return { name, collapsed: collapsed.get(name) === true };
+  });
+}
+
+function startSkillCreateEditorResize(workbench, event, handle) {
+  const editor = handle?.closest?.("[data-skill-create-editor]");
+  if (!editor) return;
+  event.preventDefault();
+  workbench.skillCreateEditorResize = {
+    editor,
+    startY: event.clientY,
+    startHeight: editor.getBoundingClientRect().height,
+  };
+  handle.setPointerCapture?.(event.pointerId);
+}
+
+function finishSkillCreateEditorResize(workbench) {
+  workbench.skillCreateEditorResize = null;
+}
+
+function applySkillCreateEditorResize(workbench, event) {
+  const resize = workbench.skillCreateEditorResize;
+  if (!resize?.editor) return;
+  const next = Math.max(18 * 16, Math.min(window.innerHeight * 0.82, resize.startHeight + (event.clientY - resize.startY)));
+  resize.editor.style.height = `${next}px`;
+}
+
+function toggleSkillCreateMenu(menu, open, anchor, relative) {
+  if (!menu) return;
+  menu.hidden = !open;
+  menu.classList.toggle("is-open", open);
+  if (!open || !anchor) return;
+  const host = relative ?? menu.offsetParent ?? menu.parentElement;
+  if (!host) return;
+  const hostBox = host.getBoundingClientRect();
+  const anchorBox = anchor.getBoundingClientRect();
+  menu.style.top = `${anchorBox.bottom - hostBox.top + 4}px`;
+  menu.style.left = `${Math.max(8, Math.min(anchorBox.left - hostBox.left, hostBox.width - menu.offsetWidth - 8))}px`;
+}
+
+function hideSkillCreateMenus(form) {
+  toggleSkillCreateMenu(form?.querySelector?.("[data-skill-create-tree-menu]"), false);
+  toggleSkillCreateMenu(form?.querySelector?.("[data-skill-create-upload-menu]"), false);
+}
+
+function renderSkillCreateTreeFileRow(name, activeName, nested = false) {
+  const base = name.split("/").pop();
+  const isEntry = name === "SKILL.md";
+  return `<div class="skill-create-tree-row is-file ${name === activeName ? "is-active" : ""} ${nested ? "is-nested" : ""}" data-tree-kind="file" data-file-name="${escapeHtmlAttribute(name)}"><button type="button" data-action="set-skill-create-file" data-file-name="${escapeHtmlAttribute(name)}"><span class="skill-create-tree-icon is-file"></span><span>${escapeHtmlText(base)}</span></button>${isEntry ? `<span class="skill-create-tree-pin" title="入口文件" aria-hidden="true"></span>` : `<button class="skill-create-tree-more" type="button" data-action="open-skill-create-tree-menu" data-kind="file" data-name="${escapeHtmlAttribute(name)}" aria-label="更多">⋯</button>`}</div>`;
 }
 
 function refreshSkillCreateTree(form) {
   const tree = form?.querySelector?.("[data-skill-create-tree]");
   if (!tree) return;
-  const items = Array.from(form.querySelectorAll("[data-skill-create-markdown-item]"));
-  const activeName = String(items.find((item) => item.classList.contains("is-active"))?.querySelector?.('input[name="skillMarkdownName"]')?.value ?? items[0]?.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "SKILL.md");
-  tree.innerHTML = items.map((item) => {
-    const name = String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "SKILL.md");
-    return `<button class="${name === activeName ? "active" : ""}" type="button" data-action="set-skill-create-file" data-file-name="${escapeHtmlAttribute(name)}"><span>${escapeHtmlText(name)}</span></button>`;
-  }).join("");
+  const files = listSkillCreateFiles(form);
+  const folders = listSkillCreateFolders(form);
+  const activeItem = form.querySelector("[data-skill-create-markdown-item].is-active");
+  const activeName = activeItem ? String(activeItem.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") : "";
+  const selectedFolder = String(form.dataset.selectedFolder ?? "");
+  const rootFiles = files.filter((name) => !name.includes("/"));
+  tree.innerHTML = [
+    ...rootFiles.map((name) => renderSkillCreateTreeFileRow(name, activeName)),
+    ...folders.map((folder) => {
+      const children = files.filter((name) => name.startsWith(`${folder.name}/`));
+      const open = folder.collapsed !== true;
+      return `<div class="skill-create-tree-folder ${selectedFolder === folder.name ? "is-selected" : ""}" data-tree-kind="folder" data-folder-name="${escapeHtmlAttribute(folder.name)}" data-collapsed="${folder.collapsed ? "true" : "false"}"><div class="skill-create-tree-row is-folder ${selectedFolder === folder.name ? "is-active" : ""}"><button type="button" data-action="toggle-skill-create-folder" data-folder-name="${escapeHtmlAttribute(folder.name)}"><span class="skill-create-tree-chevron ${open ? "is-open" : ""}"></span><span class="skill-create-tree-icon is-folder"></span><span>${escapeHtmlText(folder.name)}</span></button><button class="skill-create-tree-more" type="button" data-action="open-skill-create-tree-menu" data-kind="folder" data-name="${escapeHtmlAttribute(folder.name)}" aria-label="更多">⋯</button></div>${open ? `<div class="skill-create-tree-children">${children.map((name) => renderSkillCreateTreeFileRow(name, activeName, true)).join("")}</div>` : ""}</div>`;
+    }),
+  ].join("");
+  updateSkillCreateEditorChrome(form);
+}
+
+function updateSkillCreateContentCount(form) {
+  const count = form?.querySelector?.("[data-skill-create-content-count]");
+  const active = form?.querySelector?.("[data-skill-create-markdown-item].is-active textarea");
+  if (count) count.textContent = `${Array.from(String(active?.value ?? "")).length}/20000`;
+}
+
+function updateSkillCreateEditorChrome(form) {
+  const active = form?.querySelector?.("[data-skill-create-markdown-item].is-active");
+  const files = form?.querySelector?.("[data-skill-create-markdown-files]");
+  const preview = form?.querySelector?.("[data-skill-create-preview]");
+  const empty = form?.querySelector?.("[data-skill-create-empty]");
+  const count = form?.querySelector?.("[data-skill-create-content-count]");
+  const editor = form?.querySelector?.("[data-skill-create-editor]");
+  const mode = editor?.dataset.mode === "preview" ? "preview" : "code";
+  if (editor) editor.dataset.mode = mode;
+  if (empty) empty.hidden = Boolean(active);
+  if (files) {
+    files.hidden = !active || mode === "preview";
+    files.style.display = files.hidden ? "none" : "";
+  }
+  if (preview) {
+    preview.hidden = !active || mode !== "preview";
+    preview.style.display = preview.hidden ? "none" : "";
+  }
+  if (count) count.hidden = !active || mode === "preview";
+  updateSkillCreateContentCount(form);
+  updateSkillCreateLineNumbers(form);
 }
 
 function activateSkillCreateFile(form, fileName) {
-  const items = Array.from(form?.querySelectorAll?.("[data-skill-create-markdown-item]") ?? []);
+  if (!form) return;
+  form.dataset.selectedFolder = "";
+  const items = Array.from(form.querySelectorAll?.("[data-skill-create-markdown-item]") ?? []);
   items.forEach((item) => {
     const name = String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "");
     item.classList.toggle("is-active", name === fileName);
   });
+  hideSkillCreateMenus(form);
   refreshSkillCreateTree(form);
   updateSkillCreatePreview(form);
+}
+
+function selectSkillCreateFolder(form, folderName) {
+  if (!form) return;
+  form.dataset.selectedFolder = folderName || "";
+  form.querySelectorAll?.("[data-skill-create-markdown-item]").forEach((item) => item.classList.remove("is-active"));
+  hideSkillCreateMenus(form);
+  refreshSkillCreateTree(form);
+}
+
+function uniqueSkillCreateName(existing, desired) {
+  if (!existing.has(desired)) return desired;
+  const stem = desired.replace(/\.md$/i, "");
+  const ext = /\.md$/i.test(desired) ? ".md" : "";
+  let index = 2;
+  while (existing.has(`${stem}-${index}${ext}`)) index += 1;
+  return `${stem}-${index}${ext}`;
+}
+
+function startSkillCreateFolderDraft(form) {
+  const tree = form?.querySelector?.("[data-skill-create-tree]");
+  if (!tree || tree.querySelector("[data-skill-create-name-input]")) return;
+  hideSkillCreateMenus(form);
+  tree.insertAdjacentHTML("beforeend", `<div class="skill-create-tree-row is-folder is-draft" data-tree-kind="folder-draft"><span class="skill-create-tree-icon is-folder"></span><input data-skill-create-name-input data-draft-kind="folder" maxlength="80" /></div>`);
+  tree.querySelector("[data-skill-create-name-input]")?.focus?.();
+}
+
+function startSkillCreateFileDraft(form) {
+  const tree = form?.querySelector?.("[data-skill-create-tree]");
+  if (!tree || tree.querySelector("[data-skill-create-name-input]")) return;
+  hideSkillCreateMenus(form);
+  const folderName = String(form.dataset.selectedFolder ?? "");
+  const folder = folderName ? findSkillCreateFolder(form, folderName) : null;
+  if (folder) folder.dataset.collapsed = "false";
+  refreshSkillCreateTree(form);
+  const parent = folderName
+    ? Array.from(tree.querySelectorAll("[data-folder-name]")).find((el) => el.dataset.folderName === folderName)?.querySelector(".skill-create-tree-children") ?? tree
+    : tree;
+  parent.insertAdjacentHTML("beforeend", `<div class="skill-create-tree-row is-file is-draft ${folderName ? "is-nested" : ""}" data-tree-kind="file-draft"><span class="skill-create-tree-icon is-file"></span><input data-skill-create-name-input data-draft-kind="file" data-folder-name="${escapeHtmlAttribute(folderName)}" maxlength="80" /></div>`);
+  parent.querySelector("[data-skill-create-name-input]")?.focus?.();
+}
+
+function startSkillCreateRename(form, kind, name, keepValue = true) {
+  const tree = form?.querySelector?.("[data-skill-create-tree]");
+  if (!tree || !name || name === "SKILL.md") return;
+  const row = kind === "folder"
+    ? tree.querySelector(`[data-folder-name="${name.replace(/"/g, "")}"] > .skill-create-tree-row`)
+    : tree.querySelector(`[data-file-name="${name.replace(/"/g, "")}"]`);
+  if (!row) return;
+  const label = kind === "folder" ? name : name.split("/").pop();
+  row.classList.add("is-draft");
+  const button = row.querySelector("button[data-action]");
+  if (button) button.insertAdjacentHTML("afterend", `<input data-skill-create-name-input data-draft-kind="rename-${kind}" data-original-name="${escapeHtmlAttribute(name)}" maxlength="80" value="${keepValue ? escapeHtmlAttribute(label) : ""}" />`);
+  button?.setAttribute("hidden", "");
+  row.querySelector(".skill-create-tree-more")?.setAttribute("hidden", "");
+  const input = row.querySelector("[data-skill-create-name-input]");
+  input?.focus?.();
+  input?.select?.();
+}
+
+function commitSkillCreateNameInput(input) {
+  const form = input?.closest?.("#skill-create-form");
+  if (!form) return;
+  const kind = String(input.dataset.draftKind ?? "");
+  let raw = String(input.value ?? "").trim().replace(/[\\/]/g, "");
+  if (!raw && kind === "folder") raw = "文件夹";
+  if (!raw) {
+    cancelSkillCreateNameInput(input);
+    return;
+  }
+  if (kind === "folder") {
+    const name = uniqueSkillCreateName(new Set(listSkillCreateFolders(form).map((item) => item.name)), normalizeSkillFileName(raw) || "文件夹");
+    ensureSkillCreateFolder(form, name, false);
+    selectSkillCreateFolder(form, name);
+    return;
+  }
+  if (kind === "file") {
+    const folder = String(input.dataset.folderName ?? "");
+    const fileName = uniqueSkillCreateName(new Set(listSkillCreateFiles(form)), normalizeSkillFileName(`${folder ? `${folder}/` : ""}${/\.md$/i.test(raw) ? raw : `${raw}.md`}`));
+    const host = form.querySelector("[data-skill-create-markdown-files]");
+    host?.insertAdjacentHTML("beforeend", renderSkillCreateMarkdownItem(fileName, ""));
+    activateSkillCreateFile(form, fileName);
+    return;
+  }
+  if (kind === "rename-folder") {
+    renameSkillCreateFolder(form, String(input.dataset.originalName ?? ""), raw);
+    return;
+  }
+  if (kind === "rename-file") {
+    renameSkillCreateFile(form, String(input.dataset.originalName ?? ""), raw);
+  }
+}
+
+function cancelSkillCreateNameInput(input) {
+  const form = input?.closest?.("#skill-create-form");
+  const kind = String(input?.dataset.draftKind ?? "");
+  if (kind.startsWith("rename-")) {
+    refreshSkillCreateTree(form);
+    return;
+  }
+  input?.closest?.(".skill-create-tree-row")?.remove?.();
+}
+
+function renameSkillCreateFile(form, fromName, rawName) {
+  if (!fromName || fromName === "SKILL.md") return;
+  const folder = fromName.includes("/") ? fromName.split("/")[0] : "";
+  const nextBase = /\.md$/i.test(rawName) ? rawName : `${rawName}.md`;
+  const nextName = uniqueSkillCreateName(new Set(listSkillCreateFiles(form).filter((name) => name !== fromName)), normalizeSkillFileName(`${folder ? `${folder}/` : ""}${nextBase}`));
+  const item = Array.from(form.querySelectorAll("[data-skill-create-markdown-item]")).find((el) => String(el.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") === fromName);
+  if (!item) return;
+  const input = item.querySelector('input[name="skillMarkdownName"]');
+  if (input) input.value = nextName;
+  item.dataset.fileName = nextName;
+  activateSkillCreateFile(form, nextName);
+}
+
+function renameSkillCreateFolder(form, fromName, rawName) {
+  if (!fromName) return;
+  const nextName = uniqueSkillCreateName(new Set(listSkillCreateFolders(form).map((item) => item.name).filter((name) => name !== fromName)), normalizeSkillFileName(rawName) || fromName);
+  const folder = findSkillCreateFolder(form, fromName);
+  if (folder) {
+    folder.dataset.folderName = nextName;
+    folder.value = nextName;
+  }
+  Array.from(form.querySelectorAll("[data-skill-create-markdown-item]")).forEach((item) => {
+    const input = item.querySelector('input[name="skillMarkdownName"]');
+    const current = String(input?.value ?? "");
+    if (!current.startsWith(`${fromName}/`)) return;
+    const next = `${nextName}/${current.slice(fromName.length + 1)}`;
+    input.value = next;
+    item.dataset.fileName = next;
+  });
+  selectSkillCreateFolder(form, nextName);
+}
+
+function deleteSkillCreateTreeItem(form, kind, name) {
+  if (!name || name === "SKILL.md") return;
+  if (kind === "folder") {
+    findSkillCreateFolder(form, name)?.remove?.();
+    Array.from(form.querySelectorAll("[data-skill-create-markdown-item]")).forEach((item) => {
+      if (String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "").startsWith(`${name}/`)) item.remove();
+    });
+    form.dataset.selectedFolder = "";
+    activateSkillCreateFile(form, "SKILL.md");
+    return;
+  }
+  Array.from(form.querySelectorAll("[data-skill-create-markdown-item]")).forEach((item) => {
+    if (String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") === name) item.remove();
+  });
+  activateSkillCreateFile(form, "SKILL.md");
+}
+
+function updateSkillCreateLineNumbers(form) {
+  const active = form?.querySelector?.("[data-skill-create-markdown-item].is-active");
+  const textarea = active?.querySelector?.("textarea");
+  const gutter = active?.querySelector?.("[data-skill-create-line-numbers]");
+  if (!textarea || !gutter) return;
+  const lines = Math.max(1, String(textarea.value || textarea.placeholder || "1").split(/\n/).length);
+  gutter.textContent = Array.from({ length: lines }, (_, index) => String(index + 1)).join("\n");
 }
 
 function updateSkillCreatePreview(form) {
   const preview = form?.querySelector?.("[data-skill-create-preview]");
   const active = form?.querySelector?.("[data-skill-create-markdown-item].is-active textarea")
     ?? form?.querySelector?.('textarea[name="skillMarkdownContent"]');
-  if (preview) preview.innerHTML = renderCanvasMarkdownPreview(active?.value ?? "");
+  if (!preview) return;
+  const source = String(active?.value ?? "").trim() ? active.value : (active?.placeholder ?? "");
+  preview.innerHTML = source.trim()
+    ? renderCanvasMarkdownPreview(source)
+    : `<p class="skill-create-preview-empty">暂无内容</p>`;
 }
 
 function setSkillCreateEditorMode(form, mode) {
   const next = mode === "preview" ? "preview" : "code";
   const editor = form?.querySelector?.("[data-skill-create-editor]");
-  const preview = form?.querySelector?.("[data-skill-create-preview]");
-  const files = form?.querySelector?.("[data-skill-create-markdown-files]");
   if (editor) editor.dataset.mode = next;
   form?.querySelectorAll?.('[data-action="set-skill-create-editor-mode"]').forEach((button) => {
     button.classList.toggle("active", button.dataset.mode === next);
   });
-  if (preview) preview.hidden = next !== "preview";
-  if (files) files.hidden = next === "preview";
+  updateSkillCreateEditorChrome(form);
   if (next === "preview") updateSkillCreatePreview(form);
 }
 
@@ -64861,6 +65433,25 @@ function applySkillCreateCoverType(form, type) {
   if (input) input.accept = accepts[type] || accepts.image;
 }
 
+function skillCreatePath(value) {
+  return String(value ?? "").replace(/\\/g, "/");
+}
+
+function skillCreatePackageRoot(paths) {
+  const skillMd = paths.map(skillCreatePath).find((path) => /(^|\/)SKILL\.md$/i.test(path));
+  if (!skillMd || !skillMd.includes("/")) return "";
+  return skillMd.slice(0, skillMd.lastIndexOf("/"));
+}
+
+function skillCreateRelativePath(path, packageRoot) {
+  const next = skillCreatePath(path);
+  if (!next || next.split("/").includes("..")) return "";
+  if (packageRoot && (next === packageRoot || next.startsWith(`${packageRoot}/`))) {
+    return next.slice(packageRoot.length + (next === packageRoot ? 0 : 1));
+  }
+  return next;
+}
+
 async function ingestSkillCreateUploadedMarkdown(form) {
   const host = form?.querySelector?.("[data-skill-create-markdown-files]");
   if (!host) return;
@@ -64868,10 +65459,11 @@ async function ingestSkillCreateUploadedMarkdown(form) {
     ...Array.from(form.querySelector?.('input[name="skillFiles"]')?.files ?? []),
     ...Array.from(form.querySelector?.('input[name="skillFolderFiles"]')?.files ?? []),
   ].filter((file) => /\.(?:md|markdown|txt)$/i.test(String(file.name || "")));
+  const packageRoot = skillCreatePackageRoot(files.map((file) => file.webkitRelativePath || file.name));
   for (const file of files) {
-    const fileName = normalizeSkillFileName(file.webkitRelativePath || file.name) || file.name;
+    const fileName = skillCreateRelativePath(file.webkitRelativePath || file.name, packageRoot) || file.name;
     const content = typeof file.text === "function" ? await file.text() : "";
-    const existing = Array.from(host.querySelectorAll("[data-skill-create-markdown-item]")).find((item) => String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") === fileName);
+    const existing = Array.from(host.querySelectorAll("[data-skill-create-markdown-item]")).find((item) => skillCreatePath(item.querySelector?.('input[name="skillMarkdownName"]')?.value) === fileName);
     if (existing) {
       const textarea = existing.querySelector?.('textarea[name="skillMarkdownContent"]');
       if (textarea) textarea.value = content;
@@ -64886,30 +65478,72 @@ async function ingestSkillCreateUploadedMarkdown(form) {
 }
 
 function resolveSkillCreateFileName(file) {
-  return normalizeSkillFileName(file?.skillPath || file?.webkitRelativePath || file?.name);
+  return skillCreatePath(file?.skillPath || file?.webkitRelativePath || file?.name);
 }
 
-function collectSkillCreateUploadFiles(form) {
+async function collectSkillCreateMarkdownFiles(form) {
+  const selectedFiles = [
+    ...Array.from(form?.querySelector?.('input[name="skillFiles"]')?.files ?? []),
+    ...Array.from(form?.querySelector?.('input[name="skillFolderFiles"]')?.files ?? []),
+  ];
+  const names = Array.from(form?.querySelectorAll?.('input[name="skillMarkdownName"]') ?? []).map((input) => skillCreatePath(input.value));
+  const contents = Array.from(form?.querySelectorAll?.('textarea[name="skillMarkdownContent"]') ?? []).map((input) => String(input.value ?? ""));
+  const packageRoot = skillCreatePackageRoot([
+    ...names,
+    ...selectedFiles.map((file) => file.webkitRelativePath || file.name),
+  ]);
+  const files = [];
+  const seen = new Set();
+  names.forEach((name, index) => {
+    const fileName = skillCreateRelativePath(name, packageRoot);
+    const content = contents[index] ?? "";
+    if (!fileName || !content.trim() || seen.has(fileName)) return;
+    seen.add(fileName);
+    files.push({ name: fileName, kind: "instruction", content });
+  });
+  for (const file of selectedFiles) {
+    const fileName = skillCreateRelativePath(file.webkitRelativePath || file.name, packageRoot);
+    if (!fileName || seen.has(fileName) || !/\.(?:md|markdown|txt)$/i.test(fileName) || Number(file.size) <= 0) continue;
+    const content = typeof file.text === "function" ? await file.text() : "";
+    if (!content.trim()) continue;
+    seen.add(fileName);
+    files.push({ name: fileName, kind: "instruction", content });
+  }
+  return files;
+}
+
+function collectSkillCreateUploadFiles(form, options = {}) {
   const seen = new Set();
   const files = [];
+  const selectedFiles = [
+    ...Array.from(form?.querySelector?.('input[name="skillFiles"]')?.files ?? []),
+    ...Array.from(form?.querySelector?.('input[name="skillFolderFiles"]')?.files ?? []),
+  ];
+  const names = Array.from(form?.querySelectorAll?.('input[name="skillMarkdownName"]') ?? []).map((input) => skillCreatePath(input.value));
+  const contents = Array.from(form?.querySelectorAll?.('textarea[name="skillMarkdownContent"]') ?? []).map((input) => String(input.value ?? ""));
+  const packageRoot = skillCreatePackageRoot([
+    ...names,
+    ...selectedFiles.map((file) => file.webkitRelativePath || file.name),
+  ]);
   const addFile = (file, path) => {
-    const fileName = normalizeSkillFileName(path || file?.webkitRelativePath || file?.name);
-    if (!file || !fileName || seen.has(fileName)) return;
+    const fileName = skillCreateRelativePath(path || file?.skillPath || file?.webkitRelativePath || file?.name, packageRoot);
+    if (!file || !fileName || seen.has(fileName) || Number(file.size) <= 0) return;
     seen.add(fileName);
     file.skillPath = fileName;
     files.push(file);
   };
-  for (const file of Array.from(form?.querySelector?.('input[name="skillFiles"]')?.files ?? [])) addFile(file);
-  for (const file of Array.from(form?.querySelector?.('input[name="skillFolderFiles"]')?.files ?? [])) addFile(file);
-  const names = Array.from(form?.querySelectorAll?.('input[name="skillMarkdownName"]') ?? []).map((input) => String(input.value ?? "").trim());
-  const contents = Array.from(form?.querySelectorAll?.('textarea[name="skillMarkdownContent"]') ?? []).map((input) => String(input.value ?? ""));
-  names.forEach((name, index) => {
-    const fileName = normalizeSkillFileName(name);
-    const content = contents[index] ?? "";
-    if (!fileName || !content.trim()) return;
-    const file = new File([content], fileName.split("/").pop() || "SKILL.md", { type: "text/markdown" });
-    addFile(file, fileName);
-  });
+  if (options.includeEditorMarkdown === true) {
+    names.forEach((name, index) => {
+      if (!name) return;
+      const file = new File([contents[index] ?? ""], name.split("/").pop() || name, { type: "text/markdown" });
+      addFile(file, name);
+    });
+  }
+  for (const file of selectedFiles) {
+    const fileName = skillCreateRelativePath(file.webkitRelativePath || file.name, packageRoot);
+    if (/\.(?:md|markdown|txt)$/i.test(fileName)) continue;
+    addFile(file);
+  }
   return files;
 }
 

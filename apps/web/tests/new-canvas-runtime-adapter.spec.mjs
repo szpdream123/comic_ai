@@ -19,6 +19,11 @@ import {
   normalizeAiCanvasRuntimeGrouping,
   serializeAiCanvasDocument,
 } from "../src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import {
+  addAiCanvasRuntimeEpisodesForWorkbenchForTest,
+  applyCanvasProjectMetaFromDocumentForTest,
+  attachCanvasProjectMetaToDocumentForTest,
+} from "../src/features/production-workbench/index.js";
 
 test("AI Canvas document hooks are versioned and round-trip without mutation", () => {
   const document = { nodes: [{ id: "node-1", data: { assetId: "asset-1" } }] };
@@ -663,6 +668,62 @@ test("browser text-node uploads keep file bytes instead of showing the storage p
   assert.match(brandCss, /bottom: calc\(100% \+ 32px\) !important/);
 });
 
+test("browser series original and script persist through the host canvas document", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  assert.match(appSource, /function persistableAiCanvasRuntimeOriginalWork/);
+  assert.match(appSource, /function persistableAiCanvasRuntimeProjectMeta/);
+  assert.match(appSource, /updateSeriesInfo: isAiCanvasRuntimeNativeHost\(\)/);
+  assert.match(appSource, /\.\.\.persistableAiCanvasRuntimeProjectMeta\(source, envelope\)/);
+  assert.match(appSource, /seriesRoot\?\.series \?\? current\?\.series/);
+  assert.match(appSource, /liveNodes\.length > 0 \|\| savedNodes\.length === 0 \? liveNodes : savedNodes/);
+  assert.match(appSource, /persistableAiCanvasRuntimeProjectMeta\(nextDocument, document\)/);
+  assert.doesNotMatch(appSource, /document = nextDocument;\s*if \(typeof context\.onDocumentChange === "function"\)/);
+  assert.match(workbenchSource, /function applyCanvasProjectMetaFromDocument/);
+  assert.match(workbenchSource, /function attachCanvasProjectMetaToDocument/);
+  assert.match(workbenchSource, /applyCanvasProjectMetaFromDocument\(workbench, projectId, document\)/);
+  assert.match(workbenchSource, /applyCanvasProjectMetaFromDocument\(workbench, selectedProjectId, canvasDocument\)/);
+  assert.match(workbenchSource, /attachCanvasProjectMetaToDocument\(\s*workbench,\s*projectId,\s*normalizeStandaloneCanvasDocument/);
+  assert.match(workbenchSource, /series: project\?\.series \?\? existing\.series/);
+  assert.match(workbenchSource, /attachCanvasProjectMetaToDocument\(workbench, selectedId, workbench\.ui\.canvasDocument\)/);
+
+  const workbench = {
+    ui: {
+      canvasProjects: [{
+        id: "canvas-47",
+        title: "画布项目=47",
+        name: "画布项目=47",
+        series: {
+          originalWork: {
+            fileName: "御魂之巅-第一卷.txt",
+            filePath: "/api/storage/objects/obj-1/content?proxy=1",
+            sourceUrl: "/api/storage/objects/obj-1/content?proxy=1",
+            storageObjectId: "obj-1",
+            addedAt: 1,
+          },
+          script: "第一集剧本",
+        },
+      }],
+    },
+  };
+  const attached = attachCanvasProjectMetaToDocumentForTest(workbench, "canvas-47", {
+    canvasProjectId: "canvas-47",
+    nodes: [{ id: "node-1", type: "ai-text" }],
+    edges: [],
+  });
+  assert.equal(attached.series.originalWork.fileName, "御魂之巅-第一卷.txt");
+  assert.equal(attached.series.script, "第一集剧本");
+
+  const reloaded = {
+    ui: {
+      canvasProjects: [{ id: "canvas-47", title: "画布项目=47", name: "画布项目=47" }],
+    },
+  };
+  applyCanvasProjectMetaFromDocumentForTest(reloaded, "canvas-47", attached);
+  assert.equal(reloaded.ui.canvasProjects[0].series.originalWork.fileName, "御魂之巅-第一卷.txt");
+  assert.equal(reloaded.ui.canvasProjects[0].series.script, "第一集剧本");
+});
+
 test("browser AI assistant can split the current series into episode canvases", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const fileServiceSource = readRuntimeAsset("main-upstream-");
@@ -678,13 +739,63 @@ test("browser AI assistant can split the current series into episode canvases", 
   assert.match(appSource, /\.\.\.\(parentId \? \{ parentId \} : \{\}\)/);
   assert.match(appSource, /if \(id && project\.parentId && !catalogIds\.has\(id\)\) merged\.push\(project\)/);
   assert.match(appSource, /const projects = mergeAiCanvasRuntimeProjects\(projectCatalog, existingProjects\)/);
-  assert.match(appSource, /const projects = mergeAiCanvasRuntimeProjects\(projectCatalog, store\.getState\(\)\?\.projects\)/);
+  assert.match(appSource, /let projects = mergeAiCanvasRuntimeProjects\(projectCatalog, store\.getState\(\)\?\.projects\)/);
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   assert.match(workbenchSource, /onAddEpisodes: \(episodes\) => addAiCanvasRuntimeEpisodesForWorkbench\(workbench, episodes\)/);
   assert.match(workbenchSource, /onProjectsChange: \(projects\) => \{/);
   assert.match(workbenchSource, /if \(parentId\) record\.parentId = parentId;/);
+  assert.match(workbenchSource, /await updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true \}\);\s*persistWorkbenchState\(workbench\);\s*return createdIds;/);
+  assert.doesNotMatch(workbenchSource, /const switchId = createdIds\.at\(-1\)/);
+  assert.match(appSource, /const projects = allProjects\.filter\(\(project\) => !String\(project\?\.parentId \?\? ""\)\.trim\(\)\)/);
+  assert.match(appSource, /parentId: existing\?\.parentId \|\| seriesId/);
+  assert.match(appSource, /projectCatalog = mergeAiCanvasRuntimeProjects\(projectCatalog, mirrored\)/);
+  assert.match(workbenchSource, /documentsByProject\[createdId\] = attachCanvasProjectMetaToDocument/);
+  assert.match(workbenchSource, /await workbench\.api\.saveStandaloneCanvas\(createdId,/);
   const canvasStateSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-state.js", import.meta.url), "utf8");
   assert.match(canvasStateSource, /node\.data\?\.text \|\| node\.data\?\.output/);
+});
+
+test("creating episode canvases keeps the current series canvas selected", async () => {
+  const saved = [];
+  const workbench = {
+    api: {
+      saveStandaloneCanvas: async (projectId, payload) => {
+        saved.push({ projectId, document: payload.document });
+        return { canvas: { id: projectId, document: payload.document, serverRevision: 1 } };
+      },
+    },
+    ui: {
+      selectedCanvasProjectId: "canvas-47",
+      activeCanvasProjectId: "canvas-47",
+      canvasProjects: [{ id: "canvas-47", title: "画布项目=47", name: "画布项目=47" }],
+      canvasDocument: {
+        canvasProjectId: "canvas-47",
+        nodes: [{ id: "node-1", type: "ai-text" }],
+        edges: [],
+      },
+      canvasDocumentsByProject: {},
+    },
+  };
+
+  const createdIds = await addAiCanvasRuntimeEpisodesForWorkbenchForTest(workbench, [
+    { title: "第1集 觉醒", outline: "坠落、来客" },
+    { title: "第30集 真相与新的起点", outline: "虚空的诱惑" },
+  ]);
+
+  assert.equal(createdIds.length, 2);
+  assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-47");
+  assert.equal(workbench.ui.activeCanvasProjectId, "canvas-47");
+  assert.equal(workbench.ui.canvasDocument.nodes[0].id, "node-1");
+  const episodes = workbench.ui.canvasProjects.filter((project) => project.parentId === "canvas-47");
+  assert.equal(episodes.length, 2);
+  assert.equal(episodes[0].title, "第1集 觉醒");
+  assert.equal(episodes[1].title, "第30集 真相与新的起点");
+  assert.equal(episodes[1].episodeNo, 2);
+  assert.equal(workbench.ui.canvasDocumentsByProject[createdIds[0]].parentId, "canvas-47");
+  assert.equal(workbench.ui.canvasDocumentsByProject[createdIds[1]].parentId, "canvas-47");
+  assert.equal(saved.length, 2);
+  assert.equal(saved[0].document.parentId, "canvas-47");
+  assert.equal(saved[1].document.episodeOutline, "虚空的诱惑");
 });
 
 test("browser canvas skips Tauri video editor event listen", () => {

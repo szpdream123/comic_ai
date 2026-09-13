@@ -8,7 +8,7 @@ import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } fr
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
-  ? import("./src/features/production-workbench/index.js?skill-media-upload=5")
+  ? import("./src/features/production-workbench/index.js?skill-media-upload=8")
   : null;
 let aiCanvasRuntimePromise;
 let aiCanvasRuntimeStorePromise;
@@ -480,6 +480,70 @@ function mergeAiCanvasRuntimeProjects(catalogProjects, existingProjects) {
   return merged;
 }
 
+function persistableAiCanvasRuntimeMediaUrl(value) {
+  const url = String(value ?? "").trim();
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url) || url.startsWith("/api/storage/")) return url;
+  return "";
+}
+
+function persistableAiCanvasRuntimeOriginalWork(originalWork) {
+  if (!originalWork || typeof originalWork !== "object") return undefined;
+  const storageObjectId = String(originalWork.storageObjectId ?? "").trim();
+  const sourceUrl = persistableAiCanvasRuntimeMediaUrl(
+    originalWork.sourceUrl ?? originalWork.filePath ?? originalWork.relativePath,
+  );
+  const filePath = persistableAiCanvasRuntimeMediaUrl(originalWork.filePath) || sourceUrl;
+  if (!storageObjectId && !sourceUrl && !filePath) return undefined;
+  const fileName = String(originalWork.fileName ?? "").trim();
+  const addedAt = Number(originalWork.addedAt);
+  return {
+    ...(fileName ? { fileName } : {}),
+    ...(filePath ? { filePath } : {}),
+    ...(sourceUrl ? { sourceUrl } : {}),
+    ...(storageObjectId ? { storageObjectId } : {}),
+    addedAt: Number.isFinite(addedAt) && addedAt > 0 ? addedAt : Date.now(),
+  };
+}
+
+function persistableAiCanvasRuntimeSeries(series) {
+  if (!series || typeof series !== "object") return undefined;
+  const originalWork = persistableAiCanvasRuntimeOriginalWork(series.originalWork);
+  const script = typeof series.script === "string" ? series.script : "";
+  const next = { ...series };
+  delete next.originalWork;
+  delete next.script;
+  delete next.dataUrl;
+  if (originalWork) next.originalWork = originalWork;
+  if (script) next.script = script;
+  return Object.keys(next).length ? next : undefined;
+}
+
+function persistableAiCanvasRuntimeProjectMeta(project = {}, fallback = {}) {
+  const series = persistableAiCanvasRuntimeSeries(project?.series)
+    ?? persistableAiCanvasRuntimeSeries(fallback?.series);
+  const parentId = String(project?.parentId ?? fallback?.parentId ?? "").trim();
+  const episodeNo = Number(project?.episodeNo ?? fallback?.episodeNo);
+  const episodeOutline = project?.episodeOutline ?? fallback?.episodeOutline;
+  const episodeScript = project?.episodeScript ?? fallback?.episodeScript;
+  const episodeCreative = project?.episodeCreative ?? fallback?.episodeCreative;
+  return {
+    ...(series ? { series } : {}),
+    ...(parentId ? { parentId } : {}),
+    ...(Number.isFinite(episodeNo) && episodeNo > 0 ? { episodeNo } : {}),
+    ...(episodeOutline != null ? { episodeOutline: String(episodeOutline) } : {}),
+    ...(episodeScript != null ? { episodeScript: String(episodeScript) } : {}),
+    ...(episodeCreative && typeof episodeCreative === "object" ? { episodeCreative } : {}),
+  };
+}
+
+function overlayAiCanvasRuntimeProjectMetaFromDocument(project, document) {
+  if (!project || !document || typeof document !== "object") return project;
+  const meta = persistableAiCanvasRuntimeProjectMeta(document, project);
+  if (!Object.keys(meta).length) return project;
+  return normalizeAiCanvasRuntimeProject({ ...project, ...meta }) ?? project;
+}
+
 function isAiCanvasRuntimeNativeHost() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -771,6 +835,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     const { updatedAt: _updatedAt, createdAt: _createdAt, viewport: _viewport, ...envelope } = source;
     return cloneValue({
       ...envelope,
+      ...persistableAiCanvasRuntimeProjectMeta(source, envelope),
       version: Number(source.version ?? 1) || 1,
       nodes: (Array.isArray(source.nodes) ? source.nodes : []).map((node) => omitRuntimeEphemeralNodeFields(node, options)),
       edges: (Array.isArray(source.edges) ? source.edges : []).map((edge) => omitRuntimeEphemeralEdgeFields(edge, options)),
@@ -807,13 +872,26 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     const state = store.getState();
     const source = document && typeof document === "object" ? document : {};
     const { updatedAt: _updatedAt, ...envelope } = source;
+    const projects = Array.isArray(state.projects) ? state.projects : [];
+    const current = projects.find((project) => project?.id === (currentProjectId || state.currentProjectId));
+    const seriesRoot = projects.find((project) => project?.id === String(current?.parentId ?? current?.id ?? "")) ?? current;
+    const liveNodes = Array.isArray(state.nodes) ? state.nodes : [];
+    const savedNodes = Array.isArray(source.nodes) ? source.nodes : [];
+    const liveEdges = Array.isArray(state.edges) ? state.edges : [];
+    const savedEdges = Array.isArray(source.edges) ? source.edges : [];
+    const liveGroups = Array.isArray(state.groups) ? state.groups : [];
+    const savedGroups = Array.isArray(source.groups) ? source.groups : [];
     return persistableCanvasRuntimeDocument({
       ...envelope,
+      ...persistableAiCanvasRuntimeProjectMeta({
+        ...current,
+        series: seriesRoot?.series ?? current?.series,
+      }, envelope),
       version: Number(source.version ?? 1) || 1,
       ...(currentProjectId ? { canvasProjectId: currentProjectId } : {}),
-      nodes: state.nodes ?? [],
-      edges: state.edges ?? [],
-      groups: state.groups ?? source.groups ?? [],
+      nodes: liveNodes.length > 0 || savedNodes.length === 0 ? liveNodes : savedNodes,
+      edges: liveEdges.length > 0 || savedEdges.length === 0 ? liveEdges : savedEdges,
+      groups: liveGroups.length > 0 || savedGroups.length === 0 ? (state.groups ?? source.groups ?? []) : savedGroups,
     });
   };
   const applyHostProjectState = (next = {}) => {
@@ -831,7 +909,18 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
         currentProjectId,
       );
     }
-    const projects = mergeAiCanvasRuntimeProjects(projectCatalog, store.getState()?.projects);
+    let projects = mergeAiCanvasRuntimeProjects(projectCatalog, store.getState()?.projects);
+    if (documentProvided && document) {
+      const currentId = String(currentProjectId ?? "").trim();
+      const seriesTargetId = String(document.parentId || currentId).trim();
+      projects = projects.map((project) => {
+        if (project.id === currentId) return overlayAiCanvasRuntimeProjectMetaFromDocument(project, document);
+        if (seriesTargetId && project.id === seriesTargetId) {
+          return overlayAiCanvasRuntimeProjectMetaFromDocument(project, { series: document.series });
+        }
+        return project;
+      });
+    }
     const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0] ?? null;
     const patch = {
       ...(projects.length ? { projects } : {}),
@@ -859,12 +948,21 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     const nextNodeCount = Array.isArray(nextDocument?.nodes) ? nextDocument.nodes.length : 0;
     if ((hostNodeCount > 0 || loadedNodeCount > 0) && nextNodeCount === 0) {
       console.warn("[creator-app] blocked empty canvas overwrite");
+      const preserved = persistableCanvasRuntimeDocument({
+        ...(document && typeof document === "object" ? document : {}),
+        ...persistableAiCanvasRuntimeProjectMeta(nextDocument, document),
+      });
+      if (
+        typeof context.onDocumentChange === "function"
+        && !arePersistableCanvasRuntimeDocumentsEqual(document, preserved)
+      ) {
+        await context.onDocumentChange(preserved, { scheduleSave: true });
+      }
       return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
     }
     if (arePersistableCanvasRuntimeDocumentsEqual(document, nextDocument)) {
       return store.getState()?.currentProjectId ?? currentProjectId ?? undefined;
     }
-    document = nextDocument;
     if (typeof context.onDocumentChange === "function") {
       await context.onDocumentChange(nextDocument, { scheduleSave: true });
     }
@@ -938,9 +1036,87 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       openProjects: context.onOpenProjects,
       addEpisodes: isAiCanvasRuntimeNativeHost()
         ? undefined
-        : (episodes) => (typeof context.onAddEpisodes === "function"
-          ? context.onAddEpisodes(episodes)
-          : addAiCanvasRuntimeEpisodes(store, episodes)),
+        : async (episodes) => {
+          const createdIds = typeof context.onAddEpisodes === "function"
+            ? await context.onAddEpisodes(episodes)
+            : await addAiCanvasRuntimeEpisodes(store, episodes);
+          const ids = (Array.isArray(createdIds) ? createdIds : [])
+            .map((id) => String(id ?? "").trim())
+            .filter(Boolean);
+          if (!ids.length) return createdIds ?? [];
+          const state = store.getState();
+          const projects = Array.isArray(state.projects) ? state.projects : [];
+          const current = projects.find((project) => project?.id === state.currentProjectId);
+          const seriesId = String(current?.parentId ?? state.currentProjectId ?? "").trim();
+          const byId = new Map(projects.map((project) => [project.id, project]));
+          let episodeNo = projects
+            .filter((project) => project?.parentId === seriesId)
+            .reduce((max, project) => Math.max(max, Number(project?.episodeNo ?? 0) || 0), 0);
+          const mirrored = ids.map((id, index) => {
+            const item = Array.isArray(episodes) ? episodes[index] : null;
+            const existing = byId.get(id);
+            const nextNo = Number(existing?.episodeNo ?? 0) > 0 ? Number(existing.episodeNo) : (episodeNo += 1);
+            episodeNo = Math.max(episodeNo, nextNo);
+            const name = String(item?.name ?? item?.title ?? existing?.name ?? "").trim() || `第 ${nextNo} 集`;
+            const outline = String(item?.outline ?? existing?.episodeOutline ?? "").trim();
+            return {
+              ...(existing ?? {}),
+              id,
+              name,
+              createdAt: existing?.createdAt ?? Date.now(),
+              updatedAt: Date.now(),
+              parentId: existing?.parentId || seriesId,
+              episodeNo: nextNo,
+              ...(outline ? { episodeOutline: outline } : {}),
+            };
+          });
+          const mirroredById = new Map(mirrored.map((project) => [project.id, project]));
+          store.setState({
+            projects: [
+              ...projects.map((project) => mirroredById.get(project.id) ?? project),
+              ...mirrored.filter((project) => !byId.has(project.id)),
+            ],
+          });
+          projectCatalog = mergeAiCanvasRuntimeProjects(projectCatalog, mirrored);
+          return ids;
+        },
+      updateSeriesInfo: isAiCanvasRuntimeNativeHost()
+        ? undefined
+        : async (patch) => {
+          const state = store.getState();
+          if (state.projectLoadStatus !== "ready") {
+            state.showToast?.("项目尚未成功加载，已阻止保存", "error");
+            return false;
+          }
+          const currentId = String(state.currentProjectId ?? currentProjectId ?? "").trim();
+          const projects = Array.isArray(state.projects) ? state.projects : [];
+          const current = projects.find((project) => project?.id === currentId);
+          if (!current) return false;
+          const seriesId = String(current.parentId ?? currentId).trim();
+          const nextProjects = projects.map((project) => (
+            project.id === seriesId
+              ? {
+                ...project,
+                series: { ...(project.series ?? {}), ...(patch && typeof patch === "object" ? patch : {}) },
+                updatedAt: Date.now(),
+              }
+              : project
+          ));
+          store.setState({ projects: nextProjects });
+          if (typeof context.onProjectsChange === "function") {
+            context.onProjectsChange(nextProjects);
+          }
+          const save = store.getState().saveCurrentProjectSilent;
+          if (typeof save === "function") {
+            const savedId = await save();
+            if (!savedId) {
+              store.setState({ projects });
+              store.getState().showToast?.("保存失败，改动已回滚", "error");
+              return false;
+            }
+          }
+          return true;
+        },
     };
     const applyCatalog = (next = {}) => {
       if (next.projectCatalog !== undefined) {
@@ -1113,8 +1289,12 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
   };
 
   const renderProjectMenu = (header) => {
-    const projects = currentProjects();
+    const allProjects = currentProjects();
     const currentId = currentProjectId();
+    const currentSeriesId = String(
+      allProjects.find((project) => project?.id === currentId)?.parentId ?? currentId,
+    ).trim();
+    const projects = allProjects.filter((project) => !String(project?.parentId ?? "").trim());
     const creating = currentState().isCreatingProject === true;
     const menu = doc.createElement("div");
     menu.className = "app-canvas-project-menu";
@@ -1129,7 +1309,7 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
         ${projects.length ? projects.map((project) => {
           const id = String(project?.id ?? "");
           const name = String(project?.name ?? project?.title ?? "未命名画布");
-          const current = id === currentId;
+          const current = id === currentSeriesId;
           return `<div class="app-canvas-project-row${current ? " is-current" : ""}">
             <button type="button" class="app-canvas-project-select" data-host-header-action="switch-project" data-project-id="${escapeAiCanvasHeaderText(id)}">
               <span>${escapeAiCanvasHeaderText(name)}</span>

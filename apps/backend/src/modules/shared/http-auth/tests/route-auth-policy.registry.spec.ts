@@ -280,7 +280,7 @@ describe("route auth policy registry", () => {
 
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 219);
+    assert.equal(signatures.length, 220);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");

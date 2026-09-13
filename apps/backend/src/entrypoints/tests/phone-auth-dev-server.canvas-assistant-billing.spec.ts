@@ -20,6 +20,7 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
   let cookie = "";
   let canvasProjectId = "";
   let nextCompletion: "success" | "stream_error" = "success";
+  let nextUsage = { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 };
 
   before(async () => {
     db = await createMigratedTestDb();
@@ -99,12 +100,12 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
                 created: 1,
                 model: input.model,
                 choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-                usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
+                usage: nextUsage,
               },
             ]),
             completed: Promise.resolve({
               status: "succeeded" as const,
-              usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
+              usage: nextUsage,
               usageSource: "provider" as const,
             }),
           };
@@ -136,6 +137,7 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
 
   it("settles canvas assistant tokens with the admin token unit price", async () => {
     nextCompletion = "success";
+    nextUsage = { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 };
     const response = await postAssistant("assistant-billing-success");
     const payload = await readSsePayload(response);
 
@@ -162,6 +164,38 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
     assert.equal(Number(user.rows[0]?.credit_balance_cached), 94);
   });
 
+  it("does not cap a large assistant round at the default 2048-token reserve", async () => {
+    nextCompletion = "success";
+    nextUsage = { prompt_tokens: 9_000, completion_tokens: 1_000, total_tokens: 10_000 };
+    await grantCredits(db, {
+      userId,
+      amount: 100,
+      sourceType: "test_credit_seed",
+      sourceId: randomUUID(),
+      reason: "canvas assistant large billing test",
+      createdByUserId: userId,
+      now: new Date(),
+    });
+    const balanceBefore = await readBalance();
+    const response = await postAssistant("assistant-billing-large-prompt", {
+      messages: [{ role: "user", content: "原".repeat(10_000) }],
+    });
+    const payload = await readSsePayload(response);
+    const reservation = await db.query<{ amount_consumed: number | string; amount_released: number | string; amount_total: number | string }>(
+      `SELECT amount_consumed, amount_released, amount_total
+       FROM credit_reservations
+       WHERE user_id = $1 AND source_type = 'canvas_agent_text_round'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userId],
+    );
+
+    assert.equal(response.status, 200, payload);
+    assert.equal(Number(reservation.rows[0]?.amount_consumed), 40);
+    assert.ok(Number(reservation.rows[0]?.amount_total) >= 40);
+    assert.equal(await readBalance(), balanceBefore - 40);
+  });
+
   it("releases the reserved credits when the assistant stream fails", async () => {
     nextCompletion = "stream_error";
     const balanceBefore = await readBalance();
@@ -174,7 +208,7 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
     assert.equal(await readBalance(), balanceBefore);
   });
 
-  async function postAssistant(idempotencyKey: string) {
+  async function postAssistant(idempotencyKey: string, body: Record<string, unknown> = {}) {
     return fetch(`${server.origin}/api/canvas/${canvasProjectId}/assistant/chat/completions`, {
       method: "POST",
       headers: {
@@ -186,6 +220,7 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
         model: modelCode,
         stream: true,
         messages: [{ role: "user", content: "请继续整理原著" }],
+        ...body,
       }),
     });
   }

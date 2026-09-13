@@ -91,7 +91,7 @@ export const firstLoginOnboardingTargets = [
   },
   {
     key: "prompt-skill-selector",
-    label: "提示词技能选择",
+    label: "技能skill选择",
     pageLabel: "创建第一集",
     action: "open-episode-prompt-skill-modal",
     placements: ["before-generate-storyboard"],

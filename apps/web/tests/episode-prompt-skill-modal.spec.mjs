@@ -3,11 +3,43 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import {
+  renderEpisodePromptSkillControl,
   renderEpisodePromptSkillModal,
   sumEpisodePromptSkillCredits,
 } from "../src/features/production-workbench/episode-prompt-skill-modal.js";
 
 describe("episode prompt skill modal", () => {
+  it("renders plaza skill picker labels and catalog for the episode create modal", () => {
+    const html = renderEpisodePromptSkillModal({
+      show: true,
+      variant: "plaza",
+      sourceTab: "official",
+      activeCategory: "short-drama",
+      officialSkills: [
+        { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", summary: "一键转分镜" },
+      ],
+      privateSkills: [
+        { id: "plaza-mine", title: "我的短剧 Skill", category: "short-drama" },
+      ],
+      draftPlazaSkillIds: ["plaza-official"],
+    });
+    const control = renderEpisodePromptSkillControl({
+      variant: "plaza",
+      skills: [{ id: "plaza-official", title: "官方短剧 Skill", category: "short-drama" }],
+      selectedPlazaSkillIds: ["plaza-official"],
+    });
+
+    assert.match(control, /技能skill/);
+    assert.match(control, /已选择 1 项技能/);
+    assert.match(html, /选择技能skill/);
+    assert.match(html, /官方 Skill/);
+    assert.match(html, /我的 Skill/);
+    assert.match(html, /短剧漫剧/);
+    assert.match(html, /官方短剧 Skill/);
+    assert.match(html, /data-episode-skill-variant="plaza"/);
+    assert.doesNotMatch(html, /转剧本提示词/);
+  });
+
   it("renders independent source tabs and all five workflow categories", () => {
     const html = renderEpisodePromptSkillModal({
       show: true,

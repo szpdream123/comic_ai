@@ -432,6 +432,7 @@ describe("canvas workflow document", () => {
 
   it("thins and fades the visual Canvas grid when zoomed out", () => {
     const style = new Map();
+    const classList = { zoomedOut: false, toggle(name, value) { if (name === "is-zoomed-out") this.zoomedOut = value === true; } };
     const workbench = {
       ui: { canvasDocument: createDefaultCanvasDocument({ canvasProjectId: "canvas-grid-zoom" }) },
       updateCanvasDocument: () => {},
@@ -441,6 +442,7 @@ describe("canvas workflow document", () => {
       zoom: () => 0.35,
       __comicAiCanvasMount: {
         closest: () => ({
+          classList,
           style: { setProperty: (key, value) => style.set(key, value) },
         }),
       },
@@ -449,6 +451,7 @@ describe("canvas workflow document", () => {
     assert.equal(syncCanvasGraphViewport(graph, workbench), true);
     assert.equal(style.get("--canvas-grid-size"), "20px");
     assert.equal(style.get("--canvas-grid-dot-mix"), "4.9%");
+    assert.equal(classList.zoomedOut, true);
   });
 
   it("turns an X6 output released on blank canvas into a compatible-node menu request", () => {
@@ -1895,6 +1898,7 @@ describe("canvas workflow document", () => {
     const styles = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
     assert.match(styles, /\.canvas-x6-special-node\.is-script-workflow\s*\{/);
     assert.match(styles, /\.canvas-stage\.is-x6-ready \.canvas-x6-special-node :is\(input, textarea, select, \[contenteditable="true"\]\)\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
+    assert.match(styles, /:is\(input, textarea, select, \[contenteditable="true"\]\):not\(:focus\)[\s\S]*?transform:\s*none/);
     assert.match(styles, /\.canvas-stage\.is-x6-ready \.canvas-x6-special-node\.is-source-text \.canvas-x6-source-text-input\s*\{[\s\S]*?transform:\s*none[\s\S]*?transform-origin:\s*initial/);
     assert.match(styles, /\.script-workspace-layer\s*\{[\s\S]*?position:\s*fixed/);
     assert.match(styles, /\.canvas-x6-generic-body > \.canvas-x6-source-text-input\s*\{[\s\S]*?resize:\s*none[\s\S]*?overflow-y:\s*auto/);
@@ -2026,7 +2030,8 @@ it("keeps animated X6 edges above the retired Canvas flow layer", () => {
   assert.match(source, /\.canvas-stage\.is-panning \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing path:nth-child\(3\)[\s\S]*?animation-play-state:\s*paused/);
   assert.doesNotMatch(source, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge path:nth-child\(3\)[\s\S]*?animation-play-state:\s*paused/);
   assert.match(source, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing path:nth-child\(3\)[\s\S]*?filter:\s*none/);
-  assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.canvas-x6-special-node\s*\{[\s\S]*?box-shadow:\s*none/);
+  assert.match(hostSource, /\.canvas-stage\.is-zoomed-out \.canvas-x6-special-node[\s\S]*?\.canvas-stage\.is-node-dragging \.canvas-x6-special-node\s*\{[\s\S]*?box-shadow:\s*none/);
+  assert.match(hostSource, /\.canvas-stage\.is-node-dragging \[data-canvas-node-action-toolbar\][\s\S]*?visibility:\s*hidden/);
   assert.match(graphSource, /selectCurrentCanvasNode\(graph, workbench\);\s*refreshCanvasConnectedEdgeMotion\(graph\);/);
   assert.match(graphSource, /strokeDasharray:\s*"18 82"/);
   assert.match(graphSource, /if \(flowing\) edgeView\?\.container\?\.querySelector\?\.\("path:nth-child\(3\)"\)\?\.setAttribute\?\.\("pathLength", "100"\);/);
@@ -2048,8 +2053,12 @@ it("defers Canvas drag calculations until the pointer is released", () => {
   assert.match(wireSource.slice(nodeMoveStart, nodeMoveEnd), /setNodeDragMotion\(node, true\)/);
   assert.doesNotMatch(wireSource.slice(nodeMoveStart, nodeMoveEnd), /canvasGraphCellAndDescendantIds|refreshCanvasConnectedEdgeMotion|positionCanvasSelectionActionToolbar|updateStoryboardReturnTarget/);
   assert.doesNotMatch(wireSource.slice(positionChangeStart, positionChangeEnd), /refreshCanvasConnectedEdgeMotion|scheduleSelectionPresentation/);
+  assert.match(wireSource.slice(positionChangeStart, positionChangeEnd), /event\?\.options\?\.ui[\s\S]*?classList\?\.add\?\.\("is-node-dragging"\)/);
   assert.match(wireSource.slice(positionChangeStart, positionChangeEnd), /positionCanvasNodeActionToolbar\(graph, mount\)/);
   assert.doesNotMatch(wireSource.slice(selectionMoveStart, selectionMoveEnd), /canvasGraphCellAndDescendantIds|refreshCanvasConnectedEdgeMotion|scheduleSelectionPresentation/);
+  assert.match(wireSource, /node:moved[\s\S]*?if \(!pointerReleased\) \{[\s\S]*?canvasNodeDragActive === true[\s\S]*?return;/);
+  assert.match(source, /function isCanvasNodeMovePointerReleased[\s\S]*?if \(dragActive === true\) return false;/);
+  assert.match(wireSource, /cell:change:data[\s\S]*?canvasNodeDragActive === true[\s\S]*?return;/);
   assert.match(wireSource, /node:moved[\s\S]*?classList\?\.remove\?\.\("is-node-dragging"\)/);
   assert.match(wireSource, /node:moved[\s\S]*?setNodeDragMotion\(event\?\.node, false\)/);
   const mouseDownStart = wireSource.indexOf('graph.on("node:mousedown"');
@@ -2077,9 +2086,16 @@ it("keeps X6 edge rendering native while a node is dragged", () => {
   const positionChangeEnd = wireSource.indexOf('graph.on("node:move"', positionChangeStart);
 
   assert.match(wireSource, /node:mousedown[\s\S]*?suspendDragSnapline\(\)/);
+  assert.match(wireSource, /beginZoomedOutDragAsync\(\)/);
+  assert.match(wireSource, /endZoomedOutDragAsync\(\)/);
+  assert.doesNotMatch(wireSource, /graph\.options\.async = true/);
+  assert.match(wireSource, /graph\.options\.embedding\.enabled = false/);
+  assert.match(wireSource, /graph\.options\.embedding\.enabled = true/);
   assert.doesNotMatch(wireSource, /node:mousedown[\s\S]*?enableSynchronousDragRendering\(\)/);
   assert.doesNotMatch(wireSource, /node:mousedown[\s\S]*?deferDragEdgeRendering\(\)/);
   assert.match(wireSource, /syncCanvasGraphEditorOverlay/);
+  assert.match(source, /function syncCanvasGraphEditorOverlay[\s\S]*?is-node-dragging[\s\S]*?return false;/);
+  assert.match(source, /function positionCanvasNodeActionToolbar[\s\S]*?is-node-dragging[\s\S]*?return Boolean\(/);
   assert.match(wireSource, /node:moved[\s\S]*?scheduleGraphCommit\(\{ clearToast: true \}\)/);
   assert.match(wireSource, /node:mouseup[\s\S]*?restoreDragSnapline\(\)/);
   assert.doesNotMatch(wireSource, /node:mouseup[\s\S]*?restoreAsyncRendering\(\)/);
@@ -2089,6 +2105,7 @@ it("keeps X6 edge rendering native while a node is dragged", () => {
   assert.doesNotMatch(createGraphSource, /virtual:\s*\{/);
   assert.match(hostSource, /__comic-ai-canvas-editor-overlay__/);
   assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.x6-node-selected\.is-canvas-node-flowing \.canvas-x6-special-node::after[\s\S]*?canvas-x6-selected-border-flow 1\.2s linear infinite/);
+  assert.match(hostSource, /\.canvas-stage\.is-zoomed-out\.is-node-dragging \.x6-edge[\s\S]*?visibility:\s*hidden/);
   assert.doesNotMatch(wireSource, /requestCanvasDragViewUpdate[\s\S]*?view\?\.cell\?\.isEdge\?\.\(\)[\s\S]*?deferredUpdates\.set/);
   assert.doesNotMatch(cssSource, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing\s*\{[\s\S]*?visibility:\s*hidden/);
 });
@@ -2312,7 +2329,7 @@ it("checks distribution-handle state before querying the Canvas DOM", () => {
 
 it("bridges X6 selection plugin changes into the Canvas editor state", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
-  assert.match(source, /graph\.on\("node:mouseup", \(\{ node \}\) => \{[\s\S]*?refreshCanvasConnectedEdgeMotion\(graph\);[\s\S]*?selectGraphNode\(node\);[\s\S]*?\}\)/);
+  assert.match(source, /graph\.on\("node:mouseup", \(\{ node \}\) => \{[\s\S]*?refreshCanvasConnectedEdgeMotion\(graph\);[\s\S]*?positionCanvasNodeActionToolbar\(graph, mount\);[\s\S]*?selectGraphNode\(node\);[\s\S]*?\}\)/);
   assert.match(source, /graph\.on\("cell:click", \(\{ cell \}\) => \{/);
   assert.match(source, /graph\.on\("selection:changed", \(\{ added = \[\] \} = \{\}\) => \{/);
   assert.match(source, /const selectionPlugin = graph\.getPlugin\?\.\("selection"\)[\s\S]*?selectionPlugin\?\.on\?\.\("selection:changed"/);
@@ -2340,6 +2357,20 @@ it("commits an X6 node move without resetting the active interaction mode", () =
   assert.match(movedSource, /scheduleGraphCommit\(\{ clearToast: true \}\)/);
   assert.doesNotMatch(movedSource, /applyCanvasGraphInteractionMode/);
   assert.match(source, /function syncCanvasGraphDocument[\s\S]*?node\.setData\?\.\([\s\S]*?canvasNode:[\s\S]*?position:[\s\S]*?size:[\s\S]*?overwrite: true, silent: true/);
+});
+
+it("does not treat in-progress X6 node moves as pointer-up saves", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  const start = source.indexOf("function isCanvasNodeMovePointerReleased");
+  const end = source.indexOf("export function canvasGraphCellAndDescendantIds", start);
+  const runtime = `${source.slice(start, end)}\nreturn {\n  moving: isCanvasNodeMovePointerReleased({ e: { type: "mousemove" } }, true),\n  anonymous: isCanvasNodeMovePointerReleased({}, true),\n  buttonsUp: isCanvasNodeMovePointerReleased({ e: { buttons: 0 } }, true),\n  buttonsUpIdle: isCanvasNodeMovePointerReleased({ e: { buttons: 0 } }, false),\n  pointerUp: isCanvasNodeMovePointerReleased({ e: { type: "pointerup" } }, true),\n  clickEnd: isCanvasNodeMovePointerReleased({}, false),\n};\n`;
+  const result = new Function(runtime)();
+  assert.equal(result.moving, false);
+  assert.equal(result.anonymous, false);
+  assert.equal(result.buttonsUp, false);
+  assert.equal(result.buttonsUpIdle, false);
+  assert.equal(result.pointerUp, true);
+  assert.equal(result.clickEnd, false);
 });
 
 it("keeps mounted X6 cells in place while document data is synchronized", () => {

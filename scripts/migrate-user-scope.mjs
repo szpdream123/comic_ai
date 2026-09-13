@@ -171,6 +171,7 @@ const migrations = [
   ["20261101-retire-drained-generation-queue-shards.sql", "packages/db/migrations/20261101-retire-drained-generation-queue-shards.sql"],
   ["20261102-agent-execution-isolation.sql", "packages/db/migrations/20261102-agent-execution-isolation.sql"],
   ["20261103-canvas-media-derivation-upscale.sql", "packages/db/migrations/20261103-canvas-media-derivation-upscale.sql"],
+  ["20261104-skill-plaza-review.sql", "packages/db/migrations/20261104-skill-plaza-review.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -247,6 +248,7 @@ const runtimeSafeMigrationNames = new Set([
   "20261101-retire-drained-generation-queue-shards.sql",
   "20261102-agent-execution-isolation.sql",
   "20261103-canvas-media-derivation-upscale.sql",
+  "20261104-skill-plaza-review.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([

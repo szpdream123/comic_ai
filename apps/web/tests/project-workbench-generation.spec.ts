@@ -38346,6 +38346,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasDocument.viewport.zoom, 1.1);
     assert.equal(workbench.ui.canvasDocument.viewport.x, -50);
     assert.equal(workbench.ui.canvasDocument.viewport.y, -30);
+    assert.equal(root.innerHTML, "");
   });
 
   it("uses X6 viewport events instead of legacy host pan state", () => {
@@ -38379,6 +38380,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(inputBlock.match(/if \(target\?\.matches\?\.\("\[data-canvas-prompt-input\]"\)\)[\s\S]*?\n    \}/)?.[0] ?? "", /refreshCanvasGraphFromDocument/);
     assert.match(focusoutBlocks, /\[data-canvas-prompt-input\], \[data-canvas-title-input\], \[data-canvas-text-input\]/);
     assert.match(focusoutBlocks, /scheduleProjectCanvasSave\(workbench, \{ delayMs: 0 \}\)/);
+    assert.match(saveScheduler, /if \(workbench\.canvasNodeDragActive === true\) return;/);
     assert.match(saveScheduler, /if \(workbench\.canvasSaveInFlight\)[\s\S]*?canvasSaveQueuedDocument = document/);
   });
 
@@ -42838,6 +42840,7 @@ describe("production workbench project tab", () => {
     )?.[0] ?? "";
 
     assert.match(viewportUpdate, /delayMs:\s*CANVAS_VIEWPORT_SAVE_DELAY_MS/);
+    assert.match(viewportUpdate, /scheduleSave:\s*false/);
     assert.doesNotMatch(viewportUpdate, /immediateSave:\s*true/);
     assert.match(viewportUpdate, /persistCanvasSession\(/);
     assert.match(runtimeSync, /immediateSave:\s*metadata\.immediateSave === true/);
@@ -42993,7 +42996,8 @@ describe("production workbench project tab", () => {
       "utf8",
     );
     assert.match(x6Source, /graph\.on\("node:moving"/);
-    assert.match(x6Source, /if \(!pointerReleased\) return;/);
+    assert.match(x6Source, /if \(!pointerReleased\) \{[\s\S]*?canvasNodeDragActive === true[\s\S]*?return;/);
+    assert.match(x6Source, /function isCanvasNodeMovePointerReleased[\s\S]*?if \(dragActive === true\) return false;/);
     assert.match(x6Source, /const dragging = workbench\.canvasNodeDragActive === true;/);
   });
 
