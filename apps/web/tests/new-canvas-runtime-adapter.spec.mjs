@@ -639,6 +639,25 @@ test("browser series original uploads through COS instead of a local project fol
   assert.match(originalReaderSource, /e\.sourceUrl\?\?e\.filePath\?\?e\.relativePath/);
   assert.match(originalReaderSource, /fetch\(c,\{signal:n,credentials:`include`\}\)/);
   assert.match(originalReaderSource, /目标总集数：\$\{e\.targetEpisodeCount\} 集；单集目标时长：\$\{e\.targetDurationSec\} 秒/);
+  assert.match(appSource, /Math\.min\(500,Math\.max\(1,Number\.parseInt\(D,10\)\|\|24\)\)/);
+  assert.match(appSource, /max:500,value:D/);
+  assert.doesNotMatch(appSource, /Math\.min\(100,Math\.max\(1,Number\.parseInt\(D,10\)\|\|24\)\)/);
+  assert.doesNotMatch(appSource, /max:100,value:D/);
+});
+
+test("browser AI assistant can split the current series into episode canvases", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const fileServiceSource = readRuntimeAsset("main-upstream-");
+  const conversationSource = readRuntimeAsset("conversationExecutionController-");
+  assert.match(conversationSource, /id:`series_split_episodes`/);
+  assert.match(conversationSource, /await w\.getState\(\)\.addEpisodes\(n\)/);
+  assert.match(fileServiceSource, /if\(!J\(\)\)return t\(\)\.showToast\(`请使用「生成 AI 拆分草案」拆分，已保留当前原著`,`error`\),\[\]/);
+  assert.match(appSource, /function mergeAiCanvasRuntimeProjects/);
+  assert.match(appSource, /function addAiCanvasRuntimeEpisodes/);
+  assert.match(appSource, /addEpisodes: isAiCanvasRuntimeNativeHost\(\)[\s\S]*addAiCanvasRuntimeEpisodes\(store, episodes\)/);
+  assert.match(appSource, /if \(id && project\.parentId && !catalogIds\.has\(id\)\) merged\.push\(project\)/);
+  assert.match(appSource, /const projects = mergeAiCanvasRuntimeProjects\(projectCatalog, existingProjects\)/);
+  assert.match(appSource, /const projects = mergeAiCanvasRuntimeProjects\(projectCatalog, store\.getState\(\)\?\.projects\)/);
 });
 
 test("browser canvas skips Tauri video editor event listen", () => {

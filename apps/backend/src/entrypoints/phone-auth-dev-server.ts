@@ -80,6 +80,7 @@ import {
   CanvasAgentStepSkipError,
   CanvasAgentKnowledgeService,
   CanvasAgentBillingService,
+  CANVAS_AGENT_CREDIT_REASON,
   CanvasAgentCheckpointService,
   CanvasAgentContextService,
   createCanvasAgentFileGrantHttpService,
@@ -20209,6 +20210,7 @@ export function createPhoneAuthDevServer(
           resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
           env: runtimeEnv,
         }),
+        disableThinking: true,
       });
 
       const moneyPrinterTaskMatch = pathname.match(
@@ -28852,49 +28854,186 @@ export function createPhoneAuthDevServer(
             payloadSummary: "canvas assistant completion",
             requestKeyPrefix: "canvas-assistant",
           };
+          const billing = new CanvasAgentBillingService(db);
+          const billingStepId = uuidFromIdempotencyKey(
+            `canvas-assistant:${canvasProjectId}:${requiredIdempotencyKeyFromRequest(request) || randomUUID()}`,
+          );
+          const billingMetadata = {
+            operation: "canvas_assistant_completion",
+            canvasProjectId,
+            content: CANVAS_AGENT_CREDIT_REASON,
+          };
+          const actorTeamMemberId = canvasScope.actorTeamMemberId ?? authenticated.user.teamMember?.id ?? null;
+          let billingReceipt: Awaited<ReturnType<CanvasAgentBillingService["reserveRound"]>>;
+          try {
+            billingReceipt = await billing.reserveRound({
+              ownerUserId: canvasScope.ownerUserId,
+              actorTeamMemberId,
+              canvasId: canvasProjectId,
+              agentTaskId: billingStepId,
+              stepId: billingStepId,
+              amount: billing.estimateRound({
+                pricing: model.pricing,
+                maxTokens: Number(body.max_tokens) || undefined,
+                contextWindow: Number(model.capabilities.contextWindow) || undefined,
+              }),
+              reason: CANVAS_AGENT_CREDIT_REASON,
+              metadata: billingMetadata,
+              now: new Date(),
+            });
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "assistant_billing_failed";
+            if (code === "insufficient_credits") {
+              return writeJson(response, envelopedError(402, "assistant_credit_reserve_insufficient", "积分余额预留不足，请前往充值"));
+            }
+            return writeJson(response, envelopedError(400, "assistant_billing_failed", code));
+          }
+          const settleAssistantRound = async (
+            usage: Record<string, unknown> | null,
+            providerRequestId?: string | null,
+          ) => billing.settleRound({
+            ownerUserId: canvasScope.ownerUserId,
+            actorTeamMemberId,
+            canvasId: canvasProjectId,
+            agentTaskId: billingStepId,
+            stepId: billingStepId,
+            reservationId: billingReceipt.reservationId,
+            reservedAmount: billingReceipt.amount,
+            usage: promptReverseUsageFromProviderUsage(usage),
+            pricing: model.pricing,
+            providerRequestId: providerRequestId ?? null,
+            reason: CANVAS_AGENT_CREDIT_REASON,
+            metadata: billingMetadata,
+            now: new Date(),
+          });
+          const releaseAssistantRound = async (failureCode: string) => {
+            try {
+              await billing.releaseRound({
+                ownerUserId: canvasScope.ownerUserId,
+                actorTeamMemberId,
+                canvasId: canvasProjectId,
+                agentTaskId: billingStepId,
+                stepId: billingStepId,
+                reservationId: billingReceipt.reservationId,
+                reservedAmount: billingReceipt.amount,
+                failureCode,
+                reason: CANVAS_AGENT_CREDIT_REASON,
+                metadata: billingMetadata,
+                now: new Date(),
+              });
+            } catch {
+              // The model failure remains the actionable response. Release is idempotent for operational retry.
+            }
+          };
+          const writeAssistantStreamFailure = (failureCode: string) => {
+            if (response.destroyed || response.writableEnded) return;
+            writeSseData(response, {
+              error: { message: failureCode, type: "assistant_provider_error" },
+            });
+            response.write("data: [DONE]\n\n");
+          };
           if (canvasTextChatGateway.streamCompletions) {
-            const streamResult = await canvasTextChatGateway.streamCompletions(gatewayInput);
+            let streamResult: Awaited<ReturnType<NonNullable<typeof canvasTextChatGateway.streamCompletions>>>;
+            try {
+              streamResult = await canvasTextChatGateway.streamCompletions(gatewayInput);
+            } catch (error) {
+              const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
+              await releaseAssistantRound(failureCode);
+              if (error instanceof TextModelGatewayError && error.code === "provider_auth_missing") {
+                return writeJson(response, envelopedError(
+                  503,
+                  "assistant_provider_auth_missing",
+                  "模型服务密钥未配置，请在管理员模型配置中设置 API Key",
+                ));
+              }
+              return writeJson(response, envelopedError(502, "assistant_provider_error", failureCode));
+            }
             if (!wantsStream) {
               let content = "";
               const toolCalls = new Map<number, { id: string; type: "function"; function: { name: string; arguments: string } }>();
-              for await (const chunk of streamResult.stream) {
-                for (const choice of chunk.choices ?? []) {
-                  const delta = choice.delta?.content;
-                  if (typeof delta === "string") content += delta;
-                  for (const toolCall of choice.delta?.tool_calls ?? []) {
-                    const index = toolCall.index ?? 0;
-                    const current = toolCalls.get(index) ?? {
-                      id: toolCall.id ?? `tool-${index}`,
-                      type: "function" as const,
-                      function: { name: "", arguments: "" },
-                    };
-                    if (toolCall.id) current.id = toolCall.id;
-                    if (toolCall.function?.name) current.function.name += toolCall.function.name;
-                    if (toolCall.function?.arguments) current.function.arguments += toolCall.function.arguments;
-                    toolCalls.set(index, current);
+              try {
+                for await (const chunk of streamResult.stream) {
+                  for (const choice of chunk.choices ?? []) {
+                    const delta = choice.delta?.content;
+                    if (typeof delta === "string") content += delta;
+                    for (const toolCall of choice.delta?.tool_calls ?? []) {
+                      const index = toolCall.index ?? 0;
+                      const current = toolCalls.get(index) ?? {
+                        id: toolCall.id ?? `tool-${index}`,
+                        type: "function" as const,
+                        function: { name: "", arguments: "" },
+                      };
+                      if (toolCall.id) current.id = toolCall.id;
+                      if (toolCall.function?.name) current.function.name += toolCall.function.name;
+                      if (toolCall.function?.arguments) current.function.arguments += toolCall.function.arguments;
+                      toolCalls.set(index, current);
+                    }
                   }
                 }
+                const completed = await streamResult.completed;
+                if (completed.status !== "succeeded") {
+                  await releaseAssistantRound(completed.failureCode || "assistant_provider_error");
+                  return writeJson(response, envelopedError(502, "assistant_provider_error", completed.failureCode));
+                }
+                await settleAssistantRound(completed.usage, streamResult.providerRequestId);
+                return writeJson(response, {
+                  status: 200,
+                  body: {
+                    id: `canvas-assistant-${Date.now().toString(36)}`,
+                    model: model.id,
+                    choices: [{
+                      index: 0,
+                      message: {
+                        role: "assistant",
+                        content,
+                        ...(toolCalls.size ? { tool_calls: [...toolCalls.values()] } : {}),
+                      },
+                      finish_reason: toolCalls.size ? "tool_calls" : "stop",
+                    }],
+                    ...(completed.usage ? { usage: completed.usage } : {}),
+                  },
+                });
+              } catch (error) {
+                const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
+                await releaseAssistantRound(failureCode);
+                return writeJson(response, envelopedError(502, "assistant_provider_error", failureCode));
               }
-              const completed = await streamResult.completed;
-              if (completed.status !== "succeeded") {
-                return writeJson(response, envelopedError(502, "assistant_provider_error", completed.failureCode));
+            }
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/event-stream; charset=utf-8");
+            response.setHeader("cache-control", "no-cache, no-transform");
+            response.setHeader("connection", "keep-alive");
+            response.flushHeaders?.();
+            try {
+              try {
+                for await (const chunk of streamResult.stream) writeSseData(response, chunk);
+                const completed = await streamResult.completed;
+                if (completed.status !== "succeeded") {
+                  await releaseAssistantRound(completed.failureCode || "assistant_provider_error");
+                  writeAssistantStreamFailure(completed.failureCode || "assistant_provider_error");
+                  return;
+                }
+                await settleAssistantRound(completed.usage, streamResult.providerRequestId);
+                response.write("data: [DONE]\n\n");
+              } catch (error) {
+                const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
+                await releaseAssistantRound(failureCode);
+                writeAssistantStreamFailure(failureCode);
               }
+            } finally {
+              if (!response.writableEnded) response.end();
+            }
+            return;
+          }
+          try {
+            if (!wantsStream) {
+              const completion = canvasTextChatGateway.completeJsonWithUsage
+                ? await canvasTextChatGateway.completeJsonWithUsage(gatewayInput)
+                : { content: await canvasTextChatGateway.completeJson(gatewayInput), usage: null, providerRequestId: null };
+              await settleAssistantRound(completion.usage, completion.providerRequestId);
               return writeJson(response, {
                 status: 200,
-                body: {
-                  id: `canvas-assistant-${Date.now().toString(36)}`,
-                  model: model.id,
-                  choices: [{
-                    index: 0,
-                    message: {
-                      role: "assistant",
-                      content,
-                      ...(toolCalls.size ? { tool_calls: [...toolCalls.values()] } : {}),
-                    },
-                    finish_reason: toolCalls.size ? "tool_calls" : "stop",
-                  }],
-                  ...(completed.usage ? { usage: completed.usage } : {}),
-                },
+                body: { id: `canvas-assistant-${Date.now().toString(36)}`, model: model.id, choices: [{ index: 0, message: { role: "assistant", content: completion.content }, finish_reason: "stop" }] },
               });
             }
             response.statusCode = 200;
@@ -28903,39 +29042,27 @@ export function createPhoneAuthDevServer(
             response.setHeader("connection", "keep-alive");
             response.flushHeaders?.();
             try {
-              for await (const chunk of streamResult.stream) writeSseData(response, chunk);
-              const completed = await streamResult.completed;
-              if (completed.status !== "succeeded") throw new Error(completed.failureCode || "assistant_provider_error");
+              if (canvasTextChatGateway.streamJson) {
+                for await (const delta of canvasTextChatGateway.streamJson(gatewayInput)) {
+                  writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: { role: "assistant", content: delta }, finish_reason: null }] });
+                }
+              }
+              await settleAssistantRound(null, null);
+              writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
               response.write("data: [DONE]\n\n");
+            } catch (error) {
+              const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
+              await releaseAssistantRound(failureCode);
+              writeAssistantStreamFailure(failureCode);
             } finally {
               if (!response.writableEnded) response.end();
             }
             return;
+          } catch (error) {
+            const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
+            await releaseAssistantRound(failureCode);
+            return writeJson(response, envelopedError(502, "assistant_provider_error", failureCode));
           }
-          if (!wantsStream) {
-            const content = await canvasTextChatGateway.completeJson(gatewayInput);
-            return writeJson(response, {
-              status: 200,
-              body: { id: `canvas-assistant-${Date.now().toString(36)}`, model: model.id, choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }] },
-            });
-          }
-          response.statusCode = 200;
-          response.setHeader("content-type", "text/event-stream; charset=utf-8");
-          response.setHeader("cache-control", "no-cache, no-transform");
-          response.setHeader("connection", "keep-alive");
-          response.flushHeaders?.();
-          try {
-            if (canvasTextChatGateway.streamJson) {
-              for await (const delta of canvasTextChatGateway.streamJson(gatewayInput)) {
-                writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: { role: "assistant", content: delta }, finish_reason: null }] });
-              }
-            }
-            writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
-            response.write("data: [DONE]\n\n");
-          } finally {
-            if (!response.writableEnded) response.end();
-          }
-          return;
         }
         if (canvasAgentConversationMatch) {
           const canvasProjectId = decodeURIComponent(canvasAgentConversationMatch[1] ?? "");

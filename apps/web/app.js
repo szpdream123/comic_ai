@@ -20,7 +20,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-   stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-19";
+   stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-20";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -430,6 +430,78 @@ function normalizeAiCanvasRuntimeProjects(projects) {
     .filter(Boolean);
 }
 
+function mergeAiCanvasRuntimeProjects(catalogProjects, existingProjects) {
+  const catalog = Array.isArray(catalogProjects) ? catalogProjects : [];
+  const existing = Array.isArray(existingProjects) ? existingProjects : [];
+  const existingById = new Map(existing.map((project) => [project?.id, project]));
+  const catalogIds = new Set();
+  const merged = catalog.map((project) => {
+    const id = String(project?.id ?? "").trim();
+    if (id) catalogIds.add(id);
+    const previous = existingById.get(id);
+    if (!previous) return project;
+    return {
+      ...previous,
+      ...project,
+      ...(previous.series ? { series: previous.series } : {}),
+      ...(previous.parentId ? { parentId: previous.parentId } : {}),
+      ...(previous.episodeNo != null ? { episodeNo: previous.episodeNo } : {}),
+      ...(previous.episodeOutline != null ? { episodeOutline: previous.episodeOutline } : {}),
+      ...(previous.episodeScript != null ? { episodeScript: previous.episodeScript } : {}),
+      ...(previous.episodeCreative != null ? { episodeCreative: previous.episodeCreative } : {}),
+      ...(previous.settings || project.settings
+        ? { settings: project.settings ?? previous.settings }
+        : {}),
+    };
+  });
+  for (const project of existing) {
+    const id = String(project?.id ?? "").trim();
+    if (id && project.parentId && !catalogIds.has(id)) merged.push(project);
+  }
+  return merged;
+}
+
+function isAiCanvasRuntimeNativeHost() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+async function addAiCanvasRuntimeEpisodes(store, episodes = []) {
+  const items = Array.isArray(episodes) ? episodes : [];
+  const state = store?.getState?.() ?? {};
+  const currentProjectId = String(state.currentProjectId ?? "").trim();
+  if (!store?.setState || !currentProjectId || items.length === 0) return [];
+  if (state.projectLoadStatus !== "ready") {
+    state.showToast?.("项目尚未成功加载，已阻止新增分集", "error");
+    return [];
+  }
+  const projects = Array.isArray(state.projects) ? state.projects : [];
+  const current = projects.find((project) => project?.id === currentProjectId);
+  if (!current) return [];
+  const seriesId = String(current.parentId ?? currentProjectId).trim();
+  const series = projects.find((project) => project?.id === seriesId) ?? current;
+  let episodeNo = projects
+    .filter((project) => project?.parentId === seriesId)
+    .reduce((max, project) => Math.max(max, Number(project?.episodeNo ?? 0) || 0), 0);
+  const created = items.map((item) => {
+    episodeNo += 1;
+    const now = Date.now();
+    const name = String(item?.name ?? item?.title ?? "").trim() || `第 ${episodeNo} 集`;
+    const outline = String(item?.outline ?? "").trim();
+    return {
+      id: globalThis.crypto?.randomUUID?.() ?? `episode-${now}-${episodeNo}`,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      parentId: seriesId,
+      episodeNo,
+      ...(outline ? { episodeOutline: outline } : {}),
+      ...(series?.settings ? { settings: series.settings } : {}),
+    };
+  });
+  store.setState({ projects: [...projects, ...created] });
+  return created.map((project) => project.id);
+}
+
 const AI_CANVAS_RUNTIME_NATIVE_NODE_TYPES = new Set([
   "ai-text",
   "ai-image",
@@ -740,7 +812,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
         currentProjectId,
       );
     }
-    const projects = projectCatalog;
+    const projects = mergeAiCanvasRuntimeProjects(projectCatalog, store.getState()?.projects);
     const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0] ?? null;
     const patch = {
       ...(projects.length ? { projects } : {}),
@@ -845,6 +917,9 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       importProject: context.onImportProject,
       openHome: context.onOpenHome,
       openProjects: context.onOpenProjects,
+      addEpisodes: isAiCanvasRuntimeNativeHost()
+        ? undefined
+        : (episodes) => addAiCanvasRuntimeEpisodes(store, episodes),
     };
     const applyCatalog = (next = {}) => {
       if (next.projectCatalog !== undefined) {
@@ -855,13 +930,7 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
       }
       const state = store.getState();
       const existingProjects = Array.isArray(state.projects) ? state.projects : [];
-      const projects = projectCatalog.map((project) => {
-        const existing = existingProjects.find((item) => item?.id === project.id);
-        const settings = project.settings ?? existing?.settings;
-        return settings && typeof settings === "object"
-          ? { ...project, settings }
-          : project;
-      });
+      const projects = mergeAiCanvasRuntimeProjects(projectCatalog, existingProjects);
       const currentProject = projects.find((project) => project.id === currentProjectId) ?? projects[0];
       const resolvedCurrentProjectId = currentProject?.id ?? currentProjectId ?? state.currentProjectId ?? null;
       const patch = {
@@ -1650,7 +1719,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-19";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-20";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";

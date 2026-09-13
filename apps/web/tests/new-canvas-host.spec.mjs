@@ -186,6 +186,21 @@ test("expand editor submits injected general image models through host generatio
   assert.doesNotMatch(appSource, /try\{let e;if\(i\.provider===`general`\)/);
 });
 
+test("chapter browse stays a bounded closable dialog", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const appRuntime = readRuntimeAsset("App-");
+  const overlaySource = readRuntimeAsset("ModalOverlay-");
+  assert.match(appRuntime, /ariaLabel:r\(`章节浏览`\)/);
+  assert.match(appRuntime, /ariaLabel:r\(`关闭章节浏览`\)/);
+  assert.match(appRuntime, /h-\[min\(80vh,720px\)\] w-\[min\(960px,calc\(100vw-32px\)\)\]/);
+  assert.match(overlaySource, /document\.body/);
+  assert.match(overlaySource, /e\.key===`Escape`/);
+  assert.match(source, /\[aria-label="章节浏览"\][\s\S]*height:\s*min\(80vh,\s*720px\)/);
+  assert.match(source, /\[aria-label="章节浏览"\][\s\S]*width:\s*min\(960px/);
+  assert.match(source, /\[aria-label="章节浏览"\][\s\S]*overflow:\s*hidden/);
+  assert.match(source, /\[aria-label="章节浏览"\] \.grid\.min-h-0\.flex-1[\s\S]*grid-template-columns:\s*220px minmax\(0, 1fr\)/);
+});
+
 test("series rail and script workbench match the canvas header type size", () => {
   const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
   assert.match(source, /\.group\\\/series aside\[role="dialog"\][\s\S]*font-size:\s*18px\s*!important/);

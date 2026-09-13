@@ -1757,6 +1757,34 @@
   min-height: 34px !important;
 }
 
+[aria-label="章节浏览"] {
+  width: min(960px, calc(100vw - 32px)) !important;
+  height: min(80vh, 720px) !important;
+  max-height: min(80vh, 720px) !important;
+  overflow: hidden !important;
+}
+
+[aria-label="章节浏览"] > .ui-card,
+[aria-label="章节浏览"] > div {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+}
+
+[aria-label="章节浏览"] .grid.min-h-0.flex-1 {
+  min-height: 0 !important;
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
+}
+
+@media (width >= 640px) {
+  [aria-label="章节浏览"] .grid.min-h-0.flex-1 {
+    grid-template-columns: 220px minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+}
+
 .new-canvas-root .generation-progress-overlay,
 .ai-canvas-standalone-mount .generation-progress-overlay {
   position: absolute;
