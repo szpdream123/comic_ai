@@ -82,7 +82,7 @@ test("prompt marketplace combines catalog and private library without a publish 
   assert.doesNotMatch(html, />修炼</);
   assert.doesNotMatch(html, /这段购买前不可见的提示词正文不应渲染/);
   assert.doesNotMatch(html, /prompt-marketplace-default-badge">默认/);
-  assert.ok(html.indexOf('data-tab="prompts"') < html.indexOf('data-tab="library"'));
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="prompts"/);
   assert.ok(html.indexOf('data-action="set-prompt-plaza-type"') < html.indexOf("data-prompt-plaza-search-input"));
   assert.match(html, /data-action="open-prompt-marketplace-guide"/);
 });

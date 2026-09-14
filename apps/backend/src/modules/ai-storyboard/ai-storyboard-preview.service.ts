@@ -11,6 +11,8 @@ import { isRetrySafeTransientDatabasePersistenceError } from "../shared/db/dev-d
 const LIVE_ECHO_CHUNK_SIZE = 32;
 const AI_STORYBOARD_SHOT_MAX_TOKENS = 32_768;
 const AI_STORYBOARD_SHOT_CONTINUATION_LIMIT = 3;
+const AI_STORYBOARD_SCRIPT_MAX_TOKENS = 16_384;
+const AI_STORYBOARD_SCRIPT_CONTINUATION_LIMIT = 3;
 
 type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
 
@@ -137,6 +139,7 @@ export interface AiStoryboardPreviewInput {
     propPrompt?: string;
     shotPrompt?: string;
   };
+  skillInstructions?: string | null;
   signal?: AbortSignal;
 }
 
@@ -231,19 +234,7 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       const scriptPrompt = buildScriptPrompt(input);
       yield { type: "script_prompt", text: scriptPrompt };
       yield { type: "script_start" };
-      for await (const delta of streamJsonText({
-        gateway: deps.gateway,
-        model: modelCode,
-        prompt: scriptPrompt,
-        projectId: input.canvasProjectId ? null : input.projectId,
-        canvasProjectId: input.canvasProjectId,
-        createdByUserId: input.createdByUserId,
-        responseFormat: "text",
-        signal: input.signal,
-      })) {
-        scriptRaw += delta;
-        yield { type: "script_delta", text: delta };
-      }
+      scriptRaw = yield* runScriptPromptStage(scriptPrompt, input, modelCode);
       scriptText = resolveGeneratedScriptText(scriptRaw);
       yield { type: "script_done", text: scriptText, rawText: scriptRaw };
     }
@@ -376,6 +367,8 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
           gateway: deps.gateway,
           model: modelCode,
           prompt: requestPrompt,
+          skillInstructions: input.skillInstructions,
+          stage,
           projectId: input.canvasProjectId ? null : input.projectId,
           canvasProjectId: input.canvasProjectId,
           createdByUserId: input.createdByUserId,
@@ -405,6 +398,53 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       }
     }
     yield { type: "asset_done", stage, title, text: raw };
+    return raw;
+  }
+
+  async function* runScriptPromptStage(
+    prompt: string,
+    input: AiStoryboardPreviewInput,
+    modelCode: string,
+  ): AsyncGenerator<AiStoryboardPreviewStreamEvent, string> {
+    let raw = "";
+    let requestPrompt = prompt;
+    let continuationCount = 0;
+    let databaseRetryCount = 0;
+    while (true) {
+      try {
+        for await (const delta of streamJsonText({
+          gateway: deps.gateway,
+          model: modelCode,
+          prompt: requestPrompt,
+          skillInstructions: input.skillInstructions,
+          stage: "script",
+          projectId: input.canvasProjectId ? null : input.projectId,
+          canvasProjectId: input.canvasProjectId,
+          createdByUserId: input.createdByUserId,
+          responseFormat: "text",
+          maxTokens: AI_STORYBOARD_SCRIPT_MAX_TOKENS,
+          signal: input.signal,
+        })) {
+          raw += delta;
+          yield { type: "script_delta", text: delta };
+        }
+        break;
+      } catch (error) {
+        if (!raw && databaseRetryCount === 0 && isRetrySafeTransientDatabasePersistenceError(error)) {
+          databaseRetryCount += 1;
+          continue;
+        }
+        if (
+          !raw.trim() ||
+          !isAiStoryboardOutputTruncatedError(error) ||
+          continuationCount >= AI_STORYBOARD_SCRIPT_CONTINUATION_LIMIT
+        ) {
+          throw error;
+        }
+        continuationCount += 1;
+        requestPrompt = buildAiStoryboardScriptContinuationPrompt(prompt, raw, continuationCount);
+      }
+    }
     return raw;
   }
 
@@ -587,6 +627,18 @@ function isAiStoryboardOutputTruncatedError(error: unknown) {
   );
 }
 
+function buildAiStoryboardScriptContinuationPrompt(prompt: string, raw: string, continuationCount: number) {
+  return [
+    prompt,
+    "",
+    `【已输出剧本，第 ${continuationCount} 次续接】`,
+    raw,
+    "",
+    "【续接规则】",
+    "从上一段断点继续输出剧本文字。不要重写已完成内容，不要开始分镜、场景表、角色表或道具表。",
+  ].join("\n");
+}
+
 function buildAiStoryboardShotContinuationPrompt(prompt: string, raw: string, continuationCount: number) {
   return [
     prompt,
@@ -604,6 +656,8 @@ async function* streamJsonText(input: {
   gateway: TextChatGatewayLike;
   model: string;
   prompt: string;
+  skillInstructions?: string | null;
+  stage?: AiStoryboardPromptStage;
   projectId?: string | null;
   canvasProjectId?: string | null;
   createdByUserId?: string | null;
@@ -611,10 +665,18 @@ async function* streamJsonText(input: {
   maxTokens?: number;
   signal?: AbortSignal;
 }) {
+  const skillInstructions = String(input.skillInstructions ?? "").trim();
+  const messages = skillInstructions
+    ? [
+        { role: "system" as const, content: buildPlazaSkillSystemInstruction(skillInstructions, input.stage) },
+        { role: "user" as const, content: input.prompt },
+      ]
+    : undefined;
   if (input.gateway.streamJson) {
     for await (const delta of input.gateway.streamJson({
       model: input.model,
       prompt: input.prompt,
+      messages,
       projectId: input.projectId,
       canvasProjectId: input.canvasProjectId,
       createdByUserId: input.createdByUserId,
@@ -629,6 +691,7 @@ async function* streamJsonText(input: {
   yield* splitTextForLiveEcho(await input.gateway.completeJson({
     model: input.model,
     prompt: input.prompt,
+    messages,
     projectId: input.projectId,
     canvasProjectId: input.canvasProjectId,
     createdByUserId: input.createdByUserId,
@@ -636,6 +699,29 @@ async function* streamJsonText(input: {
     maxTokens: input.maxTokens,
     signal: input.signal,
   }));
+}
+
+function buildPlazaSkillSystemInstruction(skillInstructions: string, stage?: AiStoryboardPromptStage) {
+  const stageRule = stage === "script"
+    ? "Current stage is script only. Output the adapted screenplay/novel text. Do not output storyboard tables, camera moves, transitions, scene lists, character lists, or prop lists."
+    : stage === "scene"
+      ? "Current stage is scene extraction only. Output the scene list required by the user prompt."
+      : stage === "character"
+        ? "Current stage is character extraction only. Output the character list required by the user prompt."
+        : stage === "prop"
+          ? "Current stage is prop extraction only. Output the prop list required by the user prompt."
+          : stage === "shot"
+            ? "Current stage is storyboard generation only. Output the storyboard table required by the user prompt."
+            : "Complete only the current stage's requested structured result.";
+  return [
+    "You are following a loaded Skill handbook, the same way Codex loads SKILL.md.",
+    "Treat the Skill files below as operating instructions for this entire generation run.",
+    "Use them to decide style, constraints, naming, and output quality.",
+    stageRule,
+    "Do not skip remaining pipeline stages by doing their work now, and do not recap the Skill.",
+    "",
+    skillInstructions,
+  ].join("\n");
 }
 
 function* splitTextForLiveEcho(text: string) {

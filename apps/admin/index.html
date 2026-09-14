@@ -1322,7 +1322,7 @@
       .table-wrap.dense td.actions,
       .table-wrap.dense th.actions { width: 132px; min-width: 132px; max-width: 132px; }
       .table-wrap.skill-admin td.actions,
-      .table-wrap.skill-admin th.actions { width: 280px; min-width: 280px; max-width: 280px; }
+      .table-wrap.skill-admin th.actions { width: 360px; min-width: 360px; max-width: 360px; }
       .admin-skill-create { display: grid; gap: 14px; }
       .admin-skill-create-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
       .admin-skill-counter { position: relative; display: block; }
@@ -15381,7 +15381,6 @@
       }
 
       const adminSkillCategoryLabels = {
-        recommended: "推荐",
         "professional-film": "专业影视",
         "commercial-ad": "商业广告",
         "short-drama": "短剧漫剧",
@@ -15396,9 +15395,9 @@
       }
 
       function adminSkillCategoryOptions(selected) {
+        const selectedCategory = String(selected || "general") === "recommended" ? "general" : String(selected || "general");
         return Object.entries(adminSkillCategoryLabels)
-          .filter(([value]) => value !== "recommended")
-          .map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`)
+          .map(([value, label]) => `<option value="${value}" ${value === selectedCategory ? "selected" : ""}>${label}</option>`)
           .join("");
       }
 
@@ -15408,6 +15407,7 @@
             const official = !item.ownerUserId;
             const statusClass = item.status === "published" ? "green" : item.status === "disabled" || item.status === "rejected" ? "warn" : "blue";
             const actions = [`<button class="btn ghost" onclick="openAdminSkillReviewDrawer('${escapeAttribute(item.id)}')">查看</button>`];
+            actions.push(`<button class="btn ghost" onclick="updateAdminSkillRecommendation('${escapeAttribute(item.id)}', ${item.isRecommended === true ? "false" : "true"})">${item.isRecommended === true ? "取消推荐" : "设为推荐"}</button>`);
             if (official) actions.push(`<button class="btn ghost" onclick="openAdminSkillDrawer('${escapeAttribute(item.id)}')">编辑</button>`);
             if (item.status === "draft" || item.status === "rejected") {
               actions.push(`<button class="btn ghost" onclick="openAdminSkillReviewDrawer('${escapeAttribute(item.id)}','published')">通过</button>`);
@@ -15417,7 +15417,7 @@
             } else if (item.status === "disabled") {
               actions.push(`<button class="btn ghost" onclick="updateAdminSkillStatus('${escapeAttribute(item.id)}','draft')">退回审核</button>`);
             }
-            return `<tr><td>${escapeHtml(item.title || item.name || "未命名 Skill")}<div class="metric-note">${escapeHtml(item.summary || "暂无简介")}</div></td><td>${escapeHtml(item.ownerName || item.authorName || "未知用户")}</td><td>${escapeHtml(adminSkillCategoryLabel(item.category))}</td><td><span class="tag ${statusClass}">${adminSkillStatusLabel(item.status)}</span></td><td>${Number(item.fileCount || 0)}</td><td class="actions"><div class="actions-row">${actions.join("")}</div></td></tr>`;
+            return `<tr><td>${escapeHtml(item.title || item.name || "未命名 Skill")}<div class="metric-note">${escapeHtml(item.summary || "暂无简介")}${item.isRecommended === true ? " · 推荐" : ""}</div></td><td>${escapeHtml(item.ownerName || item.authorName || "未知用户")}</td><td>${escapeHtml(adminSkillCategoryLabel(item.category))}${item.isRecommended === true ? " / 推荐" : ""}</td><td><span class="tag ${statusClass}">${adminSkillStatusLabel(item.status)}</span></td><td>${Number(item.fileCount || 0)}</td><td class="actions"><div class="actions-row">${actions.join("")}</div></td></tr>`;
           }).join("")
           : `<tr><td colspan="6">${escapeHtml(state.skillLoadError || "暂无用户 Skill")}</td></tr>`;
         return `<section class="section"><div class="toolbar"><div><h3>Skill 管理</h3><div class="metric-note">创建官方 Skill，审核用户提交内容，并控制广场发布状态。</div></div><div class="filters"><input value="${escapeAttribute(state.skillKeyword || "")}" placeholder="搜索名称 / 简介 / 作者" oninput="state.skillKeyword=this.value;renderShell()" /><select onchange="state.skillStatus=this.value;loadAdminSkills().then(renderShell)"><option value="all" ${state.skillStatus === "all" ? "selected" : ""}>全部状态</option><option value="draft" ${state.skillStatus === "draft" ? "selected" : ""}>待审核</option><option value="published" ${state.skillStatus === "published" ? "selected" : ""}>已发布</option><option value="rejected" ${state.skillStatus === "rejected" ? "selected" : ""}>已驳回</option><option value="disabled" ${state.skillStatus === "disabled" ? "selected" : ""}>已下架</option></select><button class="btn ghost" onclick="loadAdminSkills().then(renderShell)">刷新</button><button class="btn primary" onclick="openAdminSkillDrawer()">新增官方 Skill</button></div></div><div class="table-wrap dense skill-admin"><table><thead><tr><th>Skill</th><th>作者</th><th>分类</th><th>状态</th><th>文件数</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
@@ -15524,7 +15524,7 @@
         const files = adminSkillMarkdownFiles(detail.files, detail.introduction);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
-        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);"><div class="drawer-head"><h3>${existing ? "编辑官方 Skill" : "新增官方 Skill"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="admin-skill-form" class="admin-skill-create"><div class="admin-skill-create-head"><strong>${existing ? "编辑官方 Skill" : "创建 Skill"}</strong><button class="btn primary" type="submit">保存</button></div><label class="field"><span>Skill 名称 *</span><input name="name" required minlength="2" maxlength="80" value="${escapeAttribute(existing?.name || "")}" placeholder="给你的 Skill 起个名字" /></label><label class="field"><span>分类 *</span><select name="category">${adminSkillCategoryOptions(existing?.category || "general")}</select></label><label class="field"><span>一句话介绍 *</span><span class="admin-skill-counter"><input name="summary" required maxlength="30" value="${escapeAttribute(existing?.summary || "")}" placeholder="简短描述该 Skill 的能力" data-admin-skill-summary /><small data-admin-skill-summary-count>0/30</small></span></label><section><div class="admin-skill-content-head"><span>Skill 内容 *</span><div class="admin-skill-content-tools"><div class="admin-skill-mode-toggle"><button type="button" data-admin-skill-mode="preview">预览</button><button class="active" type="button" data-admin-skill-mode="code">代码</button></div></div></div><div class="admin-skill-editor" data-admin-skill-editor data-mode="code"><aside class="admin-skill-tree"><header><span>目录</span></header><div class="admin-skill-tree-list" data-admin-skill-tree></div></aside><div class="admin-skill-editor-main"><div class="admin-skill-markdown-files">${files.map((file, index) => renderAdminSkillMarkdownItem(file.name, file.content, index === 0)).join("")}</div><pre class="admin-skill-preview" data-admin-skill-preview></pre></div></div></section><label class="field"><span>使用场景 *</span><textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息">${escapeHtml(detail.usageScene || "")}</textarea></label><label class="field"><span>如何使用 *</span><textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息">${escapeHtml(detail.howToUse || "")}</textarea></label><label class="field"><span>输出内容 *</span><textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么">${escapeHtml(detail.outputContent || "")}</textarea></label><label class="field"><span>选择类型</span><select name="coverType" data-admin-skill-cover-type><option value="image" ${detail.effectVideoUrl ? "" : "selected"}>图片</option><option value="video" ${detail.effectVideoUrl ? "selected" : ""}>视频</option><option value="text" ${!detail.effectImageUrl && !detail.effectVideoUrl ? "" : ""}>文本</option></select></label><section class="admin-skill-cover" data-admin-skill-cover><span>上传封面（选填）</span><input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" /><input type="hidden" name="effectImageUrl" value="${escapeAttribute(detail.effectImageUrl || "")}" /><input type="hidden" name="effectVideoUrl" value="${escapeAttribute(detail.effectVideoUrl || "")}" /></section><label class="field"><span>状态</span><select name="status"><option value="draft" ${existing?.status === "draft" || !existing ? "selected" : ""}>待审核</option><option value="published" ${existing?.status === "published" ? "selected" : ""}>已发布</option><option value="disabled" ${existing?.status === "disabled" ? "selected" : ""}>已下架</option></select></label><div class="error-text" id="admin-skill-error"></div></form></aside>`;
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);"><div class="drawer-head"><h3>${existing ? "编辑官方 Skill" : "新增官方 Skill"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="admin-skill-form" class="admin-skill-create"><div class="admin-skill-create-head"><strong>${existing ? "编辑官方 Skill" : "创建 Skill"}</strong><button class="btn primary" type="submit">保存</button></div><label class="field"><span>Skill 名称 *</span><input name="name" required minlength="2" maxlength="80" value="${escapeAttribute(existing?.name || "")}" placeholder="给你的 Skill 起个名字" /></label><label class="field"><span>分类 *</span><select name="category">${adminSkillCategoryOptions(existing?.category || "general")}</select></label><label class="field checkbox"><span>推荐到广场</span><input type="checkbox" name="isRecommended" ${existing?.isRecommended === true ? "checked" : ""} /><small class="metric-note">推荐不是分类，设置后仍会显示在原分类中。</small></label><label class="field"><span>一句话介绍 *</span><span class="admin-skill-counter"><input name="summary" required maxlength="30" value="${escapeAttribute(existing?.summary || "")}" placeholder="简短描述该 Skill 的能力" data-admin-skill-summary /><small data-admin-skill-summary-count>0/30</small></span></label><section><div class="admin-skill-content-head"><span>Skill 内容 *</span><div class="admin-skill-content-tools"><div class="admin-skill-mode-toggle"><button type="button" data-admin-skill-mode="preview">预览</button><button class="active" type="button" data-admin-skill-mode="code">代码</button></div></div></div><div class="admin-skill-editor" data-admin-skill-editor data-mode="code"><aside class="admin-skill-tree"><header><span>目录</span></header><div class="admin-skill-tree-list" data-admin-skill-tree></div></aside><div class="admin-skill-editor-main"><div class="admin-skill-markdown-files">${files.map((file, index) => renderAdminSkillMarkdownItem(file.name, file.content, index === 0)).join("")}</div><pre class="admin-skill-preview" data-admin-skill-preview></pre></div></div></section><label class="field"><span>使用场景 *</span><textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息">${escapeHtml(detail.usageScene || "")}</textarea></label><label class="field"><span>如何使用 *</span><textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息">${escapeHtml(detail.howToUse || "")}</textarea></label><label class="field"><span>输出内容 *</span><textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么">${escapeHtml(detail.outputContent || "")}</textarea></label><label class="field"><span>选择类型</span><select name="coverType" data-admin-skill-cover-type><option value="image" ${detail.effectVideoUrl ? "" : "selected"}>图片</option><option value="video" ${detail.effectVideoUrl ? "selected" : ""}>视频</option><option value="text" ${!detail.effectImageUrl && !detail.effectVideoUrl ? "" : ""}>文本</option></select></label><section class="admin-skill-cover" data-admin-skill-cover><span>上传封面（选填）</span><input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" /><input type="hidden" name="effectImageUrl" value="${escapeAttribute(detail.effectImageUrl || "")}" /><input type="hidden" name="effectVideoUrl" value="${escapeAttribute(detail.effectVideoUrl || "")}" /></section><label class="field"><span>状态</span><select name="status"><option value="draft" ${existing?.status === "draft" || !existing ? "selected" : ""}>待审核</option><option value="published" ${existing?.status === "published" ? "selected" : ""}>已发布</option><option value="disabled" ${existing?.status === "disabled" ? "selected" : ""}>已下架</option></select></label><div class="error-text" id="admin-skill-error"></div></form></aside>`;
         const formEl = document.getElementById("admin-skill-form");
         bindAdminSkillCreateInteractions(formEl);
         formEl.addEventListener("submit", async (event) => {
@@ -15553,6 +15553,7 @@
             await api(existing ? `/api/admin/skills/${encodeURIComponent(existing.id)}` : "/api/admin/skills", { method: existing ? "PATCH" : "POST", headers: { "idempotency-key": `admin-ui-skill-${existing?.id || "new"}-${Date.now()}` }, body: JSON.stringify({
               name: String(form.get("name") || "").trim(),
               category: String(form.get("category") || "general"),
+              isRecommended: form.get("isRecommended") === "on",
               summary: String(form.get("summary") || "").trim(),
               status: String(form.get("status") || "draft"),
               files,
@@ -15601,6 +15602,17 @@
           });
         } catch (error) {
           drawer.innerHTML = `<aside class="drawer-panel"><div class="drawer-head"><h3>Skill 审核</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><p>${escapeHtml(error.payload?.error?.message || error.message || "Skill 详情加载失败")}</p></aside>`;
+        }
+      }
+
+      async function updateAdminSkillRecommendation(skillId, isRecommended) {
+        try {
+          await api(`/api/admin/skills/${encodeURIComponent(skillId)}/recommendation`, { method: "PATCH", headers: { "idempotency-key": `admin-ui-skill-recommend-${skillId}-${Date.now()}` }, body: JSON.stringify({ isRecommended }) });
+          await loadAdminSkills();
+          renderShell();
+          showToast(isRecommended ? "Skill 已设为推荐" : "Skill 已取消推荐");
+        } catch (error) {
+          showToast(error.payload?.error?.message || error.message || "Skill 推荐状态更新失败");
         }
       }
 
@@ -15653,6 +15665,7 @@
       })();
       window.loadAdminSkills = loadAdminSkills;
       window.updateAdminSkillStatus = updateAdminSkillStatus;
+      window.updateAdminSkillRecommendation = updateAdminSkillRecommendation;
       window.openAdminSkillDrawer = openAdminSkillDrawer;
       window.openAdminSkillReviewDrawer = openAdminSkillReviewDrawer;
 

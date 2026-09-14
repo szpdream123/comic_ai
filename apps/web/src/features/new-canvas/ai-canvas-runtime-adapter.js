@@ -130,6 +130,118 @@ export function normalizeAiCanvasRuntimeModel(model = {}, category = "text") {
   };
 }
 
+function normalizeAiCanvasSkillFileName(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+}
+
+function isAiCanvasSkillEntryFileName(value) {
+  return normalizeAiCanvasSkillFileName(value).split("/").pop()?.toLowerCase() === "skill.md";
+}
+
+function listAiCanvasRuntimeSkillFiles(skill = {}) {
+  const rows = [];
+  const pushList = (list) => {
+    if (!Array.isArray(list)) return;
+    for (const file of list) {
+      if (typeof file === "string") {
+        const name = normalizeAiCanvasSkillFileName(file);
+        if (name) rows.push({ name, content: "" });
+        continue;
+      }
+      const name = normalizeAiCanvasSkillFileName(file?.name ?? file?.fileName);
+      if (!name) continue;
+      rows.push({ name, content: typeof file?.content === "string" ? file.content : "" });
+    }
+  };
+  pushList(skill.files);
+  const detail = skill.detail && typeof skill.detail === "object" && !Array.isArray(skill.detail)
+    ? skill.detail
+    : {};
+  pushList(detail.files);
+  const merged = new Map();
+  for (const file of rows) {
+    const previous = merged.get(file.name);
+    if (!previous || (!String(previous.content ?? "").trim() && String(file.content ?? "").trim())) {
+      merged.set(file.name, file);
+    }
+  }
+  return [...merged.values()];
+}
+
+function resolveAiCanvasSkillEntryContent(skill = {}, files = []) {
+  const entry = files.find((file) => isAiCanvasSkillEntryFileName(file.name));
+  const fromFile = String(entry?.content ?? "").trim();
+  if (fromFile) return fromFile;
+  const fromContent = typeof skill.content === "string" ? skill.content.trim() : "";
+  if (fromContent) return fromContent;
+  const detail = skill.detail && typeof skill.detail === "object" && !Array.isArray(skill.detail)
+    ? skill.detail
+    : {};
+  return String(detail.introduction ?? detail.intro ?? "").trim();
+}
+
+function extractReferencedAiCanvasSkillFiles(entryContent, files = []) {
+  const text = String(entryContent ?? "");
+  const candidates = new Set();
+  const add = (raw) => {
+    const cleaned = String(raw ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "").split(/[?#]/)[0];
+    if (!cleaned || /^[a-z]+:\/\//i.test(cleaned) || cleaned.startsWith("#")) return;
+    const name = normalizeAiCanvasSkillFileName(cleaned);
+    if (!name || isAiCanvasSkillEntryFileName(name)) return;
+    candidates.add(name);
+  };
+  for (const match of text.matchAll(/\[[^\]]*\]\(\s*<?([^)\s>]+)>?\s*\)/g)) add(match[1]);
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) add(match[1]);
+  for (const match of text.matchAll(/(?:^|[\s("'=])((?:\.\/)?(?:[^\s"'()]+\/)+[^\s"'()]+\.(?:md|markdown|txt|json))/gi)) {
+    add(match[1]);
+  }
+  const selected = [];
+  const seen = new Set();
+  const take = (file) => {
+    if (!file || seen.has(file.name) || isAiCanvasSkillEntryFileName(file.name)) return;
+    seen.add(file.name);
+    selected.push(file);
+  };
+  for (const candidate of candidates) {
+    const exact = files.find((file) => file.name === candidate);
+    if (exact) {
+      take(exact);
+      continue;
+    }
+    const prefix = candidate.endsWith("/") ? candidate : `${candidate}/`;
+    let matchedPrefix = false;
+    for (const file of files) {
+      if (file.name.startsWith(prefix)) {
+        matchedPrefix = true;
+        take(file);
+      }
+    }
+    if (matchedPrefix || candidate.includes("/")) continue;
+    const base = candidate.split("/").pop();
+    for (const file of files) {
+      if (file.name.split("/").pop() === base) take(file);
+    }
+  }
+  return selected;
+}
+
+function composeAiCanvasRuntimeSkillContent(skill = {}) {
+  const files = listAiCanvasRuntimeSkillFiles(skill);
+  const entryContent = resolveAiCanvasSkillEntryContent(skill, files);
+  const referenced = extractReferencedAiCanvasSkillFiles(entryContent, files)
+    .map((file) => {
+      const body = String(file.content ?? "").trim();
+      return body ? `【${file.name}】\n${body}` : "";
+    })
+    .filter(Boolean);
+  return [entryContent, ...referenced].filter(Boolean).join("\n\n");
+}
+
 export function normalizeAiCanvasRuntimeSkill(skill = {}) {
   const id = String(skill.id ?? skill.skillId ?? "").trim();
   if (!id) return null;
@@ -143,7 +255,7 @@ export function normalizeAiCanvasRuntimeSkill(skill = {}) {
     version: String(skill.version ?? "").trim() || undefined,
     // The runtime picker expects content, while the server remains the source
     // of truth for execution. Keep only an optional, already-sanitized body.
-    content: typeof skill.content === "string" ? skill.content : "",
+    content: composeAiCanvasRuntimeSkillContent(skill),
   };
 }
 
@@ -171,10 +283,67 @@ async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, depe
       mediaType,
       payload: await creatorApi.listGlobalGenerationConfig({ mediaType, fresh: true }).catch(() => null),
     })));
+  const mergeSkillDetail = (skill, detailPayload) => {
+    const payload = detailPayload && typeof detailPayload === "object" && !Array.isArray(detailPayload)
+      ? detailPayload
+      : {};
+    const nested = payload.skill && typeof payload.skill === "object" && !Array.isArray(payload.skill)
+      ? payload.skill
+      : payload.data?.skill && typeof payload.data.skill === "object" && !Array.isArray(payload.data.skill)
+        ? payload.data.skill
+        : payload;
+    const files = Array.isArray(payload.files)
+      ? payload.files
+      : Array.isArray(payload.data?.files)
+        ? payload.data.files
+        : Array.isArray(nested?.files)
+          ? nested.files
+          : Array.isArray(skill?.files)
+            ? skill.files
+            : [];
+    return { ...skill, ...nested, files };
+  };
+  const hydrateSkillRows = async (rows) => {
+    if (typeof creatorApi?.getSkillDetail !== "function") return rows;
+    return Promise.all(rows.map(async (skill) => {
+      const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+      if (!id) return skill;
+      const existingFiles = listAiCanvasRuntimeSkillFiles(skill);
+      if (existingFiles.some((file) => String(file.content ?? "").trim())
+        || (String(skill.content ?? "").trim() && existingFiles.length === 0)) {
+        return skill;
+      }
+      try {
+        return mergeSkillDetail(skill, await creatorApi.getSkillDetail(id));
+      } catch {
+        return skill;
+      }
+    }));
+  };
   const skillsPromise = skillCatalog !== undefined
-    ? Promise.resolve(skillCatalog)
+    ? Promise.resolve(skillCatalog).then((payload) => hydrateSkillRows(rowsFromPayload(payload, ["items", "skills"])))
     : typeof creatorApi?.getSkills === "function"
-      ? creatorApi.getSkills({ page: 1, pageSize: 50 })
+      ? Promise.all([
+          creatorApi.getSkills({ page: 1, pageSize: 50 }),
+          typeof creatorApi?.getMySkills === "function"
+            ? creatorApi.getMySkills().catch(() => ({ items: [] }))
+            : Promise.resolve({ items: [] }),
+        ]).then(async ([catalogPayload, minePayload]) => {
+          const catalogRows = rowsFromPayload(catalogPayload, ["items", "skills"]).map((skill) => ({
+            ...skill,
+            source: skill?.source ?? (skill?.ownerUserId ? "mine" : "official"),
+          }));
+          const mineRows = rowsFromPayload(minePayload, ["items", "skills"]).map((skill) => ({
+            ...skill,
+            source: "mine",
+          }));
+          const byId = new Map();
+          for (const skill of [...catalogRows, ...mineRows]) {
+            const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+            if (id) byId.set(id, skill);
+          }
+          return hydrateSkillRows([...byId.values()]);
+        })
       : Promise.resolve([]);
   const [modelsPayload, generationPayload, skillsPayload] = await Promise.allSettled([modelsPromise, generationPromise, skillsPromise]);
   const modelRows = modelsPayload.status === "fulfilled"

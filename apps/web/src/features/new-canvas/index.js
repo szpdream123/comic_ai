@@ -913,6 +913,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
           });
           return;
         }
+        if (event.target?.closest?.(".canvas-agent-skill-picker")) {
+          event.preventDefault?.();
+          event.stopPropagation();
+          return;
+        }
         const actionTarget = event.target?.closest?.("[data-action]")
           ?? (event.composedPath?.() ?? [])
             .find((candidate) => candidate?.matches?.("[data-action]"));
@@ -1154,6 +1159,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
       };
       const onInput = (event) => {
         mediaToolsController?.handleInput(event.target);
+        if (event.target?.matches?.("[data-episode-plaza-skill-search]")) {
+          agentController.handleInput(event.target);
+          event.stopPropagation();
+          return;
+        }
         agentController.handleInput(event.target);
         configLibraryController.handleInput(event.target);
         characterLibraryController.handleInput(event.target);

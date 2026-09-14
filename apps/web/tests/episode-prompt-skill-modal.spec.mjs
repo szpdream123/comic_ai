@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import {
   renderEpisodePromptSkillControl,
   renderEpisodePromptSkillModal,
+  resolvePlazaSkillWorkflowStages,
   sumEpisodePromptSkillCredits,
 } from "../src/features/production-workbench/episode-prompt-skill-modal.js";
 
@@ -14,11 +15,10 @@ describe("episode prompt skill modal", () => {
       show: true,
       variant: "plaza",
       sourceTab: "official",
-      activeCategory: "short-drama",
       officialSkills: [
-        { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", summary: "一键转分镜" },
+        { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", summary: "一键转分镜", slug: "short-drama-skill" },
       ],
-      privateSkills: [
+      mineSkills: [
         { id: "plaza-mine", title: "我的短剧 Skill", category: "short-drama" },
       ],
       draftPlazaSkillIds: ["plaza-official"],
@@ -29,13 +29,19 @@ describe("episode prompt skill modal", () => {
       selectedPlazaSkillIds: ["plaza-official"],
     });
 
-    assert.match(control, /技能skill/);
-    assert.match(control, /已选择 1 项技能/);
-    assert.match(html, /选择技能skill/);
-    assert.match(html, /官方 Skill/);
-    assert.match(html, /我的 Skill/);
-    assert.match(html, /短剧漫剧/);
+    assert.match(control, />Skill</);
+    assert.match(control, /plaza-skill-chip/);
+    assert.match(control, /官方短剧 Skill/);
+    assert.match(control, /data-action="remove-episode-plaza-skill"/);
+    assert.match(html, /plaza-skill-picker-modal/);
+    assert.match(html, />Skill</);
+    assert.match(html, />通用</);
+    assert.match(html, />收藏</);
+    assert.match(html, />我的</);
+    assert.match(html, /搜索 Skill/);
     assert.match(html, /官方短剧 Skill/);
+    assert.match(html, /\/short-drama-skill/);
+    assert.match(html, /查看全部 Skill/);
     assert.match(html, /data-episode-skill-variant="plaza"/);
     assert.doesNotMatch(html, /转剧本提示词/);
   });
@@ -126,6 +132,19 @@ describe("episode prompt skill modal", () => {
     assert.match(html, /data-action="set-canvas-text-skill-page" data-skill-page="1"/);
     assert.doesNotMatch(html, /官方技能<\/span><small>42<\/small>/);
   });
+  it("resolves plaza skill stages from the selected skill instead of the comic pipeline", () => {
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "漫画角色一致性",
+      summary: "保持角色三视图一致",
+      outputContent: "角色提示词",
+    }], { skipScriptStage: true }), ["character"]);
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "通用小说一键转分镜提取",
+      summary: "一键生成工作流",
+      outputContent: "场景、角色、道具和分镜表",
+    }], { skipScriptStage: true }), ["scene", "character", "prop", "shot"]);
+  });
+
   it("uses workbench theme variables for active and selected states", async () => {
     const css = await readFile(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
 

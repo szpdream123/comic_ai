@@ -6,10 +6,25 @@ import {
   deriveInitialNavTabForTest,
   handleWorkbenchActionForTest,
   handleNewCanvasHostInputForTest,
+  parseSkillRouteForTest,
   readWorkbenchRouteTokenForTest,
+  restoreWorkbenchRouteFromLocationForTest,
   scheduleLazySurfaceLoadForTest,
   syncWorkbenchRouteStateForTest,
 } from "../src/features/production-workbench/index.js";
+
+test("workbench rail omits the director and script tabs", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { user: { phone: "+86 13800138000" } },
+    ui: { activeNavTab: "home" },
+  });
+
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="director"/);
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="script"/);
+  assert.doesNotMatch(html, /<span class="rail-label">导演台<\/span>/);
+  assert.doesNotMatch(html, /<span class="rail-label">剧本<\/span>/);
+});
 
 test("workbench rail omits the community tab", () => {
   const html = renderProjectDetail({
@@ -176,11 +191,56 @@ test("refreshing the skills route loads the Skill plaza catalog", async () => {
 
   assert.deepEqual(requests, [{
     section: "catalog",
-    category: "all",
+    category: "recommended",
     query: "",
     page: 1,
     pageSize: 20,
   }]);
+});
+
+test("skill create form exposes real categories instead of recommendation", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "skills",
+      skillCreateOpen: true,
+    },
+  });
+  assert.match(html, /skill-plaza-page/);
+  assert.match(html, /skill-create-overlay/);
+  assert.match(html, /skill-create-page/);
+  assert.match(html, /data-action="close-skill-create"/);
+  assert.match(html, /name="category"/);
+  assert.match(html, /type="hidden" name="category"/);
+  assert.match(html, /type="hidden" name="coverType"/);
+  assert.match(html, /data-action="toggle-skill-create-picker"/);
+  assert.match(html, /skill-create-picker-menu" role="listbox" hidden/);
+  assert.match(html, /professional-film/);
+  assert.match(html, /short-drama/);
+  assert.match(html, /通用技能/);
+  assert.match(html, /data-skill-create-cover-type/);
+  assert.doesNotMatch(html, /option value="recommended"/);
+  assert.doesNotMatch(html, /<select name="category"/);
+  assert.doesNotMatch(html, /<select name="coverType"/);
+});
+
+test("skill plaza recommended tab only shows admin-recommended skills", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "skills",
+      skillPlazaSection: "catalog",
+      skillPlazaCategory: "recommended",
+      skillPlazaItems: [
+        { id: "skill-1", title: "推荐短剧", category: "short-drama", isRecommended: true, summary: "推荐短剧" },
+        { id: "skill-2", title: "普通短剧", category: "short-drama", isRecommended: false, summary: "普通短剧" },
+      ],
+    },
+  });
+  assert.match(html, /推荐短剧/);
+  assert.doesNotMatch(html, /普通短剧/);
 });
 
 test("Canvas remains available when the legacy feature flag is disabled", () => {
@@ -248,6 +308,114 @@ test("Skill Plaza restores from its own path and legacy hash", () => {
 
   assert.equal(workbench.ui.activeNavTab, "skills");
   assert.equal(workbench.ui.projectPanelMode, "library");
+});
+
+test("Skill detail restores from path and legacy hash", async () => {
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/skills/skill-42", hash: "" }), "skills/skill-42");
+  assert.equal(deriveInitialNavTabForTest("skills/skill-42"), "skills");
+  assert.deepEqual(parseSkillRouteForTest({ pathname: "/skills/skill-42", hash: "" }), { skillId: "skill-42" });
+  assert.deepEqual(parseSkillRouteForTest({ pathname: "/", hash: "#/skills/skill-42" }), { skillId: "skill-42" });
+
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: false },
+    api: {
+      async getSkillDetail(skillId) {
+        return { skill: { id: skillId, title: "分享 Skill" }, files: [] };
+      },
+    },
+    ui: { activeNavTab: "home", projectPanelMode: "library", toastQueue: [] },
+  };
+
+  await restoreWorkbenchRouteFromLocationForTest(workbench, {
+    pathname: "/skills/skill-42",
+    hash: "",
+  });
+
+  assert.equal(workbench.ui.activeNavTab, "skills");
+  assert.equal(workbench.ui.skillDetailItem?.id, "skill-42");
+  assert.equal(workbench.ui.skillDetailItem?.title, "分享 Skill");
+});
+
+test("skill detail share button copies the public skill URL", async () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "skills",
+      skillDetailItem: { id: "skill-42", title: "分享 Skill", authorName: "官方" },
+    },
+  });
+  assert.match(html, /data-action="copy-skill-share-link"/);
+  assert.match(html, /aria-label="分享"/);
+  assert.match(html, /title="分享"/);
+  assert.match(html, /data-skill-id="skill-42"/);
+
+  const copied = [];
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const originalWindow = globalThis.window;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { async writeText(text) { copied.push(text); } } },
+  });
+  globalThis.window = {
+    location: { origin: "https://lingxi.test", pathname: "/skills/skill-42", hash: "" },
+    history: { pushState() {} },
+  };
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, user: { id: "user-1" } },
+    api: {},
+    ui: {
+      activeNavTab: "skills",
+      skillDetailItem: { id: "skill-42", title: "分享 Skill" },
+      toastQueue: [],
+    },
+  };
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "copy-skill-share-link", skillId: "skill-42" },
+    });
+    assert.deepEqual(copied, ["https://lingxi.test/skills/skill-42"]);
+    assert.equal(workbench.ui.toast?.message, "分享链接已复制。");
+    assert.equal(workbench.ui.toast?.tone, "success");
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+    globalThis.window = originalWindow;
+  }
+});
+
+test("opening a skill detail pushes the public skill path", async () => {
+  const pushed = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { origin: "https://lingxi.test", pathname: "/skills", hash: "" },
+    history: { pushState(_state, _title, url) { pushed.push(url); } },
+  };
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, user: { id: "user-1" } },
+    api: {
+      async getSkillDetail(skillId) {
+        return { skill: { id: skillId, title: "分享 Skill" }, files: [] };
+      },
+    },
+    ui: { activeNavTab: "skills", toastQueue: [] },
+  };
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-skill-detail", skillId: "skill-42" },
+    });
+    assert.equal(workbench.ui.skillDetailItem?.id, "skill-42");
+    assert.deepEqual(pushed, ["/skills/skill-42"]);
+    assert.equal(workbench.lastHistoryRouteToken, "skills/skill-42");
+  } finally {
+    globalThis.window = originalWindow;
+  }
 });
 
 test("Canvas detail uses the upstream runtime host instead of the legacy X6 controls", () => {
@@ -791,4 +959,145 @@ test("project overview leaves current project blank when no project name is avai
   });
 
   assert.match(html, /<span>当前项目<\/span>\s*<strong><\/strong>/);
+});
+
+test("project episodes interior defaults to the episode hub with a scripts tab", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "试播集", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "试播集" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+    },
+  });
+
+  assert.match(html, /data-action="set-project-episodes-tab"[\s\S]*data-episodes-tab="episodes"/);
+  assert.match(html, /data-action="set-project-episodes-tab"[\s\S]*data-episodes-tab="scripts"/);
+  assert.match(html, /aria-selected="true"[\s\S]*data-episodes-tab="episodes"/);
+  assert.match(html, /episode-hub-shell empty/);
+  assert.match(html, /单集创建/);
+  assert.doesNotMatch(html, /episode-scripts-shell/);
+});
+
+test("project episodes scripts tab lists per-episode excerpts", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "试播集", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "试播集" },
+        episodes: [
+          {
+            id: "episode-1",
+            title: "第一集 开场",
+            sequence: 1,
+            status: "draft",
+            createdAt: "2026-06-24T00:00:00.000Z",
+            scriptText: "夜色里的港口灯火一闪一闪，主角沿着湿漉漉的码头走下去。",
+          },
+        ],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      projectEpisodesTab: "scripts",
+      selectedScriptEpisodeId: "episode-1",
+    },
+  });
+
+  assert.match(html, /aria-selected="true"[\s\S]*data-episodes-tab="scripts"/);
+  assert.match(html, /episode-scripts-shell/);
+  assert.match(html, /data-action="select-project-episode-script"/);
+  assert.match(html, /data-action="save-script-reader-section"/);
+  assert.match(html, /data-action="reanalyze-project-episode-script"/);
+  assert.match(html, /data-role="script-reader-editor"/);
+  assert.match(html, /第一集 开场/);
+  assert.match(html, /夜色里的港口灯火一闪一闪/);
+  assert.doesNotMatch(html, /从这里开始创建第一集/);
+});
+
+test("switching the project episodes tab persists scripts and selects an episode script", async () => {
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {
+      project: { id: "project-1" },
+      projectDetail: { project: { id: "project-1" }, episodes: [] },
+    },
+    session: { user: { phone: "+86 13800138000" } },
+    api: {},
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      projectEpisodesTab: "episodes",
+      selectedScriptEpisodeId: "",
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-project-episodes-tab", episodesTab: "scripts" },
+  });
+  assert.equal(workbench.ui.projectEpisodesTab, "scripts");
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "select-project-episode-script", episodeId: "episode-1" },
+  });
+  assert.equal(workbench.ui.selectedScriptEpisodeId, "episode-1");
+});
+
+test("reanalyzing a project episode script prefills the existing episode text", async () => {
+  const workbench = {
+    root: {
+      innerHTML: "",
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    state: {
+      project: { id: "project-1" },
+      projectDetail: {
+        project: { id: "project-1" },
+        episodes: [
+          {
+            id: "episode-1",
+            title: "第一集 开场",
+            scriptText: "夜色里的港口灯火一闪一闪。",
+          },
+        ],
+      },
+    },
+    session: { user: { phone: "+86 13800138000" } },
+    api: {},
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      projectEpisodesTab: "scripts",
+      selectedScriptEpisodeId: "episode-1",
+      scriptReaderDrafts: { "episode-1": "手动改过的单集剧本。" },
+      isSingleEpisodeModalOpen: false,
+      singleEpisodeScript: "",
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "reanalyze-project-episode-script", episodeId: "episode-1" },
+  });
+
+  assert.equal(workbench.ui.selectedScriptEpisodeId, "episode-1");
+  assert.equal(workbench.ui.projectEpisodesTab, "scripts");
+  assert.equal(workbench.ui.isSingleEpisodeModalOpen, true);
+  assert.equal(workbench.ui.singleEpisodeScript, "手动改过的单集剧本。");
 });

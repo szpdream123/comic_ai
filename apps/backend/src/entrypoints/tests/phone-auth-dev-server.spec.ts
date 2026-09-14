@@ -6852,6 +6852,70 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("runs only plaza skill stages instead of the default comic pipeline", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 5);
+    const skillId = "76767676-7676-4676-8676-767676767676";
+    await db.query(
+      `INSERT INTO skills (
+         id, owner_user_id, name, summary, category, author_name, detail_json, status, visibility, is_recommended
+       ) VALUES (
+         $1, NULL, '漫画角色一致性', '保持角色三视图一致', 'animation-game', '官方',
+         $2::jsonb, 'published', 'public', true
+       )`,
+      [skillId, JSON.stringify({
+        introduction: "# SKILL.md\n只生成角色提示词，保持角色一致性。",
+        usageScene: "漫画角色",
+        howToUse: "上传剧本",
+        outputContent: "角色提示词",
+        workflow: [{ stage: "character" }],
+        files: [{ name: "SKILL.md", kind: "instruction", content: "# SKILL.md\n只生成角色提示词，保持角色一致性。" }],
+      })],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "黑发少年。", characterImagePrompt: "黑发少年，旧布短衣。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138243");
+      await seedGenerationAccessForPhone(db, "13800138243", 5000);
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "plaza-character-skill");
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-plaza-character-skill",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野进入乌坦城。",
+            skipScriptStage: true,
+            plazaSkillId: skillId,
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200, JSON.stringify(envelope));
+      assert.equal(textChatGateway.calls.length, 1);
+      assert.equal(envelope.data.modelRunCount, 1);
+      assert.deepEqual(envelope.data.resolvedIntent, { stages: ["character"], skipScriptStage: true });
+      assert.equal(envelope.data.displayTables.characters.rows[0]?.characterName, "任小野");
+      assert.deepEqual(envelope.data.commitPayload.scenes, []);
+      assert.deepEqual(envelope.data.commitPayload.props, []);
+      assert.deepEqual(envelope.data.commitPayload.storyboards, []);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("resolves a DB-configured cumob_chat text.script model for AI storyboard preview", async () => {
     const db = await createMigratedTestDb();
     await seedPreviewScriptModelConfig(db, 0);

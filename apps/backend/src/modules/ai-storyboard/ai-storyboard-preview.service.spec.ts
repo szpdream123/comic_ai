@@ -294,7 +294,7 @@ describe("ai storyboard preview service", () => {
     assert.equal(gateway.calls.length, 5);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text", "text", "text", "text", "text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined, undefined, undefined, undefined, 32_768]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [16_384, undefined, undefined, undefined, 32_768]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /短剧快节奏/);
@@ -569,6 +569,45 @@ describe("ai storyboard preview service", () => {
     assert.match(gateway.calls[0]?.prompt ?? "", /饭食/);
     assert.deepEqual(events.filter((event) => event.type === "asset_prompt").map((event) => event.stage), ["shot"]);
     assert.equal(events.some((event) => event.type === "script_start"), false);
+  });
+
+  it("loads plaza skill markdown once as a Codex-style system handbook for every stage", async () => {
+    const gateway = new FakeTextGateway([
+      "Skill 改编后的剧本。",
+      JSON.stringify({ scenes: [{ sceneName: "闵婶家门前" }] }),
+      JSON.stringify({ characters: [{ characterName: "任小野" }] }),
+      JSON.stringify({ props: [{ propName: "饭食" }] }),
+      JSON.stringify({ storyboards: [{ shotNo: 1, plot: "递出饭食" }] }),
+    ]);
+    const service = createAiStoryboardPreviewService({ gateway });
+    const plazaSkill = "# SKILL.md\n按短剧节奏拆镜。";
+
+    await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000023",
+      scriptText: "小说原文。",
+      modelCode: "selected-text-model",
+      skillInstructions: plazaSkill,
+      packages: {},
+      templates: {
+        scenePrompt: "场景模板",
+        characterPrompt: "人物模板",
+        propPrompt: "道具模板",
+        shotPrompt: "分镜模板",
+      },
+    });
+
+    assert.equal(gateway.calls.length, 5);
+    for (const call of gateway.calls) {
+      const system = call.messages?.find((message) => message.role === "system")?.content ?? "";
+      assert.match(system, /SKILL.md/);
+      assert.match(system, /Codex loads SKILL.md/);
+      assert.match(system, /按短剧节奏拆镜/);
+      assert.doesNotMatch(call.prompt ?? "", /SKILL\.md/);
+    }
+    assert.match(gateway.calls[1]?.prompt ?? "", /场景模板/);
+    assert.match(gateway.calls[4]?.prompt ?? "", /分镜模板/);
+    assert.match(gateway.calls[0]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is script only/);
+    assert.match(gateway.calls[4]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is storyboard generation only/);
   });
 
   it("feeds the selected script result into each later selected skill", async () => {
@@ -1584,6 +1623,37 @@ describe("ai storyboard preview service", () => {
     assert.match(calls[1]?.prompt ?? "", /分镜1：白野走进营地/);
   });
 
+  it("continues a truncated script response instead of failing the preview", async () => {
+    const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson(input) {
+        calls.push(input);
+        if (calls.length === 1) {
+          yield "清晨，宁川盘膝坐在床上";
+          throw Object.assign(new Error("provider_output_truncated"), { code: "provider_output_truncated" });
+        }
+        yield "，缓缓收功。";
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events: Array<{ type: string }> = [];
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000024",
+      scriptText: "小说原文。",
+      selectedStages: ["script"],
+      skillInstructions: "# SKILL.md\n按短剧节奏拆镜。",
+      packages: {},
+    });
+
+    assert.equal(result.scriptText, "清晨，宁川盘膝坐在床上，缓缓收功。");
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.map((call) => call.maxTokens), [16_384, 16_384]);
+    assert.match(calls[1]?.prompt ?? "", /已输出剧本/);
+    assert.match(String(calls[0]?.messages?.[0]?.content ?? ""), /Current stage is script only/);
+  });
+
   it("yields each model chunk before the model stream is finished", async () => {
     const gateway = new ManualStreamGateway();
     const service = createAiStoryboardPreviewService({ gateway });
@@ -1638,18 +1708,36 @@ async function settlesWithin<T>(promise: Promise<T>, timeoutMs: number) {
 }
 
 class FakeTextGateway implements TextChatGatewayLike {
-  readonly calls: Array<{ model: string; prompt: string; responseFormat?: "json_object" | "text"; maxTokens?: number }> = [];
+  readonly calls: Array<{
+    model: string;
+    prompt?: string;
+    messages?: Array<{ role: string; content: string }>;
+    responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+  }> = [];
 
   constructor(private readonly responses: Array<string | string[]>) {}
 
-  async completeJson(input: { model: string; prompt: string; responseFormat?: "json_object" | "text"; maxTokens?: number }) {
+  async completeJson(input: {
+    model: string;
+    prompt?: string;
+    messages?: Array<{ role: string; content: string }>;
+    responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+  }) {
     this.calls.push(input);
     const response = this.responses.shift();
     assert.ok(response, "missing fake response");
     return Array.isArray(response) ? response.join("") : response;
   }
 
-  async *streamJson(input: { model: string; prompt: string; responseFormat?: "json_object" | "text"; maxTokens?: number }) {
+  async *streamJson(input: {
+    model: string;
+    prompt?: string;
+    messages?: Array<{ role: string; content: string }>;
+    responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+  }) {
     this.calls.push(input);
     const response = this.responses.shift();
     assert.ok(response, "missing fake response");

@@ -2108,6 +2108,53 @@ test("home workflow refuses to start without an uploaded script", async () => {
   assert.equal(workbench.ui.toast, "请先上传 DOCX 或 TXT 剧本文档。");
 });
 
+test("switching to home workflow does not prefetch skill catalogs", async () => {
+  const workbench = createWorkbench();
+  const calls = [];
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.api.getPromptSkills = async (input) => {
+    calls.push(["getPromptSkills", input]);
+    return { items: [] };
+  };
+  workbench.api.getSkills = async (input) => {
+    calls.push(["getSkills", input]);
+    return { items: [] };
+  };
+  workbench.api.getMySkills = async () => {
+    calls.push(["getMySkills"]);
+    return { items: [] };
+  };
+  workbench.api.getSkillFavorites = async () => {
+    calls.push(["getSkillFavorites"]);
+    return { items: [] };
+  };
+  workbench.api.getSkillLibrary = async () => {
+    calls.push(["getSkillLibrary"]);
+    return { items: [] };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-home-creation-mode", creationMode: "workflow" },
+  });
+
+  assert.equal(workbench.ui.homeCreationMode, "workflow");
+  assert.deepEqual(calls, []);
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "open-episode-prompt-skill-modal" },
+  });
+
+  assert.equal(workbench.ui.episodePromptSkillModalOpen, true);
+  assert.deepEqual(calls, [
+    ["getPromptSkills", { source: "official", category: "all", page: 1, pageSize: 100 }],
+    ["getPromptSkills", { source: "private", category: "all", page: 1, pageSize: 100 }],
+    ["getSkills", { category: "all", page: 1, pageSize: 50 }],
+    ["getMySkills"],
+    ["getSkillFavorites"],
+  ]);
+});
+
 test("clicking the free generation tab immediately opens the conversation page", async () => {
   const workbench = createWorkbench();
   const pushedRoutes = [];
@@ -2828,7 +2875,7 @@ test("hash route changes re-render the active surface", async () => {
 
   assert.equal(workbench.ui.activeNavTab, "script");
   assert.match(workbench.root.innerHTML, /data-scroll-surface="script"/);
-  assert.match(workbench.root.innerHTML, /data-tab="script"[\s\S]*aria-selected="true"|aria-selected="true"[\s\S]*data-tab="script"/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="set-nav-tab"\s+data-tab="script"/);
 });
 
 test("history navigation back to home immediately revalidates recommendations", async () => {

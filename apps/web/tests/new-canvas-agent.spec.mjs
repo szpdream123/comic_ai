@@ -4016,6 +4016,111 @@ test("media-only Agent interjection sends a video request with an image referenc
   }
 });
 
+test("Canvas Agent skill picker reuses the plaza catalog as an upward popover", async () => {
+  const calls = [];
+  const workbench = {
+    session: { authenticated: true },
+    ui: {
+      canvasAgent: {
+        skillMenuOpen: true,
+        skillStatus: "ready",
+        skillQuery: "",
+        skillSourceTab: "official",
+        skillOfficialItems: [
+          { id: "plaza-official", name: "官方短剧 Skill", title: "官方短剧 Skill", summary: "一键转分镜", slug: "short-drama-skill", category: "short-drama" },
+        ],
+        skillLibraryItems: [
+          { id: "plaza-library", name: "收藏 Skill", title: "收藏 Skill", summary: "已收藏", slug: "library-skill", category: "general" },
+        ],
+        skillMineItems: [
+          { id: "plaza-mine", name: "我的 Skill", title: "我的 Skill", summary: "私人", slug: "mine-skill", category: "general" },
+        ],
+        skillDraftIds: ["plaza-official"],
+        promptDraft: "先分析画布",
+      },
+    },
+    api: {
+      async getSkills() {
+        calls.push("getSkills");
+        return { items: [{ id: "plaza-official", name: "官方短剧 Skill", slug: "short-drama-skill" }] };
+      },
+      async getMySkills() {
+        calls.push("getMySkills");
+        return { items: [{ id: "plaza-mine", name: "我的 Skill", slug: "mine-skill" }] };
+      },
+      async getSkillFavorites() {
+        calls.push("getSkillFavorites");
+        return { items: [{ id: "plaza-library", name: "收藏 Skill", slug: "library-skill" }] };
+      },
+    },
+  };
+  const html = renderCanvasAgentPanel(workbench.ui);
+  assert.match(html, /data-agent-action="toggle-skill-menu"/);
+  assert.match(html, /canvas-agent-panel[^"]*skill-picker-open/);
+  assert.match(html, /canvas-agent-skill-picker/);
+  assert.match(html, /plaza-skill-picker-modal/);
+  assert.match(html, />通用</);
+  assert.match(html, />收藏</);
+  assert.match(html, />我的</);
+  assert.match(html, /data-episode-plaza-skill-search/);
+  assert.match(html, /data-agent-action="select-agent-skill-draft"/);
+  assert.match(html, /data-agent-action="confirm-agent-skills"/);
+  assert.match(html, /data-agent-action="open-agent-skill-create"/);
+  assert.match(html, /data-agent-action="open-agent-skill-plaza"/);
+  assert.match(html, /data-agent-action="open-agent-skill-detail"/);
+  assert.doesNotMatch(html, /data-action="open-skill-create-from-picker"/);
+  assert.doesNotMatch(html, /data-action="open-skill-plaza-from-picker"/);
+  assert.doesNotMatch(html, /data-agent-action="select-agent-skill"/);
+  assert.match(html, /官方短剧 Skill/);
+  assert.match(html, /\/short-drama-skill/);
+
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+  });
+  await controller.handleAction({
+    dataset: { agentAction: "select-agent-skill-draft", episodeSkillId: "plaza-official" },
+  });
+  await controller.handleAction({
+    dataset: { agentAction: "select-agent-skill-draft", episodeSkillId: "plaza-library" },
+  });
+  await controller.handleAction({ dataset: { agentAction: "confirm-agent-skills" } });
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "先分析画布 /library-skill ");
+  assert.equal(workbench.ui.canvasAgent.skillMenuOpen, false);
+  assert.deepEqual(workbench.ui.canvasAgent.skillDraftIds, []);
+
+  workbench.ui.canvasAgent.skillMenuOpen = false;
+  workbench.ui.canvasAgent.skillStatus = "idle";
+  await controller.handleAction({ dataset: { agentAction: "toggle-skill-menu" } });
+  assert.equal(workbench.ui.canvasAgent.skillMenuOpen, true);
+  assert.deepEqual(calls, ["getSkills", "getMySkills", "getSkillFavorites"]);
+  assert.equal(workbench.ui.canvasAgent.skillOfficialItems[0].id, "plaza-official");
+  assert.equal(workbench.ui.canvasAgent.skillLibraryItems[0].id, "plaza-library");
+  assert.equal(workbench.ui.canvasAgent.skillMineItems[0].id, "plaza-mine");
+
+  await controller.handleInput({
+    matches: (selector) => selector === "[data-episode-plaza-skill-search]",
+    value: "官方",
+    selectionStart: 2,
+  });
+  assert.equal(workbench.ui.canvasAgent.skillQuery, "官方");
+
+  await controller.handleAction({ dataset: { agentAction: "set-agent-skill-source", skillSource: "mine" } });
+  assert.equal(workbench.ui.canvasAgent.skillSourceTab, "mine");
+  assert.match(renderCanvasAgentPanel(workbench.ui), /data-skill-source="mine"[^>]*class="active"|class="active"[^>]*data-skill-source="mine"/);
+
+  await controller.handleAction({ dataset: { agentAction: "open-agent-skill-create" } });
+  assert.equal(workbench.ui.canvasAgent.skillMenuOpen, false);
+  assert.equal(workbench.ui.canvasAgent.panelView, "agents");
+
+  workbench.ui.canvasAgent.skillMenuOpen = true;
+  workbench.ui.canvasAgent.panelView = "timeline";
+  await controller.handleAction({ dataset: { agentAction: "open-agent-skill-detail", skillId: "plaza-official" } });
+  assert.equal(workbench.ui.canvasAgent.skillMenuOpen, false);
+  assert.equal(workbench.ui.canvasAgent.panelView, "agents");
+  controller.dispose();
+});
+
 test("Canvas Agent still sends document attachments through a text-only model", async () => {
   const calls = [];
   const workbench = {

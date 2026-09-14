@@ -51,7 +51,7 @@ import {
   setOfficialPromptDefault,
   setUserPromptDefault,
 } from "../modules/prompt-marketplace/prompt-skill-default.service.ts";
-import { createSkillPlazaService, SkillPlazaError } from "../modules/skill-plaza/skill-plaza.service.ts";
+import { createSkillPlazaService, resolvePlazaSkillWorkflowStages, SkillPlazaError } from "../modules/skill-plaza/skill-plaza.service.ts";
 import {
   AiStoryboardWorkflowIntentError,
   createAiStoryboardPreviewService,
@@ -4867,6 +4867,10 @@ function generationCostFromModelConfig(
   modelConfig?: AiModelConfigRecord,
   parameters: Record<string, unknown> = {},
 ) {
+  const tokenCost = textTokenCreditCostFromModelConfig(modelConfig, parameters);
+  if (tokenCost != null) {
+    return tokenCost;
+  }
   const baseCredits = Number(modelConfig?.pricing.baseCredits);
   if (!Number.isFinite(baseCredits) || baseCredits < 0) {
     return fallbackCost;
@@ -4884,6 +4888,29 @@ function generationCostFromModelConfig(
   return Number.isFinite(cost) && cost >= 0
     ? (cost > 0 && cost < 1 ? 1 : Math.round(cost))
     : fallbackCost;
+}
+
+function textTokenCreditCostFromModelConfig(
+  modelConfig?: AiModelConfigRecord,
+  parameters: Record<string, unknown> = {},
+) {
+  const mediaType = String(modelConfig?.mediaType ?? "").trim().toLowerCase();
+  if (mediaType && mediaType !== "text" && mediaType !== "multimodal") return null;
+  const pricing = modelConfig?.pricing && typeof modelConfig.pricing === "object" ? modelConfig.pricing : {};
+  const rate = Number(
+    (pricing as Record<string, unknown>).tokenCreditsPerMillion
+    ?? (pricing as Record<string, unknown>).token_credits_per_million
+    ?? (pricing as Record<string, unknown>).canvasAgentTokenCreditsPerMillion,
+  );
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  const capabilities = modelConfig?.capabilities && typeof modelConfig.capabilities === "object"
+    ? modelConfig.capabilities as Record<string, unknown>
+    : {};
+  const contextWindow = Number(capabilities.contextWindow ?? capabilities.context_window ?? 32_000);
+  const stageCount = Math.max(1, Math.round(Number(parameters.stageCount) || 1));
+  const estimatedTokens = Math.max(1, (Number.isFinite(contextWindow) && contextWindow > 0 ? Math.trunc(contextWindow) : 32_000) * stageCount);
+  const minimumCredits = Math.max(1, Math.ceil(Number((pricing as Record<string, unknown>).minimumCredits) || 1));
+  return Math.max(1, Math.ceil((estimatedTokens * rate) / 1_000_000), minimumCredits);
 }
 
 async function estimateCanvasGenerationBatchItemCredits(
@@ -22146,6 +22173,7 @@ export function createPhoneAuthDevServer(
             detail: body.detail,
             status: body.status,
             files: body.files,
+            isRecommended: body.isRecommended ?? body.is_recommended,
           }) } });
         } catch (error) {
           if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
@@ -22173,6 +22201,7 @@ export function createPhoneAuthDevServer(
       }
 
       const adminSkillStatusMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)\/status$/);
+      const adminSkillRecommendMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)\/recommendation$/);
       const adminSkillMatch = pathname.match(/^\/api\/admin\/skills\/([^/]+)$/);
       if (request.method === "GET" && adminSkillMatch) {
         const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.storyboardPromptWrite] });
@@ -22192,7 +22221,26 @@ export function createPhoneAuthDevServer(
         const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
         try {
           return writeJson(response, { status: 200, body: { data: await service.updateOfficial({
-            skillId: decodeURIComponent(adminSkillMatch[1]), name: String(body.name ?? body.title ?? ""), summary: body.summary, category: body.category, detail: body.detail, status: body.status, files: body.files,
+            skillId: decodeURIComponent(adminSkillMatch[1]), name: String(body.name ?? body.title ?? ""), summary: body.summary, category: body.category, detail: body.detail, status: body.status, files: body.files, isRecommended: body.isRecommended ?? body.is_recommended,
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+      if (request.method === "PATCH" && adminSkillRecommendMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.updateRecommendation({
+            skillId: decodeURIComponent(adminSkillRecommendMatch[1]),
+            isRecommended: body.isRecommended ?? body.is_recommended,
           }) } });
         } catch (error) {
           if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
@@ -34435,7 +34483,21 @@ export function createPhoneAuthDevServer(
             throw error;
           }
           const plazaSkillContent = plazaSkills.map((item) => String(item.content ?? "").trim()).filter(Boolean).join("\n\n");
-          if (usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill) {
+          const plazaSkillStages = usesPlazaSkill
+            ? resolvePlazaSkillWorkflowStages(plazaSkills, { skipScriptStage })
+            : [];
+          const plazaSelectedStages = requestedStages.length
+            ? requestedStages as Array<"script" | "scene" | "character" | "prop" | "shot">
+            : plazaSkillStages;
+          if (usesPlazaSkill && !plazaSelectedStages.length) {
+            return writeJson(response, envelopedError(400, "workflow_plaza_skill_stage_unresolved", "当前 Skill 未声明可执行的工作流阶段"));
+          }
+          const workflowResolvedIntent = resolvedIntent ?? (usesPlazaSkill
+            ? { stages: plazaSelectedStages, skipScriptStage }
+            : null);
+          const usesDefaultComicPipeline = usesLegacyPackages || (useDefaultWorkflowStages && !usesPlazaSkill);
+          const needsDefaultTemplates = usesDefaultComicPipeline || (usesPlazaSkill && plazaSelectedStages.some((stage) => stage !== "script"));
+          if (needsDefaultTemplates) {
             await Promise.all([
               ensureDefaultStoryboardPromptData(db),
               ensureDefaultScenePromptTemplates(db),
@@ -34444,7 +34506,7 @@ export function createPhoneAuthDevServer(
               ensureDefaultShotPromptTemplates(db),
             ]);
           }
-          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill
+          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = needsDefaultTemplates
             ? await Promise.all([
                 findDefaultScenePromptTemplateForPreview(db),
                 findDefaultCharacterPromptTemplateForPreview(db),
@@ -34452,7 +34514,7 @@ export function createPhoneAuthDevServer(
                 findDefaultShotPromptTemplateForPreview(db),
               ])
             : [null, null, null, null];
-          if ((usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill) && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
+          if (needsDefaultTemplates && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
           const [genrePackage, emotionPackage, tabooPackages] = usesLegacyPackages
@@ -34465,10 +34527,12 @@ export function createPhoneAuthDevServer(
           if (usesLegacyPackages && (!genrePackage || !emotionPackage)) {
             return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
           }
-          const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill
+          const modelRunCount = usesPlazaSkill
+            ? plazaSelectedStages.length
+            : usesDefaultComicPipeline
             ? (requestedStages.length || (skipScriptStage ? 4 : 5))
             : workflowSkills.length + (resolvedIntent ? 1 : 0);
-          const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
+          const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig, { stageCount: modelRunCount });
           const skillCreditCost = workflowSkills.reduce(
             (sum, item) => sum + Math.max(0, Math.round(Number(item.priceCredits) || 0)),
             0,
@@ -34559,7 +34623,9 @@ export function createPhoneAuthDevServer(
             teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
             modelCode: resolvedModelCode,
-            selectedStages: usesLegacyPackages || useDefaultWorkflowStages || usesPlazaSkill
+            selectedStages: usesPlazaSkill
+              ? plazaSelectedStages
+              : usesDefaultComicPipeline
               ? (requestedStages.length
                   ? requestedStages as Array<"script" | "scene" | "character" | "prop" | "shot">
                   : undefined)
@@ -34576,17 +34642,18 @@ export function createPhoneAuthDevServer(
               characters: Array.isArray(body.context?.characters) ? body.context.characters.slice(0, 500) : [],
               props: Array.isArray(body.context?.props) ? body.context.props.slice(0, 500) : [],
             },
+            skillInstructions: plazaSkillContent || null,
             packages: {
-              skillPrompt: [plazaSkillContent, workflowSkillByCategory.get("script")?.content ?? ""].filter(Boolean).join("\n\n"),
+              skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
               genrePrompt: genrePackage ? formatStoryboardPromptPackageContents([genrePackage]) : "",
               emotionPrompt: emotionPackage ? formatStoryboardPromptPackageContents([emotionPackage]) : "",
               tabooPrompt: formatStoryboardPromptPackageContents(tabooPackages),
             },
             templates: {
-              scenePrompt: [plazaSkillContent, workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
-              characterPrompt: [plazaSkillContent, workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
-              propPrompt: [plazaSkillContent, workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
-              shotPrompt: [plazaSkillContent, workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? ""].filter(Boolean).join("\n\n"),
+              scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? "",
+              characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? "",
+              propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? "",
+              shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? "",
             },
           };
           const previewService = createAiStoryboardPreviewService({ gateway: aiStoryboardTextChatGateway });
@@ -34615,8 +34682,8 @@ export function createPhoneAuthDevServer(
                 userId: authenticated.user.id,
                 teamMemberId: actor.teamMember?.id ?? null,
               });
-              if (resolvedIntent) {
-                writeSseData(response, { type: "intent_resolved", ...resolvedIntent });
+              if (workflowResolvedIntent) {
+                writeSseData(response, { type: "intent_resolved", ...workflowResolvedIntent });
               }
               for await (const event of previewService.generatePreviewStream({
                 ...previewInput,
@@ -34640,7 +34707,7 @@ export function createPhoneAuthDevServer(
                     modelRunCount,
                     skillCreditCost,
                     selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
-                    ...(resolvedIntent ? { resolvedIntent } : {}),
+                    ...(workflowResolvedIntent ? { resolvedIntent: workflowResolvedIntent } : {}),
                     selectedPackages: genrePackage && emotionPackage ? {
                       genre: { id: genrePackage.id, name: genrePackage.name },
                       emotion: { id: emotionPackage.id, name: emotionPackage.name },
@@ -34727,7 +34794,7 @@ export function createPhoneAuthDevServer(
               modelRunCount,
               skillCreditCost,
               selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
-              ...(resolvedIntent ? { resolvedIntent } : {}),
+              ...(workflowResolvedIntent ? { resolvedIntent: workflowResolvedIntent } : {}),
               selectedPackages: genrePackage && emotionPackage ? {
                 genre: { id: genrePackage.id, name: genrePackage.name },
                 emotion: { id: emotionPackage.id, name: emotionPackage.name },

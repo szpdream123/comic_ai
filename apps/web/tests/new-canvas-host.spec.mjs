@@ -1693,7 +1693,7 @@ test("free generation keeps the application shell around the standalone Agent ho
   assert.match(html, /从一个想法，开始你的作品/);
   assert.match(html, /class="home-creation-mode-switch"/);
   assert.match(html, /data-creation-mode="agent"[^>]*data-tooltip="在画布中通过对话协同创建和编辑内容"[^>]*>画布Agent/);
-  assert.match(html, /data-creation-mode="workflow"[^>]*data-tooltip="上传剧本，自动解析并生成资产与分镜"[^>]*>项目工作流/);
+  assert.match(html, /data-creation-mode="workflow"[^>]*data-tooltip="上传剧本，按所选 Skill 解析并进入工作流"[^>]*>项目工作流/);
   assert.match(html, /data-creation-mode="free"[^>]*data-tooltip="在独立会话中直接生成图片、视频和音频"[^>]*>自由会话/);
   assert.match(html, /<button(?=[^>]*data-creation-mode="free")(?=[^>]*class="active")(?=[^>]*aria-selected="true")[^>]*>/);
   assert.match(html, /workbench-rail persistent/);
@@ -1719,6 +1719,7 @@ test("home creation mode tabs update only the home creation surface", () => {
   // Free generation changes the route and therefore still needs a full host
   // render; agent/workflow tabs update only their home creation surface.
   assert.match(handler, /if \(mode === "free"\)[\s\S]*?render\(workbench\)/);
+  assert.doesNotMatch(handler, /syncEpisodePromptSkills/);
   const surfaceRenderer = source.match(/function renderHomeCreationModeSurface[\s\S]*?function render\(workbench, options = \{\}\)/)?.[0] ?? "";
   assert.match(surfaceRenderer, /currentModeSurface\.replaceWith\(nextModeSurface\)/);
   assert.doesNotMatch(surfaceRenderer, /\.seo-home-scroll\)/);

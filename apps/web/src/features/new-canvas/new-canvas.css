@@ -2537,6 +2537,10 @@
   overflow: hidden;
 }
 
+.canvas-agent-panel.skill-picker-open {
+  overflow: visible;
+}
+
 .canvas-agent-resize-handle {
   position: absolute;
   top: 0;
@@ -3771,6 +3775,8 @@
 
 .canvas-agent-composer {
   position: relative;
+  z-index: 5;
+  overflow: visible;
   padding: 10px 12px 12px;
   border-top: 1px solid #2a3036;
   background: #0d1013;
@@ -4356,15 +4362,44 @@
 .canvas-agent-skill-picker {
   position: absolute;
   right: 12px;
-  bottom: 62px;
+  bottom: calc(100% + 8px);
   left: 12px;
-  z-index: 3;
-  max-height: 260px;
-  overflow: auto;
-  border: 1px solid #30404a;
-  border-radius: 6px;
-  background: #11181c;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+  z-index: 8;
+  display: block;
+  width: auto;
+  height: min(28rem, 52vh);
+  max-height: min(28rem, 52vh);
+  padding: 0;
+  overflow: hidden;
+  isolation: auto;
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.canvas-agent-skill-picker.episode-skill-picker-layer,
+.canvas-agent-skill-picker.plaza-skill-picker-layer {
+  position: absolute;
+  inset: auto 12px calc(100% + 8px) 12px;
+  z-index: 8;
+  display: block;
+  width: auto;
+  height: min(28rem, 52vh);
+  max-height: min(28rem, 52vh);
+  padding: 0;
+  place-items: stretch;
+  pointer-events: auto;
+}
+
+.canvas-agent-skill-picker .episode-skill-picker-scrim {
+  display: none;
+}
+
+.canvas-agent-skill-picker .plaza-skill-picker-modal {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
 }
 
 .canvas-agent-skill-picker-head {

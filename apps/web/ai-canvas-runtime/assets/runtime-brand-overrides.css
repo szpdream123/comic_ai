@@ -533,31 +533,52 @@
   position: absolute;
   bottom: 100%;
   left: 0;
-  z-index: 20;
+  z-index: 80;
   display: grid;
-  min-width: 10rem;
+  min-width: 18rem;
   gap: 2px;
   margin-bottom: 8px;
   padding: 4px;
   border: 1px solid var(--theme-border, rgba(120, 140, 170, .35));
   border-radius: 6px;
-  background: var(--theme-card, #1b2230);
+  background: var(--theme-card, #fff);
   box-shadow: 0 12px 28px rgba(0, 0, 0, .28);
+  isolation: isolate;
 }
 
 .agent-mode-selector > .agent-mode-menu > button {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
-  padding: 6px 8px;
+  min-height: 0;
+  padding: 0.65rem 0.7rem;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--theme-text-secondary, #aab5c5);
   text-align: left;
   cursor: pointer;
+}
+
+.agent-mode-selector > .agent-mode-menu > button > span {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.agent-mode-selector > .agent-mode-menu strong {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: inherit;
+}
+
+.agent-mode-selector > .agent-mode-menu small {
+  color: var(--theme-text-secondary, rgba(90, 100, 110, 0.72));
+  font-size: 0.7rem;
+  line-height: 1.4;
+  white-space: normal;
 }
 
 .agent-mode-selector > .agent-mode-menu > button:hover,
@@ -578,13 +599,13 @@
 }
 
 .new-canvas-root .chat-panel-root .chat-panel-header button,
-.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button,
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not(.chat-skill-source-tab),
 .new-canvas-root .chat-panel-root .chat-panel-send-btn {
   min-width: 38px;
   min-height: 38px;
 }
 
-.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button {
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not(.chat-skill-source-tab) {
   width: 38px;
   height: 38px;
 }
@@ -614,17 +635,18 @@
 .new-canvas-root .prompt-footer > .model-selector,
 .new-canvas-root .model-selector {
   flex: 0 0 auto !important;
-  width: 32px !important;
-  min-width: 32px !important;
-  max-width: 32px !important;
+  width: 38px !important;
+  min-width: 38px !important;
+  max-width: 38px !important;
 }
 
 .new-canvas-root .chat-panel-input-toolbar .model-selector-trigger,
 .new-canvas-root .prompt-footer .model-selector-trigger,
 .new-canvas-root .model-selector-trigger {
-  width: 32px !important;
-  min-width: 32px !important;
-  height: 32px !important;
+  width: 38px !important;
+  min-width: 38px !important;
+  height: 38px !important;
+  min-height: 38px !important;
   justify-content: center !important;
   gap: 0 !important;
   padding: 0 !important;
@@ -760,20 +782,74 @@
 }
 
 /* Keep the three Agent modes as readable rows in a stable-width popover. */
+.new-canvas-root .chat-panel-root .chat-panel-input-box,
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar,
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar-left,
 .new-canvas-root .agent-mode-selector {
-  flex: 0 0 auto !important;
-  min-width: 38px !important;
   overflow: visible !important;
+}
+
+.new-canvas-root .agent-mode-selector {
+  position: relative !important;
+  z-index: 30 !important;
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+}
+
+/* Match the homepage sparkles + label + chevron capsule. */
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar .agent-mode-selector > .agent-mode-trigger {
+  display: inline-flex !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  gap: 0.4rem !important;
+  padding: 0 0.72rem !important;
+  border: 0 !important;
+  border-radius: 1.25rem !important;
+  background: transparent !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.78)) !important;
+  font-size: 0.82rem !important;
+  white-space: nowrap !important;
+  box-shadow: none !important;
+}
+
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar .agent-mode-selector > .agent-mode-trigger:hover,
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar .agent-mode-selector > .agent-mode-trigger:focus-visible,
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar .agent-mode-selector > .agent-mode-trigger[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: var(--theme-text, #fff) !important;
+  outline: none !important;
+}
+
+.new-canvas-root .chat-panel-root .agent-mode-selector > .agent-mode-trigger > :first-child,
+.new-canvas-root .chat-panel-root .agent-mode-selector > .agent-mode-trigger > :first-child svg,
+.new-canvas-root .chat-panel-root .agent-mode-selector > .agent-mode-trigger svg {
+  width: 1.4rem !important;
+  height: 1.4rem !important;
+  max-width: 1.4rem !important;
+  max-height: 1.4rem !important;
+}
+
+.new-canvas-root .chat-panel-root .agent-mode-selector > .agent-mode-trigger > :last-child,
+.new-canvas-root .chat-panel-root .agent-mode-selector > .agent-mode-trigger > :last-child svg {
+  width: 0.8rem !important;
+  height: 0.8rem !important;
+  max-width: 0.8rem !important;
+  max-height: 0.8rem !important;
 }
 
 .new-canvas-root .agent-mode-selector > .agent-mode-menu {
   display: grid !important;
-  width: 220px !important;
-  min-width: 220px !important;
-  max-width: min(220px, calc(100vw - 24px)) !important;
-  grid-auto-rows: minmax(30px, auto) !important;
+  width: min(18rem, calc(100vw - 24px)) !important;
+  min-width: min(18rem, calc(100vw - 24px)) !important;
+  max-width: min(18rem, calc(100vw - 24px)) !important;
+  grid-auto-rows: auto !important;
   overflow: visible !important;
   writing-mode: horizontal-tb !important;
+  z-index: 80 !important;
+  background: var(--theme-card, #fff) !important;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18) !important;
 }
 
 .new-canvas-root .agent-mode-selector > .agent-mode-menu *,
@@ -783,21 +859,39 @@
 }
 
 .new-canvas-root .agent-mode-selector > .agent-mode-menu > button {
-  min-width: 0 !important;
   width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: visible !important;
   flex-direction: row !important;
-  align-items: center !important;
-  white-space: nowrap !important;
-  word-break: keep-all !important;
+  align-items: flex-start !important;
+  white-space: normal !important;
+  word-break: break-word !important;
   writing-mode: horizontal-tb !important;
 }
 
 .new-canvas-root .agent-mode-selector > .agent-mode-menu > button > span {
+  display: grid !important;
+  gap: 0.2rem !important;
   min-width: 0 !important;
   flex: 1 1 auto !important;
-  white-space: nowrap !important;
-  word-break: keep-all !important;
+  white-space: normal !important;
+  word-break: break-word !important;
   writing-mode: horizontal-tb !important;
+}
+
+.new-canvas-root .agent-mode-selector > .agent-mode-menu strong {
+  font-size: 0.82rem !important;
+  font-weight: 600 !important;
+  color: inherit !important;
+}
+
+.new-canvas-root .agent-mode-selector > .agent-mode-menu small {
+  color: var(--theme-text-secondary, rgba(90, 100, 110, 0.72)) !important;
+  font-size: 0.7rem !important;
+  line-height: 1.4 !important;
+  white-space: normal !important;
 }
 
 /* Skill suggestions share the input popover; reserve a real text column so
@@ -820,7 +914,7 @@
   text-orientation: mixed !important;
 }
 
-.new-canvas-root .chat-panel-root [role="listbox"][aria-label="Skill 引用"] button {
+.new-canvas-root .chat-panel-root [role="listbox"][aria-label="Skill 引用"] button:not(.chat-skill-source-tab) {
   min-width: 0 !important;
   width: 100% !important;
   flex-direction: row !important;
@@ -846,7 +940,7 @@
   writing-mode: horizontal-tb !important;
 }
 
-.new-canvas-root .chat-panel-root #chat-skill-suggestions button {
+.new-canvas-root .chat-panel-root #chat-skill-suggestions button:not(.chat-skill-source-tab) {
   display: flex !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -936,6 +1030,40 @@
 
 .new-canvas-root .chat-panel-root #chat-skill-suggestions button::after {
   display: none;
+}
+
+.new-canvas-root .chat-panel-root #chat-skill-suggestions .chat-skill-source-tabs {
+  display: flex !important;
+  min-width: 0 !important;
+  width: auto !important;
+  flex: 1 1 auto !important;
+  align-items: center !important;
+  gap: 0.75rem !important;
+}
+
+.new-canvas-root .chat-panel-root #chat-skill-suggestions .chat-skill-source-tab {
+  display: inline-flex !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--theme-text-secondary, rgba(90, 100, 110, 0.72)) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+}
+
+.new-canvas-root .chat-panel-root #chat-skill-suggestions .chat-skill-source-tab.active,
+.new-canvas-root .chat-panel-root #chat-skill-suggestions .chat-skill-source-tab[aria-pressed="true"] {
+  color: var(--theme-text) !important;
+}
+
+.new-canvas-root .chat-panel-root #chat-skill-suggestions section[role="group"] > div:first-child {
+  display: none !important;
 }
 
 .new-canvas-root .chat-panel-root [role="listbox"][aria-label="Skill 引用"] button > span > span {
@@ -1832,8 +1960,8 @@
   position: absolute !important;
   inset: 8px !important;
   background-color: var(--theme-text, #111827) !important;
-  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='6' width='12' height='12' rx='2'/><rect x='9' y='9' width='6' height='6' rx='1'/><path d='M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'/></svg>") center / contain no-repeat;
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='6' width='12' height='12' rx='2'/><rect x='9' y='9' width='6' height='6' rx='1'/><path d='M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z'/><path d='m7 16.5-4.74-2.85'/><path d='m7 16.5 5-3'/><path d='M7 16.5v5.17'/><path d='M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z'/><path d='m17 16.5-5-3'/><path d='m17 16.5 4.74-2.85'/><path d='M17 16.5v5.17'/><path d='M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z'/><path d='M12 8 7.26 5.15'/><path d='m12 8 4.74-2.85'/><path d='M12 13.5V8'/></svg>") center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z'/><path d='m7 16.5-4.74-2.85'/><path d='m7 16.5 5-3'/><path d='M7 16.5v5.17'/><path d='M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z'/><path d='m17 16.5-5-3'/><path d='m17 16.5 4.74-2.85'/><path d='M17 16.5v5.17'/><path d='M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z'/><path d='M12 8 7.26 5.15'/><path d='m12 8 4.74-2.85'/><path d='M12 13.5V8'/></svg>") center / contain no-repeat;
 }
 
 .new-canvas-root .model-selector-trigger > *,

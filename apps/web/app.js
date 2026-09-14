@@ -20,7 +20,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-   stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-20";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-05";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -1923,7 +1923,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260912-20";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-05";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -2020,11 +2020,11 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .model-selector {
           flex: 0 0 auto !important;
-          width: 32px !important;
+          width: 38px !important;
         }
         .new-canvas-root .model-selector-trigger {
-          width: 32px !important;
-          height: 32px !important;
+          width: 38px !important;
+          height: 38px !important;
           justify-content: center !important;
           padding: 0 !important;
         }
@@ -2296,11 +2296,11 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         .new-canvas-root .model-selector {
           flex: 0 0 auto !important;
-          width: 32px !important;
+          width: 38px !important;
         }
         .new-canvas-root .model-selector-trigger {
-          width: 32px !important;
-          height: 32px !important;
+          width: 38px !important;
+          height: 38px !important;
           justify-content: center !important;
           padding: 0 !important;
         }

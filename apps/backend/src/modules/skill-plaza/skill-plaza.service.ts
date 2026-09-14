@@ -4,7 +4,6 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 export const skillCategories = [
-  "recommended",
   "professional-film",
   "commercial-ad",
   "short-drama",
@@ -16,6 +15,114 @@ export const skillCategories = [
 
 export type SkillCategory = (typeof skillCategories)[number];
 
+export const plazaWorkflowStages = ["script", "scene", "character", "prop", "shot"] as const;
+export type PlazaWorkflowStage = (typeof plazaWorkflowStages)[number];
+
+const PLAZA_WORKFLOW_STAGE_ALIASES: Record<string, PlazaWorkflowStage> = {
+  script: "script",
+  剧本: "script",
+  转剧本: "script",
+  screenplay: "script",
+  scene: "scene",
+  scenes: "scene",
+  scene_extract: "scene",
+  "scene-extract": "scene",
+  场景: "scene",
+  character: "character",
+  characters: "character",
+  character_extract: "character",
+  "character-extract": "character",
+  角色: "character",
+  人物: "character",
+  prop: "prop",
+  props: "prop",
+  prop_extract: "prop",
+  "prop-extract": "prop",
+  道具: "prop",
+  shot: "shot",
+  shots: "shot",
+  storyboard: "shot",
+  storyboards: "shot",
+  分镜: "shot",
+  拆镜: "shot",
+};
+
+function normalizePlazaWorkflowStageToken(value: unknown): PlazaWorkflowStage | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const direct = PLAZA_WORKFLOW_STAGE_ALIASES[raw] ?? PLAZA_WORKFLOW_STAGE_ALIASES[raw.toLowerCase()];
+  if (direct) return direct;
+  const compact = raw.toLowerCase().replace(/[\s_/]+/g, "-");
+  return PLAZA_WORKFLOW_STAGE_ALIASES[compact] ?? null;
+}
+
+function collectPlazaWorkflowStagesFromText(text: string, collected: Set<PlazaWorkflowStage>) {
+  const source = String(text ?? "");
+  if (!source.trim()) return;
+  if (/转剧本|小说转剧本|screenplay|\bscript\b/i.test(source)) collected.add("script");
+  if (/场景|scene(?!board)/i.test(source)) collected.add("scene");
+  if (/角色|人物|character/i.test(source)) collected.add("character");
+  if (/道具|\bprops?\b/i.test(source)) collected.add("prop");
+  if (/分镜|拆镜|storyboard|\bshots?\b/i.test(source)) collected.add("shot");
+}
+
+function collectPlazaWorkflowStagesFromFileName(fileName: string, collected: Set<PlazaWorkflowStage>) {
+  const name = String(fileName ?? "").replace(/\\/g, "/").toLowerCase();
+  if (!name) return;
+  if (/(?:^|\/)(?:script|screenplay|转剧本)/.test(name)) collected.add("script");
+  if (/(?:^|\/)(?:scene[-_]?extract|scenes?)(?:[-_.]|$)/.test(name) || name.includes("场景")) collected.add("scene");
+  if (/(?:^|\/)(?:character[-_]?extract|characters?)(?:[-_.]|$)/.test(name) || name.includes("角色") || name.includes("人物")) collected.add("character");
+  if (/(?:^|\/)(?:prop[-_]?extract|props?)(?:[-_.]|$)/.test(name) || name.includes("道具")) collected.add("prop");
+  if (/(?:^|\/)(?:shot|storyboard)s?(?:[-_.]|$)/.test(name) || name.includes("分镜") || name.includes("拆镜")) collected.add("shot");
+}
+
+export function resolvePlazaSkillWorkflowStages(
+  skills: Array<{
+    title?: string | null;
+    summary?: string | null;
+    content?: string | null;
+    outputContent?: string | null;
+    workflow?: unknown;
+    files?: Array<{ name?: string | null; fileName?: string | null } | string> | null;
+  }>,
+  options: { skipScriptStage?: boolean } = {},
+) {
+  const collected = new Set<PlazaWorkflowStage>();
+  for (const skill of Array.isArray(skills) ? skills : []) {
+    const workflow = Array.isArray(skill?.workflow) ? skill.workflow : [];
+    const explicitStages = workflow
+      .map((item) => {
+        const token = item && typeof item === "object" && !Array.isArray(item)
+          ? (item as Record<string, unknown>).stage
+            ?? (item as Record<string, unknown>).id
+            ?? (item as Record<string, unknown>).key
+            ?? (item as Record<string, unknown>).label
+            ?? (item as Record<string, unknown>).name
+          : item;
+        return normalizePlazaWorkflowStageToken(token);
+      })
+      .filter((stage): stage is PlazaWorkflowStage => Boolean(stage));
+    if (explicitStages.length) {
+      for (const stage of explicitStages) collected.add(stage);
+      continue;
+    }
+    for (const file of Array.isArray(skill?.files) ? skill.files : []) {
+      const fileName = typeof file === "string"
+        ? file
+        : String(file?.name ?? file?.fileName ?? "");
+      collectPlazaWorkflowStagesFromFileName(fileName, collected);
+    }
+    collectPlazaWorkflowStagesFromText([
+      skill?.title,
+      skill?.summary,
+      skill?.outputContent,
+      skill?.content,
+    ].filter(Boolean).join("\n"), collected);
+  }
+  if (options.skipScriptStage === true) collected.delete("script");
+  return plazaWorkflowStages.filter((stage) => collected.has(stage));
+}
+
 export class SkillPlazaError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
     super(message);
@@ -24,7 +131,12 @@ export class SkillPlazaError extends Error {
 
 function normalizeCategory(value: unknown): SkillCategory | null {
   const category = String(value ?? "").trim();
+  if (category === "recommended") return null;
   return skillCategories.includes(category as SkillCategory) ? category as SkillCategory : null;
+}
+
+function normalizeRecommended(value: unknown) {
+  return value === true || value === "true" || value === 1 || value === "1" || value === "on";
 }
 
 function skillUrl(id: string) {
@@ -75,6 +187,7 @@ function mapSkill(row: Record<string, unknown>) {
     },
     authorName: row.author_name ?? "官方",
     authorAvatarUrl: row.author_avatar_url ?? null,
+    isRecommended: Boolean(row.is_recommended),
     coverUrl: skillMediaUrl(detail.effectImageUrl ?? detail.coverUrl, row.cover_storage_object_id) || null,
     previewUrl: skillMediaUrl(detail.effectVideoUrl ?? detail.previewUrl, row.preview_storage_object_id) || null,
     usageCount: Number(row.usage_count ?? 0),
@@ -103,7 +216,9 @@ export function createSkillPlazaService(deps: {
   readSkillFileContent?: (storageObjectId: string) => Promise<string | null>;
 }) {
   async function listCatalog(input: { userId?: string | null; category?: unknown; query?: unknown; page?: number; pageSize?: number }) {
-    const category = normalizeCategory(input.category);
+    const requestedCategory = String(input.category ?? "").trim();
+    const recommendedOnly = requestedCategory === "recommended";
+    const category = recommendedOnly ? null : normalizeCategory(input.category);
     const query = String(input.query ?? "").trim();
     const pageSize = Math.min(50, Math.max(1, Number(input.pageSize) || 20));
     const page = Math.max(1, Number(input.page) || 1);
@@ -118,16 +233,17 @@ export function createSkillPlazaService(deps: {
         false AS is_mine
         FROM skills skill
         WHERE skill.status = 'published' AND skill.visibility = 'public'
-          AND ($2::text IS NULL OR skill.category = $2)
-          AND ($3::text = '' OR lower(skill.name || ' ' || skill.summary) LIKE '%' || lower($3) || '%')
+          AND ($2::boolean IS NOT TRUE OR skill.is_recommended = true)
+          AND ($3::text IS NULL OR skill.category = $3)
+          AND ($4::text = '' OR lower(skill.name || ' ' || skill.summary) LIKE '%' || lower($4) || '%')
         ORDER BY skill.usage_count DESC, skill.favorite_count DESC, skill.updated_at DESC
-        LIMIT $4 OFFSET $5
+        LIMIT $5 OFFSET $6
       `,
-      [userId, category, query, pageSize, offset],
+      [userId, recommendedOnly, category, query, pageSize, offset],
     );
     const count = await queryOne<{ count: string }>(deps.db,
-      `SELECT COUNT(*)::text AS count FROM skills WHERE status = 'published' AND visibility = 'public' AND ($1::text IS NULL OR category = $1) AND ($2::text = '' OR lower(name || ' ' || summary) LIKE '%' || lower($2) || '%')`,
-      [category, query],
+      `SELECT COUNT(*)::text AS count FROM skills WHERE status = 'published' AND visibility = 'public' AND ($1::boolean IS NOT TRUE OR is_recommended = true) AND ($2::text IS NULL OR category = $2) AND ($3::text = '' OR lower(name || ' ' || summary) LIKE '%' || lower($3) || '%')`,
+      [recommendedOnly, category, query],
     );
     return {
       items: result.rows.map(mapSkill),
@@ -224,12 +340,24 @@ export function createSkillPlazaService(deps: {
     return mapSkill(row);
   }
 
-  async function updateOfficial(input: { skillId: string; name: string; summary?: string; category?: unknown; detail?: unknown; status?: unknown; files?: unknown }) {
+  async function updateRecommendation(input: { skillId: string; isRecommended: unknown }) {
+    const isRecommended = normalizeRecommended(input.isRecommended);
+    const row = await queryOne<Record<string, unknown>>(
+      deps.db,
+      `UPDATE skills SET is_recommended = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+      [input.skillId, isRecommended],
+    );
+    if (!row) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在");
+    return mapSkill(row);
+  }
+
+  async function updateOfficial(input: { skillId: string; name: string; summary?: string; category?: unknown; detail?: unknown; status?: unknown; files?: unknown; isRecommended?: unknown }) {
     const current = await queryOne<Record<string, unknown>>(deps.db, "SELECT * FROM skills WHERE id = $1 AND owner_user_id IS NULL", [input.skillId]);
     if (!current) throw new SkillPlazaError(404, "official_skill_not_found", "官方 Skill 不存在");
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = normalizeCategory(input.category) ?? String(current.category ?? "general");
+    const category = normalizeCategory(input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
+    const isRecommended = input.isRecommended === undefined ? Boolean(current.is_recommended) : normalizeRecommended(input.isRecommended);
     const status = ["draft", "published", "disabled", "rejected"].includes(String(input.status ?? current.status)) ? String(input.status ?? current.status) : String(current.status ?? "draft");
     const previousDetail = current.detail_json && typeof current.detail_json === "object" && !Array.isArray(current.detail_json) ? current.detail_json as Record<string, unknown> : {};
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? { ...previousDetail, ...(input.detail as Record<string, unknown>) } : { ...previousDetail };
@@ -244,14 +372,15 @@ export function createSkillPlazaService(deps: {
       if (files.some((file) => file.content.length > 5 * 1024 * 1024)) throw new SkillPlazaError(400, "skill_file_too_large", "单个 Skill 文件不能超过 5 MB");
       detail.files = files;
     }
-    const row = await queryOne<Record<string, unknown>>(deps.db, "UPDATE skills SET name = $2, summary = $3, category = $4, author_name = '官方', detail_json = $5::jsonb, status = $6, visibility = CASE WHEN $6 = 'published' THEN 'public' ELSE 'private' END, updated_at = now() WHERE id = $1 AND owner_user_id IS NULL RETURNING *", [input.skillId, name, String(input.summary ?? "").trim(), category, JSON.stringify(detail), status]);
+    const row = await queryOne<Record<string, unknown>>(deps.db, "UPDATE skills SET name = $2, summary = $3, category = $4, author_name = '官方', detail_json = $5::jsonb, status = $6, visibility = CASE WHEN $6 = 'published' THEN 'public' ELSE 'private' END, is_recommended = $7, updated_at = now() WHERE id = $1 AND owner_user_id IS NULL RETURNING *", [input.skillId, name, String(input.summary ?? "").trim(), category, JSON.stringify(detail), status, isRecommended]);
     return mapSkill({ ...row, is_in_library: false, is_favorite: false, is_mine: false });
   }
 
-  async function createOfficial(input: { name: string; summary?: string; category?: unknown; detail?: unknown; status?: unknown; files?: unknown }) {
+  async function createOfficial(input: { name: string; summary?: string; category?: unknown; detail?: unknown; status?: unknown; files?: unknown; isRecommended?: unknown }) {
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
     const category = normalizeCategory(input.category) ?? "general";
+    const isRecommended = normalizeRecommended(input.isRecommended);
     const status = ["draft", "published", "disabled", "rejected"].includes(String(input.status ?? "draft"))
       ? String(input.status ?? "draft")
       : "draft";
@@ -270,10 +399,10 @@ export function createSkillPlazaService(deps: {
     if (files.some((file) => file.content.length > 5 * 1024 * 1024)) throw new SkillPlazaError(400, "skill_file_too_large", "单个 Skill 文件不能超过 5 MB");
     detail.files = files;
     const row = await queryOne<Record<string, unknown>>(deps.db,
-      `INSERT INTO skills (id, owner_user_id, name, summary, category, author_name, detail_json, status, visibility)
-       VALUES ($1, NULL, $2, $3, $4, '官方', $5::jsonb, $6, CASE WHEN $6 = 'published' THEN 'public' ELSE 'private' END)
+      `INSERT INTO skills (id, owner_user_id, name, summary, category, author_name, detail_json, status, visibility, is_recommended)
+       VALUES ($1, NULL, $2, $3, $4, '官方', $5::jsonb, $6, CASE WHEN $6 = 'published' THEN 'public' ELSE 'private' END, $7)
        RETURNING *`,
-      [randomUUID(), name, String(input.summary ?? "").trim(), category, JSON.stringify(detail), status],
+      [randomUUID(), name, String(input.summary ?? "").trim(), category, JSON.stringify(detail), status, isRecommended],
     );
     if (!row) throw new SkillPlazaError(400, "skill_create_failed", "官方 Skill 创建失败");
     return mapSkill({ ...row, is_in_library: false, is_favorite: false, is_mine: false });
@@ -312,7 +441,11 @@ export function createSkillPlazaService(deps: {
     const skillMd = files.find((file) => String(file.name ?? file.fileName ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() === "skill.md");
     const instructionFiles = files
       .filter((file) => file !== skillMd && (file.kind === "instruction" || String(file.name ?? "").toLowerCase().endsWith(".md")))
-      .map((file) => String(file.content ?? "").trim())
+      .map((file) => {
+        const name = String(file.name ?? file.fileName ?? "").trim();
+        const body = String(file.content ?? "").trim();
+        return body ? (name ? `【${name}】\n${body}` : body) : "";
+      })
       .filter(Boolean);
     const content = [
       String(skillMd?.content ?? hydrated.skill.detail?.introduction ?? "").trim(),
@@ -325,6 +458,12 @@ export function createSkillPlazaService(deps: {
       title: String(hydrated.skill.title ?? hydrated.skill.name ?? ""),
       category: String(hydrated.skill.category ?? "general"),
       summary: String(hydrated.skill.summary ?? ""),
+      outputContent: String(hydrated.skill.detail?.outputContent ?? ""),
+      workflow: Array.isArray(hydrated.skill.detail?.workflow) ? hydrated.skill.detail.workflow : [],
+      files: files.map((file) => ({
+        name: String(file.name ?? file.fileName ?? ""),
+        kind: String(file.kind ?? "instruction"),
+      })),
       content,
       official: row.owner_user_id == null,
       ownerUserId: row.owner_user_id ? String(row.owner_user_id) : null,
@@ -449,7 +588,7 @@ export function createSkillPlazaService(deps: {
     if (!current) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在或不可编辑");
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = normalizeCategory(input.category) ?? String(current.category ?? "general");
+    const category = normalizeCategory(input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
     const previousDetail = current.detail_json && typeof current.detail_json === "object" && !Array.isArray(current.detail_json) ? current.detail_json as Record<string, unknown> : {};
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? { ...previousDetail, ...(input.detail as Record<string, unknown>) } : { ...previousDetail };
     const requestedFileListPublic = detail.fileListPublic;
@@ -517,5 +656,5 @@ export function createSkillPlazaService(deps: {
     return { skillId: input.skillId, storageObjectId: input.storageObjectId, fileName, fileKind };
   }
 
-  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, updateStatus, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
+  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
 }

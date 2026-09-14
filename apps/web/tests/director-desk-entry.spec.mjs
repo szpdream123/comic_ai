@@ -232,15 +232,15 @@ test("director desk creation requires an active professional membership", async 
   );
 });
 
-test("workbench rail exposes the director desk menu without adding a home hero action", () => {
+test("workbench rail omits the director desk menu without adding a home hero action", () => {
   const html = renderProjectDetail({
     state: {},
     session: { user: { phone: "+86 13800138000" } },
     ui: { activeNavTab: "home" },
   });
 
-  assert.match(html, /data-action="set-nav-tab"[\s\S]*data-tab="director"/);
-  assert.match(html, /导演台/);
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="director"/);
+  assert.doesNotMatch(html, /<span class="rail-label">导演台<\/span>/);
   assert.doesNotMatch(html, /hero-director-cta/);
 });
 
@@ -256,7 +256,7 @@ test("director route keeps the workbench shell and renders a direct module mount
 
   assert.match(html, /class="production-workbench"/);
   assert.match(html, /class="workbench-main\s+director-mode"/);
-  assert.match(html, /class="rail-item active"[\s\S]*data-tab="director"/);
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="director"/);
   assert.match(html, /data-director-desk-mount/);
   assert.match(html, /global-workbench-toast error/);
   assert.match(html, /至少需要 2 个镜头移动点位才能导出/);

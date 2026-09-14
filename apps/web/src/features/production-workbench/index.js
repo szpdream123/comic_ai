@@ -83,6 +83,8 @@ import {
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
   normalizePlazaSkillIds,
+  resolvePlazaSelectedSkills,
+  resolvePlazaSkillWorkflowStages,
   syncEpisodePromptSkillDraft,
   togglePlazaSkillId,
 } from "./episode-prompt-skill-modal.js";
@@ -2497,7 +2499,7 @@ function prepareDeferredMediaElements(root) {
     if (image.closest?.(".asset-generator-backdrop")) continue;
     // Picker dialogs have their own scroll container; native lazy loading is
     // more reliable there than observing against the workbench root.
-    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer, .ai-dialog-float, .connected-nodes-float, .connected-node-thumb, .skill-detail-overlay, .skill-create-cover-upload")) continue;
+    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer, .ai-dialog-float, .connected-nodes-float, .connected-node-thumb, .skill-detail-overlay, .skill-create-overlay, .skill-create-cover-upload")) continue;
     const source = String(image.getAttribute?.("src") ?? "").trim();
     if (!isDeferredMediaSource(source)) continue;
     image.dataset.deferredMediaManaged = "true";
@@ -3165,6 +3167,7 @@ export async function initProductionWorkbench({
       deleteProjectSubmitting: false,
       projectInteriorSection: deriveInitialProjectInteriorSection(readWorkbenchRouteToken(window.location)),
       projectAssetTab: "character",
+      projectEpisodesTab: "episodes",
       selectedEpisodeAssetKind: null,
       selectedEpisodeCardId: null,
       selectedEpisodeAssetId: null,
@@ -3362,7 +3365,10 @@ export async function initProductionWorkbench({
       episodePromptSkillDraftIds: {},
       episodePromptSkillDraftPlazaIds: [],
       episodePlazaOfficialSkills: [],
+      episodePlazaLibrarySkills: [],
+      episodePlazaMineSkills: [],
       episodePlazaPrivateSkills: [],
+      episodePlazaSkillQuery: "",
       selectedEpisodePlazaSkillIds: [],
       canvasTextOfficialSkills: [],
       canvasTextPrivateSkills: [],
@@ -3822,14 +3828,15 @@ export async function initProductionWorkbench({
     scheduleProjectGalleryMeasurement(workbench);
     syncEpisodeWorkbenchLayoutVars(workbench);
     syncEpisodeQuickAssetTogglePosition(workbench);
+    positionPlazaSkillPicker(workbench);
   });
-  let lastHistoryRouteToken = readWorkbenchRouteToken(window.location);
+  workbench.lastHistoryRouteToken = readWorkbenchRouteToken(window.location);
   const restoreHistoryRoute = () => {
     const routeToken = readWorkbenchRouteToken(window.location);
-    if (routeToken === lastHistoryRouteToken) {
+    if (routeToken === workbench.lastHistoryRouteToken) {
       return;
     }
-    lastHistoryRouteToken = routeToken;
+    workbench.lastHistoryRouteToken = routeToken;
     void restoreWorkbenchRouteFromLocation(workbench, window.location).catch((error) => {
       console.warn("[workbench] history route restore failed", error);
     });
@@ -3877,6 +3884,12 @@ export async function initProductionWorkbench({
     }
     if (skillCreateForm && !eventTarget?.closest?.(".skill-create-upload-menu-wrap")) {
       toggleSkillCreateMenu(skillCreateForm.querySelector("[data-skill-create-upload-menu]"), false);
+    }
+    if (skillCreateForm) {
+      const activePicker = eventTarget?.closest?.("[data-skill-create-picker]");
+      skillCreateForm.querySelectorAll("[data-skill-create-picker]").forEach((picker) => {
+        if (picker !== activePicker) toggleSkillCreatePicker(picker, false);
+      });
     }
     const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
     if (imagePreviewTarget) {
@@ -4044,6 +4057,18 @@ export async function initProductionWorkbench({
           workbench.ui.toast = `操作失败：${friendlyError(error)}`;
           render(workbench);
         });
+        return;
+      }
+    }
+    if (
+      workbench.ui.episodePromptSkillModalOpen &&
+      !eventTarget?.closest?.('.plaza-skill-picker-layer, [data-action="open-episode-prompt-skill-modal"]')
+    ) {
+      workbench.ui.episodePromptSkillModalOpen = false;
+      workbench.ui.episodePromptSkillDraftIds = {};
+      workbench.ui.episodePromptSkillDraftPlazaIds = [];
+      if (!actionTarget) {
+        render(workbench);
         return;
       }
     }
@@ -4522,6 +4547,7 @@ export async function initProductionWorkbench({
     if (workbench.ui.episodePromptSkillModalOpen) {
       workbench.ui.episodePromptSkillModalOpen = false;
       workbench.ui.episodePromptSkillDraftIds = {};
+      workbench.ui.episodePromptSkillDraftPlazaIds = [];
       render(workbench);
       return;
     }
@@ -5364,6 +5390,11 @@ export async function initProductionWorkbench({
       render(workbench, { preserveNavigationShell: true });
       return;
     }
+    if (target?.matches?.("[data-episode-plaza-skill-search]")) {
+      workbench.ui.episodePlazaSkillQuery = target.value ?? "";
+      render(workbench);
+      return;
+    }
     if (target?.matches?.('[data-action="search-projects"]')) {
       workbench.projectSearchComposing = false;
       workbench.ui.projectSearchDraft = target.value;
@@ -5408,6 +5439,18 @@ export async function initProductionWorkbench({
       workbench.ui.skillPlazaQuery = target.value ?? "";
       await syncSkillPlaza(workbench);
       render(workbench, { preserveNavigationShell: true });
+      return;
+    }
+
+    if (target?.matches?.("[data-episode-plaza-skill-search]")) {
+      workbench.ui.episodePlazaSkillQuery = target.value ?? "";
+      const caret = target.selectionStart;
+      render(workbench);
+      const input = workbench.root?.querySelector?.("[data-episode-plaza-skill-search]");
+      if (input) {
+        input.focus?.();
+        input.setSelectionRange?.(caret, caret);
+      }
       return;
     }
 
@@ -6566,8 +6609,16 @@ async function refresh(workbench, options = {}) {
       workbench.ui.episodeWorkbenchError = friendlyError(error);
     }
   }
-  if (!isAnonymousSession) {
+  if (parseSkillRouteFromLocation(window.location) || !isAnonymousSession) {
     const restoreRoutes = async () => {
+      const restoredSkillRoute = await restoreSkillRouteState(workbench, window.location);
+      if (restoredSkillRoute) {
+        renderAfterCanvasLoad(workbench, { preserveNavigationShell: true });
+        return;
+      }
+      if (!hasActiveSessionUser(workbench.session)) {
+        return;
+      }
       const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
       if (!restoredEpisodeRoute) {
         const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
@@ -6611,6 +6662,15 @@ async function restoreWorkbenchRouteFromLocation(workbench, locationLike) {
   if (workbench.ui.activeNavTab === "home") {
     void refreshVisibleHomeRecommendations(workbench);
   }
+  const hasSkillRoute = Boolean(parseSkillRouteFromLocation(locationLike));
+  if (hasSkillRoute) {
+    const restored = await restoreSkillRouteState(workbench, locationLike, { requestId });
+    if (!isCurrentHistoryRouteRestore(workbench, requestId)) {
+      return false;
+    }
+    render(workbench, { preserveNavigationShell: true });
+    return restored;
+  }
   if (!hasActiveSessionUser(workbench.session)) {
     return false;
   }
@@ -6633,6 +6693,45 @@ async function restoreWorkbenchRouteFromLocation(workbench, locationLike) {
 
 function isCurrentHistoryRouteRestore(workbench, requestId) {
   return requestId == null || workbench.historyRouteRestoreRequestId === requestId;
+}
+
+function rememberWorkbenchHistoryRouteToken(workbench, locationLike = globalThis.window?.location) {
+  if (!workbench) {
+    return;
+  }
+  workbench.lastHistoryRouteToken = readWorkbenchRouteToken(locationLike);
+}
+
+function buildSkillSharePath(skillId) {
+  const normalizedSkillId = String(skillId ?? "").trim();
+  return normalizedSkillId ? `/skills/${encodeURIComponent(normalizedSkillId)}` : "/skills";
+}
+
+function buildSkillShareUrl(skillId, locationLike = globalThis.window?.location) {
+  const path = buildSkillSharePath(skillId);
+  const origin = String(locationLike?.origin ?? "").replace(/\/+$/, "");
+  return origin ? `${origin}${path}` : path;
+}
+
+function syncSkillDetailRoute(workbench, skillId = workbench?.ui?.skillDetailItem?.id) {
+  const nextPath = buildSkillSharePath(skillId);
+  const history = globalThis.window?.history;
+  const location = globalThis.window?.location;
+  if (history?.pushState && location) {
+    const currentPath = normalizeRoutePath(location.pathname);
+    if (currentPath !== nextPath || location.hash) {
+      history.pushState(null, "", nextPath);
+    }
+    rememberWorkbenchHistoryRouteToken(workbench, { pathname: nextPath, hash: "" });
+    return;
+  }
+  if (location) {
+    const nextHash = String(skillId ?? "").trim()
+      ? `/skills/${encodeURIComponent(String(skillId).trim())}`
+      : "skills";
+    location.hash = nextHash;
+    rememberWorkbenchHistoryRouteToken(workbench, { pathname: location.pathname, hash: `#${nextHash}` });
+  }
 }
 
 function buildProjectDetailHash(projectId, section = "overview") {
@@ -6979,6 +7078,10 @@ function shouldLoadProjectInteriorSupplementary(section) {
 function normalizeProjectInteriorSection(section) {
   const normalized = String(section ?? "overview");
   return PROJECT_INTERIOR_SECTIONS.has(normalized) ? normalized : "overview";
+}
+
+function normalizeProjectEpisodesTab(tab) {
+  return String(tab ?? "") === "scripts" ? "scripts" : "episodes";
 }
 
 async function fetchProjectLibraryAssets(workbench, projectId) {
@@ -8250,7 +8353,7 @@ async function syncSkillPlaza(workbench) {
     : "catalog";
   const request = {
     section,
-    category: workbench.ui.skillPlazaCategory === "recommended" ? "all" : (workbench.ui.skillPlazaCategory || "all"),
+    category: workbench.ui.skillPlazaCategory || "recommended",
     query: String(workbench.ui.skillPlazaQuery || "").trim(),
     page: 1,
     pageSize: 20,
@@ -8348,6 +8451,8 @@ async function syncEpisodePromptSkills(workbench) {
     workbench.ui.episodePromptOfficialSkills = [];
     workbench.ui.episodePromptPrivateSkills = [];
     workbench.ui.episodePlazaOfficialSkills = [];
+    workbench.ui.episodePlazaLibrarySkills = [];
+    workbench.ui.episodePlazaMineSkills = [];
     workbench.ui.episodePlazaPrivateSkills = [];
     workbench.ui.episodePromptSkillLoading = false;
     return;
@@ -8374,7 +8479,11 @@ async function syncEpisodePromptSkills(workbench) {
       ? [
           workbench.api.getSkills({ category: "all", page: 1, pageSize: 50 }),
           typeof workbench.api.getMySkills === "function" ? workbench.api.getMySkills() : Promise.resolve({ items: [] }),
-          typeof workbench.api.getSkillLibrary === "function" ? workbench.api.getSkillLibrary() : Promise.resolve({ items: [] }),
+          typeof workbench.api.getSkillFavorites === "function"
+            ? workbench.api.getSkillFavorites()
+            : typeof workbench.api.getSkillLibrary === "function"
+              ? workbench.api.getSkillLibrary()
+              : Promise.resolve({ items: [] }),
         ]
       : [Promise.resolve({ items: [] }), Promise.resolve({ items: [] }), Promise.resolve({ items: [] })];
     const [catalog, library, plazaCatalog, plazaMine, plazaLibrary] = await Promise.all([
@@ -8405,22 +8514,22 @@ async function syncEpisodePromptSkills(workbench) {
       })),
     };
     const plazaOfficial = normalizePlazaEpisodeSkills(plazaCatalog?.items, "official");
-    const plazaPrivate = normalizePlazaEpisodeSkills([
-      ...(Array.isArray(plazaMine?.items) ? plazaMine.items : []),
-      ...(Array.isArray(plazaLibrary?.items) ? plazaLibrary.items : []),
-    ], "private");
-    const plazaAll = [...plazaOfficial, ...plazaPrivate];
+    const plazaLibraryItems = normalizePlazaEpisodeSkills(plazaLibrary?.items, "library");
+    const plazaMineItems = normalizePlazaEpisodeSkills(plazaMine?.items, "mine");
+    const plazaAll = [...plazaOfficial, ...plazaLibraryItems, ...plazaMineItems];
     const currentPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds)
       .filter((id) => plazaAll.some((item) => item.id === id));
     workbench.ui.episodePlazaOfficialSkills = plazaOfficial;
-    workbench.ui.episodePlazaPrivateSkills = plazaPrivate;
-    workbench.ui.selectedEpisodePlazaSkillIds = currentPlazaIds.length
-      ? currentPlazaIds
-      : plazaOfficial.slice(0, 1).map((item) => item.id);
+    workbench.ui.episodePlazaLibrarySkills = plazaLibraryItems;
+    workbench.ui.episodePlazaMineSkills = plazaMineItems;
+    workbench.ui.episodePlazaPrivateSkills = [...plazaLibraryItems, ...plazaMineItems];
+    workbench.ui.selectedEpisodePlazaSkillIds = currentPlazaIds;
   } catch (error) {
     workbench.ui.episodePromptOfficialSkills = [];
     workbench.ui.episodePromptPrivateSkills = [];
     workbench.ui.episodePlazaOfficialSkills = [];
+    workbench.ui.episodePlazaLibrarySkills = [];
+    workbench.ui.episodePlazaMineSkills = [];
     workbench.ui.episodePlazaPrivateSkills = [];
     workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "技能skill加载失败";
   } finally {
@@ -20548,6 +20657,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.skillCreateOpen = true;
     workbench.ui.skillCreateDraft = null;
     workbench.ui.skillCreateEditorMode = "code";
+    workbench.ui.skillDetailItem = null;
     render(workbench, { preserveNavigationShell: true });
     return;
   }
@@ -20578,6 +20688,37 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const menu = wrap?.querySelector?.("[data-skill-create-upload-menu]");
     if (!menu) return;
     toggleSkillCreateMenu(menu, menu.hidden);
+    return;
+  }
+
+  if (action === "toggle-skill-create-picker") {
+    const picker = target.closest?.("[data-skill-create-picker]");
+    const form = target.closest?.("form") ?? workbench.root?.querySelector?.("#skill-create-form");
+    if (!picker) return;
+    const open = !picker.classList.contains("open");
+    form?.querySelectorAll?.("[data-skill-create-picker]").forEach((item) => {
+      toggleSkillCreatePicker(item, item === picker && open);
+    });
+    return;
+  }
+
+  if (action === "select-skill-create-picker") {
+    const picker = target.closest?.("[data-skill-create-picker]");
+    const value = String(target.dataset.value ?? "");
+    const option = picker?.querySelector?.(`[data-action="select-skill-create-picker"][data-value="${CSS.escape(value)}"]`);
+    const input = picker?.querySelector?.('input[type="hidden"]');
+    const label = option?.querySelector?.("span")?.textContent ?? option?.textContent ?? "";
+    if (!picker || !input) return;
+    input.value = value;
+    const triggerLabel = picker.querySelector(".skill-create-picker-trigger span");
+    if (triggerLabel) triggerLabel.textContent = label.trim();
+    picker.querySelectorAll('[data-action="select-skill-create-picker"]').forEach((button) => {
+      const selected = button === option;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    toggleSkillCreatePicker(picker, false);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
     return;
   }
 
@@ -20710,7 +20851,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       const payload = {
         name: String(data.get("name") ?? "").trim(),
-        category: String(data.get("category") ?? "general"),
+        category: EPISODE_PLAZA_SKILL_CATEGORIES.some((item) => item.id !== "recommended" && item.id === String(data.get("category") ?? ""))
+          ? String(data.get("category"))
+          : "general",
         summary: String(data.get("summary") ?? "").trim(),
         detail: {
           introduction,
@@ -20759,6 +20902,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "copy-skill-share-link") {
+    const skillId = String(target.dataset.skillId ?? workbench.ui.skillDetailItem?.id ?? "").trim();
+    if (!skillId) return;
+    try {
+      await copyTextToClipboard(buildSkillShareUrl(skillId));
+      workbench.ui.toast = { tone: "success", message: "分享链接已复制。" };
+    } catch (error) {
+      workbench.ui.toast = `复制失败：${friendlyError(error)}`;
+    }
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
   if (action === "open-skill-detail") {
     const skillId = String(target.dataset.skillId ?? "").trim();
     if (!skillId || typeof workbench.api?.getSkillDetail !== "function") return;
@@ -20767,6 +20923,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.skillDetailItem = result?.skill ? { ...result.skill, files: result.files ?? [] } : result;
       workbench.ui.skillDetailFileIndex = 0;
       workbench.ui.skillDetailFileMenuOpen = false;
+      syncSkillDetailRoute(workbench, skillId);
     });
     return;
   }
@@ -20790,6 +20947,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.skillDetailItem = null;
     workbench.ui.skillDetailFileIndex = 0;
     workbench.ui.skillDetailFileMenuOpen = false;
+    syncSkillDetailRoute(workbench);
     render(workbench, { preserveNavigationShell: true });
     return;
   }
@@ -21064,6 +21222,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     workbench.ui.skillCreateOpen = false;
+    workbench.ui.skillDetailItem = null;
+    workbench.ui.skillDetailFileIndex = 0;
+    workbench.ui.skillDetailFileMenuOpen = false;
     workbench.ui.activeNavTab = normalizedTab;
     if (workbench.ui.activeNavTab === "skills") {
       await syncSkillPlaza(workbench);
@@ -21117,6 +21278,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         if (currentPath !== nextPath || globalThis.window.location.hash) {
           globalThis.window.history.pushState(null, "", nextPath);
           routeUpdatedWithPushState = true;
+          rememberWorkbenchHistoryRouteToken(workbench, { pathname: nextPath, hash: "" });
         }
       } else {
         globalThis.window.location.hash = nextHash;
@@ -21597,6 +21759,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.root?.querySelector?.("[data-action=\"pick-home-workflow-script\"]")?.focus?.();
       return;
     }
+    if (creationMode === "workflow" && !normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds).length) {
+      workbench.ui.toast = "请先选择 Skill。";
+      render(workbench);
+      workbench.root?.querySelector?.("[data-action=\"open-episode-prompt-skill-modal\"]")?.focus?.();
+      return;
+    }
     const text = homeAgentPromptTextForSubmission(workbench).trim();
     if (creationMode !== "workflow" && !text) {
       workbench.ui.toast = "请先输入创作指令。";
@@ -21660,8 +21828,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           workbench.state?.script?.inputText,
         ).trim();
         if (!sourceScript) throw new Error("script_text_required");
-        // The home workflow uses the server's default stages and model; loading
-        // the optional skill catalogs here only delays the first visible result.
+        workbench.ui.selectedEpisodePlazaSkillIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds);
         workbench.ui.singleEpisodeTextModelCode =
           resolveSingleEpisodeTextModelCode(workbench.ui) || "deepseek-noval";
         workbench.ui.singleEpisodeName = buildSingleEpisodeTitle(sourceScript, getDetailEpisodes(workbench.state));
@@ -25638,6 +25805,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-episode-prompt-skill-modal") {
+    if (workbench.ui.episodePromptSkillModalOpen) {
+      workbench.ui.episodePromptSkillModalOpen = false;
+      workbench.ui.episodePromptSkillDraftIds = {};
+      workbench.ui.episodePromptSkillDraftPlazaIds = [];
+      render(workbench);
+      return;
+    }
     resetCanvasTextSkillModal(workbench.ui);
     workbench.ui.episodePromptSkillDraftIds = {
       ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
@@ -25645,8 +25819,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.episodePromptSkillDraftPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds);
     workbench.ui.episodePromptSkillSourceTab = "official";
     workbench.ui.episodePromptSkillCategory = "recommended";
+    workbench.ui.episodePlazaSkillQuery = "";
     workbench.ui.episodePromptSkillModalOpen = true;
     workbench.ui.singleEpisodeScriptImportMenu = "";
+    const hasEpisodePromptSkills = Boolean(
+      workbench.ui.episodePlazaOfficialSkills?.length
+      || workbench.ui.episodePlazaLibrarySkills?.length
+      || workbench.ui.episodePlazaMineSkills?.length
+      || workbench.ui.episodePromptOfficialSkills?.length
+      || workbench.ui.episodePromptPrivateSkills?.length,
+    );
+    if (!hasEpisodePromptSkills && !workbench.ui.episodePromptSkillLoading) {
+      workbench.ui.episodePromptSkillLoading = true;
+      render(workbench);
+      await syncEpisodePromptSkills(workbench);
+      workbench.ui.episodePromptSkillDraftPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds);
+    }
     render(workbench);
     return;
   }
@@ -25737,8 +25925,55 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-episode-prompt-skill-source") {
-    workbench.ui.episodePromptSkillSourceTab = target.dataset.skillSource === "private" ? "private" : "official";
+    const source = String(target.dataset.skillSource ?? "");
+    workbench.ui.episodePromptSkillSourceTab = source === "library" || source === "mine" || source === "private"
+      ? (source === "private" ? "mine" : source)
+      : "official";
     render(workbench);
+    return;
+  }
+
+  if (action === "open-skill-create-from-picker") {
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.activeNavTab = "skills";
+    workbench.ui.skillCreateOpen = true;
+    workbench.ui.skillCreateDraft = null;
+    workbench.ui.skillCreateEditorMode = "code";
+    workbench.ui.skillDetailItem = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-skill-plaza-from-picker") {
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.activeNavTab = "skills";
+    workbench.ui.skillCreateOpen = false;
+    workbench.ui.skillPlazaSection = workbench.ui.episodePromptSkillSourceTab === "mine"
+      ? "mine"
+      : workbench.ui.episodePromptSkillSourceTab === "library"
+        ? "library"
+        : "catalog";
+    workbench.ui.skillPlazaCategory = "recommended";
+    workbench.ui.skillPlazaQuery = String(workbench.ui.episodePlazaSkillQuery ?? "");
+    await syncSkillPlaza(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-skill-detail-from-picker") {
+    const skillId = String(target.dataset.skillId ?? "").trim();
+    if (!skillId || typeof workbench.api?.getSkillDetail !== "function") return;
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.activeNavTab = "skills";
+    workbench.ui.skillCreateOpen = false;
+    await runAction(workbench, "正在加载 Skill 详情...", async () => {
+      const result = await workbench.api.getSkillDetail(skillId);
+      workbench.ui.skillDetailItem = result?.skill ? { ...result.skill, files: result.files ?? [] } : result;
+      workbench.ui.skillDetailFileIndex = 0;
+      workbench.ui.skillDetailFileMenuOpen = false;
+      syncSkillDetailRoute(workbench, skillId);
+      await syncSkillPlaza(workbench);
+    });
     return;
   }
 
@@ -25758,18 +25993,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const skillId = String(target.dataset.episodeSkillId ?? "");
     const skills = [
       ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaOfficialSkills, "official"),
+      ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaLibrarySkills, "library"),
+      ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaMineSkills, "mine"),
       ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaPrivateSkills, "private"),
     ];
     if (!skills.some((item) => item.id === skillId)) {
       return;
     }
     workbench.ui.episodePromptSkillDraftPlazaIds = togglePlazaSkillId(workbench.ui.episodePromptSkillDraftPlazaIds, skillId);
-    syncEpisodePromptSkillDraft(workbench.root, {
-      category: workbench.ui.episodePromptSkillCategory,
-      skills,
-      draftPlazaSkillIds: workbench.ui.episodePromptSkillDraftPlazaIds,
-      variant: "plaza",
-    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "remove-episode-plaza-skill") {
+    const skillId = String(target.dataset.episodeSkillId ?? "").trim();
+    workbench.ui.selectedEpisodePlazaSkillIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds)
+      .filter((id) => id !== skillId);
+    workbench.ui.episodePromptSkillDraftPlazaIds = normalizePlazaSkillIds(workbench.ui.episodePromptSkillDraftPlazaIds)
+      .filter((id) => id !== skillId);
+    render(workbench);
     return;
   }
 
@@ -25829,6 +26071,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           .filter(([, id]) => Boolean(id)))
       : {};
     const hasEpisodeSkills = episodePlazaSkillIds.length > 0 || Object.keys(episodeSkills).length > 0;
+    const plazaWorkflowSkills = episodePlazaSkillIds.length
+      ? resolvePlazaSelectedSkills([
+          ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaOfficialSkills, "official"),
+          ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaLibrarySkills, "library"),
+          ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaMineSkills, "mine"),
+          ...normalizePlazaEpisodeSkills(workbench.ui.episodePlazaPrivateSkills, "private"),
+        ], episodePlazaSkillIds)
+      : [];
+    const plazaWorkflowStages = isHomeWorkflowAnalysis
+      ? resolvePlazaSkillWorkflowStages(plazaWorkflowSkills, { skipScriptStage: true })
+      : [];
+    const homeWorkflowStages = plazaWorkflowStages.length ? plazaWorkflowStages : null;
     const singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
     const hasLegacyPromptPackages = Array.isArray(workbench.ui.storyboardPromptPackages)
       && workbench.ui.storyboardPromptPackages.length > 0;
@@ -25874,7 +26128,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       skillId: skillId || null,
       skills: episodeSkills,
       plazaSkillIds: episodePlazaSkillIds,
-      selectedStages: isHomeWorkflowAnalysis ? ["scene", "character", "prop", "shot"] : null,
+      selectedStages: isHomeWorkflowAnalysis ? homeWorkflowStages : null,
       modelCode: singleEpisodeTextModelCode || (!isManualScriptAnalysis && !hasEpisodeSkills ? "deepseek-script" : ""),
       projectId,
       data: (() => {
@@ -25895,8 +26149,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       livePreviewTables: null,
       liveDisplayTables: null,
       activeStage: isHomeWorkflowAnalysis
-        ? "scene"
-        : episodeSkills.script
+        ? (homeWorkflowStages?.[0] ?? "intent")
+        : episodePlazaSkillIds.length || episodeSkills.script
         ? "script"
         : episodeSkills.scene_extract
           ? "scene"
@@ -25938,12 +26192,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         scriptText: nextScript,
         ...(isHomeWorkflowAnalysis ? {
           skipScriptStage: true,
-          useDefaultWorkflowStages: true,
         } : {}),
         ...(isManualScriptAnalysis
           ? { skillId, modelCode: singleEpisodeTextModelCode }
           : episodePlazaSkillId
-            ? { plazaSkillId: episodePlazaSkillId, plazaSkillIds: episodePlazaSkillIds, modelCode: singleEpisodeTextModelCode }
+            ? {
+                plazaSkillId: episodePlazaSkillId,
+                plazaSkillIds: episodePlazaSkillIds,
+                modelCode: singleEpisodeTextModelCode,
+                ...(isHomeWorkflowAnalysis ? { skipScriptStage: true } : {}),
+              }
             : hasEpisodeSkills
               ? { skills: episodeSkills, modelCode: singleEpisodeTextModelCode }
               : { packages }),
@@ -26052,6 +26310,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         sourceScript: workbench.ui.singleEpisodeAiPreview.sourceScript,
         packages: workbench.ui.singleEpisodeAiPreview.packages,
         skills: workbench.ui.singleEpisodeAiPreview.skills,
+        plazaSkillIds: workbench.ui.singleEpisodeAiPreview.plazaSkillIds,
         selectedStages: finalizedPreview?.resolvedIntent?.stages ?? workbench.ui.singleEpisodeAiPreview.selectedStages ?? null,
         modelCode: workbench.ui.singleEpisodeAiPreview.modelCode,
         projectId: workbench.ui.singleEpisodeAiPreview.projectId,
@@ -26315,6 +26574,63 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorModal = null;
     render(workbench);
     await ensureProjectAssetsLoaded(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-project-episodes-tab") {
+    workbench.ui.projectEpisodesTab = normalizeProjectEpisodesTab(target.dataset.episodesTab);
+    if (
+      workbench.ui.projectEpisodesTab === "scripts" &&
+      !String(workbench.ui.selectedScriptEpisodeId ?? "").trim()
+    ) {
+      const firstEpisodeId = String(
+        (Array.isArray(workbench.state?.projectDetail?.episodes)
+          ? workbench.state.projectDetail.episodes
+          : []).find((episode) => episode?.id)?.id ?? "",
+      ).trim();
+      if (firstEpisodeId) {
+        workbench.ui.selectedScriptEpisodeId = firstEpisodeId;
+      }
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-project-episode-script") {
+    workbench.ui.selectedScriptEpisodeId = String(target.dataset.episodeId ?? "").trim();
+    render(workbench);
+    return;
+  }
+
+  if (action === "reanalyze-project-episode-script") {
+    const episodeId = String(target.dataset.episodeId ?? workbench.ui.selectedScriptEpisodeId ?? "").trim();
+    const draftText = workbench.ui.scriptReaderDrafts?.[episodeId];
+    const editor = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-editor"]') ?? [])]
+      .find((element) => element.dataset.episodeId === episodeId);
+    const episode = (Array.isArray(workbench.state?.projectDetail?.episodes)
+      ? workbench.state.projectDetail.episodes
+      : []).find((item) => String(item?.id ?? "") === episodeId);
+    const matchedSection = (Array.isArray(workbench.ui.scriptReaderSections) ? workbench.ui.scriptReaderSections : [])
+      .find((section) => String(section?.id ?? "") === episodeId);
+    const nextScript = String(
+      draftText ??
+      editor?.value ??
+      episode?.scriptText ??
+      episode?.inputText ??
+      episode?.text ??
+      episode?.summary ??
+      matchedSection?.text ??
+      matchedSection?.body ??
+      "",
+    );
+    if (episodeId) {
+      workbench.ui.selectedScriptEpisodeId = episodeId;
+    }
+    await openSingleEpisodeFlow(workbench, {
+      scriptText: truncateScriptTextByCharacters(nextScript, 5000),
+    });
+    workbench.ui.projectEpisodesTab = "scripts";
     render(workbench);
     return;
   }
@@ -37373,6 +37689,10 @@ export function restoreWorkbenchRouteFromLocationForTest(workbench, locationLike
   return restoreWorkbenchRouteFromLocation(workbench, locationLike);
 }
 
+export function parseSkillRouteForTest(locationLike) {
+  return parseSkillRouteFromLocation(locationLike);
+}
+
 export function syncCanvasRouteStateForTest(workbench, hash, locationLike) {
   return syncCanvasRouteState(workbench, hash, locationLike);
 }
@@ -37508,6 +37828,8 @@ async function regenerateSingleEpisodeAiPreviewStage(workbench, stageValue) {
     ...(stageValue === "script" ? {} : { skipScriptStage: true }),
     ...(stageSkillId
       ? { skills: { [stageConfig.category]: stageSkillId } }
+      : Array.isArray(currentPreview.plazaSkillIds) && currentPreview.plazaSkillIds.length
+        ? { plazaSkillIds: currentPreview.plazaSkillIds, plazaSkillId: currentPreview.plazaSkillIds[0] }
       : stageValue === "script"
         ? { packages }
         : { useDefaultWorkflowStages: true }),
@@ -37687,12 +38009,12 @@ function mergeSingleEpisodeAiRegeneratedStage({ currentPreview, finalizedStage, 
   };
 }
 
-async function openSingleEpisodeFlow(workbench) {
+async function openSingleEpisodeFlow(workbench, options = {}) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.isSingleEpisodeModalOpen = true;
   workbench.ui.isScriptModalOpen = false;
   workbench.ui.singleEpisodeName = "";
-  workbench.ui.singleEpisodeScript = "";
+  workbench.ui.singleEpisodeScript = String(options.scriptText ?? "");
   workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedEpisodeId: "", selectedLabel: "", page: 1 };
   workbench.ui.singleEpisodeScriptLibraryPagination = { page: 1, pageSize: 100, total: 0, totalPages: 1 };
   workbench.ui.singleEpisodeAspectRatio = "9:16";
@@ -37714,7 +38036,6 @@ async function openSingleEpisodeFlow(workbench) {
     ensureProjectEpisodesLoaded(workbench),
     syncEpisodePromptSkills(workbench),
     syncSingleEpisodeGenerationConfig(workbench),
-    refreshScriptLibraryIfAvailable(workbench),
   ]);
   workbench.ui.singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
   render(workbench);
@@ -56591,6 +56912,53 @@ function removePromptMentionPreviewDom(workbench) {
     ?.forEach((node) => node.remove());
 }
 
+function positionPlazaSkillPicker(workbench) {
+  const root = workbench?.root ?? null;
+  const layer = root?.querySelector?.(".plaza-skill-picker-layer");
+  if (!layer) {
+    return;
+  }
+  const trigger = root.querySelector(".plaza-skill-chip-control.is-open")
+    ?? root.querySelector(".plaza-skill-chip-control")
+    ?? root.querySelector('[data-action="open-episode-prompt-skill-modal"]');
+  if (!trigger) {
+    return;
+  }
+  const scale = resolveEpisodeQuickAssetToggleScale(layer);
+  const triggerRect = trigger.getBoundingClientRect();
+  const gap = 8;
+  const viewportPadding = 12;
+  const minVisibleHeight = 240;
+  const viewportWidth = Number(globalThis.window?.innerWidth ?? 0) / scale;
+  const viewportHeight = Number(globalThis.window?.innerHeight ?? 0) / scale;
+  layer.style.removeProperty("height");
+  layer.style.removeProperty("max-height");
+  const width = Number(layer.offsetWidth || 0) || Math.min(448, Math.max(0, viewportWidth - viewportPadding * 2));
+  let left = triggerRect.left / scale;
+  if (viewportWidth > 0 && left + width > viewportWidth - viewportPadding) {
+    left = Math.max(viewportPadding, viewportWidth - viewportPadding - width);
+  } else {
+    left = Math.max(viewportPadding, left);
+  }
+  const triggerTop = triggerRect.top / scale;
+  const triggerBottom = triggerRect.bottom / scale;
+  const availableAbove = Math.max(0, triggerTop - viewportPadding - gap);
+  const availableBelow = viewportHeight > 0
+    ? Math.max(0, viewportHeight - triggerBottom - viewportPadding - gap)
+    : availableAbove;
+  const preferredHeight = Number(layer.offsetHeight || 0) || minVisibleHeight;
+  const preferAbove = availableAbove >= minVisibleHeight || availableAbove >= availableBelow;
+  const available = preferAbove ? availableAbove : availableBelow;
+  const nextHeight = Math.max(0, Math.min(preferredHeight, available));
+  const top = preferAbove
+    ? Math.max(viewportPadding, triggerTop - nextHeight - gap)
+    : triggerBottom + gap;
+  layer.style.setProperty("top", `${top}px`);
+  layer.style.setProperty("left", `${left}px`);
+  layer.style.setProperty("height", `${nextHeight}px`);
+  layer.style.setProperty("max-height", `${nextHeight}px`);
+}
+
 function positionPromptMentionSurface(workbench, textarea = null) {
   positionPromptMentionMenu(workbench, textarea);
   positionPromptMentionPreview(workbench, textarea);
@@ -57668,6 +58036,9 @@ function hydratePersistedWorkbenchState(workbench) {
   if (typeof persisted.projectAssetTab === "string") {
     workbench.ui.projectAssetTab = persisted.projectAssetTab;
   }
+  if (typeof persisted.projectEpisodesTab === "string") {
+    workbench.ui.projectEpisodesTab = normalizeProjectEpisodesTab(persisted.projectEpisodesTab);
+  }
   if (typeof persisted.episodeWorkbenchCenterWidthRatio === "number") {
     workbench.ui.episodeWorkbenchCenterWidthRatio = clampEpisodeWorkbenchCenterWidthRatio(
       persisted.episodeWorkbenchCenterWidthRatio,
@@ -57760,6 +58131,13 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.projectInteriorSection = route.section;
     return;
   }
+  if (parseSkillRouteToken(token)) {
+    workbench.ui.activeNavTab = "skills";
+    workbench.ui.projectPanelMode = "library";
+    workbench.ui.selectedEpisodeId = null;
+    workbench.ui.episodeWorkbenchContext = null;
+    return;
+  }
   if (token === "project") {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "library";
@@ -57799,6 +58177,11 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.episodeWorkbenchContext = null;
     if (token === "library") {
       workbench.ui.libraryTeamRoute = "assets";
+    }
+    if (token === "skills") {
+      workbench.ui.skillDetailItem = null;
+      workbench.ui.skillDetailFileIndex = 0;
+      workbench.ui.skillDetailFileMenuOpen = false;
     }
     return;
   }
@@ -57916,6 +58299,39 @@ async function restoreEpisodeRouteState(workbench, locationLike, options = {}) {
   }
 }
 
+async function restoreSkillRouteState(workbench, locationLike, options = {}) {
+  const route = parseSkillRouteFromLocation(locationLike);
+  if (!route) {
+    return false;
+  }
+
+  workbench.ui.activeNavTab = "skills";
+  workbench.ui.projectPanelMode = "library";
+  if (typeof workbench.api?.getSkillDetail !== "function") {
+    return false;
+  }
+
+  try {
+    const result = await workbench.api.getSkillDetail(route.skillId);
+    if (!isCurrentHistoryRouteRestore(workbench, options.requestId)) {
+      return false;
+    }
+    workbench.ui.skillDetailItem = result?.skill ? { ...result.skill, files: result.files ?? [] } : result;
+    workbench.ui.skillDetailFileIndex = 0;
+    workbench.ui.skillDetailFileMenuOpen = false;
+    return true;
+  } catch (error) {
+    if (!isCurrentHistoryRouteRestore(workbench, options.requestId)) {
+      return false;
+    }
+    workbench.ui.skillDetailItem = null;
+    workbench.ui.skillDetailFileIndex = 0;
+    workbench.ui.skillDetailFileMenuOpen = false;
+    workbench.ui.toast = `Skill route restore failed: ${friendlyError(error)}`;
+    return false;
+  }
+}
+
 async function restoreProjectRouteState(workbench, locationLike, options = {}) {
   const route = parseProjectRouteFromLocation(locationLike);
   if (!route) {
@@ -57983,6 +58399,18 @@ export function parseProjectRouteForWorkbench(locationLike) {
   return parseProjectRouteFromLocation(locationLike);
 }
 
+function parseSkillRouteFromLocation(locationLike) {
+  const hashRoute = parseSkillRouteToken(locationLike?.hash ?? "");
+  if (hashRoute) {
+    return hashRoute;
+  }
+  return parseSkillRouteToken(locationLike?.pathname ?? "");
+}
+
+export function parseSkillRouteForWorkbench(locationLike) {
+  return parseSkillRouteFromLocation(locationLike);
+}
+
 function parseEpisodeRouteToken(value) {
   const token = decodeURIComponent(String(value || ""))
     .replace(/^#/, "")
@@ -57995,6 +58423,20 @@ function parseEpisodeRouteToken(value) {
   return {
     projectId: match[1],
     episodeId: match[2],
+  };
+}
+
+function parseSkillRouteToken(value) {
+  const token = decodeURIComponent(String(value || ""))
+    .replace(/^#/, "")
+    .replace(/^\//, "")
+    .replace(/^!\/?/, "");
+  const match = token.match(/^skills\/([^/?#]+)\/?$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    skillId: match[1],
   };
 }
 
@@ -58133,6 +58575,7 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     ),
     episodeWorkbenchCenterWidthVersion: EPISODE_LAYOUT_WIDTH_VERSION,
     projectAssetTab: workbench.ui.projectAssetTab ?? "character",
+    projectEpisodesTab: normalizeProjectEpisodesTab(workbench.ui.projectEpisodesTab),
     storyboards: Array.isArray(workbench.ui.storyboards) ? workbench.ui.storyboards : [],
     episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
     episodeStoryboardPaginationMap: workbench.ui.episodeStoryboardPaginationMap ?? {},
@@ -59125,6 +59568,7 @@ function applyPostRenderEffects(workbench) {
   }
   syncEpisodeWorkbenchLayoutVars(workbench);
   positionPromptMentionSurface(workbench);
+  positionPlazaSkillPicker(workbench);
   scheduleSelectedAssetGenerationPolling(workbench, "image");
   syncProjectAssetGenerationPollingForCurrentView(workbench);
   const episodeWorkbenchScrollTarget = workbench.ui.episodeWorkbenchScrollTarget ?? null;
@@ -62153,7 +62597,12 @@ function readWorkbenchRouteToken(locationLike = globalThis.window?.location) {
   if (hashToken) {
     return hashToken;
   }
-  const pathToken = PUBLIC_PATH_TOKENS.get(normalizeRoutePath(locationLike?.pathname));
+  const normalizedPath = normalizeRoutePath(locationLike?.pathname);
+  const skillRoute = parseSkillRouteToken(normalizedPath);
+  if (skillRoute) {
+    return `skills/${skillRoute.skillId}`;
+  }
+  const pathToken = PUBLIC_PATH_TOKENS.get(normalizedPath);
   return pathToken ?? "";
 }
 
@@ -62164,6 +62613,9 @@ function deriveInitialNavTab(hash, session = {}) {
   }
   if (parseEpisodeRouteToken(token) || parseProjectRouteToken(token)) {
     return "project";
+  }
+  if (parseSkillRouteToken(token) || token === "skills") {
+    return "skills";
   }
   if (token === "community") {
     return "community";
@@ -62188,9 +62640,6 @@ function deriveInitialNavTab(hash, session = {}) {
   }
   if (token === "script") {
     return "script";
-  }
-  if (token === "skills") {
-    return "skills";
   }
   if (token === "toolbox") {
     return "toolbox";
@@ -65164,6 +65613,16 @@ function toggleSkillCreateMenu(menu, open, anchor, relative) {
 function hideSkillCreateMenus(form) {
   toggleSkillCreateMenu(form?.querySelector?.("[data-skill-create-tree-menu]"), false);
   toggleSkillCreateMenu(form?.querySelector?.("[data-skill-create-upload-menu]"), false);
+  form?.querySelectorAll?.("[data-skill-create-picker]").forEach((picker) => toggleSkillCreatePicker(picker, false));
+}
+
+function toggleSkillCreatePicker(picker, open) {
+  if (!picker) return;
+  const menu = picker.querySelector(".skill-create-picker-menu");
+  const trigger = picker.querySelector(".skill-create-picker-trigger");
+  picker.classList.toggle("open", Boolean(open));
+  trigger?.setAttribute("aria-expanded", open ? "true" : "false");
+  toggleSkillCreateMenu(menu, Boolean(open));
 }
 
 function renderSkillCreateTreeFileRow(name, activeName, nested = false) {

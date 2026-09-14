@@ -338,6 +338,7 @@ const adminApiRouteAuthRegistrations = inventoryRegistrations("admin", [
   ["GET", "/api/admin/skills/{skillId}"],
   ["PATCH", "/api/admin/skills/{skillId}"],
   ["PATCH", "/api/admin/skills/{skillId}/status"],
+  ["PATCH", "/api/admin/skills/{skillId}/recommendation"],
   ["POST", "/api/admin/prompt-marketplace/items"],
   ["PATCH", "/api/admin/prompt-marketplace/items/{itemId}"],
   ["PUT", "/api/admin/prompt-defaults/{category}"],

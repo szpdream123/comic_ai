@@ -255,6 +255,7 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
       listCanvasAgentModels: async () => ({ models: [{ modelCode: "text-1", modelLabel: "文本模型", capabilities: { vision: true }, apiKey: "must-not-forward" }] }),
       listGlobalGenerationConfig: async ({ mediaType }) => ({ models: [{ modelId: `${mediaType}-1`, modelName: `${mediaType}模型`, mediaType, apiKey: "must-not-forward" }] }),
       getSkills: async () => ({ items: [{ id: "skill-1", name: "分镜 Skill", description: "用于分镜" }] }),
+      getMySkills: async () => ({ items: [{ id: "skill-mine", name: "我的 Skill", summary: "私人", ownerUserId: "u1" }] }),
     },
     mountRuntime: async (_surface, context) => {
       runtimeContext = context;
@@ -272,10 +273,81 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
     source: "official",
     version: undefined,
     content: "",
+  }, {
+    id: "skill-mine",
+    name: "我的 Skill",
+    description: "私人",
+    summary: "私人",
+    category: "general",
+    source: "mine",
+    version: undefined,
+    content: "",
   }]);
   assert.equal(Object.hasOwn(runtimeContext.modelCatalog[0], "apiKey"), false);
   assert.equal(normalizeAiCanvasRuntimeModel({ modelCode: "m", apiKey: "secret" }).apiKey, undefined);
   assert.equal(normalizeAiCanvasRuntimeSkill({ id: "s", content: "body" }).content, "body");
+  await handle.dispose();
+});
+
+test("AI Canvas adapter hydrates plaza skills from SKILL.md and only the files it names", async () => {
+  const detailCalls = [];
+  let runtimeContext;
+  const adapter = createAiCanvasRuntimeAdapter({
+    creatorApi: {
+      getSkills: async () => ({ items: [{ id: "skill-1", name: "短剧流水线", summary: "广场摘要" }] }),
+      getMySkills: async () => ({ items: [] }),
+      getSkillDetail: async (skillId) => {
+        detailCalls.push(skillId);
+        return {
+          skill: {
+            id: skillId,
+            name: "短剧流水线",
+            summary: "广场摘要",
+            detail: { introduction: "ignored introduction" },
+          },
+          files: [
+            {
+              name: "SKILL.md",
+              content: "---\nname: short-drama-pipeline\n---\n# 入口\n先读 `guides/scene.md`，再读 [角色](packs/character.md)。",
+            },
+            { name: "guides/scene.md", content: "场景提取正文" },
+            { name: "packs/character.md", content: "角色提取正文" },
+            { name: "unused/notes.md", content: "不应注入" },
+          ],
+        };
+      },
+    },
+    mountRuntime: async (_surface, context) => {
+      runtimeContext = context;
+      return { dispose() {} };
+    },
+  });
+  const handle = await adapter.mount({}, { canvasProjectId: "canvas-skill-md" });
+  assert.deepEqual(detailCalls, ["skill-1"]);
+  const skill = runtimeContext.skillCatalog[0];
+  assert.equal(skill.id, "skill-1");
+  assert.match(skill.content, /# 入口/);
+  assert.match(skill.content, /【guides\/scene\.md】\n场景提取正文/);
+  assert.match(skill.content, /【packs\/character\.md】\n角色提取正文/);
+  assert.equal(skill.content.includes("unused/notes.md"), false);
+  assert.equal(skill.content.includes("不应注入"), false);
+  assert.equal(skill.content.includes("ignored introduction"), false);
+  assert.equal(normalizeAiCanvasRuntimeSkill({
+    id: "local",
+    files: [
+      { name: "SKILL.md", content: "只用 `docs/a.md`" },
+      { name: "docs/a.md", content: "A" },
+      { name: "docs/b.md", content: "B" },
+    ],
+  }).content, "只用 `docs/a.md`\n\n【docs/a.md】\nA");
+  assert.equal(normalizeAiCanvasRuntimeSkill({
+    id: "basename",
+    files: [
+      { name: "SKILL.md", content: "只写文件名 `scene.md`" },
+      { name: "guides/scene.md", content: "场景提取正文" },
+      { name: "unused/notes.md", content: "不应注入" },
+    ],
+  }).content, "只写文件名 `scene.md`\n\n【guides/scene.md】\n场景提取正文");
   await handle.dispose();
 });
 
@@ -844,11 +916,28 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /import\("\/ai-canvas-runtime\/runtime\.js"\)/);
   assert.doesNotMatch(adapterSource, /mountAssistantLauncher|ai-canvas-agent-launcher/);
   assert.match(chatPanelSource, /chat-panel-input-toolbar-left/);
-  assert.match(chatPanelSource, /lucide:notebook-pen/);
+  assert.match(chatPanelSource, /tabler:file-spark/);
+  assert.match(chatPanelSource, /chat-skill-source-tabs/);
+  assert.match(chatPanelSource, /b\(`我的`\)/);
+  assert.match(chatPanelSource, /b\(`通用`\)/);
+  assert.match(runtimeAssetSource, /sourceKind:`official`/);
+  assert.match(adapterSource, /getMySkills/);
   assert.match(chatPanelSource, /lucide:circle-check/);
+  assert.match(chatPanelSource, /className:`agent-mode-trigger /);
+  assert.match(chatPanelSource, /icon:`lucide:sparkles`/);
+  assert.match(chatPanelSource, /lucide:chevron-down/);
+  assert.match(chatPanelSource, /jsx\)\(`strong`/);
+  assert.match(chatPanelSource, /jsx\)\(`small`/);
+  assert.match(chatPanelSource, /只生成执行计划/);
+  assert.doesNotMatch(chatPanelSource, /icon:i\.icon/);
+  assert.match(brandCss, /\.agent-mode-selector > \.agent-mode-trigger/);
+  assert.match(brandCss, /\.agent-mode-selector > \.agent-mode-trigger > :first-child/);
+  assert.match(brandCss, /\.chat-panel-input-toolbar button:not\(\.agent-mode-trigger\):not\(\[role="option"\]\):not\(\.chat-skill-source-tab\)/);
+  assert.match(brandCss, /\.chat-skill-source-tab/);
+  assert.match(brandCss, /\.agent-mode-menu strong/);
   assert.doesNotMatch(chatPanelSource, /icon: "mdi:at"/);
   assert.match(modelSelectorSource, /data-tooltip.*选择模型/);
-  assert.match(appSource, /\.new-canvas-root \.model-selector-trigger[\s\S]*?width: 32px !important/);
+  assert.match(appSource, /\.new-canvas-root \.model-selector-trigger[\s\S]*?width: 38px !important/);
   assert.match(appSource, /mountAiCanvasRuntime\(surface/);
   assert.doesNotMatch(appSource, /<iframe|createElement\("iframe"/i);
   assert.match(appSource, /dataset\.aiCanvasRuntimeGlobalStyle/);

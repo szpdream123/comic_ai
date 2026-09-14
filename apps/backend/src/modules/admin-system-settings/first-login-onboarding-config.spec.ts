@@ -54,6 +54,7 @@ test("first-login onboarding exposes useful safe targets at every timeline bound
   assert.equal(firstLoginOnboardingTargets.find((target) => target.key === "project-module-entry")?.action, "set-nav-tab");
   assert.equal(firstLoginOnboardingTargets.find((target) => target.key === "episode-module-entry")?.action, "set-project-interior-section");
   assert.equal(firstLoginOnboardingTargets.find((target) => target.key === "prompt-skill-selector")?.action, "open-episode-prompt-skill-modal");
+  assert.equal(firstLoginOnboardingTargets.find((target) => target.key === "prompt-skill-selector")?.label, "技能skill选择");
 });
 
 test("first-login onboarding keeps new timeline tips only with a compatible safe target", () => {

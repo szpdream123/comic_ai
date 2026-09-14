@@ -15,6 +15,7 @@ import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-login-onboarding.js";
 import {
+  EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
@@ -229,6 +230,11 @@ const ASSET_TABS = [
   { id: "scene", icon: "⌂", label: "场景", search: "搜索你所需要的场景" },
   { id: "prop", icon: "✣", label: "道具", search: "搜索你所需要的道具" },
   { id: "other", icon: "◈", label: "音频", search: "搜索你所需要的音频" },
+];
+
+const EPISODE_HUB_TABS = [
+  { id: "episodes", icon: "▣", label: "剧集" },
+  { id: "scripts", icon: "▤", label: "剧本" },
 ];
 
 const SINGLE_EPISODE_AI_TABLE_ORDER = ["script", "scenes", "characters", "props", "storyboards"];
@@ -1352,13 +1358,14 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderHomeAgentSkillPicker(ui)}
     ${renderScriptConversionSkillModal(ui)}
     ${renderEpisodePromptSkillModal({
-      show: ui.episodePromptSkillModalOpen === true && ui.isSingleEpisodeModalOpen === true,
+      show: ui.episodePromptSkillModalOpen === true && (ui.isSingleEpisodeModalOpen === true || ui.homeCreationMode === "workflow"),
       variant: "plaza",
       sourceTab: ui.episodePromptSkillSourceTab,
-      activeCategory: ui.episodePromptSkillCategory,
       officialSkills: ui.episodePlazaOfficialSkills,
-      privateSkills: ui.episodePlazaPrivateSkills,
+      librarySkills: ui.episodePlazaLibrarySkills,
+      mineSkills: ui.episodePlazaMineSkills,
       draftPlazaSkillIds: ui.episodePromptSkillDraftPlazaIds,
+      query: ui.episodePlazaSkillQuery,
       loading: ui.episodePromptSkillLoading,
     })}
     ${renderCanvasTextSkillModal({
@@ -2999,7 +3006,7 @@ export function renderWorkbenchRail(activeNavTab, session = {}, ui = {}) {
   const isAnonymous = !hasActiveSessionUser(session);
   const railTabs = NAV_TABS.filter((tab) => {
     if (isTeamMember && tab.id === "team") return false;
-    if (tab.id === "tools") return false;
+    if (tab.id === "tools" || tab.id === "prompts" || tab.id === "director" || tab.id === "script") return false;
     return tab.id !== "new-canvas" || session?.features?.newCanvas !== false;
   });
   return `
@@ -3481,7 +3488,158 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
 
 function renderProjectEpisodesInterior({ state, ui }) {
   const episodes = getEpisodeHubEntries(state, ui);
-  return renderEpisodeHub({ episodes, ui });
+  const activeTab = normalizeProjectEpisodesTab(ui.projectEpisodesTab);
+  return `
+    <section class="episode-hub-panel" aria-label="剧集工作台">
+      <header class="episode-hub-head">
+        <div class="asset-library-tabs" role="tablist" aria-label="剧集与剧本">
+          ${EPISODE_HUB_TABS.map((tab) => renderProjectEpisodesTab(tab, tab.id === activeTab)).join("")}
+        </div>
+      </header>
+      ${
+        activeTab === "scripts"
+          ? renderProjectEpisodeScriptsInterior({ episodes, state, ui })
+          : renderEpisodeHub({ episodes, ui })
+      }
+    </section>
+  `;
+}
+
+function normalizeProjectEpisodesTab(tab) {
+  return String(tab ?? "") === "scripts" ? "scripts" : "episodes";
+}
+
+function renderProjectEpisodesTab(tab, active) {
+  return `
+    <button
+      class="asset-library-tab ${active ? "active" : ""}"
+      type="button"
+      role="tab"
+      aria-selected="${active ? "true" : "false"}"
+      data-action="set-project-episodes-tab"
+      data-episodes-tab="${escapeHtml(tab.id)}"
+    >
+      <span class="asset-library-tab-icon" aria-hidden="true">${tab.icon}</span>
+      ${escapeHtml(tab.label)}
+    </button>
+  `;
+}
+
+function renderProjectEpisodeScriptsInterior({ episodes = [], state, ui }) {
+  if (!episodes.length) {
+    return `
+      <section class="episode-scripts-shell" aria-label="剧集剧本">
+        <div class="episode-empty-state">
+          <strong>暂无剧集剧本</strong>
+          <span>先在剧集里创建单集，再查看对应剧本。</span>
+        </div>
+      </section>
+    `;
+  }
+
+  const draftMap = ui?.scriptReaderDrafts && typeof ui.scriptReaderDrafts === "object" ? ui.scriptReaderDrafts : {};
+  const requestedId = String(ui.selectedScriptEpisodeId ?? "");
+  const selectedEpisode =
+    episodes.find((episode) => String(episode.id ?? "") === requestedId) ?? episodes[0];
+  const selectedId = String(selectedEpisode?.id ?? "");
+  const selectedText = typeof draftMap[selectedId] === "string"
+    ? draftMap[selectedId]
+    : resolveEpisodeHubScriptText(selectedEpisode, state, ui);
+  return `
+    <section class="episode-scripts-shell" aria-label="剧集剧本">
+      <div class="episode-scripts-layout">
+        <div class="episode-scripts-list">
+          ${episodes.map((episode) => {
+            const episodeId = String(episode.id ?? "");
+            const episodeText = typeof draftMap[episodeId] === "string"
+              ? draftMap[episodeId]
+              : resolveEpisodeHubScriptText(episode, state, ui);
+            return renderProjectEpisodeScriptCard(episode, {
+              selected: selectedId === episodeId,
+              excerpt: summarizeEpisodeScriptExcerpt(episodeText),
+            });
+          }).join("")}
+        </div>
+        <article class="episode-scripts-editor script-reader-content">
+          <header class="script-reader-content-head">
+            <strong title="${escapeAttr(selectedEpisode.title)}">${escapeHtml(truncateEpisodeTitle(selectedEpisode.title))}</strong>
+            <div class="episode-scripts-editor-actions">
+              <button
+                class="script-reader-save"
+                type="button"
+                data-action="save-script-reader-section"
+                data-episode-id="${escapeAttr(selectedId)}"
+              >保存</button>
+              <button
+                class="episode-scripts-reanalyze"
+                type="button"
+                data-action="reanalyze-project-episode-script"
+                data-episode-id="${escapeAttr(selectedId)}"
+              >重新分析</button>
+            </div>
+          </header>
+          <textarea
+            class="script-reader-editor"
+            data-role="script-reader-editor"
+            data-episode-id="${escapeAttr(selectedId)}"
+            aria-label="剧本正文"
+            spellcheck="false"
+            placeholder="填写本集剧本"
+          >${escapeHtml(selectedText)}</textarea>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+function renderProjectEpisodeScriptCard(episode, { selected, excerpt }) {
+  return `
+    <article
+      class="episode-script-card ${selected ? "active" : ""}"
+      data-action="select-project-episode-script"
+      data-episode-id="${escapeAttr(episode.id)}"
+    >
+      <h3 title="${escapeAttr(episode.title)}">${escapeHtml(truncateEpisodeTitle(episode.title))}</h3>
+      <p>${escapeHtml(excerpt)}</p>
+    </article>
+  `;
+}
+
+function resolveEpisodeHubScriptText(episode, state, ui) {
+  const fromEpisode = String(
+    episode?.scriptText ??
+    episode?.inputText ??
+    episode?.text ??
+    episode?.summary ??
+    "",
+  ).trim();
+  if (fromEpisode) {
+    return fromEpisode;
+  }
+
+  const episodeId = String(episode?.id ?? "");
+  const matchedSection = (Array.isArray(ui?.scriptReaderSections) ? ui.scriptReaderSections : [])
+    .find((section) => String(section?.id ?? "") === episodeId);
+  const fromSection = String(matchedSection?.text ?? matchedSection?.body ?? "").trim();
+  if (fromSection) {
+    return fromSection;
+  }
+
+  return String(
+    state?.projectDetail?.script?.inputText ??
+    state?.projectDetail?.script?.text ??
+    state?.script?.inputText ??
+    state?.script?.text ??
+    "",
+  ).trim();
+}
+
+function summarizeEpisodeScriptExcerpt(text) {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "尚未填写本集剧本。";
+  }
+  return normalized.length > 88 ? `${normalized.slice(0, 88)}...` : normalized;
 }
 
 function renderProjectStatsInterior(ui) {
@@ -3901,9 +4059,8 @@ function renderEpisodeHubMenu(episode) {
 function renderSingleEpisodeModal(ui, state = {}) {
   const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
   const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
-  const selectedSkillCount = resolveSelectedEpisodePromptSkills(ui).length;
+  const selectedSkillCount = resolveSelectedEpisodePlazaSkills(ui).length;
   const selectedTextModelCode = resolveSingleEpisodeTextModelCode(ui);
-  const scriptPicker = resolveSingleEpisodeScriptPicker(state, ui);
   const scriptInput = truncateScriptTextByCharacters(ui.singleEpisodeScript, 5000);
   const guideTargetKey = resolveFirstLoginGuideTargetKey(ui.firstLoginGuide);
   return `
@@ -3915,7 +4072,6 @@ function renderSingleEpisodeModal(ui, state = {}) {
           </div>
           <button class="modal-close" type="button" data-action="close-single-episode-modal" aria-label="关闭">×</button>
         </div>
-        ${renderSingleEpisodeScriptImport(scriptPicker, isCheckingAiStoryboard, ui.singleEpisodeScriptImportMenu)}
         <label class="single-episode-field single-episode-script-field ${guideTargetKey === "script-input" ? "first-login-guide-target" : ""}" data-first-login-target="script-input">
           <textarea id="single-episode-script-input" maxlength="5000" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(scriptInput)}</textarea>
           <span class="single-episode-count">${[...scriptInput].length}/5000</span>
@@ -3940,6 +4096,7 @@ function renderSingleEpisodeModal(ui, state = {}) {
                   selectedPlazaSkillIds: ui.selectedEpisodePlazaSkillIds,
                   loading: ui.episodePromptSkillLoading,
                   variant: "plaza",
+                  open: ui.episodePromptSkillModalOpen === true,
                 })}
               </div>
             </div>
@@ -4359,7 +4516,7 @@ function resolveSingleEpisodeAiActionLabel(ui = {}) {
     return "AI 小说分镜";
   }
   const skillCredits = selectedSkills.reduce((sum, skill) => sum + Math.max(0, Number(skill.priceCredits) || 0), 0);
-  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits * 5, skillCredits)}`;
+  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits, skillCredits)}`;
 }
 
 function resolveSelectedEpisodePromptSkills(ui = {}) {
@@ -4435,6 +4592,27 @@ function resolveConfiguredModelCredits(model = {}) {
   const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
     ? model.pricing_json
     : {};
+  const capabilities = model?.capabilities && typeof model.capabilities === "object" && !Array.isArray(model.capabilities)
+    ? model.capabilities
+    : {};
+  const tokenRate = Number(
+    pricing.tokenCreditsPerMillion
+    ?? pricing.token_credits_per_million
+    ?? pricing.canvasAgentTokenCreditsPerMillion
+    ?? pricingJson.tokenCreditsPerMillion
+    ?? pricingJson.token_credits_per_million
+    ?? pricingJson.canvasAgentTokenCreditsPerMillion
+    ?? pricingSnakeJson.tokenCreditsPerMillion
+    ?? pricingSnakeJson.token_credits_per_million
+    ?? pricingSnakeJson.canvasAgentTokenCreditsPerMillion
+    ?? model?.tokenCreditsPerMillion,
+  );
+  if (Number.isFinite(tokenRate) && tokenRate > 0) {
+    const contextWindow = Number(capabilities.contextWindow ?? capabilities.context_window ?? 32_000);
+    const estimatedTokens = Math.max(1, Number.isFinite(contextWindow) && contextWindow > 0 ? Math.trunc(contextWindow) : 32_000);
+    const minimumCredits = Math.max(1, Math.ceil(Number(pricing.minimumCredits ?? pricingJson.minimumCredits ?? pricingSnakeJson.minimumCredits) || 1));
+    return String(Math.max(1, Math.ceil((estimatedTokens * tokenRate) / 1_000_000), minimumCredits));
+  }
   const candidates = [
     pricing.baseCredits,
     pricing.credits,
@@ -5758,6 +5936,8 @@ function resolveEpisodePromptSkillItems(ui = {}) {
 function resolveEpisodePlazaSkillItems(ui = {}) {
   return [
     ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine"),
     ...normalizePlazaEpisodeSkills(ui.episodePlazaPrivateSkills, "private"),
   ];
 }
@@ -5926,6 +6106,10 @@ function getEpisodeHubEntries(state, ui) {
       createdAt: episode.createdAt ?? fallbackProjectCreatedAt,
       createdAtMs: getEpisodeCreatedAtValue(episode.createdAt ?? fallbackProjectCreatedAt),
       storyboardCount: episode.storyboardCount ?? 0,
+      scriptText: episode.scriptText ?? null,
+      inputText: episode.inputText ?? null,
+      text: episode.text ?? null,
+      summary: episode.summary ?? null,
       coverImageUrl: episode.coverImageUrl ?? episode.cover_image_url ?? null,
       coverStorageObjectId: episode.coverStorageObjectId ?? episode.cover_storage_object_id ?? null,
       previewMedia: getEpisodePreviewMedia(
@@ -8888,7 +9072,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "skills") {
     return renderScrollableWorkbenchSurface("skills", `
-      ${ui.skillCreateOpen ? renderSkillCreatePage(ui) : renderSkillPlazaPage(ui)}
+      ${renderSkillPlazaPage(ui)}
+      ${ui.skillCreateOpen ? renderSkillCreatePage(ui) : ""}
       ${renderInlineStatusToast(ui)}
     `);
   }
@@ -8952,27 +9137,51 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     return renderScrollableWorkbenchSurface("toolbox", renderToolboxPage(ui));
   }
 
+function renderSkillCreatePicker(name, options, selectedValue, extraAttrs = "") {
+  const items = Array.isArray(options) ? options : [];
+  const selected = items.find((item) => item.value === selectedValue) ?? items[0];
+  return `<div class="skill-create-picker" data-skill-create-picker="${escapeAttr(name)}">
+    <input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(selected?.value ?? "")}" ${extraAttrs} />
+    <button class="skill-create-picker-trigger" type="button" data-action="toggle-skill-create-picker" aria-haspopup="listbox" aria-expanded="false">
+      <span>${escapeHtml(selected?.label ?? "")}</span>
+      <b aria-hidden="true">⌄</b>
+    </button>
+    <div class="skill-create-picker-menu" role="listbox" hidden>
+      ${items.map((item) => `<button class="skill-create-picker-option ${item.value === selected?.value ? "selected" : ""}" type="button" role="option" aria-selected="${item.value === selected?.value}" data-action="select-skill-create-picker" data-value="${escapeAttr(item.value)}"><span>${escapeHtml(item.label)}</span></button>`).join("")}
+    </div>
+  </div>`;
+}
+
 function renderSkillCreatePage(ui = {}) {
   const draft = ui.skillCreateDraft && typeof ui.skillCreateDraft === "object" ? ui.skillCreateDraft : null;
   const draftDetail = draft?.detail && typeof draft.detail === "object" ? draft.detail : {};
+  const draftCategory = String(draft?.category || "general") === "recommended" ? "general" : String(draft?.category || "general");
   const draftCoverUrl = String(draftDetail.effectImageUrl || draft?.coverUrl || "").trim();
   const draftPreviewUrl = String(draftDetail.effectVideoUrl || draft?.previewUrl || "").trim();
   const draftCoverType = draftPreviewUrl ? "video" : draftCoverUrl ? "image" : "image";
   const draftFiles = Array.isArray(draft?.files) && draft.files.length
     ? draft.files.map((file) => ({ name: String(file.name || file.fileName || "SKILL.md"), content: String(file.content || "") }))
     : [{ name: "SKILL.md", content: String(draftDetail.introduction || "") }];
-  return `<section class="skill-create-page" aria-label="${draft ? "编辑 Skill" : "创建 Skill"}">
+  return `<div class="skill-detail-overlay skill-create-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-create-title">
+    <button class="modal-backdrop-hit" type="button" data-action="close-skill-create" aria-label="关闭"></button>
+    <section class="skill-create-page skill-create-modal" aria-label="${draft ? "编辑 Skill" : "创建 Skill"}">
     <form id="skill-create-form" class="skill-create-page-form" ${draft?.id ? `data-skill-id="${escapeAttr(draft.id)}"` : ""}>
       <header class="skill-create-page-header">
         <h1 id="skill-create-title">${draft ? "编辑Skill" : "创建Skill"}</h1>
-        <button class="skill-create-save" type="button" data-action="create-skill">保存</button>
+        <div class="skill-create-page-actions">
+          <button class="skill-create-save" type="button" data-action="create-skill">保存</button>
+          <button class="skill-detail-close" type="button" data-action="close-skill-create" aria-label="关闭">×</button>
+        </div>
       </header>
       <div class="skill-create-page-body">
         <label class="skill-create-field">
           <span>Skill 名称 <em>*</em></span>
           <input name="name" required minlength="2" maxlength="80" placeholder="给你的 Skill 起个名字" value="${escapeAttr(draft?.name || draft?.title || "")}" />
         </label>
-        <input type="hidden" name="category" value="${escapeAttr(draft?.category || "general")}" />
+        <label class="skill-create-field">
+          <span>Skill 分类 <em>*</em></span>
+          ${renderSkillCreatePicker("category", EPISODE_PLAZA_SKILL_CATEGORIES.filter((item) => item.id !== "recommended").map((item) => ({ value: item.id, label: item.label })), draftCategory, "required")}
+        </label>
         <label class="skill-create-field">
           <span>一句话介绍 <em>*</em></span>
           <span class="skill-create-counter-field">
@@ -9043,12 +9252,12 @@ function renderSkillCreatePage(ui = {}) {
         </label>
         <label class="skill-create-field">
           <span>选择类型</span>
-          <select name="coverType" data-skill-create-cover-type>
-            <option value="image" ${draftCoverType === "image" ? "selected" : ""}>图片</option>
-            <option value="video" ${draftCoverType === "video" ? "selected" : ""}>视频</option>
-            <option value="audio">音频</option>
-            <option value="text">文本</option>
-          </select>
+          ${renderSkillCreatePicker("coverType", [
+            { value: "image", label: "图片" },
+            { value: "video", label: "视频" },
+            { value: "audio", label: "音频" },
+            { value: "text", label: "文本" },
+          ], draftCoverType, "data-skill-create-cover-type")}
         </label>
         <section class="skill-create-cover" data-skill-create-cover>
           <span>上传封面（选填）</span>
@@ -9062,7 +9271,8 @@ function renderSkillCreatePage(ui = {}) {
         <ul class="skill-create-file-list" data-skill-create-file-list hidden></ul>
       </div>
     </form>
-  </section>`;
+    </section>
+  </div>`;
 }
 
 function renderSkillPlazaPage(ui = {}) {
@@ -9080,7 +9290,7 @@ function renderSkillPlazaPage(ui = {}) {
   const activeCategory = String(ui.skillPlazaCategory ?? "recommended");
   const query = String(ui.skillPlazaQuery ?? "").trim().toLowerCase();
   const items = sourceItems.filter((item) =>
-    (activeCategory === "recommended" || String(item.category ?? "") === activeCategory)
+    (activeCategory === "recommended" ? item.isRecommended === true : String(item.category ?? "") === activeCategory)
     && (!query || [item.title, item.name, item.summary].join(" ").toLowerCase().includes(query)),
   );
   const detail = ui.skillDetailItem;
@@ -9137,7 +9347,7 @@ function renderSkillPlazaPage(ui = {}) {
     <nav class="skill-plaza-categories" aria-label="Skill 分类">${categories.map(([id, label]) => `<button type="button" class="${activeCategory === id ? "active" : ""}" data-action="set-skill-plaza-category" data-skill-category="${id}">${label}</button>`).join("")}</nav>
     ${ui.skillPlazaError ? `<p class="skill-plaza-error">${escapeHtml(ui.skillPlazaError)}</p>` : ""}
     <div class="skill-plaza-grid">${ui.skillPlazaLoading ? `<div class="skill-plaza-empty">正在加载 Skill...</div>` : items.length ? items.map(renderCard).join("") : `<div class="skill-plaza-empty">暂无公开 Skill</div>`}</div>
-    ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div>        <div class="skill-detail-actions"><button type="button" aria-label="分享 Skill" title="分享 Skill">↗</button>${detail.isMine ? `<button class="primary" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(detail.id)}">编辑</button>` : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${detail.isMine && detail.reviewComment ? section("审核意见", detail.reviewComment) : ""}${section("简介", detail.summary || detailText.summary)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
+    ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div>        <div class="skill-detail-actions"><button type="button" data-action="copy-skill-share-link" data-skill-id="${escapeAttr(detail.id)}" aria-label="分享" title="分享">${renderCanvasIcon("share")}</button>${detail.isMine ? `<button class="primary" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(detail.id)}">编辑</button>` : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${detail.isMine && detail.reviewComment ? section("审核意见", detail.reviewComment) : ""}${section("简介", detail.summary || detailText.summary)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
   </section>`;
 }
 
@@ -12296,7 +12506,7 @@ function renderCanvasIcon(icon) {
     map: '<path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2V6Z" /><path d="M9 4v14M15 6v14" />',
     markdown: '<path d="M4 6h16v12H4z" /><path d="M7 15V9l3 3 3-3v6M16 9v6m-2-2 2 2 2-2" />',
     minus: '<path d="M5 12h14" />',
-    model: '<rect x="6" y="6" width="12" height="12" rx="2" /><rect x="9" y="9" width="6" height="6" rx="1" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" />',
+    model: '<path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z" /><path d="m7 16.5-4.74-2.85" /><path d="m7 16.5 5-3" /><path d="M7 16.5v5.17" /><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z" /><path d="m17 16.5-5-3" /><path d="m17 16.5 4.74-2.85" /><path d="M17 16.5v5.17" /><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z" /><path d="M12 8 7.26 5.15" /><path d="m12 8 4.74-2.85" /><path d="M12 13.5V8" />',
     panel: '<rect x="4" y="5" width="16" height="14" rx="2" /><path d="M9 5v14" />',
     plus: '<path d="M12 5v14M5 12h14" />',
     role: '<rect x="5" y="5" width="14" height="14" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" />',
@@ -12616,7 +12826,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
     workflow: {
       label: "工作流",
       placeholder: "上传剧本文件",
-      tip: "上传剧本后，AI 会解析内容并创建工作流",
+      tip: "上传剧本后，按所选 Skill 解析并创建工作流",
     },
     free: {
       label: "自由生成",
@@ -12636,6 +12846,10 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
         ${homeCreationMode === "workflow" ? renderHomeWorkflowScriptUpload({
           fileName: homeWorkflowScriptFileName,
           disabled: isTeamMember,
+          skills: resolveEpisodePlazaSkillItems(ui),
+          selectedPlazaSkillIds: ui.selectedEpisodePlazaSkillIds,
+          loading: ui.episodePromptSkillLoading,
+          open: ui.episodePromptSkillModalOpen === true,
         }) : `<form class="home-agent-composer" data-home-agent-form aria-label="${escapeAttr(creationModeCopy.label)} 创作输入">
           <div class="home-agent-composer-content" data-home-agent-attachment-list>
             <div class="home-agent-rich-editor" data-home-agent-prompt contenteditable="${isTeamMember ? "false" : "true"}" role="textbox" aria-multiline="true" aria-label="${escapeAttr(creationModeCopy.label)} 创作指令" data-placeholder="${escapeAttr(creationModeCopy.placeholder)}" spellcheck="true">${renderHomeAgentComposerSegments(homeAgentComposerSegments, selectedHomeAgentModels, homeAgentAttachments, resolveHomeAgentSkillCatalog(ui))}</div>
@@ -12749,7 +12963,7 @@ function renderHomeCreationModeSwitch(activeMode = "agent") {
   const selectedMode = ["agent", "workflow", "free"].includes(activeMode) ? activeMode : "agent";
   const modes = [
     ["agent", "画布Agent", "在画布中通过对话协同创建和编辑内容"],
-    ["workflow", "项目工作流", "上传剧本，自动解析并生成资产与分镜"],
+    ["workflow", "项目工作流", "上传剧本，按所选 Skill 解析并进入工作流"],
     ["free", "自由会话", "在独立会话中直接生成图片、视频和音频"],
   ];
   return `
@@ -12759,7 +12973,14 @@ function renderHomeCreationModeSwitch(activeMode = "agent") {
   `;
 }
 
-function renderHomeWorkflowScriptUpload({ fileName = "", disabled = false } = {}) {
+function renderHomeWorkflowScriptUpload({
+  fileName = "",
+  disabled = false,
+  skills = [],
+  selectedPlazaSkillIds = [],
+  loading = false,
+  open = false,
+} = {}) {
   const hasFile = Boolean(fileName);
   return `
     <form class="home-agent-composer home-workflow-script-upload" data-home-workflow-script-form aria-label="上传剧本并解析">
@@ -12768,12 +12989,21 @@ function renderHomeWorkflowScriptUpload({ fileName = "", disabled = false } = {}
         <button type="button" class="home-workflow-script-picker" data-action="pick-home-workflow-script" ${disabled ? "disabled" : ""}>
           <span class="home-workflow-script-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
           <strong>${hasFile ? "已选择剧本" : "点击或拖拽上传剧本"}</strong>
-          <small>${hasFile ? escapeHtml(fileName) : "自动解析角色、场景和分镜，进入视频制作流程"}</small>
+          <small>${hasFile ? escapeHtml(fileName) : "按所选 Skill 解析剧本，进入对应工作流"}</small>
           ${hasFile ? "" : "<em>支持 DOCX、TXT 格式</em>"}
         </button>
       </div>
       <footer class="home-workflow-script-footer">
-        ${hasFile ? `<button type="button" class="home-workflow-script-clear" data-action="clear-home-workflow-script" ${disabled ? "disabled" : ""}>移除文件</button>` : "<span>仅支持上传剧本文件进行解析</span>"}
+        <div class="home-workflow-script-skill">
+          ${renderEpisodePromptSkillControl({
+            skills,
+            selectedPlazaSkillIds,
+            loading,
+            variant: "plaza",
+            open,
+          })}
+        </div>
+        ${hasFile ? `<button type="button" class="home-workflow-script-clear" data-action="clear-home-workflow-script" ${disabled ? "disabled" : ""}>移除文件</button>` : ""}
         <button type="button" class="home-workflow-script-submit" data-action="submit-home-agent-prompt" ${hasFile && !disabled ? "" : "disabled"}>解析剧本</button>
       </footer>
     </form>

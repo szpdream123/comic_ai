@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../shared/db/test-db.ts";
-import { createSkillPlazaService, SkillPlazaError } from "./skill-plaza.service.ts";
+import { createSkillPlazaService, resolvePlazaSkillWorkflowStages, SkillPlazaError } from "./skill-plaza.service.ts";
 
 describe("skill plaza admin review", { concurrency: false }, () => {
   it("requires review comments for approve and reject, then exposes them on mine/detail", async () => {
@@ -112,6 +112,56 @@ describe("skill plaza admin review", { concurrency: false }, () => {
     }
   });
 
+  it("treats recommendation as an admin flag instead of a category", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "91000000-0000-4000-8000-000000000004";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+         VALUES ($1, '13800139004', 'Skill 作者', 'plain:test-password', 'active')`,
+        [userId],
+      );
+      const service = createSkillPlazaService({ db });
+      const created = await service.create({
+        userId,
+        name: "短剧推荐候选",
+        summary: "把小说转成分镜",
+        category: "recommended",
+        detail: {
+          introduction: "# SKILL.md",
+          usageScene: "小说转分镜",
+          howToUse: "输入小说正文",
+          outputContent: "分镜表",
+        },
+      });
+      assert.equal(created.category, "general");
+      assert.equal(created.isRecommended, false);
+
+      const published = await service.updateStatus({
+        skillId: String(created.id),
+        status: "published",
+        reviewComment: "允许上架",
+      });
+      assert.equal(published.category, "general");
+
+      const recommended = await service.updateRecommendation({
+        skillId: String(created.id),
+        isRecommended: true,
+      });
+      assert.equal(recommended.isRecommended, true);
+      assert.equal(recommended.category, "general");
+
+      const recommendedCatalog = await service.listCatalog({ category: "recommended" });
+      assert.equal(recommendedCatalog.items[0]?.id, created.id);
+      const originalCategory = await service.listCatalog({ category: "general" });
+      assert.equal(originalCategory.items[0]?.id, created.id);
+      const filmCategory = await service.listCatalog({ category: "professional-film" });
+      assert.equal(filmCategory.items.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("persists nested uploaded files onto the skill so admin fileCount is not zero", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -166,5 +216,65 @@ describe("skill plaza admin review", { concurrency: false }, () => {
     } finally {
       await db.close();
     }
+  });
+
+  it("resolves published plaza skills for episode workflow generation", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "91000000-0000-4000-8000-000000000003";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+         VALUES ($1, '13800139003', 'Skill 作者', 'plain:test-password', 'active')`,
+        [userId],
+      );
+      const service = createSkillPlazaService({ db });
+      const created = await service.create({
+        userId,
+        name: "短剧一键转分镜",
+        summary: "把小说转成分镜",
+        category: "short-drama",
+        detail: {
+          introduction: "# SKILL.md\n按短剧节奏拆镜。",
+          usageScene: "小说转分镜",
+          howToUse: "输入小说正文",
+          outputContent: "分镜表",
+          files: [{ name: "SKILL.md", kind: "instruction", content: "# SKILL.md\n按短剧节奏拆镜。" }],
+        },
+      });
+      await service.updateStatus({
+        skillId: String(created.id),
+        status: "published",
+        reviewComment: "允许用于章节创作",
+      });
+      const resolved = await service.resolveWorkflowSkill({ userId, skillId: String(created.id) });
+      assert.equal(resolved.id, String(created.id));
+      assert.equal(resolved.title, "短剧一键转分镜");
+      assert.match(resolved.content, /按短剧节奏拆镜/);
+      assert.deepEqual(resolvePlazaSkillWorkflowStages([resolved], { skipScriptStage: true }), ["shot"]);
+      const usage = await db.query<{ usage_count: number }>("SELECT usage_count FROM skills WHERE id = $1", [created.id]);
+      assert.equal(Number(usage.rows[0]?.usage_count ?? 0), 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("resolves plaza skill workflow stages from declared workflow instead of the comic pipeline", () => {
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "漫画角色一致性",
+      summary: "保持角色三视图一致",
+      outputContent: "角色提示词",
+      workflow: [{ stage: "character" }],
+      content: "角色一致性手册",
+    }], { skipScriptStage: true }), ["character"]);
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "漫画角色一致性",
+      summary: "保持角色三视图一致",
+      files: [{ name: "references/character-extract.md" }],
+    }], { skipScriptStage: true }), ["character"]);
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "通用小说一键转分镜提取",
+      summary: "一键生成工作流",
+      outputContent: "场景、角色、道具和分镜表",
+    }], { skipScriptStage: true }), ["scene", "character", "prop", "shot"]);
   });
 });

@@ -111,6 +111,9 @@ test("home workflow accepts only an uploaded script for parsing", () => {
   assert.match(html, /已选择剧本/);
   assert.match(html, /雨夜车站\.docx/);
   assert.match(html, /data-action="submit-home-agent-prompt"[^>]*>解析剧本/);
+  assert.match(html, /data-action="open-episode-prompt-skill-modal"/);
+  assert.match(html, /home-workflow-script-skill/);
+  assert.doesNotMatch(html, /仅支持上传剧本文件进行解析/);
   assert.doesNotMatch(html, /data-home-agent-prompt/);
 });
 
@@ -204,8 +207,8 @@ test("workflow state opens from cards and closes without changing standard handl
   assert.match(source, /function resolveWorkflowDefaultGenerationScopeMode/);
   assert.match(source, /progress\.total > 0 && progress\.completed === progress\.total \? "storyboard" : "assets"/);
   const homeWorkflowProjectOpen = source.slice(
-    source.indexOf('if (action === "open-project-detail")'),
-    source.indexOf("const selectedProjectCard = findProjectLibraryCard"),
+    source.indexOf('if (action === "select-home-project-workflow-episode")'),
+    source.indexOf('if (action === "open-episode-workbench")'),
   );
   assert.match(homeWorkflowProjectOpen, /scopeMode: resolveWorkflowDefaultGenerationScopeMode\(workbench\)/);
   const batchAction = source.slice(
@@ -253,8 +256,7 @@ test("home workflow submission starts the AI storyboard modal instead of parsing
     source.indexOf('await runAction(workbench, creationMode === "free"'),
   );
 
-  assert.match(workflowSubmit, /syncEpisodePromptSkills\(workbench\)/);
-  assert.match(workflowSubmit, /loadGlobalGenerationConfig\(workbench, \{ fresh: true, mediaType: "text" \}\)/);
+  assert.match(workflowSubmit, /selectedEpisodePlazaSkillIds/);
   assert.match(workflowSubmit, /action: "confirm-single-episode", workflowOrigin: "home"/);
   assert.match(workflowSubmit, /episodeWorkbenchLayout = "workflow"/);
   assert.match(workflowSubmit, /homeWorkflowInstruction = sourceScript/);
@@ -264,10 +266,10 @@ test("home workflow submission starts the AI storyboard modal instead of parsing
   assert.doesNotMatch(workflowSubmit, /enterEpisodeWorkbench\(/);
   assert.match(source, /isManualScriptAnalysis \|\| isHomeWorkflowAnalysis/);
   assert.match(source, /skipScriptStage: true/);
-  assert.match(source, /useDefaultWorkflowStages: true/);
+  assert.match(source, /selectedStages: isHomeWorkflowAnalysis \? homeWorkflowStages : null/);
+  assert.match(source, /activeStage: isHomeWorkflowAnalysis[\s\S]*homeWorkflowStages\?\.\[0\]/);
+  assert.doesNotMatch(source, /selectedStages: isHomeWorkflowAnalysis \? \["scene", "character", "prop", "shot"\]/);
   assert.doesNotMatch(source, /resolveInstructionIntent: true/);
-  assert.match(source, /selectedStages: isHomeWorkflowAnalysis[\s\S]*\["scene", "character", "prop", "shot"\]/);
-  assert.match(source, /activeStage: isHomeWorkflowAnalysis[\s\S]*\? "scene"/);
   assert.match(source, /!workbench\.ui\.singleEpisodeAiPreview\.selectedStages\.includes\("script"\)/);
 });
 

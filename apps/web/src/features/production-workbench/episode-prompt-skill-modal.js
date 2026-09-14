@@ -19,12 +19,112 @@ export const EPISODE_PLAZA_SKILL_CATEGORIES = [
   { id: "general", label: "通用技能", shortLabel: "通用" },
 ];
 
+export const PLAZA_WORKFLOW_STAGES = ["script", "scene", "character", "prop", "shot"];
+const PLAZA_WORKFLOW_STAGE_ALIASES = {
+  script: "script",
+  剧本: "script",
+  转剧本: "script",
+  screenplay: "script",
+  scene: "scene",
+  scenes: "scene",
+  scene_extract: "scene",
+  "scene-extract": "scene",
+  场景: "scene",
+  character: "character",
+  characters: "character",
+  character_extract: "character",
+  "character-extract": "character",
+  角色: "character",
+  人物: "character",
+  prop: "prop",
+  props: "prop",
+  prop_extract: "prop",
+  "prop-extract": "prop",
+  道具: "prop",
+  shot: "shot",
+  shots: "shot",
+  storyboard: "shot",
+  storyboards: "shot",
+  分镜: "shot",
+  拆镜: "shot",
+};
+
+function normalizePlazaWorkflowStageToken(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return PLAZA_WORKFLOW_STAGE_ALIASES[raw]
+    || PLAZA_WORKFLOW_STAGE_ALIASES[raw.toLowerCase()]
+    || PLAZA_WORKFLOW_STAGE_ALIASES[raw.toLowerCase().replace(/[\s_/]+/g, "-")]
+    || "";
+}
+
+function collectPlazaWorkflowStagesFromText(text, collected) {
+  const source = String(text ?? "");
+  if (!source.trim()) return;
+  if (/转剧本|小说转剧本|screenplay|\bscript\b/i.test(source)) collected.add("script");
+  if (/场景|scene(?!board)/i.test(source)) collected.add("scene");
+  if (/角色|人物|character/i.test(source)) collected.add("character");
+  if (/道具|\bprops?\b/i.test(source)) collected.add("prop");
+  if (/分镜|拆镜|storyboard|\bshots?\b/i.test(source)) collected.add("shot");
+}
+
+function collectPlazaWorkflowStagesFromFileName(fileName, collected) {
+  const name = String(fileName ?? "").replace(/\\/g, "/").toLowerCase();
+  if (!name) return;
+  if (/(?:^|\/)(?:script|screenplay|转剧本)/.test(name)) collected.add("script");
+  if (/(?:^|\/)(?:scene[-_]?extract|scenes?)(?:[-_.]|$)/.test(name) || name.includes("场景")) collected.add("scene");
+  if (/(?:^|\/)(?:character[-_]?extract|characters?)(?:[-_.]|$)/.test(name) || name.includes("角色") || name.includes("人物")) collected.add("character");
+  if (/(?:^|\/)(?:prop[-_]?extract|props?)(?:[-_.]|$)/.test(name) || name.includes("道具")) collected.add("prop");
+  if (/(?:^|\/)(?:shot|storyboard)s?(?:[-_.]|$)/.test(name) || name.includes("分镜") || name.includes("拆镜")) collected.add("shot");
+}
+
+export function resolvePlazaSkillWorkflowStages(skills = [], options = {}) {
+  const collected = new Set();
+  for (const skill of Array.isArray(skills) ? skills : []) {
+    const workflow = Array.isArray(skill?.workflow)
+      ? skill.workflow
+      : Array.isArray(skill?.detail?.workflow)
+        ? skill.detail.workflow
+        : [];
+    const explicitStages = workflow
+      .map((item) => {
+        const token = item && typeof item === "object"
+          ? item.stage ?? item.id ?? item.key ?? item.label ?? item.name
+          : item;
+        return normalizePlazaWorkflowStageToken(token);
+      })
+      .filter(Boolean);
+    if (explicitStages.length) {
+      for (const stage of explicitStages) collected.add(stage);
+      continue;
+    }
+    for (const file of Array.isArray(skill?.files) ? skill.files : []) {
+      collectPlazaWorkflowStagesFromFileName(
+        typeof file === "string" ? file : String(file?.name ?? file?.fileName ?? ""),
+        collected,
+      );
+    }
+    collectPlazaWorkflowStagesFromText([
+      skill?.title,
+      skill?.name,
+      skill?.summary,
+      skill?.outputContent,
+      skill?.detail?.outputContent,
+      skill?.content,
+      skill?.detail?.introduction,
+    ].filter(Boolean).join("\n"), collected);
+  }
+  if (options.skipScriptStage === true) collected.delete("script");
+  return PLAZA_WORKFLOW_STAGES.filter((stage) => collected.has(stage));
+}
+
 export function renderEpisodePromptSkillControl({
   skills = [],
   selectedByCategory = {},
   selectedPlazaSkillIds = [],
   loading = false,
   variant = "workflow",
+  open = false,
 } = {}) {
   const selectedSkills = variant === "plaza"
     ? resolvePlazaSelectedSkills(skills, selectedPlazaSkillIds)
@@ -34,10 +134,40 @@ export function renderEpisodePromptSkillControl({
     ? `已选择 ${selectedSkills.length} 项技能`
     : loading
       ? "正在加载技能"
-      : variant === "plaza"
-        ? "请选择技能skill"
-        : "请选择创作技能";
-  const label = variant === "plaza" ? "技能skill" : "创作技能";
+      : "请选择创作技能";
+  const label = variant === "plaza" ? "Skill" : "创作技能";
+  if (variant === "plaza") {
+    return `
+      <section class="episode-prompt-skill-control plaza-skill-chip-control${open ? " is-open" : ""}" aria-label="Skill">
+        <div class="single-episode-look-label">
+          <span>Skill</span>
+          <i aria-hidden="true">?</i>
+        </div>
+        <div class="plaza-skill-chip-row">
+          ${selectedSkills.map((skill) => `
+            <button
+              class="plaza-skill-chip"
+              type="button"
+              data-action="remove-episode-plaza-skill"
+              data-episode-skill-id="${escapeAttr(skill.id)}"
+              title="移除 ${escapeAttr(skill.title)}"
+            >
+              <span aria-hidden="true">⚒</span>
+              <strong>${escapeHtml(skill.title)}</strong>
+            </button>
+          `).join("")}
+          <button
+            class="plaza-skill-chip-add"
+            type="button"
+            data-action="open-episode-prompt-skill-modal"
+            aria-haspopup="dialog"
+            aria-expanded="${open ? "true" : "false"}"
+            aria-label="${selectedSkills.length ? "添加 Skill" : (loading ? "正在加载 Skill" : "请选择 Skill")}"
+          >${selectedSkills.length ? "+" : (loading ? "正在加载 Skill" : "请选择 Skill")}</button>
+        </div>
+      </section>
+    `;
+  }
   return `
     <section class="episode-prompt-skill-control" aria-label="${escapeAttr(label)}">
       <div class="single-episode-look-label">
@@ -64,9 +194,12 @@ export function renderEpisodePromptSkillModal({
   activeCategory = "script",
   officialSkills = [],
   privateSkills = [],
+  librarySkills = [],
+  mineSkills = [],
   draftSelections = {},
   draftPlazaSkillIds = [],
   selectionSkills = [],
+  query = "",
   categories = variant === "plaza" ? EPISODE_PLAZA_SKILL_CATEGORIES : EPISODE_PROMPT_SKILL_CATEGORIES,
   allowClear = true,
   showPagination = false,
@@ -78,6 +211,19 @@ export function renderEpisodePromptSkillModal({
 } = {}) {
   if (!show) return "";
   const plazaMode = variant === "plaza";
+  if (plazaMode) {
+    return renderPlazaSkillPickerModal({
+      sourceTab,
+      officialSkills,
+      librarySkills,
+      mineSkills,
+      privateSkills,
+      draftPlazaSkillIds,
+      query,
+      loading,
+      actions,
+    });
+  }
   const normalizedSource = sourceTab === "private" ? "private" : "official";
   const supportedCategories = Array.isArray(categories) && categories.length
     ? categories
@@ -107,7 +253,7 @@ export function renderEpisodePromptSkillModal({
   const allSkills = [...new Map([...official, ...privateLibrary, ...extraSkills].map((item) => [item.id, item])).values()];
   const matchingSkills = (normalizedSource === "private" ? privateLibrary : official)
     .filter((item) => plazaMode
-      ? category === "recommended" || item.category === category
+      ? (category === "recommended" ? item.isRecommended === true : item.category === category)
       : item.category === category);
   const pagination = normalizedSource === "private" ? privatePagination : officialPagination;
   const pageSize = Math.max(1, Number(pagination?.pageSize) || matchingSkills.length || 1);
@@ -142,7 +288,7 @@ export function renderEpisodePromptSkillModal({
         <nav class="episode-skill-category-tabs" aria-label="${plazaMode ? "Skill 分类" : "提示词分类"}">
           ${supportedCategories.map((item) => {
             const selected = plazaMode
-              ? selectedSkills.some((skill) => item.id === "recommended" || skill.category === item.id)
+              ? selectedSkills.some((skill) => item.id === "recommended" ? skill.isRecommended === true : skill.category === item.id)
               : allSkills.find((skill) => skill.category === item.id && skill.id === String(draftSelections?.[item.id] ?? ""));
             return `
               <button
@@ -242,7 +388,7 @@ export function syncEpisodePromptSkillDraft(root, {
   const categorySummary = layer.querySelector?.(`[data-episode-skill-category-summary="${category}"]`);
   if (categorySummary) {
     const selected = plazaMode
-      ? selectedSkills.some((skill) => category === "recommended" || skill.category === category)
+      ? selectedSkills.some((skill) => category === "recommended" ? skill.isRecommended === true : skill.category === category)
       : Boolean(selectedId);
     categorySummary.textContent = selected ? "✓" : "";
     categorySummary.setAttribute?.("aria-label", selected ? "已选择" : "未选择");
@@ -305,17 +451,136 @@ export function normalizePlazaEpisodeSkills(items = [], source = "") {
   return (Array.isArray(items) ? items : [])
     .map((item) => {
       const category = String(item?.category ?? "").trim() || "general";
+      const title = String(item?.title ?? item?.name ?? "未命名 Skill");
+      const slug = String(item?.slug ?? item?.handle ?? item?.name ?? title)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48);
       return {
         id: String(item?.id ?? ""),
-        title: String(item?.title ?? item?.name ?? "未命名 Skill"),
+        title,
         summary: String(item?.summary ?? ""),
-        category: validCategories.has(category) ? category : "general",
+        slug,
+        category: validCategories.has(category) && category !== "recommended" ? category : "general",
+        isRecommended: item?.isRecommended === true || item?.is_recommended === true,
         priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
-        source: source || (item?.ownerUserId || item?.owner_user_id || item?.isMine ? "private" : "official"),
+        source: source || (item?.isFavorite ? "library" : item?.isMine || item?.ownerUserId || item?.owner_user_id ? "mine" : "official"),
+        isMine: item?.isMine === true || Boolean(item?.ownerUserId || item?.owner_user_id),
+        isFavorite: item?.isFavorite === true || item?.is_favorite === true,
         isDefault: item?.isDefault === true || item?.is_default === true,
+        outputContent: String(item?.outputContent ?? item?.detail?.outputContent ?? ""),
+        workflow: Array.isArray(item?.workflow)
+          ? item.workflow
+          : Array.isArray(item?.detail?.workflow)
+            ? item.detail.workflow
+            : [],
+        files: Array.isArray(item?.files) ? item.files : [],
+        content: String(item?.content ?? item?.detail?.introduction ?? ""),
       };
     })
     .filter((item) => item.id);
+}
+
+function renderPlazaSkillPickerModal({
+  sourceTab = "official",
+  officialSkills = [],
+  librarySkills = [],
+  mineSkills = [],
+  privateSkills = [],
+  draftPlazaSkillIds = [],
+  query = "",
+  loading = false,
+  actions = {},
+} = {}) {
+  const resolvedActions = {
+    close: "close-episode-prompt-skill-modal",
+    source: "set-episode-prompt-skill-source",
+    select: "select-episode-prompt-skill-draft",
+    confirm: "confirm-episode-prompt-skills",
+    create: "open-skill-create-from-picker",
+    browse: "open-skill-plaza-from-picker",
+    detail: "open-skill-detail-from-picker",
+    ...actions,
+  };
+  const normalizedSource = sourceTab === "library" || sourceTab === "mine" || sourceTab === "private"
+    ? (sourceTab === "private" ? "mine" : sourceTab)
+    : "official";
+  const official = normalizePlazaEpisodeSkills(officialSkills, "official");
+  const library = normalizePlazaEpisodeSkills(librarySkills.length ? librarySkills : [], "library");
+  const mine = normalizePlazaEpisodeSkills(mineSkills.length ? mineSkills : privateSkills, "mine");
+  const sourceSkills = normalizedSource === "library" ? library : normalizedSource === "mine" ? mine : official;
+  const queryText = String(query ?? "").trim().toLowerCase();
+  const visibleSkills = sourceSkills.filter((skill) =>
+    !queryText || `${skill.title} ${skill.summary} ${skill.slug} ${skill.category}`.toLowerCase().includes(queryText),
+  );
+  const selectedPlazaIds = normalizePlazaSkillIds(draftPlazaSkillIds);
+  const allSkills = [...new Map([...official, ...library, ...mine].map((item) => [item.id, item])).values()];
+  const selectedSkills = resolvePlazaSelectedSkills(allSkills, selectedPlazaIds);
+  return `
+    <section class="episode-skill-picker-layer plaza-skill-picker-layer" data-episode-skill-picker="true" data-episode-skill-variant="plaza">
+      <div class="plaza-skill-picker-modal" role="dialog" aria-modal="false" aria-labelledby="episode-skill-picker-title">
+        <header class="plaza-skill-picker-header">
+          <h2 id="episode-skill-picker-title">Skill</h2>
+          <div class="plaza-skill-picker-header-actions">
+            <button type="button" data-action="${escapeAttr(resolvedActions.create)}">+ 创建</button>
+            <button type="button" data-action="${escapeAttr(resolvedActions.browse)}">全部</button>
+          </div>
+        </header>
+        <div class="plaza-skill-picker-toolbar">
+          <nav class="plaza-skill-picker-tabs" aria-label="Skill 来源">
+            ${renderPlazaSourceTab("official", "通用", normalizedSource, resolvedActions.source)}
+            ${renderPlazaSourceTab("library", "收藏", normalizedSource, resolvedActions.source)}
+            ${renderPlazaSourceTab("mine", "我的", normalizedSource, resolvedActions.source)}
+          </nav>
+          <label class="plaza-skill-picker-search">
+            <span aria-hidden="true">⌕</span>
+            <input type="search" data-episode-plaza-skill-search value="${escapeAttr(query)}" placeholder="搜索 Skill" aria-label="搜索 Skill" />
+          </label>
+        </div>
+        <div class="plaza-skill-picker-list" role="listbox" aria-multiselectable="true">
+          ${loading
+            ? `<div class="episode-skill-empty">正在加载 Skill...</div>`
+            : visibleSkills.length
+              ? visibleSkills.map((skill) => renderPlazaSkillRow(skill, selectedPlazaIds.includes(skill.id), resolvedActions)).join("")
+              : `<div class="episode-skill-empty">${queryText ? "没有匹配的 Skill" : normalizedSource === "library" ? "暂无收藏 Skill" : normalizedSource === "mine" ? "暂无我的 Skill" : "暂无公开 Skill"}</div>`}
+        </div>
+        <footer class="plaza-skill-picker-footer">
+          <button type="button" data-action="${escapeAttr(resolvedActions.browse)}">没找到合适的？查看全部 Skill ›</button>
+          <strong data-episode-skill-selected-count>已选 ${selectedSkills.length} 项</strong>
+          <button class="plaza-skill-picker-confirm" type="button" data-action="${escapeAttr(resolvedActions.confirm)}" ${disabled(loading)}>确认选择</button>
+        </footer>
+      </div>
+    </section>
+  `;
+}
+
+function renderPlazaSourceTab(id, label, activeTab, action) {
+  return `<button class="${id === activeTab ? "active" : ""}" type="button" data-action="${escapeAttr(action)}" data-skill-source="${id}">${escapeHtml(label)}</button>`;
+}
+
+function renderPlazaSkillRow(skill, selected, actions) {
+  const slug = skill.slug ? `/${skill.slug}` : "";
+  return `
+    <article class="plaza-skill-picker-item ${selected ? "active" : ""}">
+      <button
+        type="button"
+        role="option"
+        aria-selected="${selected ? "true" : "false"}"
+        data-action="${escapeAttr(actions.select)}"
+        data-episode-skill-id="${escapeAttr(skill.id)}"
+        data-skill-category="${escapeAttr(skill.category)}"
+      >
+        <span class="plaza-skill-picker-icon" aria-hidden="true">⚒</span>
+        <span class="plaza-skill-picker-copy">
+          <strong>${escapeHtml(skill.title)}${slug ? `<em>${escapeHtml(slug)}</em>` : ""}</strong>
+          <small>${escapeHtml(skill.summary || plazaCategoryLabel(skill.category))}</small>
+        </span>
+      </button>
+      <button type="button" class="plaza-skill-picker-detail" data-action="${escapeAttr(actions.detail)}" data-skill-id="${escapeAttr(skill.id)}">详情</button>
+    </article>
+  `;
 }
 
 export function normalizePlazaSkillIds(ids = []) {
@@ -331,7 +596,14 @@ export function togglePlazaSkillId(ids = [], skillId = "") {
 
 export function resolvePlazaSelectedSkills(skills = [], selectedIds = []) {
   const selected = new Set(normalizePlazaSkillIds(selectedIds));
-  return normalizePlazaEpisodeSkills(skills).filter((skill) => selected.has(skill.id));
+  const unique = [];
+  const seen = new Set();
+  for (const skill of normalizePlazaEpisodeSkills(skills)) {
+    if (!selected.has(skill.id) || seen.has(skill.id)) continue;
+    seen.add(skill.id);
+    unique.push(skill);
+  }
+  return unique;
 }
 
 export function sumPlazaEpisodeSkillCredits(skills = [], selectedIds = []) {

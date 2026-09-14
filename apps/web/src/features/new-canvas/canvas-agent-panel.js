@@ -20,6 +20,13 @@ import { renderNewCanvasChromeRail, renderNewCanvasUtilityMenu } from "./canvas-
 import { renderCanvasStyleGuide } from "./canvas-style-guide.js";
 import { confirmCanvasAction } from "./canvas-ui-controls.js";
 import { describeGenerationProgress } from "./free-conversation-progress.js";
+import {
+  normalizePlazaEpisodeSkills,
+  normalizePlazaSkillIds,
+  renderEpisodePromptSkillModal,
+  resolvePlazaSelectedSkills,
+  togglePlazaSkillId,
+} from "../production-workbench/episode-prompt-skill-modal.js";
 
 const AGENT_MODES = [
   { id: "plan", label: "规划", description: "Plan 模式：仅分析与规划，只能使用只读工具。" },
@@ -240,6 +247,11 @@ export function ensureCanvasAgentState(ui = {}) {
     taskCenterError: "",
     memoryEvents: [],
     skillItems: [],
+    skillOfficialItems: Array.isArray(previous.skillOfficialItems) ? previous.skillOfficialItems : [],
+    skillLibraryItems: Array.isArray(previous.skillLibraryItems) ? previous.skillLibraryItems : [],
+    skillMineItems: Array.isArray(previous.skillMineItems) ? previous.skillMineItems : [],
+    skillDraftIds: normalizePlazaSkillIds(previous.skillDraftIds),
+    skillSourceTab: previous.skillSourceTab === "library" || previous.skillSourceTab === "mine" ? previous.skillSourceTab : "official",
     skillStatus: "idle",
     skillQuery: "",
     skillMenuOpen: false,
@@ -255,6 +267,11 @@ export function ensureCanvasAgentState(ui = {}) {
     polling: false,
     ...previous,
     mode,
+    skillOfficialItems: Array.isArray(previous.skillOfficialItems) ? previous.skillOfficialItems : [],
+    skillLibraryItems: Array.isArray(previous.skillLibraryItems) ? previous.skillLibraryItems : [],
+    skillMineItems: Array.isArray(previous.skillMineItems) ? previous.skillMineItems : [],
+    skillDraftIds: normalizePlazaSkillIds(previous.skillDraftIds),
+    skillSourceTab: previous.skillSourceTab === "library" || previous.skillSourceTab === "mine" ? previous.skillSourceTab : "official",
     ...(Number(previous.panelWidth) === LEGACY_CANVAS_AGENT_PANEL_WIDTH
       ? { panelWidth: DEFAULT_CANVAS_AGENT_PANEL_WIDTH }
       : {}),
@@ -381,7 +398,7 @@ export function renderCanvasAgentPanel(ui = {}) {
     });
   }
   return `
-    <aside class="canvas-agent-panel ${agent.historyOpen ? "history-open" : panelView === "timeline" ? "" : "has-special-view"}${agent.conversationId ? " has-conversation" : ""}${timelineEmpty ? " timeline-empty" : ""}" data-canvas-agent-panel aria-label="Canvas Agent">
+    <aside class="canvas-agent-panel ${agent.historyOpen ? "history-open" : panelView === "timeline" ? "" : "has-special-view"}${agent.conversationId ? " has-conversation" : ""}${timelineEmpty ? " timeline-empty" : ""}${agent.skillMenuOpen ? " skill-picker-open" : ""}" data-canvas-agent-panel aria-label="Canvas Agent">
       <div class="canvas-agent-resize-handle" data-canvas-agent-resize role="separator" aria-orientation="vertical" aria-label="调整 Agent 面板宽度"></div>
       <header class="canvas-agent-head">
         ${titleMarkup}
@@ -414,8 +431,8 @@ export function renderCanvasAgentPanel(ui = {}) {
           <div class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor>
             <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : mediaOnly ? "描述要生成的图片或视频，可添加参考素材" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
           </div>
-          ${!mediaOnly && agent.skillMenuOpen ? renderAgentSkillPicker(agent, busy) : ""}
         </div>
+        ${!mediaOnly && agent.skillMenuOpen ? renderAgentSkillPicker(agent, busy) : ""}
         <div class="canvas-agent-composer-footer">
           <div class="canvas-agent-composer-left">
             <div class="canvas-agent-mode-picker">
@@ -678,7 +695,7 @@ function renderCurrentTextModelPicker(agent, disabled) {
 }
 
 function renderAgentTextModelIcon() {
-  return '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><rect x="5" y="4" width="14" height="16" rx="2" /><path d="M8.5 9h7M8.5 12h7M8.5 15h4" /></svg>';
+  return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z" /><path d="m7 16.5-4.74-2.85" /><path d="m7 16.5 5-3" /><path d="M7 16.5v5.17" /><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z" /><path d="m17 16.5-5-3" /><path d="m17 16.5 4.74-2.85" /><path d="M17 16.5v5.17" /><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z" /><path d="M12 8 7.26 5.15" /><path d="m12 8 4.74-2.85" /><path d="M12 13.5V8" /></svg>';
 }
 
 function normalizeFreeGenerationKind(value) {
@@ -1187,8 +1204,10 @@ export function createCanvasAgentController({
       input?.addEventListener?.("keydown", (event) => {
         if (!mediaOnly && event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
           agent.skillMenuOpen = true;
+          agent.skillDraftIds = [];
           syncPanel();
           void loadAgentSkills();
+          queueMicrotask(() => surface.querySelector?.("[data-episode-plaza-skill-search]")?.focus?.());
           return;
         }
         if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
@@ -2084,9 +2103,47 @@ export function createCanvasAgentController({
     return agent.taskItems;
   };
 
+  const rowsFromSkillPayload = (payload) => (
+    Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.skills) ? payload.skills : Array.isArray(payload) ? payload : []
+  );
+  const mapAgentSkillItems = (rows, source) => rows.map((skill) => ({
+    id: String(skill.id ?? skill.skillId ?? ""),
+    name: String(skill.name ?? skill.title ?? "未命名 Skill"),
+    title: String(skill.title ?? skill.name ?? "未命名 Skill"),
+    summary: String(skill.summary ?? skill.description ?? ""),
+    category: String(skill.category ?? "general"),
+    slug: String(skill.slug ?? skill.handle ?? skill.name ?? skill.title ?? ""),
+    source: String(source || skill.source || (skill.ownerUserId ? "mine" : "official")),
+    isMine: skill.isMine === true || Boolean(skill.ownerUserId || skill.owner_user_id),
+    isFavorite: skill.isFavorite === true || skill.is_favorite === true,
+    priceCredits: Math.max(0, Math.round(Number(skill.priceCredits ?? skill.price_credits ?? 0) || 0)),
+  })).filter((skill) => skill.id);
+  const collectAgentPlazaSkills = () => [
+    ...normalizePlazaEpisodeSkills(agent.skillOfficialItems, "official"),
+    ...normalizePlazaEpisodeSkills(agent.skillLibraryItems, "library"),
+    ...normalizePlazaEpisodeSkills(agent.skillMineItems, "mine"),
+  ];
+  const insertSelectedAgentSkills = (skills) => {
+    const tokens = (Array.isArray(skills) ? skills : [])
+      .map((skill) => String(skill?.slug || skill?.name || skill?.title || "").trim())
+      .filter(Boolean)
+      .map((token) => token.startsWith("/") ? token : `/${token}`);
+    if (!tokens.length) return false;
+    const prefix = String(agent.promptDraft ?? "").trim() ? `${String(agent.promptDraft).trim()} ` : "";
+    agent.promptDraft = `${prefix}${tokens.join(" ")} `;
+    return true;
+  };
+  const closeAgentSkillMenu = () => {
+    agent.skillMenuOpen = false;
+    agent.skillDraftIds = [];
+    agent.skillQuery = "";
+  };
   const loadAgentSkills = async () => {
     if (disposed || typeof workbench.api?.getSkills !== "function") {
       agent.skillItems = [];
+      agent.skillOfficialItems = [];
+      agent.skillLibraryItems = [];
+      agent.skillMineItems = [];
       agent.skillStatus = "unavailable";
       syncPanel();
       return agent.skillItems;
@@ -2094,18 +2151,32 @@ export function createCanvasAgentController({
     agent.skillStatus = "loading";
     syncPanel();
     try {
-      const payload = await workbench.api.getSkills({ query: agent.skillQuery, page: 1, pageSize: 50 });
-      const rows = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.skills) ? payload.skills : Array.isArray(payload) ? payload : [];
-      agent.skillItems = rows.map((skill) => ({
-        id: String(skill.id ?? skill.skillId ?? ""),
-        name: String(skill.name ?? skill.title ?? "未命名 Skill"),
-        summary: String(skill.summary ?? skill.description ?? ""),
-        category: String(skill.category ?? "general"),
-        source: String(skill.source ?? (skill.ownerUserId ? "mine" : "official")),
-      })).filter((skill) => skill.id);
+      const authenticated = workbench.session?.authenticated !== false;
+      const [catalog, mine, library] = await Promise.all([
+        workbench.api.getSkills({ query: agent.skillQuery, page: 1, pageSize: 50 }),
+        authenticated && typeof workbench.api.getMySkills === "function"
+          ? workbench.api.getMySkills().catch(() => ({ items: [] }))
+          : Promise.resolve({ items: [] }),
+        authenticated && typeof workbench.api.getSkillFavorites === "function"
+          ? workbench.api.getSkillFavorites().catch(() => ({ items: [] }))
+          : authenticated && typeof workbench.api.getSkillLibrary === "function"
+            ? workbench.api.getSkillLibrary().catch(() => ({ items: [] }))
+            : Promise.resolve({ items: [] }),
+      ]);
+      agent.skillOfficialItems = mapAgentSkillItems(rowsFromSkillPayload(catalog), "official");
+      agent.skillMineItems = mapAgentSkillItems(rowsFromSkillPayload(mine), "mine");
+      agent.skillLibraryItems = mapAgentSkillItems(rowsFromSkillPayload(library), "library");
+      const byId = new Map();
+      for (const skill of [...agent.skillOfficialItems, ...agent.skillLibraryItems, ...agent.skillMineItems]) {
+        byId.set(skill.id, skill);
+      }
+      agent.skillItems = [...byId.values()];
       agent.skillStatus = "ready";
     } catch (error) {
       agent.skillItems = [];
+      agent.skillOfficialItems = [];
+      agent.skillLibraryItems = [];
+      agent.skillMineItems = [];
       agent.skillStatus = "unavailable";
       agent.error = friendlyAgentError(error);
     }
@@ -2188,7 +2259,7 @@ export function createCanvasAgentController({
         return true;
       }
       if (agent.skillMenuOpen && !target?.closest?.(".canvas-agent-skill-picker, [data-agent-action=\"toggle-skill-menu\"]")) {
-        agent.skillMenuOpen = false;
+        closeAgentSkillMenu();
         syncPanel();
         return true;
       }
@@ -2235,6 +2306,17 @@ export function createCanvasAgentController({
         }
         return true;
       }
+      if (target?.matches?.("[data-episode-plaza-skill-search]")) {
+        const caret = target.selectionStart;
+        agent.skillQuery = String(target.value ?? "");
+        syncPanel();
+        const input = surface.querySelector?.("[data-episode-plaza-skill-search]");
+        if (input) {
+          input.focus?.();
+          input.setSelectionRange?.(caret, caret);
+        }
+        return true;
+      }
       if (field === "skillQuery") {
         if (mediaOnly) {
           agent.skillQuery = String(target.value ?? "").slice(0, 100);
@@ -2242,8 +2324,14 @@ export function createCanvasAgentController({
           if (results) results.innerHTML = renderFreeConversationSkillResults(agent);
           return true;
         }
+        const caret = target.selectionStart;
         agent.skillQuery = String(target.value ?? "");
         syncPanel();
+        const input = surface.querySelector?.('[data-agent-field="skillQuery"]');
+        if (input) {
+          input.focus?.();
+          input.setSelectionRange?.(caret, caret);
+        }
         return true;
       }
       if (field === "generationModelCode") {
@@ -2340,7 +2428,14 @@ export function createCanvasAgentController({
         queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-skill-library"]')?.focus?.());
         return true;
       }
-      if (event.key === "Enter" && target?.dataset?.agentField === "skillQuery") {
+      if (event.key === "Escape" && agent.skillMenuOpen) {
+        event.preventDefault();
+        closeAgentSkillMenu();
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-skill-menu"]')?.focus?.());
+        return true;
+      }
+      if (event.key === "Enter" && (target?.dataset?.agentField === "skillQuery" || target?.matches?.("[data-episode-plaza-skill-search]"))) {
         event.preventDefault();
         return true;
       }
@@ -2434,16 +2529,70 @@ export function createCanvasAgentController({
       }
       if (action === "toggle-skill-menu") {
         agent.skillMenuOpen = !agent.skillMenuOpen;
-        if (agent.skillMenuOpen && agent.skillStatus !== "ready") await run("load-agent-skills", loadAgentSkills);
+        if (agent.skillMenuOpen) {
+          agent.skillDraftIds = [];
+          if (agent.skillStatus !== "ready") await run("load-agent-skills", loadAgentSkills);
+          else syncPanel();
+          queueMicrotask(() => surface.querySelector?.("[data-episode-plaza-skill-search]")?.focus?.());
+        } else {
+          closeAgentSkillMenu();
+          syncPanel();
+        }
+        return true;
+      }
+      if (action === "close-agent-skill-menu") {
+        closeAgentSkillMenu();
         syncPanel();
         return true;
       }
+      if (action === "set-agent-skill-source") {
+        const source = String(target.dataset.skillSource ?? "");
+        agent.skillSourceTab = source === "library" || source === "mine" ? source : "official";
+        syncPanel();
+        return true;
+      }
+      if (action === "select-agent-skill-draft") {
+        const skillId = String(target.dataset.episodeSkillId ?? target.dataset.skillId ?? "").trim();
+        if (!collectAgentPlazaSkills().some((item) => item.id === skillId)) return true;
+        agent.skillDraftIds = togglePlazaSkillId(agent.skillDraftIds, skillId);
+        syncPanel();
+        return true;
+      }
+      if (action === "confirm-agent-skills") {
+        const selected = resolvePlazaSelectedSkills(collectAgentPlazaSkills(), agent.skillDraftIds);
+        insertSelectedAgentSkills(selected);
+        closeAgentSkillMenu();
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-field="promptDraft"], [data-agent-prompt-input]')?.focus?.());
+        return true;
+      }
+      if (action === "open-agent-skill-create") {
+        closeAgentSkillMenu();
+        agent.panelView = "agents";
+        syncPanel();
+        await run("load-agent-skills", loadAgentSkills);
+        return true;
+      }
+      if (action === "open-agent-skill-plaza") {
+        closeAgentSkillMenu();
+        agent.panelView = "agents";
+        syncPanel();
+        await run("load-agent-skills", loadAgentSkills);
+        return true;
+      }
+      if (action === "open-agent-skill-detail") {
+        closeAgentSkillMenu();
+        agent.panelView = "agents";
+        syncPanel();
+        await run("load-agent-skills", loadAgentSkills);
+        return true;
+      }
       if (action === "select-agent-skill") {
-        const skill = (Array.isArray(agent.skillItems) ? agent.skillItems : []).find((item) => item.id === String(target.dataset.skillId ?? ""));
+        const skill = collectAgentPlazaSkills().find((item) => item.id === String(target.dataset.skillId ?? ""))
+          || (Array.isArray(agent.skillItems) ? agent.skillItems : []).find((item) => item.id === String(target.dataset.skillId ?? ""));
         if (!skill) return true;
-        const prefix = agent.promptDraft.trim() ? `${agent.promptDraft.trim()} ` : "";
-        agent.promptDraft = `${prefix}/${skill.name} `;
-        agent.skillMenuOpen = false;
+        insertSelectedAgentSkills([skill]);
+        closeAgentSkillMenu();
         syncPanel();
         return true;
       }
@@ -3834,13 +3983,32 @@ function renderAgentSpecialEmpty(title, detail) {
 }
 
 function renderAgentSkillPicker(agent, busy) {
-  const query = String(agent.skillQuery ?? "").trim().toLowerCase();
-  const skills = (Array.isArray(agent.skillItems) ? agent.skillItems : [])
-    .filter((skill) => !query || `${skill.name} ${skill.summary} ${skill.category}`.toLowerCase().includes(query));
-  return `<div class="canvas-agent-skill-picker" role="listbox" aria-label="Skill">
-    <div class="canvas-agent-skill-picker-head"><strong>调用 Skill</strong><input type="search" data-agent-field="skillQuery" value="${escapeAttr(agent.skillQuery)}" placeholder="搜索 Skill" /></div>
-    ${skills.length ? skills.map((skill) => `<button type="button" role="option" data-agent-action="select-agent-skill" data-skill-id="${escapeAttr(skill.id)}" ${busy ? "disabled" : ""}><span>/</span><strong>${escapeHtml(skill.name)}</strong><small>${escapeHtml(skill.summary || skill.category)}</small></button>`).join("") : renderAgentSpecialEmpty(agent.skillStatus === "loading" ? "正在加载 Skill" : "暂无可用 Skill", "使用智能体中心刷新 Skill 目录。")}
-  </div>`;
+  const markup = renderEpisodePromptSkillModal({
+    show: true,
+    variant: "plaza",
+    sourceTab: agent.skillSourceTab === "library" || agent.skillSourceTab === "mine" ? agent.skillSourceTab : "official",
+    officialSkills: agent.skillOfficialItems,
+    librarySkills: agent.skillLibraryItems,
+    mineSkills: agent.skillMineItems,
+    draftPlazaSkillIds: agent.skillDraftIds,
+    query: agent.skillQuery,
+    loading: agent.skillStatus === "loading" || busy === true,
+    actions: {
+      close: "close-agent-skill-menu",
+      source: "set-agent-skill-source",
+      select: "select-agent-skill-draft",
+      confirm: "confirm-agent-skills",
+      create: "open-agent-skill-create",
+      browse: "open-agent-skill-plaza",
+      detail: "open-agent-skill-detail",
+    },
+  });
+  return markup
+    .replace(
+      'class="episode-skill-picker-layer plaza-skill-picker-layer"',
+      'class="episode-skill-picker-layer plaza-skill-picker-layer canvas-agent-skill-picker"',
+    )
+    .replaceAll("data-action=", "data-agent-action=");
 }
 
 function renderAgentSkipStepButton(agent, busy) {

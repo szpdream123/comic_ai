@@ -1080,8 +1080,10 @@ describe("production workbench home shell", () => {
 
     assert.match(html, /data-action="set-nav-tab"/);
     assert.doesNotMatch(html, /<span class="rail-label">画布<\/span>/);
+    assert.doesNotMatch(html, /<span class="rail-label">导演台<\/span>/);
+    assert.doesNotMatch(html, /<span class="rail-label">剧本<\/span>/);
     assert.ok(html.indexOf('<span class="rail-label">首页</span>') < html.indexOf('<span class="rail-label">新画布</span>'));
-    assert.ok(html.indexOf('<span class="rail-label">新画布</span>') < html.indexOf('<span class="rail-label">剧本</span>'));
+    assert.ok(html.indexOf('<span class="rail-label">新画布</span>') < html.indexOf('<span class="rail-label">资产库</span>'));
     assert.doesNotMatch(html, /<span class="rail-label">工具箱<\/span>/);
     assert.match(html, /data-action="open-create-modal"/);
     assert.match(html, /data-liquid-ether-root/);
@@ -1984,6 +1986,11 @@ describe("episode workbench asset list layout", () => {
     assert.match(dragFunctionBlock, /episodeQuickAssetToggleClickSuppressedUntil/);
     assert.match(dragFunctionBlock, /persistWorkbenchState\(workbench\)/);
     assert.match(persistedStateBlock, /episodeQuickAssetTogglePosition:\s*normalizeEpisodeQuickAssetTogglePosition/);
+    assert.match(persistedStateBlock, /projectEpisodesTab:\s*normalizeProjectEpisodesTab/);
+    assert.match(
+      source,
+      /if \(typeof persisted\.projectEpisodesTab === "string"\) \{\s*workbench\.ui\.projectEpisodesTab = normalizeProjectEpisodesTab\(persisted\.projectEpisodesTab\);/,
+    );
     assert.match(
       refreshBlock,
       /workbench\.state = typeof workbench\.api\?\.getCreatorState[\s\S]*workbench\.state\.project\.id !== persistedProjectIdBeforeRefresh[\s\S]*hydratePersistedWorkbenchState\(workbench\)/,
@@ -17438,7 +17445,7 @@ describe("production workbench project tab", () => {
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "open-single-episode-flow" },
     });
-    assert.equal(calls.filter(([name]) => name === "getUserScripts").length, 1);
+    assert.equal(calls.filter(([name]) => name === "getUserScripts").length, 0);
   });
 
   it("keeps homepage project entry on episode selection until an episode is confirmed", async () => {
@@ -36225,7 +36232,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-template-id="template-video-result"/);
     assert.doesNotMatch(html, /data-template-id="template-audio"/);
     assert.match(html, /data-template-id="template-upload"/);
-    assert.match(html, /data-tab="director"/);
+    assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="director"/);
     assert.doesNotMatch(html, /交付输出/);
     assert.match(html, /data-action="add-canvas-template"/);
     assert.match(html, /data-action="set-canvas-sidebar-mode"/);
@@ -53234,7 +53241,7 @@ describe("production workbench project tab", () => {
     assert.match(batchEpisodeHtml, /data-action="confirm-batch-episode"/);
   });
 
-  it("renders the independent five-category workflow skill modal in the single-episode flow", () => {
+  it("renders the plaza skill picker in the single-episode flow", () => {
     const state = {
       ...buildProjectState(),
       shots: [],
@@ -53249,32 +53256,16 @@ describe("production workbench project tab", () => {
         projectDetail: state.projectDetail ?? null,
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "EP",
-        episodePromptOfficialSkills: [
-          { id: "official-shot", title: "官方分镜", category: "shot", official: true, priceCredits: 12 },
-          { id: "official-prop", title: "官方道具抽取", category: "prop_extract", official: true, priceCredits: 3 },
-          { id: "official-character", title: "官方人物抽取", category: "character_extract", official: true, priceCredits: 4 },
-          { id: "official-scene", title: "官方场景抽取", category: "scene_extract", official: true, priceCredits: 5 },
+        episodePlazaOfficialSkills: [
+          { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", isRecommended: true, priceCredits: 12 },
         ],
-        episodePromptPrivateSkills: [
-          { id: "personal-skill", title: "我的快节奏改编", category: "script", official: false, priceCredits: 23 },
+        episodePlazaMineSkills: [
+          { id: "plaza-mine", title: "我的快节奏改编", category: "general", priceCredits: 23 },
         ],
-        selectedEpisodePromptSkillIds: {
-          script: "personal-skill",
-          shot: "official-shot",
-          prop_extract: "official-prop",
-          character_extract: "official-character",
-          scene_extract: "official-scene",
-        },
+        selectedEpisodePlazaSkillIds: ["plaza-official", "plaza-mine"],
         episodePromptSkillModalOpen: true,
-        episodePromptSkillSourceTab: "private",
-        episodePromptSkillCategory: "script",
-        episodePromptSkillDraftIds: {
-          script: "personal-skill",
-          shot: "official-shot",
-          prop_extract: "official-prop",
-          character_extract: "official-character",
-          scene_extract: "official-scene",
-        },
+        episodePromptSkillSourceTab: "mine",
+        episodePromptSkillDraftPlazaIds: ["plaza-official", "plaza-mine"],
         episodeGenerationConfig: {
           models: [
             { modelCode: "deepseek-script", mediaType: "text", pricing: { baseCredits: 200 } },
@@ -53293,23 +53284,24 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(singleEpisodeHtml, /创作技能/);
+    assert.match(singleEpisodeHtml, />Skill</);
     assert.match(singleEpisodeHtml, /文本模型/);
     assert.match(singleEpisodeHtml, /data-action="toggle-single-episode-text-model-menu"/);
     assert.match(singleEpisodeHtml, /single-episode-look-trigger/);
-    assert.match(singleEpisodeHtml, /episode-skill-picker-modal/);
-    assert.match(singleEpisodeHtml, /官方技能/);
-    assert.match(singleEpisodeHtml, /私人技能库/);
-    assert.match(singleEpisodeHtml, /转剧本提示词/);
-    assert.match(singleEpisodeHtml, /分镜提示词/);
-    assert.match(singleEpisodeHtml, /道具抽取提示词/);
-    assert.match(singleEpisodeHtml, /人物抽取提示词/);
-    assert.match(singleEpisodeHtml, /场景抽取提示词/);
+    assert.match(singleEpisodeHtml, /plaza-skill-picker-modal/);
+    assert.match(singleEpisodeHtml, /plaza-skill-picker-layer/);
+    assert.match(singleEpisodeHtml, /plaza-skill-chip-control is-open/);
+    assert.match(singleEpisodeHtml, /aria-expanded="true"/);
+    assert.doesNotMatch(singleEpisodeHtml, /episode-skill-picker-scrim/);
+    assert.match(singleEpisodeHtml, />通用</);
+    assert.match(singleEpisodeHtml, />收藏</);
+    assert.match(singleEpisodeHtml, />我的</);
+    assert.match(singleEpisodeHtml, /搜索 Skill/);
     assert.match(singleEpisodeHtml, /我的快节奏改编/);
-    assert.match(singleEpisodeHtml, /episode-selected-skills/);
-    assert.match(singleEpisodeHtml, /已选技能/);
-    assert.match(singleEpisodeHtml, /官方分镜/);
-    assert.match(singleEpisodeHtml, /AI 小说分镜 1000 \+ 47积分/);
+    assert.match(singleEpisodeHtml, /已选 2 项/);
+    assert.match(singleEpisodeHtml, /查看全部 Skill/);
+    assert.match(singleEpisodeHtml, /AI 小说分镜 200 \+ 35积分/);
+    assert.doesNotMatch(singleEpisodeHtml, /转剧本提示词/);
     assert.doesNotMatch(singleEpisodeHtml, /data-action="confirm-single-episode-storyboard"/);
     assert.doesNotMatch(singleEpisodeHtml, /selection-picker-modal/);
     assert.doesNotMatch(singleEpisodeHtml, /题材看点/);
@@ -53320,15 +53312,15 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...baseUi,
-        episodePromptOfficialSkills: baseUi.episodePromptOfficialSkills.map((item) => ({ ...item, priceCredits: 0 })),
-        episodePromptPrivateSkills: baseUi.episodePromptPrivateSkills.map((item) => ({ ...item, priceCredits: 0 })),
+        episodePlazaOfficialSkills: baseUi.episodePlazaOfficialSkills.map((item) => ({ ...item, priceCredits: 0 })),
+        episodePlazaMineSkills: baseUi.episodePlazaMineSkills.map((item) => ({ ...item, priceCredits: 0 })),
       },
     });
-    assert.match(freeSkillsHtml, /AI 小说分镜 1000积分/);
+    assert.match(freeSkillsHtml, /AI 小说分镜 200积分/);
     assert.doesNotMatch(freeSkillsHtml, /\+ 0积分/);
   });
 
-  it("keeps the new workflow skill draft isolated from the original skill picker", async () => {
+  it("keeps the plaza skill draft isolated from the original skill picker", async () => {
     const workbench = {
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
@@ -53338,33 +53330,80 @@ describe("production workbench project tab", () => {
         projectInteriorSection: "episodes",
         isSingleEpisodeModalOpen: true,
         selectedScriptConversionSkillId: "original-script-skill",
-        episodePromptOfficialSkills: [
-          { id: "official-script", title: "官方转剧本", category: "script", priceCredits: 0 },
-          { id: "official-shot", title: "官方分镜", category: "shot", priceCredits: 6 },
+        episodePlazaOfficialSkills: [
+          { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", priceCredits: 0 },
         ],
-        episodePromptPrivateSkills: [
-          { id: "private-shot", title: "私人分镜", category: "shot", priceCredits: 9 },
+        episodePlazaMineSkills: [
+          { id: "plaza-mine", title: "我的短剧 Skill", category: "short-drama", priceCredits: 9 },
         ],
-        selectedEpisodePromptSkillIds: { script: "official-script", shot: "official-shot" },
+        selectedEpisodePlazaSkillIds: ["plaza-official"],
       }),
       root: { innerHTML: "", querySelector() { return null; } },
     };
 
     await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-episode-prompt-skill-modal" } });
-    await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-prompt-skill-source", skillSource: "private" } });
-    await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-prompt-skill-category", skillCategory: "shot" } });
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-prompt-skill-source", skillSource: "mine" } });
     await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "select-episode-prompt-skill-draft", skillCategory: "shot", episodeSkillId: "private-shot" },
+      dataset: { action: "select-episode-prompt-skill-draft", episodeSkillId: "plaza-mine" },
     });
 
-    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "official-shot");
-    assert.equal(workbench.ui.episodePromptSkillDraftIds.shot, "private-shot");
+    assert.deepEqual(workbench.ui.selectedEpisodePlazaSkillIds, ["plaza-official"]);
+    assert.deepEqual(workbench.ui.episodePromptSkillDraftPlazaIds, ["plaza-official", "plaza-mine"]);
     assert.equal(workbench.ui.selectedScriptConversionSkillId, "original-script-skill");
 
     await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-episode-prompt-skills" } });
-    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "private-shot");
+    assert.deepEqual(workbench.ui.selectedEpisodePlazaSkillIds, ["plaza-official", "plaza-mine"]);
     assert.equal(workbench.ui.episodePromptSkillModalOpen, false);
     assert.equal(workbench.ui.selectedScriptConversionSkillId, "original-script-skill");
+  });
+
+  it("does not auto-select a plaza skill before the user confirms a choice", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getPromptMarketplace() {
+          return { items: [] };
+        },
+        async getPromptMarketplaceLibrary() {
+          return { items: [] };
+        },
+        async getSkills() {
+          return {
+            items: [
+              { id: "plaza-official-skill", title: "AI视频提示词优化", category: "general", priceCredits: 0 },
+            ],
+          };
+        },
+        async getMySkills() {
+          return { items: [] };
+        },
+        async getSkillLibrary() {
+          return { items: [] };
+        },
+      },
+      ui: buildProjectUi({
+        homeCreationMode: "workflow",
+        isSingleEpisodeModalOpen: false,
+        selectedEpisodePlazaSkillIds: [],
+        episodePlazaOfficialSkills: [],
+        episodePlazaLibrarySkills: [],
+        episodePlazaMineSkills: [],
+        episodePromptOfficialSkills: [],
+        episodePromptPrivateSkills: [],
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-episode-prompt-skill-modal" } });
+
+    assert.deepEqual(workbench.ui.selectedEpisodePlazaSkillIds, []);
+    assert.deepEqual(workbench.ui.episodePromptSkillDraftPlazaIds, []);
+    assert.equal(workbench.ui.episodePromptSkillModalOpen, true);
+    assert.match(workbench.root.innerHTML, /已选 0 项/);
+    assert.match(workbench.root.innerHTML, /plaza-skill-picker-modal/);
+    assert.doesNotMatch(workbench.root.innerHTML, /episode-skill-picker-scrim/);
+    assert.doesNotMatch(workbench.root.innerHTML, /plaza-skill-chip(?!-)/);
   });
 
   it("renders official and personal novel-to-script skills with combined pricing", () => {
@@ -54149,14 +54188,10 @@ describe("production workbench project tab", () => {
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
           singleEpisodeScript: "任小野把小草托付给闵婶子。",
-          episodePromptOfficialSkills: [
-            { id: "official-script-skill", title: "官方小说转剧本", category: "script", official: true, priceCredits: 9 },
-            { id: "official-shot-skill", title: "官方分镜提示词", category: "shot", official: true, priceCredits: 6 },
+          episodePlazaOfficialSkills: [
+            { id: "plaza-official-skill", title: "官方短剧 Skill", category: "short-drama", official: true, priceCredits: 0 },
           ],
-          selectedEpisodePromptSkillIds: {
-            script: "official-script-skill",
-            shot: "official-shot-skill",
-          },
+        selectedEpisodePlazaSkillIds: ["plaza-official-skill"],
         }),
       },
       root: {
@@ -54175,10 +54210,9 @@ describe("production workbench project tab", () => {
     assert.equal(createdEpisodeCount, 0);
     assert.equal(previewCalls.length, 1);
     assert.equal(previewCalls[0].projectId, "project-1");
-    assert.deepEqual(previewCalls[0].input.skills, {
-      script: "official-script-skill",
-      shot: "official-shot-skill",
-    });
+    assert.equal(previewCalls[0].input.plazaSkillId, "plaza-official-skill");
+    assert.deepEqual(previewCalls[0].input.plazaSkillIds, ["plaza-official-skill"]);
+    assert.equal(Object.prototype.hasOwnProperty.call(previewCalls[0].input, "skills"), false);
     assert.equal(previewCalls[0].input.modelCode, "deepseek-script");
     assert.equal(Object.prototype.hasOwnProperty.call(previewCalls[0].input, "packages"), false);
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
@@ -54322,6 +54356,10 @@ describe("production workbench project tab", () => {
         selectedProjectCardId: "project-1",
         singleEpisodeScript: "工作流原始剧本。",
         singleEpisodeTextModelCode: "deepseek-noval",
+        episodePlazaOfficialSkills: [
+          { id: "plaza-full-skill", title: "通用小说一键转分镜提取", summary: "一键生成工作流", outputContent: "场景、角色、道具和分镜表" },
+        ],
+        selectedEpisodePlazaSkillIds: ["plaza-full-skill"],
         episodeGenerationConfig: {
           models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek", mediaType: "text" }],
         },
@@ -54377,6 +54415,10 @@ describe("production workbench project tab", () => {
         selectedProjectCardId: "project-1",
         singleEpisodeScript: "任小野走入城门。",
         singleEpisodeTextModelCode: "deepseek-noval",
+        episodePlazaOfficialSkills: [
+          { id: "plaza-full-skill", title: "通用小说一键转分镜提取", summary: "一键生成工作流", outputContent: "场景、角色、道具和分镜表" },
+        ],
+        selectedEpisodePlazaSkillIds: ["plaza-full-skill"],
         episodeGenerationConfig: {
           models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek", mediaType: "text" }],
         },
@@ -54395,6 +54437,63 @@ describe("production workbench project tab", () => {
 
     releaseComplete();
     await generation;
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
+  });
+
+  it("runs a home plaza skill as its own stages instead of the comic pipeline", async () => {
+    const previewCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          yield { event: "intent_resolved", data: { stages: ["character"], skipScriptStage: true } };
+          yield { event: "asset_done", data: { stage: "character", title: "角色提示词生成", text: '{"characters":[{"characterName":"任小野"}]}' } };
+          yield { event: "complete", data: {
+            scriptText: "任小野进入乌坦城。",
+            resolvedIntent: { stages: ["character"], skipScriptStage: true },
+            displayTables: {
+              characters: { title: "角色", columns: ["角色名称"], rows: [{ characterName: "任小野" }] },
+            },
+            commitPayload: {
+              scriptText: "任小野进入乌坦城。",
+              characters: [{ characterName: "任小野" }],
+              scenes: [],
+              props: [],
+              storyboards: [],
+            },
+          } };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeScript: "任小野进入乌坦城。",
+        singleEpisodeTextModelCode: "deepseek-noval",
+        episodePlazaOfficialSkills: [
+          { id: "plaza-character-skill", title: "漫画角色一致性", summary: "保持角色三视图一致", outputContent: "角色提示词" },
+        ],
+        selectedEpisodePlazaSkillIds: ["plaza-character-skill"],
+        episodeGenerationConfig: {
+          models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek", mediaType: "text" }],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode", workflowOrigin: "home" },
+    });
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(previewCalls[0].input.plazaSkillId, "plaza-character-skill");
+    assert.deepEqual(previewCalls[0].input.plazaSkillIds, ["plaza-character-skill"]);
+    assert.equal(previewCalls[0].input.skipScriptStage, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(previewCalls[0].input, "useDefaultWorkflowStages"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(previewCalls[0].input, "stages"), false);
+    assert.deepEqual(workbench.ui.singleEpisodeAiPreview.selectedStages, ["character"]);
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
   });
 
@@ -58303,10 +58402,10 @@ describe("storyboard state", () => {
         isScriptModalOpen: false,
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "EP",
-        episodePromptOfficialSkills: [
-          { id: "single-episode-skill", title: "单集小说改编", category: "script", official: true, priceCredits: 15 },
+        episodePlazaOfficialSkills: [
+          { id: "single-episode-skill", title: "单集小说改编", category: "general", official: true, priceCredits: 15 },
         ],
-        selectedEpisodePromptSkillIds: { script: "single-episode-skill" },
+        selectedEpisodePlazaSkillIds: ["single-episode-skill"],
         episodeGenerationConfig: {
           models: [
             {
@@ -58398,6 +58497,19 @@ describe("storyboard state", () => {
             { id: "private-shot-non-default", title: "私人普通分镜技能", category: "shot", official: false, isDefault: false, priceCredits: 2 },
           ] };
         },
+        async getSkills() {
+          return { items: [
+            { id: "plaza-official-skill", title: "官方短剧 Skill", category: "short-drama", priceCredits: 0 },
+          ] };
+        },
+        async getMySkills() {
+          return { items: [
+            { id: "plaza-mine-skill", title: "我的短剧 Skill", category: "general", priceCredits: 9 },
+          ] };
+        },
+        async getSkillLibrary() {
+          return { items: [] };
+        },
         async listGlobalGenerationConfig(options = {}) {
           configCalls.push(options);
           return {
@@ -58454,11 +58566,12 @@ describe("storyboard state", () => {
     assert.deepEqual(configCalls, [{ fresh: true, mediaType: undefined }]);
     assert.equal(workbench.ui.selectedEpisodePromptSkillIds.script, "fresh-script-skill");
     assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "official-shot-default");
-    assert.match(workbench.root.innerHTML, /AI 小说分镜 70 \+ 9积分/);
+    assert.deepEqual(workbench.ui.selectedEpisodePlazaSkillIds, []);
+    assert.match(workbench.root.innerHTML, /AI 小说分镜/);
     assert.doesNotMatch(workbench.root.innerHTML, /AI 小说分镜 200 \+/);
   });
 
-  it("renders inline script and chapter selects and applies the selected chapter", async () => {
+  it("hides inline script and chapter selects and does not fetch the script library", async () => {
     let fetchCount = 0;
     const workbench = {
       root: {
@@ -58483,19 +58596,7 @@ describe("storyboard state", () => {
       api: {
         async getUserScripts() {
           fetchCount += 1;
-          return {
-            scripts: [
-              {
-                id: "script-library",
-                projectId: "project-1",
-                title: "剧本库一号",
-                inputText: "剧本库正文",
-                episodes: [
-                  { id: "episode-1", title: "第一集", scriptText: `第一集正文${"文".repeat(5000)}` },
-                ],
-              },
-            ],
-          };
+          return { scripts: [] };
         },
       },
       ui: {
@@ -58518,206 +58619,14 @@ describe("storyboard state", () => {
       dataset: { action: "open-single-episode-flow" },
     });
 
-    assert.equal(fetchCount, 1);
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, false);
+    assert.equal(fetchCount, 0);
     assert.match(workbench.root.innerHTML, /id="single-episode-script-input" maxlength="5000"/);
-    assert.match(workbench.root.innerHTML, /class="single-episode-script-help"/);
-    assert.match(workbench.root.innerHTML, /role="tooltip">请前往剧本菜单添加/);
+    assert.doesNotMatch(workbench.root.innerHTML, /id="single-episode-script-select"/);
+    assert.doesNotMatch(workbench.root.innerHTML, /id="single-episode-chapter-select"/);
+    assert.doesNotMatch(workbench.root.innerHTML, /class="single-episode-script-help"/);
+    assert.doesNotMatch(workbench.root.innerHTML, /请前往剧本菜单添加/);
+    assert.doesNotMatch(workbench.root.innerHTML, /<span>章节<\/span>/);
     assert.doesNotMatch(workbench.root.innerHTML, /从一句设定、一段对白或完整剧情开始/);
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: {
-        action: "select-single-episode-script-source",
-        scriptId: "script-library",
-      },
-    });
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "toggle-single-episode-import-menu", menuKey: "chapter" },
-    });
-
-    const afterScriptSelectHtml = renderProductionWorkbench(workbench);
-    assert.equal(workbench.ui.singleEpisodeScript, "");
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, true);
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.scriptId, "script-library");
-    assert.match(afterScriptSelectHtml, /id="single-episode-script-select"/);
-    assert.match(afterScriptSelectHtml, /id="single-episode-chapter-select"/);
-    assert.match(afterScriptSelectHtml, /<span>章节<\/span>/);
-    assert.match(afterScriptSelectHtml, /single-episode-script-select-menu/);
-    assert.match(afterScriptSelectHtml, /role="listbox" aria-label="章节"/);
-    assert.match(afterScriptSelectHtml, /第一集/);
-    assert.doesNotMatch(afterScriptSelectHtml, /<select/);
-    assert.doesNotMatch(afterScriptSelectHtml, /single-episode-script-overlay/);
-    assert.equal(workbench.ui.singleEpisodeNotice, "");
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: {
-        action: "apply-single-episode-script",
-        scriptId: "script-library",
-        episodeId: "episode-1",
-      },
-    });
-
-    assert.equal([...workbench.ui.singleEpisodeScript].length, 5000);
-    assert.equal(workbench.ui.singleEpisodeScript.startsWith("第一集正文"), true);
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, false);
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.scriptId, "script-library");
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.selectedEpisodeId, "episode-1");
-    assert.equal(workbench.ui.singleEpisodeScriptPicker.selectedLabel, "剧本库一号 · 第一集");
-  });
-
-  it("keeps the selected script visible in the inline dropdown", async () => {
-    const calls = [];
-    const workbench = {
-      root: {
-        innerHTML: "",
-        querySelector() {
-          return null;
-        },
-      },
-      state: {
-        project: { id: "project-1", name: "灵曦剧厂" },
-        projectDetail: {
-          project: { id: "project-1", name: "灵曦剧厂" },
-          script: {
-            id: "script-main",
-            projectId: "project-1",
-            title: "项目剧本",
-            inputText: "项目剧本正文",
-          },
-        },
-      },
-      session: { user: { phone: "+86 13800138000" } },
-      api: {
-        async getUserScripts(input = {}) {
-          calls.push({ page: input.page, pageSize: input.pageSize });
-          return {
-            scripts: Array.from({ length: 10 }, (_, index) => ({
-              id: `script-${index + 1}`,
-              projectId: "project-1",
-              title: `剧本 ${index + 1}`,
-              inputText: `第 1 集\n剧本 ${index + 1} 正文。`,
-              episodes: [
-                { id: `episode-${index + 1}`, title: "第一集", scriptText: `第一集正文 ${index + 1}` },
-              ],
-            })),
-            pagination: {
-              page: Number(input.page ?? 1),
-              pageSize: Number(input.pageSize ?? 10),
-              total: 11,
-              totalPages: 2,
-            },
-          };
-        },
-      },
-      ui: {
-        activeNavTab: "project",
-        projectPanelMode: "detail",
-        projectInteriorSection: "episodes",
-        storyboards: [],
-        selectedStoryboardId: null,
-        storyboardPage: 1,
-        storyboardPageSize: 10,
-        isSingleEpisodeModalOpen: true,
-        singleEpisodeScript: "",
-        singleEpisodeScriptPicker: { open: false, scriptId: "", selectedLabel: "", selectedScript: null, page: 1 },
-        singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
-        singleEpisodeNotice: "",
-        toast: "",
-      },
-    };
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "toggle-single-episode-script-picker" },
-    });
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "select-single-episode-script-source", scriptId: "script-1" },
-    });
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "toggle-single-episode-import-menu", menuKey: "script" },
-    });
-
-    const html = renderProductionWorkbench(workbench);
-    assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0], { page: 1, pageSize: 100 });
-    assert.match(html, /id="single-episode-script-select"/);
-    assert.match(html, /class="is-selected"[\s\S]*?data-script-id="script-1"/);
-    assert.match(html, /剧本 1/);
-    assert.match(html, /单集创建/);
-    assert.doesNotMatch(html, /single-episode-script-picker-pagination/);
-  });
-
-  it("keeps the chapter dropdown disabled when a script has no chapters", async () => {
-    const workbench = {
-      root: {
-        innerHTML: "",
-        querySelector() {
-          return null;
-        },
-      },
-      state: {
-        project: { id: "project-1", name: "灵曦剧厂" },
-        projectDetail: {
-          project: { id: "project-1", name: "灵曦剧厂" },
-          scripts: [
-            {
-              id: "script-empty",
-              projectId: "project-1",
-              title: "空剧本",
-              inputText: "仅有正文，没有章节",
-            },
-          ],
-        },
-      },
-      session: { user: { phone: "+86 13800138000" } },
-      api: {
-        async getUserScripts() {
-          return {
-            scripts: [
-              {
-                id: "script-empty",
-                projectId: "project-1",
-                title: "空剧本",
-                inputText: "仅有正文，没有章节",
-              },
-            ],
-          };
-        },
-      },
-      ui: {
-        activeNavTab: "project",
-        projectPanelMode: "detail",
-        projectInteriorSection: "episodes",
-        storyboards: [],
-        selectedStoryboardId: null,
-        storyboardPage: 1,
-        storyboardPageSize: 10,
-        isSingleEpisodeModalOpen: true,
-        singleEpisodeScript: "",
-        singleEpisodeScriptPicker: { open: false, scriptId: "", selectedLabel: "" },
-        singleEpisodeNotice: "",
-        toast: "",
-      },
-    };
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "toggle-single-episode-script-picker" },
-    });
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: {
-        action: "select-single-episode-script-source",
-        scriptId: "script-empty",
-      },
-    });
-
-    const html = renderProductionWorkbench(workbench);
-    assert.match(html, /空剧本/);
-    assert.match(html, /id="single-episode-chapter-select"[\s\S]*?disabled/);
-    assert.match(html, /当前剧本暂无章节/);
-    assert.doesNotMatch(html, /episode-primary/);
   });
 
   it("adds storyboard 3 with draft status", () => {
