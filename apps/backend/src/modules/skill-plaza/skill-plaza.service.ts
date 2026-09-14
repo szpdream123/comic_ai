@@ -361,6 +361,10 @@ export function createSkillPlazaService(deps: {
     const status = ["draft", "published", "disabled", "rejected"].includes(String(input.status ?? current.status)) ? String(input.status ?? current.status) : String(current.status ?? "draft");
     const previousDetail = current.detail_json && typeof current.detail_json === "object" && !Array.isArray(current.detail_json) ? current.detail_json as Record<string, unknown> : {};
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? { ...previousDetail, ...(input.detail as Record<string, unknown>) } : { ...previousDetail };
+    const requestedFileListPublic = detail.fileListPublic;
+    detail.fileListPublic = requestedFileListPublic === undefined
+      ? (previousDetail.fileListPublic === undefined ? true : previousDetail.fileListPublic === true || previousDetail.fileListPublic === "true" || previousDetail.fileListPublic === 1 || previousDetail.fileListPublic === "1")
+      : requestedFileListPublic === true || requestedFileListPublic === "true" || requestedFileListPublic === 1 || requestedFileListPublic === "1";
     const effectImageUrl = String(detail.effectImageUrl ?? "").trim();
     const effectVideoUrl = String(detail.effectVideoUrl ?? "").trim();
     if (effectImageUrl && effectVideoUrl) throw new SkillPlazaError(400, "skill_effect_media_conflict", "效果图和效果视频只能选择一个");
@@ -368,7 +372,7 @@ export function createSkillPlazaService(deps: {
     detail.effectVideoUrl = effectVideoUrl;
     if (Array.isArray(input.files)) {
       const files = input.files.map((file) => ({ name: String((file as Record<string, unknown>)?.name ?? "").trim(), kind: String((file as Record<string, unknown>)?.kind ?? "instruction").trim() || "instruction", content: String((file as Record<string, unknown>)?.content ?? "") })).filter((file) => file.name && file.content);
-      if (files.length > 10) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 10 个");
+      if (files.length > 50) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 50 个");
       if (files.some((file) => file.content.length > 5 * 1024 * 1024)) throw new SkillPlazaError(400, "skill_file_too_large", "单个 Skill 文件不能超过 5 MB");
       detail.files = files;
     }
@@ -385,6 +389,10 @@ export function createSkillPlazaService(deps: {
       ? String(input.status ?? "draft")
       : "draft";
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? { ...(input.detail as Record<string, unknown>) } : {};
+    const requestedFileListPublic = detail.fileListPublic;
+    detail.fileListPublic = requestedFileListPublic === undefined
+      ? true
+      : requestedFileListPublic === true || requestedFileListPublic === "true" || requestedFileListPublic === 1 || requestedFileListPublic === "1";
     const effectImageUrl = String(detail.effectImageUrl ?? "").trim();
     const effectVideoUrl = String(detail.effectVideoUrl ?? "").trim();
     if (effectImageUrl && effectVideoUrl) throw new SkillPlazaError(400, "skill_effect_media_conflict", "效果图和效果视频只能选择一个");
@@ -395,7 +403,7 @@ export function createSkillPlazaService(deps: {
       kind: String((file as Record<string, unknown>)?.kind ?? "instruction").trim() || "instruction",
       content: String((file as Record<string, unknown>)?.content ?? ""),
     })).filter((file) => file.name && file.content) : [];
-    if (files.length > 10) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 10 个");
+    if (files.length > 50) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 50 个");
     if (files.some((file) => file.content.length > 5 * 1024 * 1024)) throw new SkillPlazaError(400, "skill_file_too_large", "单个 Skill 文件不能超过 5 MB");
     detail.files = files;
     const row = await queryOne<Record<string, unknown>>(deps.db,
@@ -469,6 +477,27 @@ export function createSkillPlazaService(deps: {
       ownerUserId: row.owner_user_id ? String(row.owner_user_id) : null,
       priceCredits: 0,
     };
+  }
+
+  async function findAccessibleSkillIdByName(input: { userId: string; name: string }) {
+    const name = String(input.name ?? "").trim();
+    if (!name) return null;
+    const row = await queryOne<{ id: string }>(
+      deps.db,
+      `SELECT skill.id
+       FROM skills skill
+       WHERE lower(skill.name) = lower($1)
+         AND skill.status <> 'disabled'
+         AND (
+           (skill.status = 'published' AND skill.visibility = 'public')
+           OR skill.owner_user_id = $2
+           OR EXISTS (SELECT 1 FROM skill_library library WHERE library.skill_id = skill.id AND library.user_id = $2)
+         )
+       ORDER BY CASE WHEN skill.owner_user_id = $2 THEN 0 ELSE 1 END, skill.usage_count DESC, skill.updated_at DESC
+       LIMIT 1`,
+      [name, input.userId],
+    );
+    return row?.id ? String(row.id) : null;
   }
 
   async function getAdminDetail(skillId: string) {
@@ -571,7 +600,7 @@ export function createSkillPlazaService(deps: {
         content: String(record.content ?? ""),
       };
     }).filter((file) => file.name && file.content.trim()) : [];
-    if (files.length > 10) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 10 个");
+    if (files.length > 50) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 50 个");
     if (files.some((file) => file.content.length > 5 * 1024 * 1024)) throw new SkillPlazaError(400, "skill_file_too_large", "单个 Skill 文件不能超过 5 MB");
     (detail as Record<string, unknown>).files = files;
     const row = await queryOne<Record<string, unknown>>(deps.db,
@@ -606,7 +635,7 @@ export function createSkillPlazaService(deps: {
         content: String(record.content ?? ""),
       };
     }).filter((file) => file.name && file.content.trim()) : [];
-    if (files.length > 10) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 10 个");
+    if (files.length > 50) throw new SkillPlazaError(400, "skill_files_too_many", "Skill 文件最多上传 50 个");
     if (files.some((file) => file.content.length > 5 * 1024 * 1024)) throw new SkillPlazaError(400, "skill_file_too_large", "单个 Skill 文件不能超过 5 MB");
     detail.files = files;
     const row = await queryOne<Record<string, unknown>>(deps.db,
@@ -656,5 +685,5 @@ export function createSkillPlazaService(deps: {
     return { skillId: input.skillId, storageObjectId: input.storageObjectId, fileName, fileKind };
   }
 
-  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
+  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, findAccessibleSkillIdByName, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
 }

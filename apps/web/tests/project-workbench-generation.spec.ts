@@ -17502,6 +17502,58 @@ describe("production workbench project tab", () => {
     assert.equal(calls.some(([name]) => name === "getEpisodeWorkbench"), false);
   });
 
+  it("opens the existing single-episode flow from the homepage episode picker header", async () => {
+    const projectId = "project-home-create-episode-1";
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        project: { id: projectId, name: "首页创建单集项目", phase: "asset_review" },
+        projectDetail: {
+          project: { id: projectId, name: "首页创建单集项目", phase: "asset_review" },
+          episodes: [{ id: "episode-home-create-1", title: "第一集", storyboardCount: 2 }],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        selectedProjectCardId: projectId,
+        homeProjectWorkflowProjectId: projectId,
+        homeWorkflowOrigin: true,
+        selectedEpisodeId: null,
+        projectLibrary: [{ id: projectId, name: "首页创建单集项目" }],
+      }),
+      api: {},
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    const pickerHtml = renderProductionWorkbench(workbench);
+    assert.match(pickerHtml, /home-project-workflow-head is-episode-selection/);
+    assert.match(pickerHtml, /请选择进入的集数/);
+    assert.match(pickerHtml, /class="home-project-workflow-create"[^>]*data-action="open-single-episode-flow"/);
+    assert.doesNotMatch(pickerHtml, /single-episode-modal/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-single-episode-flow" },
+    });
+
+    assert.equal(workbench.ui.activeNavTab, "home");
+    assert.equal(workbench.ui.homeProjectWorkflowProjectId, projectId);
+    assert.equal(workbench.ui.isSingleEpisodeModalOpen, true);
+    const openHtml = renderProductionWorkbench(workbench);
+    assert.match(openHtml, /home-project-workflow-backdrop[\s\S]*single-episode-modal/);
+    assert.match(openHtml, /data-action="confirm-single-episode"/);
+    assert.match(openHtml, /data-action="create-empty-single-episode"/);
+  });
+
   it("centers resource-specific assignment notices for empty team member workspaces", () => {
     const session = { user: { id: "owner-1", actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } };
     const cases = [
@@ -35498,6 +35550,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasProjects[0].id, "remote-canvas-2");
     assert.match(workbench.ui.canvasProjects[0].title, /画布项目 1/);
     assert.equal(workbench.ui.selectedCanvasProjectId, workbench.ui.canvasProjects[0].id);
+    assert.equal(workbench.ui.canvasSessionUiStateReady, true);
     assert.ok(workbench.ui.canvasDocumentsByProject[workbench.ui.selectedCanvasProjectId]);
     assert.equal(workbench.ui.canvasDocument.canvasProjectId, workbench.ui.selectedCanvasProjectId);
     assert.equal("projectId" in workbench.ui.canvasDocument, false);

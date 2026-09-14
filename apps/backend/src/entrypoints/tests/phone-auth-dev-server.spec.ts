@@ -6907,10 +6907,108 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(textChatGateway.calls.length, 1);
       assert.equal(envelope.data.modelRunCount, 1);
       assert.deepEqual(envelope.data.resolvedIntent, { stages: ["character"], skipScriptStage: true });
+      assert.equal(textChatGateway.calls[0]?.prompt ?? "", "任小野进入乌坦城。");
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /【输出顺序】/);
+      assert.match(String(textChatGateway.calls[0]?.messages?.[0]?.content ?? ""), /只生成角色提示词，保持角色一致性/);
       assert.equal(envelope.data.displayTables.characters.rows[0]?.characterName, "任小野");
       assert.deepEqual(envelope.data.commitPayload.scenes, []);
       assert.deepEqual(envelope.data.commitPayload.props, []);
       assert.deepEqual(envelope.data.commitPayload.storyboards, []);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not load default extraction templates when a plaza skill is selected", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 5);
+    await db.query(
+      `
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
+        )
+        VALUES
+          ('11111111-1111-4111-8111-111111111112', 'scene_extract', '自定义场景提示词', '', '后台列表默认场景模板', 'enabled', true, true, NOW(), NOW(), NOW()),
+          ('33333333-3333-4333-8333-333333333334', 'character_extract', '自定义角色提示词', '', '后台列表默认角色模板', 'enabled', true, true, NOW(), NOW(), NOW()),
+          ('22222222-2222-4222-8222-222222222223', 'prop_extract', '自定义道具提示词', '', '后台列表默认道具模板', 'enabled', true, true, NOW(), NOW(), NOW()),
+          ('44444444-4444-4444-8444-444444444445', 'shot', '自定义分镜提示词', '', '后台列表默认分镜模板', 'enabled', true, true, NOW(), NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
+      `,
+    );
+    const skillId = "78787878-7878-4878-8878-787878787878";
+    await db.query(
+      `INSERT INTO skills (
+         id, owner_user_id, name, summary, category, author_name, detail_json, status, visibility, is_recommended
+       ) VALUES (
+         $1, NULL, '导演skill', '按短剧节奏拆镜', 'animation-game', '官方',
+         $2::jsonb, 'published', 'public', true
+       )`,
+      [skillId, JSON.stringify({
+        introduction: "# SKILL.md\n按短剧节奏拆镜，不要套用旧模板。",
+        usageScene: "小说转分镜",
+        howToUse: "上传剧本",
+        outputContent: "场景、角色、道具和分镜表",
+        workflow: [{ stage: "scene" }, { stage: "character" }, { stage: "prop" }, { stage: "shot" }],
+        files: [{ name: "SKILL.md", kind: "instruction", content: "# SKILL.md\n按短剧节奏拆镜，不要套用旧模板。" }],
+      })],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "递出的饭食。", propImagePrompt: "旧布包裹的饭食。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138244");
+      await seedGenerationAccessForPhone(db, "13800138244", 5000);
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "plaza-director-skill");
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-plaza-director-skill",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把饭食递给闵婶子。",
+            skipScriptStage: true,
+            plazaSkillId: skillId,
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200, JSON.stringify(envelope));
+      assert.equal(textChatGateway.calls.length, 4);
+      assert.deepEqual(envelope.data.resolvedIntent, { stages: ["scene", "character", "prop", "shot"], skipScriptStage: true });
+      for (const call of textChatGateway.calls) {
+        assert.doesNotMatch(call.prompt ?? "", /后台列表默认场景模板/);
+        assert.doesNotMatch(call.prompt ?? "", /后台列表默认角色模板/);
+        assert.doesNotMatch(call.prompt ?? "", /后台列表默认道具模板/);
+        assert.doesNotMatch(call.prompt ?? "", /后台列表默认分镜模板/);
+        assert.doesNotMatch(call.prompt ?? "", /【输出顺序】/);
+        assert.match(String(call.messages?.[0]?.content ?? ""), /按短剧节奏拆镜，不要套用旧模板/);
+      }
+      assert.equal(textChatGateway.calls[0]?.prompt ?? "", "任小野把饭食递给闵婶子。");
+      assert.equal(textChatGateway.calls[1]?.prompt ?? "", "任小野把饭食递给闵婶子。");
+      assert.equal(textChatGateway.calls[2]?.prompt ?? "", "任小野把饭食递给闵婶子。");
+      assert.match(textChatGateway.calls[3]?.prompt ?? "", /^任小野把饭食递给闵婶子。/);
+      assert.equal(envelope.data.displayTables.scenes.rows[0]?.sceneName, "闵婶家门前");
     } finally {
       await server.close();
     }

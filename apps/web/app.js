@@ -5,6 +5,12 @@ import {
 } from "./src/features/production-workbench/first-login-onboarding.js";
 import { normalizeAiCanvasRuntimeGrouping } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
+import {
+  normalizePlazaEpisodeSkills,
+  renderEpisodePromptSkillModal,
+  resolvePlazaSelectedSkills,
+  togglePlazaSkillId,
+} from "./src/features/production-workbench/episode-prompt-skill-modal.js";
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
@@ -20,7 +26,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-05";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-06";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -1609,6 +1615,366 @@ function installAiCanvasRuntimeFooterZoomControls(surface) {
   };
 }
 
+function rowsFromAiCanvasRuntimeSkillPayload(payload) {
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.skills)) return payload.skills;
+  return Array.isArray(payload) ? payload : [];
+}
+
+function readAiCanvasRuntimeComposerSlashQuery(composer) {
+  const text = String(composer?.textContent ?? "").replaceAll("\u200B", "");
+  return /(?:^|\s)\/([^\s/]*)$/.exec(text)?.[1] ?? "";
+}
+
+function findAiCanvasRuntimeComposerSlashRange(composer) {
+  if (!composer) return null;
+  const walker = composer.ownerDocument.createTreeWalker(composer, NodeFilter.SHOW_TEXT);
+  let lastText = null;
+  while (walker.nextNode()) lastText = walker.currentNode;
+  if (!lastText) return null;
+  const value = String(lastText.textContent ?? "");
+  const match = /(?:^|\s)\/([^\s/]*)$/.exec(value);
+  if (!match) return null;
+  const range = composer.ownerDocument.createRange();
+  range.setStart(lastText, value.length - match[0].trimStart().length);
+  range.setEnd(lastText, value.length);
+  return range;
+}
+
+function createAiCanvasRuntimeSkillChip(doc, skill) {
+  const id = String(skill?.id ?? "").trim();
+  const label = String(skill?.title ?? skill?.name ?? "Skill").trim() || "Skill";
+  const raw = `@skill{${id}|${encodeURIComponent(label)}}`;
+  const chip = doc.createElement("span");
+  chip.contentEditable = "false";
+  chip.setAttribute("data-chat-reference", "skill");
+  chip.setAttribute("data-chat-reference-raw", raw);
+  chip.setAttribute("aria-label", `Skill ${label}`);
+  chip.className = "mx-0.5 inline-flex max-w-[min(100%,18rem)] select-none items-center align-middle rounded-[7px] border px-2 py-1 text-[12px] font-medium leading-none shadow-sm border-emerald-400/25 bg-emerald-400/10 text-emerald-100";
+  const accent = doc.createElement("span");
+  accent.setAttribute("aria-hidden", "true");
+  accent.className = "mr-1.5 h-3 w-0.5 shrink-0 rounded-full bg-emerald-300/70";
+  chip.append(accent);
+  const text = doc.createElement("span");
+  text.className = "max-w-[12rem] truncate";
+  text.textContent = `/${label}`;
+  chip.append(text);
+  return chip;
+}
+
+function insertAiCanvasRuntimeSkillChips(composer, skills) {
+  const doc = composer?.ownerDocument;
+  const items = (Array.isArray(skills) ? skills : []).filter((skill) => String(skill?.id ?? "").trim());
+  if (!composer || !doc || composer.getAttribute("contenteditable") === "false") return false;
+  composer.focus?.();
+  const selection = doc.defaultView?.getSelection?.() ?? globalThis.getSelection?.();
+  const range = findAiCanvasRuntimeComposerSlashRange(composer) ?? doc.createRange();
+  if (!findAiCanvasRuntimeComposerSlashRange(composer)) {
+    range.selectNodeContents(composer);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  for (const skill of items) {
+    const chip = createAiCanvasRuntimeSkillChip(doc, skill);
+    range.insertNode(chip);
+    const previous = chip.previousSibling;
+    if (!previous || previous.nodeName === "BR" || previous.getAttribute?.("data-chat-reference")) {
+      chip.parentNode?.insertBefore(doc.createTextNode("\u200B"), chip);
+    }
+    const space = doc.createTextNode(" ");
+    chip.parentNode?.insertBefore(space, chip.nextSibling);
+    range.setStart(space, 1);
+    range.collapse(true);
+  }
+  selection?.removeAllRanges?.();
+  selection?.addRange?.(range);
+  composer.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+
+function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  const doc = surface?.ownerDocument ?? globalThis.document;
+  if (!root || !doc?.createElement || typeof MutationObserver !== "function") return () => {};
+
+  let disposed = false;
+  let nesting = false;
+  let open = false;
+  let suppressReopen = false;
+  let openedViaSlash = false;
+  let loading = false;
+  let sourceTab = "official";
+  let query = "";
+  let draftIds = [];
+  let officialSkills = [];
+  let librarySkills = [];
+  let mineSkills = [];
+  let loadToken = 0;
+
+  const findNativeSkillList = () => root.querySelector?.("#chat-skill-suggestions")
+    ?? root.querySelector?.('[role="listbox"][aria-label="Skill 引用"]');
+  const findComposer = () => root.querySelector?.(".chat-panel-textarea");
+  const findInputBox = () => findComposer()?.closest?.(".chat-panel-input-box")
+    ?? root.querySelector?.(".chat-panel-input-box");
+  const findOverlay = () => root.querySelector?.("[data-host-skill-picker]");
+  const hostApi = () => context.api ?? context.creatorApi ?? globalThis.__COMIC_AI_CANVAS_HOST_API__;
+  const collectSkills = () => [
+    ...normalizePlazaEpisodeSkills(officialSkills, "official"),
+    ...normalizePlazaEpisodeSkills(librarySkills, "library"),
+    ...normalizePlazaEpisodeSkills(mineSkills, "mine"),
+  ];
+
+  const hideNativeSkillList = (node) => {
+    if (!node || node.dataset.hostSkillPickerHidden === "true") return;
+    node.dataset.hostSkillPickerHidden = "true";
+    node.setAttribute("aria-hidden", "true");
+    node.style.setProperty("display", "none", "important");
+    node.style.setProperty("visibility", "hidden", "important");
+    node.style.setProperty("pointer-events", "none", "important");
+  };
+
+  const dismissNativeSkillSuggestions = () => {
+    const composer = findComposer();
+    const slashRange = findAiCanvasRuntimeComposerSlashRange(composer);
+    if (slashRange) slashRange.deleteContents();
+    openedViaSlash = false;
+    if (!composer) return;
+    composer.focus?.();
+    const selection = composer.ownerDocument?.defaultView?.getSelection?.() ?? globalThis.getSelection?.();
+    if (!selection?.rangeCount || !composer.contains(selection.anchorNode)) {
+      const range = composer.ownerDocument.createRange();
+      range.selectNodeContents(composer);
+      range.collapse(false);
+      selection?.removeAllRanges?.();
+      selection?.addRange?.(range);
+    }
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  const removeOverlay = () => {
+    findOverlay()?.remove();
+  };
+
+  const renderOverlay = () => {
+    const inputBox = findInputBox();
+    if (!inputBox) return;
+    const markup = renderEpisodePromptSkillModal({
+      show: true,
+      variant: "plaza",
+      sourceTab,
+      officialSkills,
+      librarySkills,
+      mineSkills,
+      draftPlazaSkillIds: draftIds,
+      query,
+      loading,
+      actions: {
+        close: "close-host-skill-picker",
+        source: "set-host-skill-source",
+        select: "select-host-skill-draft",
+        confirm: "confirm-host-skills",
+        create: "open-host-skill-create",
+        browse: "open-host-skill-plaza",
+        detail: "open-host-skill-detail",
+      },
+    })
+      .replace(
+        'class="episode-skill-picker-layer plaza-skill-picker-layer"',
+        'class="episode-skill-picker-layer plaza-skill-picker-layer host-chat-skill-picker" data-host-skill-picker="true"',
+      )
+      .replaceAll("data-action=", "data-host-skill-action=")
+      .replaceAll("data-episode-plaza-skill-search", "data-host-skill-search");
+    nesting = true;
+    try {
+      let overlay = findOverlay();
+      if (!overlay) {
+        overlay = doc.createElement("div");
+        inputBox.append(overlay);
+      } else if (overlay.parentElement !== inputBox) {
+        inputBox.append(overlay);
+      }
+      overlay.outerHTML = markup;
+    } finally {
+      nesting = false;
+    }
+  };
+
+  const seedSkillsFromStore = () => {
+    const rows = Array.isArray(runtimeStore?.getState?.()?.userSkills) ? runtimeStore.getState().userSkills : [];
+    officialSkills = normalizePlazaEpisodeSkills(rows.filter((skill) => skill?.source !== "mine"), "official");
+    mineSkills = normalizePlazaEpisodeSkills(rows.filter((skill) => skill?.source === "mine"), "mine");
+  };
+
+  const loadCatalogs = async () => {
+    const token = ++loadToken;
+    loading = true;
+    seedSkillsFromStore();
+    renderOverlay();
+    const api = hostApi();
+    try {
+      const [catalog, mine, library] = await Promise.all([
+        typeof api?.getSkills === "function" ? api.getSkills({ page: 1, pageSize: 50 }).catch(() => ({ items: [] })) : { items: [] },
+        typeof api?.getMySkills === "function" ? api.getMySkills().catch(() => ({ items: [] })) : { items: [] },
+        typeof api?.getSkillFavorites === "function"
+          ? api.getSkillFavorites().catch(() => ({ items: [] }))
+          : typeof api?.getSkillLibrary === "function"
+            ? api.getSkillLibrary().catch(() => ({ items: [] }))
+            : { items: [] },
+      ]);
+      if (disposed || token !== loadToken) return;
+      officialSkills = normalizePlazaEpisodeSkills(rowsFromAiCanvasRuntimeSkillPayload(catalog), "official");
+      mineSkills = normalizePlazaEpisodeSkills(rowsFromAiCanvasRuntimeSkillPayload(mine), "mine");
+      librarySkills = normalizePlazaEpisodeSkills(rowsFromAiCanvasRuntimeSkillPayload(library), "library");
+    } finally {
+      if (token === loadToken) loading = false;
+      if (!disposed && open && token === loadToken) renderOverlay();
+    }
+  };
+
+  const closePicker = () => {
+    open = false;
+    draftIds = [];
+    query = "";
+    removeOverlay();
+    dismissNativeSkillSuggestions();
+    suppressReopen = Boolean(findNativeSkillList());
+  };
+
+  const openSkills = (options = {}) => {
+    closePicker();
+    void context.onOpenSkills?.(options);
+  };
+
+  const onClick = (event) => {
+    const target = event.target?.closest?.("[data-host-skill-action]");
+    if (!target || !findOverlay()?.contains(target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const action = String(target.dataset.hostSkillAction ?? "");
+    if (action === "close-host-skill-picker") {
+      closePicker();
+      return;
+    }
+    if (action === "set-host-skill-source") {
+      const source = String(target.dataset.skillSource ?? "");
+      sourceTab = source === "library" || source === "mine" ? source : "official";
+      renderOverlay();
+      return;
+    }
+    if (action === "select-host-skill-draft") {
+      const skillId = String(target.dataset.episodeSkillId ?? target.dataset.skillId ?? "").trim();
+      if (!collectSkills().some((skill) => skill.id === skillId)) return;
+      draftIds = togglePlazaSkillId(draftIds, skillId);
+      renderOverlay();
+      return;
+    }
+    if (action === "confirm-host-skills") {
+      const selected = resolvePlazaSelectedSkills(collectSkills(), draftIds);
+      insertAiCanvasRuntimeSkillChips(findComposer(), selected);
+      closePicker();
+      return;
+    }
+    if (action === "open-host-skill-create") {
+      openSkills({ mode: "create" });
+      return;
+    }
+    if (action === "open-host-skill-plaza") {
+      openSkills({
+        mode: "plaza",
+        section: sourceTab === "mine" ? "mine" : sourceTab === "library" ? "library" : "catalog",
+      });
+      return;
+    }
+    if (action === "open-host-skill-detail") {
+      openSkills({ mode: "detail", skillId: String(target.dataset.skillId ?? "").trim() });
+    }
+  };
+
+  const onInput = (event) => {
+    const target = event.target?.closest?.("[data-host-skill-search]");
+    if (!target || !findOverlay()?.contains(target)) return;
+    event.stopPropagation();
+    const caret = target.selectionStart;
+    query = String(target.value ?? "");
+    renderOverlay();
+    const input = findOverlay()?.querySelector?.("[data-host-skill-search]");
+    if (input) {
+      input.focus?.();
+      input.setSelectionRange?.(caret, caret);
+    }
+  };
+
+  const onKeyDown = (event) => {
+    if (!open || !["Escape", "Enter"].includes(event.key) || (event.key === "Enter" && event.shiftKey)) return;
+    if (event.key === "Enter" && event.target?.closest?.("[data-host-skill-search]")) return;
+    if (event.key === "Enter" && !findOverlay()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      closePicker();
+      return;
+    }
+    const selected = resolvePlazaSelectedSkills(collectSkills(), draftIds);
+    insertAiCanvasRuntimeSkillChips(findComposer(), selected);
+    closePicker();
+  };
+
+  const onPointerDown = (event) => {
+    if (!open) return;
+    const target = event.target;
+    if (target?.closest?.("[data-host-skill-picker], .chat-panel-input-box, [aria-label=\"调用 Skill\"]")) return;
+    closePicker();
+  };
+
+  const sync = () => {
+    if (disposed || nesting) return;
+    const native = findNativeSkillList();
+    if (!native) {
+      suppressReopen = false;
+      openedViaSlash = false;
+      if (open) {
+        open = false;
+        draftIds = [];
+        query = "";
+        removeOverlay();
+      }
+      return;
+    }
+    hideNativeSkillList(native);
+    if (suppressReopen) return;
+    if (!open) {
+      open = true;
+      draftIds = [];
+      sourceTab = "official";
+      query = readAiCanvasRuntimeComposerSlashQuery(findComposer());
+      openedViaSlash = Boolean(findAiCanvasRuntimeComposerSlashRange(findComposer()));
+      seedSkillsFromStore();
+      void loadCatalogs();
+      return;
+    }
+    if (!findOverlay()) renderOverlay();
+  };
+
+  root.addEventListener("click", onClick, true);
+  root.addEventListener("input", onInput, true);
+  root.addEventListener("keydown", onKeyDown, true);
+  root.addEventListener("pointerdown", onPointerDown, true);
+  const observer = new MutationObserver(() => sync());
+  observer.observe(root, { childList: true, subtree: true });
+  sync();
+  return () => {
+    disposed = true;
+    loadToken += 1;
+    observer.disconnect();
+    root.removeEventListener("click", onClick, true);
+    root.removeEventListener("input", onInput, true);
+    root.removeEventListener("keydown", onKeyDown, true);
+    root.removeEventListener("pointerdown", onPointerDown, true);
+    open = false;
+    removeOverlay();
+  };
+}
+
 function subscribeAiCanvasRuntimeAssistantPreference(runtimeStore) {
   if (typeof runtimeStore?.subscribe !== "function") return () => {};
   let previousOpen = runtimeStore.getState?.()?.chatOpen;
@@ -1664,6 +2030,173 @@ async function ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context = 
 
   state?.createConversation?.(settledProjectId);
   openAiCanvasRuntimeAssistant(runtimeStore);
+}
+
+function resolveAiCanvasRuntimeAgentMode(mode) {
+  const value = String(mode ?? "").trim().toLowerCase();
+  if (value === "c" || value === "autonomous") return "autonomous";
+  if (value === "plan") return "plan";
+  return "collaborative";
+}
+
+function resolveAiCanvasRuntimeAssistantMediaModelId(runtimeStore, selectedValue) {
+  const models = Array.isArray(runtimeStore?.getState?.()?.config?.generalModels)
+    ? runtimeStore.getState().config.generalModels
+    : [];
+  const matched = matchCanvasRuntimeCatalogModel(models, selectedValue);
+  const id = String(matched?.id ?? "").trim();
+  if (!id) return "";
+  return id.startsWith("general/") ? id : `general/${id}`;
+}
+
+function resolveAiCanvasRuntimeSkillLabel(skill, fallback = "") {
+  return String(
+    skill?.title
+      ?? skill?.name
+      ?? skill?.displayName
+      ?? skill?.display_name
+      ?? skill?.skillName
+      ?? fallback
+      ?? "",
+  ).trim();
+}
+
+function plazaSkillTokensForAiCanvasRuntimePrompt(input = {}, runtimeStore, context = {}) {
+  const ids = Array.isArray(input?.plazaSkillIds)
+    ? [...new Set(input.plazaSkillIds.map((id) => String(id ?? "").trim()).filter(Boolean))]
+    : [];
+  if (!ids.length) return [];
+  const rawContent = String(input?.text ?? input?.content ?? "");
+  const state = runtimeStore?.getState?.();
+  const catalog = [
+    ...(Array.isArray(state?.userSkills) ? state.userSkills : []),
+    ...(Array.isArray(state?.agentPackageSkills) ? state.agentPackageSkills : []),
+    ...(Array.isArray(context?.skillCatalog) ? context.skillCatalog : []),
+    ...(Array.isArray(context?.skills) ? context.skills : []),
+  ];
+  const markers = Array.from(
+    rawContent.matchAll(/【Skill：([^】]+)】/g),
+    (match) => String(match[1] ?? "").trim(),
+  ).filter(Boolean);
+  return ids
+    .filter((id) => !rawContent.includes(`@skill{${id}|`))
+    .map((id, index) => {
+      const skill = catalog.find((candidate) => String(candidate?.id ?? candidate?.skillId ?? "").trim() === id);
+      const label = resolveAiCanvasRuntimeSkillLabel(skill) || markers[index] || "Skill";
+      return `@skill{${id}|${encodeURIComponent(label)}}`;
+    });
+}
+
+function applyAiCanvasRuntimePlazaSkillTokens(text, tokens = []) {
+  let index = 0;
+  let next = String(text ?? "").replace(/【Skill：[^】]*】/g, () => {
+    const token = tokens[index] ?? "";
+    index += 1;
+    return token;
+  });
+  const unused = tokens.slice(index).filter(Boolean);
+  if (unused.length) next = `${unused.join(" ")} ${next}`.trim();
+  return next.trim();
+}
+
+function isAiCanvasRuntimeTextAttachment(file = {}) {
+  const type = String(file?.type ?? "").toLowerCase();
+  const name = String(file?.name ?? "").toLowerCase();
+  return type.startsWith("text/")
+    || type === "application/json"
+    || [".txt", ".md", ".markdown", ".csv", ".json"].some((extension) => name.endsWith(extension));
+}
+
+async function readAiCanvasRuntimePromptAttachment(file) {
+  const name = String(file?.name ?? "未命名附件").trim() || "未命名附件";
+  const marker = `【附件：${name}】`;
+  if (!isAiCanvasRuntimeTextAttachment(file) || typeof file?.text !== "function") return marker;
+  try {
+    const body = String(await file.text()).trim();
+    return body ? `${marker}\n${body}` : marker;
+  } catch {
+    return marker;
+  }
+}
+
+async function applyAiCanvasRuntimePromptAttachments(text, files = []) {
+  let next = String(text ?? "");
+  for (const file of Array.isArray(files) ? files : []) {
+    if (!file) continue;
+    const block = await readAiCanvasRuntimePromptAttachment(file);
+    const name = String(file?.name ?? "未命名附件").trim() || "未命名附件";
+    const marker = `【附件：${name}】`;
+    next = next.includes(marker) ? next.replace(marker, block) : [next, block].filter(Boolean).join("\n");
+  }
+  return next.trim();
+}
+
+async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, context = {}) {
+  const skillTokens = plazaSkillTokensForAiCanvasRuntimePrompt(input, runtimeStore, context);
+  const withSkills = applyAiCanvasRuntimePlazaSkillTokens(String(input.text ?? input.content ?? ""), skillTokens);
+  const content = await applyAiCanvasRuntimePromptAttachments(withSkills, input.files);
+  if (!content) throw new Error("Agent 指令为空");
+  const state = runtimeStore?.getState?.();
+  if (!state) throw new Error("画布 Agent 未就绪");
+  state.setChatPanelDetached?.(false);
+  state.openChat?.();
+
+  const preferred = input.preferredModels && typeof input.preferredModels === "object"
+    ? input.preferredModels
+    : {};
+  const configPatch = {};
+  const imageModelId = resolveAiCanvasRuntimeAssistantMediaModelId(runtimeStore, preferred.image);
+  const videoModelId = resolveAiCanvasRuntimeAssistantMediaModelId(runtimeStore, preferred.video);
+  if (imageModelId) configPatch.assistantImageModelId = imageModelId;
+  if (videoModelId) configPatch.assistantVideoModelId = videoModelId;
+  if (Object.keys(configPatch).length) {
+    state.updateConfig?.(configPatch);
+    try {
+      await state.saveConfig?.({ silent: true });
+    } catch {}
+  }
+
+  await ensureAiCanvasRuntimeDefaultConversation(runtimeStore, context);
+  const nextState = runtimeStore?.getState?.() ?? state;
+  const projectId = String(
+    nextState?.currentProjectId ?? context.currentProjectId ?? context.canvasProjectId ?? "",
+  ).trim();
+  if (!projectId) throw new Error("画布项目未就绪");
+  const conversations = Array.isArray(nextState?.conversations) ? nextState.conversations : [];
+  const normalizedProjectId = resolveAiCanvasRuntimeConversationProjectId(nextState?.projects, projectId);
+  const belongsToCurrentProject = (conversation) => (
+    isVisibleAiCanvasRuntimeConversation(conversation)
+      && resolveAiCanvasRuntimeConversationProjectId(nextState?.projects, conversation?.projectId) === normalizedProjectId
+  );
+  let conversationId = String(nextState?.activeConversationId ?? "").trim();
+  if (!belongsToCurrentProject(conversations.find((conversation) => conversation?.id === conversationId))) {
+    conversationId = String(
+      conversations.find(belongsToCurrentProject)?.id
+        ?? nextState?.createConversation?.(projectId)
+        ?? "",
+    ).trim();
+  }
+  if (!conversationId) throw new Error("画布会话未就绪");
+
+  const agentMode = resolveAiCanvasRuntimeAgentMode(input.mode);
+  nextState.updateConversation?.(conversationId, { agentMode });
+  nextState.setActiveConversation?.(conversationId);
+  nextState.openChat?.();
+
+  const controller = await import("/ai-canvas-runtime/assets/conversationExecutionController-CGzzIkBM.js");
+  const submitChat = controller?.i ?? controller?.gp;
+  if (typeof submitChat !== "function") throw new Error("画布 Agent 执行器不可用");
+  const result = submitChat({
+    content,
+    conversationId,
+    projectId,
+    mode: agentMode,
+    dispatchMode: "queue",
+  });
+  if (result?.status !== "started" && result?.status !== "interjected") {
+    throw new Error("Agent 未启动");
+  }
+  return true;
 }
 
 function isAiCanvasAssistantTaskTerminal(task) {
@@ -1923,7 +2456,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-05";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-06";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -2577,6 +3110,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       onImportProject: context.onImportProject,
       onOpenHome: context.onOpenHome,
       onOpenProjects: context.onOpenProjects,
+      onOpenSkills: context.onOpenSkills,
       onDirectorDeskOpen: context.onDirectorDeskOpen,
       onDirectorDeskSyncFrame: context.onDirectorDeskSyncFrame,
       onDirectorDeskExportVideo: context.onDirectorDeskExportVideo,
@@ -2619,6 +3153,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     let disposeHeaderChrome = () => {};
     let disposeFooterZoomControls = () => {};
     let disposePromptCreditCost = () => {};
+    let disposeSkillPicker = () => {};
     const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
         ...context,
         ...runtimeContext,
@@ -2631,6 +3166,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeHeaderChrome = installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, runtimeContext);
       disposeFooterZoomControls = installAiCanvasRuntimeFooterZoomControls(surface);
       disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost(surface, runtimeStore);
+      disposeSkillPicker = installAiCanvasRuntimeSkillPicker(surface, runtimeStore, runtimeContext);
       return ({
       ...runtimeHandle,
       async update(next = {}) {
@@ -2644,12 +3180,19 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         applyTaskCenterActiveCount(next);
         return runtimeHandle?.update?.(next);
       },
+      async submitAgentPrompt(input = {}) {
+        if (typeof runtimeHandle?.submitAgentPrompt === "function") {
+          return runtimeHandle.submitAgentPrompt(input);
+        }
+        return submitAiCanvasRuntimeAgentPrompt(runtimeStore, input, runtimeContext);
+      },
       async dispose() {
         try {
           unsubscribeAssistantPreference();
           disposeHeaderChrome();
           disposeFooterZoomControls();
           disposePromptCreditCost();
+          disposeSkillPicker();
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
           taskCenterBridge.dispose();
           projectBridge.dispose();

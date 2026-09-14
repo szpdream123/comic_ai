@@ -2723,6 +2723,22 @@ function normalizeHomeAgentModelMediaType(value) {
   return normalized;
 }
 
+function collectHomeAgentPlazaSkills(ui = {}) {
+  return [
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine"),
+  ];
+}
+
+function homeAgentPlazaSkillIdsForSubmission(workbench) {
+  return normalizePlazaSkillIds(
+    (workbench?.ui?.homeAgentComposerSegments ?? [])
+      .filter((segment) => segment?.type === "skill")
+      .map((segment) => segment.skillId),
+  );
+}
+
 function homeAgentPromptTextForSubmission(workbench) {
   const attachments = new Map(
     (workbench.ui.homeAgentAttachments ?? []).map((attachment) => [attachment.id, attachment]),
@@ -2730,10 +2746,7 @@ function homeAgentPromptTextForSubmission(workbench) {
   const models = Array.isArray(workbench.ui.episodeGenerationConfig?.models)
     ? workbench.ui.episodeGenerationConfig.models
     : [];
-  const skills = [
-    ...normalizeCanvasTextSkills(workbench.ui.homeAgentOfficialSkills, "official"),
-    ...normalizeCanvasTextSkills(workbench.ui.homeAgentPrivateSkills, "private"),
-  ];
+  const skills = collectHomeAgentPlazaSkills(workbench.ui);
   return (workbench.ui.homeAgentComposerSegments ?? [])
     .map((segment) => {
       if (segment?.type === "text") return String(segment.text ?? "");
@@ -3119,13 +3132,8 @@ export async function initProductionWorkbench({
       homeAgentModelTab: "image",
       homeAgentSelectedModels: { image: "", video: "" },
       homeAgentSkillPickerOpen: false,
-      homeAgentSkillSource: "official",
-      homeAgentSkillCategory: "",
-      homeAgentSkillDraftId: "",
-      homeAgentSkillLoading: false,
-      homeAgentOfficialSkills: [],
-      homeAgentPrivateSkills: [],
-      homeAgentSkillPagination: { official: {}, private: {} },
+      homeAgentSkillSourceTab: "official",
+      homeAgentSkillDraftPlazaIds: [],
       homeAgentAttachmentCount: 0,
       homeAgentAttachments: [],
       homeAgentComposerSegments: [],
@@ -3730,7 +3738,7 @@ export async function initProductionWorkbench({
   installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("pointerdown", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    if (eventTarget?.closest?.('[data-action="pick-home-agent-attachments"], [data-action="toggle-home-agent-model-menu"]')) {
+    if (eventTarget?.closest?.('[data-action="pick-home-agent-attachments"], [data-action="toggle-home-agent-model-menu"], [data-action="open-home-agent-skill-picker"]')) {
       rememberHomeAgentComposerCaret(workbench);
     }
     const watermarkMask = eventTarget?.closest?.("[data-toolbox-watermark-mask]")
@@ -4069,6 +4077,18 @@ export async function initProductionWorkbench({
       workbench.ui.episodePromptSkillDraftPlazaIds = [];
       if (!actionTarget) {
         render(workbench);
+        return;
+      }
+    }
+    if (
+      workbench.ui.homeAgentSkillPickerOpen &&
+      !eventTarget?.closest?.('.plaza-skill-picker-layer, [data-action="open-home-agent-skill-picker"], .home-agent-skill-trigger')
+    ) {
+      workbench.ui.homeAgentSkillPickerOpen = false;
+      workbench.ui.homeAgentSkillDraftPlazaIds = [];
+      if (!actionTarget) {
+        render(workbench);
+        restoreHomeAgentComposerCaret(workbench);
         return;
       }
     }
@@ -4457,6 +4477,30 @@ export async function initProductionWorkbench({
       render(workbench);
       return;
     }
+    if (workbench.ui.episodePromptSkillModalOpen) {
+      event.preventDefault();
+      workbench.ui.episodePromptSkillModalOpen = false;
+      workbench.ui.episodePromptSkillDraftIds = {};
+      workbench.ui.episodePromptSkillDraftPlazaIds = [];
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.singleEpisodeLookPanel) {
+      event.preventDefault();
+      workbench.ui.singleEpisodeLookPanel = "";
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.isSingleEpisodeModalOpen) {
+      event.preventDefault();
+      cancelSingleEpisodeAiPreviewRequest(workbench);
+      workbench.ui.singleEpisodeAiChecking = false;
+      workbench.ui.scriptConversionSkillModalOpen = false;
+      workbench.ui.scriptConversionSkillDraftId = "";
+      resetSingleEpisodeModalState(workbench);
+      render(workbench);
+      return;
+    }
     if (workbench.ui.homeProjectWorkflowProjectId) {
       event.preventDefault();
       workbench.ui.homeProjectWorkflowProjectId = null;
@@ -4467,6 +4511,7 @@ export async function initProductionWorkbench({
       workbench.ui.episodeWorkbenchLayout = "standard";
       workbench.ui.homeWorkflowOrigin = false;
       workbench.ui.workflowGenerationWorkbenchOpen = false;
+      resetSingleEpisodeModalState(workbench);
       render(workbench);
       return;
     }
@@ -4510,6 +4555,7 @@ export async function initProductionWorkbench({
       !workbench.ui.singleEpisodeLookPanel &&
       !workbench.ui.scriptConversionSkillModalOpen &&
       !workbench.ui.episodePromptSkillModalOpen &&
+      !workbench.ui.homeAgentSkillPickerOpen &&
       !workbench.ui.storyboardPromptSkillModalOpen &&
       !workbench.ui.promptMarketplaceGuideOpen &&
       !workbench.ui.assetImageStyleSkillModalOpen &&
@@ -4549,6 +4595,13 @@ export async function initProductionWorkbench({
       workbench.ui.episodePromptSkillDraftIds = {};
       workbench.ui.episodePromptSkillDraftPlazaIds = [];
       render(workbench);
+      return;
+    }
+    if (workbench.ui.homeAgentSkillPickerOpen) {
+      workbench.ui.homeAgentSkillPickerOpen = false;
+      workbench.ui.homeAgentSkillDraftPlazaIds = [];
+      render(workbench);
+      restoreHomeAgentComposerCaret(workbench);
       return;
     }
     if (workbench.ui.storyboardPromptSkillModalOpen) {
@@ -8585,44 +8638,6 @@ function canvasTextSkillCacheKey(source, category, page) {
   return [source === "private" ? "private" : "official", String(category || "all"), Math.max(1, Number(page) || 1)].join(":");
 }
 
-async function syncHomeAgentSkillPage(workbench, options = {}) {
-  const source = workbench.ui.homeAgentSkillSource === "private" ? "private" : "official";
-  const previous = workbench.ui.homeAgentSkillPagination?.[source] ?? {};
-  const category = String(options.category ?? previous.category ?? "all").trim() || "all";
-  const page = Math.max(1, Number(options.page ?? previous.page) || 1);
-  const request = { source, category, page, pageSize: 100 };
-  if (typeof workbench.api?.getPromptSkills !== "function") {
-    if (source === "private") workbench.ui.homeAgentPrivateSkills = [];
-    else workbench.ui.homeAgentOfficialSkills = [];
-    workbench.ui.homeAgentSkillPagination = {
-      ...(workbench.ui.homeAgentSkillPagination ?? {}),
-      [source]: normalizeCanvasTextSkillPagination({}, request),
-    };
-    return;
-  }
-  const requestToken = (workbench.homeAgentSkillRequestToken ?? 0) + 1;
-  workbench.homeAgentSkillRequestToken = requestToken;
-  workbench.ui.homeAgentSkillLoading = true;
-  try {
-    const payload = await workbench.api.getPromptSkills(request);
-    if (workbench.homeAgentSkillRequestToken !== requestToken) return;
-    const skills = normalizeCanvasTextSkills(payload?.items, source);
-    if (source === "private") workbench.ui.homeAgentPrivateSkills = skills;
-    else workbench.ui.homeAgentOfficialSkills = skills;
-    workbench.ui.homeAgentSkillPagination = {
-      ...(workbench.ui.homeAgentSkillPagination ?? {}),
-      [source]: normalizeCanvasTextSkillPagination(payload, request),
-    };
-  } catch (error) {
-    if (workbench.homeAgentSkillRequestToken !== requestToken) return;
-    workbench.ui.toast = `Skill 加载失败：${friendlyError(error)}`;
-  } finally {
-    if (workbench.homeAgentSkillRequestToken === requestToken) {
-      workbench.ui.homeAgentSkillLoading = false;
-    }
-  }
-}
-
 async function syncCanvasTextSkills(workbench, options = {}) {
   const source = options.source === "private" ? "private" : "official";
   const previous = canvasTextSkillPaginationFor(workbench.ui, source);
@@ -10676,10 +10691,41 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
     onImportProject: () => importAiCanvasRuntimeProject(workbench),
     onOpenHome: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "home" } }),
     onOpenProjects: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "new-canvas" } }),
+    onOpenSkills: (options = {}) => openAiCanvasRuntimeSkills(workbench, options),
     onOpenTaskCenter: () => handleAction(workbench, { dataset: { action: "open-task-center" } }),
     onOpenOperationRecords: () => handleAction(workbench, { dataset: { action: "set-canvas-sidebar-mode", canvasSidebarMode: "history" } }),
     taskCenterActiveCount: countTaskCenterActiveTasks(workbench),
   };
+}
+
+async function openAiCanvasRuntimeSkills(workbench, options = {}) {
+  const mode = String(options?.mode ?? "plaza").trim();
+  const skillId = String(options?.skillId ?? "").trim();
+  const section = ["catalog", "library", "mine"].includes(String(options?.section ?? ""))
+    ? String(options.section)
+    : "catalog";
+  if (mode === "create") {
+    workbench.ui.activeNavTab = "skills";
+    workbench.ui.skillCreateOpen = true;
+    workbench.ui.skillCreateDraft = null;
+    workbench.ui.skillCreateEditorMode = "code";
+    workbench.ui.skillDetailItem = null;
+    render(workbench);
+    return;
+  }
+  if (mode === "detail" && skillId) {
+    await handleAction(workbench, { dataset: { action: "open-skill-detail", skillId } });
+    workbench.ui.activeNavTab = "skills";
+    workbench.ui.skillCreateOpen = false;
+    render(workbench);
+    return;
+  }
+  workbench.ui.activeNavTab = "skills";
+  workbench.ui.skillCreateOpen = false;
+  workbench.ui.skillPlazaSection = section;
+  workbench.ui.skillPlazaCategory = "recommended";
+  await syncSkillPlaza(workbench);
+  render(workbench);
 }
 
 function addCanvasCharacterLibraryAsset(workbench, character) {
@@ -20821,6 +20867,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const uploadFiles = collectSkillCreateUploadFiles(form, { includeEditorMarkdown: false });
     const introduction = String(markdownFiles.find((file) => file.name === "SKILL.md")?.content ?? skillMarkdown?.querySelector?.('textarea[name="skillMarkdownContent"]')?.value ?? data.get("introduction") ?? "").trim();
     await runAction(workbench, "正在提交 Skill 审核...", async () => {
+      if (markdownFiles.length > 50) throw new Error("Skill 文件最多上传 50 个");
       const existingImageUrl = String(workbench.ui.skillCreateDraft?.detail?.effectImageUrl || workbench.ui.skillCreateDraft?.coverUrl || "").trim();
       const existingVideoUrl = String(workbench.ui.skillCreateDraft?.detail?.effectVideoUrl || workbench.ui.skillCreateDraft?.previewUrl || "").trim();
       let effectImageUrl = coverType === "text" ? "" : existingImageUrl;
@@ -21487,6 +21534,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.homeAgentModeMenuOpen = false;
       workbench.ui.homeAgentModelMenuOpen = false;
       workbench.ui.homeAgentSkillPickerOpen = false;
+      workbench.ui.homeAgentSkillDraftPlazaIds = [];
       if (mode === "free") {
         prepareFreeGenerationSurface(workbench);
         if (typeof window !== "undefined") {
@@ -21532,13 +21580,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "toggle-home-agent-mode-menu") {
     workbench.ui.homeAgentModeMenuOpen = workbench.ui.homeAgentModeMenuOpen !== true;
     workbench.ui.homeAgentModelMenuOpen = false;
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     render(workbench);
     return;
   }
 
   if (action === "set-home-agent-mode") {
     const mode = String(target.dataset.agentMode ?? "");
-    if (["b", "c", "plan", "expert"].includes(mode)) {
+    if (["b", "c", "plan"].includes(mode)) {
       workbench.ui.homeAgentMode = mode;
     }
     workbench.ui.homeAgentModeMenuOpen = false;
@@ -21551,6 +21601,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const shouldOpen = workbench.ui.homeAgentModelMenuOpen !== true;
     workbench.ui.homeAgentModelMenuOpen = shouldOpen;
     workbench.ui.homeAgentModeMenuOpen = false;
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     if (shouldOpen) {
       try {
         await ensureCanvasGenerationConfig(workbench, { force: true });
@@ -21620,102 +21672,70 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-home-agent-skill-picker") {
     rememberHomeAgentComposerCaret(workbench);
+    if (workbench.ui.homeAgentSkillPickerOpen) {
+      workbench.ui.homeAgentSkillPickerOpen = false;
+      workbench.ui.homeAgentSkillDraftPlazaIds = [];
+      render(workbench);
+      restoreHomeAgentComposerCaret(workbench);
+      return;
+    }
     workbench.ui.homeAgentSkillPickerOpen = true;
-    workbench.ui.homeAgentSkillDraftId = "";
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
+    workbench.ui.homeAgentSkillSourceTab = "official";
+    workbench.ui.episodePlazaSkillQuery = "";
     workbench.ui.homeAgentModeMenuOpen = false;
     workbench.ui.homeAgentModelMenuOpen = false;
-    workbench.ui.homeAgentSkillLoading = true;
-    render(workbench);
-    try {
-      const fetchSkills = async (source) => {
-        if (typeof workbench.api?.getPromptSkills !== "function") return [];
-        const payload = await workbench.api.getPromptSkills({ source, category: "all", page: 1, pageSize: 100 });
-        return {
-          skills: normalizeCanvasTextSkills(payload?.items, source),
-          pagination: normalizeCanvasTextSkillPagination(payload, {
-            source,
-            category: "all",
-            page: 1,
-            pageSize: 100,
-          }),
-        };
-      };
-      const [official, privateSkills] = await Promise.all([fetchSkills("official"), fetchSkills("private")]);
-      workbench.ui.homeAgentOfficialSkills = official.skills;
-      workbench.ui.homeAgentPrivateSkills = privateSkills.skills;
-      workbench.ui.homeAgentSkillPagination = {
-        official: official.pagination,
-        private: privateSkills.pagination,
-      };
-    } catch (error) {
-      workbench.ui.toast = `Skill 加载失败：${friendlyError(error)}`;
-    } finally {
-      workbench.ui.homeAgentSkillLoading = false;
+    const hasPlazaSkills = Boolean(
+      workbench.ui.episodePlazaOfficialSkills?.length
+      || workbench.ui.episodePlazaLibrarySkills?.length
+      || workbench.ui.episodePlazaMineSkills?.length,
+    );
+    if (!hasPlazaSkills && !workbench.ui.episodePromptSkillLoading) {
+      workbench.ui.episodePromptSkillLoading = true;
       render(workbench);
+      await syncEpisodePromptSkills(workbench);
     }
+    render(workbench);
     return;
   }
 
   if (action === "close-home-agent-skill-picker") {
     workbench.ui.homeAgentSkillPickerOpen = false;
-    workbench.ui.homeAgentSkillDraftId = "";
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     render(workbench);
     restoreHomeAgentComposerCaret(workbench);
     return;
   }
 
   if (action === "set-home-agent-skill-source") {
-    const source = target.dataset.skillSource === "private" ? "private" : "official";
-    workbench.ui.homeAgentSkillSource = source;
-    workbench.ui.homeAgentSkillCategory = "";
-    workbench.ui.homeAgentSkillDraftId = "";
-    render(workbench);
-    return;
-  }
-
-  if (action === "set-home-agent-skill-category") {
-    const category = String(target.dataset.skillCategory ?? "");
-    if (!category) return;
-    workbench.ui.homeAgentSkillCategory = category;
-    workbench.ui.homeAgentSkillDraftId = "";
-    render(workbench);
-    await syncHomeAgentSkillPage(workbench, { category, page: 1 });
-    render(workbench);
-    return;
-  }
-
-  if (action === "set-home-agent-skill-page") {
-    const page = Math.max(1, Number(target.dataset.skillPage) || 1);
-    workbench.ui.homeAgentSkillDraftId = "";
-    render(workbench);
-    await syncHomeAgentSkillPage(workbench, { page });
+    const source = String(target.dataset.skillSource ?? "");
+    workbench.ui.homeAgentSkillSourceTab = source === "library" || source === "mine" || source === "private"
+      ? (source === "private" ? "mine" : source)
+      : "official";
     render(workbench);
     return;
   }
 
   if (action === "select-home-agent-skill") {
-    workbench.ui.homeAgentSkillDraftId = String(target.dataset.skillId ?? "");
-    render(workbench);
-    return;
-  }
-
-  if (action === "clear-home-agent-skill-draft") {
-    workbench.ui.homeAgentSkillDraftId = "";
+    const skillId = String(target.dataset.episodeSkillId ?? target.dataset.skillId ?? "");
+    if (!collectHomeAgentPlazaSkills(workbench.ui).some((item) => item.id === skillId)) {
+      return;
+    }
+    workbench.ui.homeAgentSkillDraftPlazaIds = togglePlazaSkillId(workbench.ui.homeAgentSkillDraftPlazaIds, skillId);
     render(workbench);
     return;
   }
 
   if (action === "confirm-home-agent-skill") {
-    const skillId = String(workbench.ui.homeAgentSkillDraftId ?? "");
-    const available = [
-      ...normalizeCanvasTextSkills(workbench.ui.homeAgentOfficialSkills, "official"),
-      ...normalizeCanvasTextSkills(workbench.ui.homeAgentPrivateSkills, "private"),
-    ].some((skill) => skill.id === skillId);
-    if (skillId && available) {
-      insertHomeAgentComposerSegment(workbench, { type: "skill", skillId });
+    const selected = resolvePlazaSelectedSkills(
+      collectHomeAgentPlazaSkills(workbench.ui),
+      workbench.ui.homeAgentSkillDraftPlazaIds,
+    );
+    for (const skill of selected) {
+      insertHomeAgentComposerSegment(workbench, { type: "skill", skillId: skill.id });
     }
     workbench.ui.homeAgentSkillPickerOpen = false;
-    workbench.ui.homeAgentSkillDraftId = "";
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     render(workbench);
     restoreHomeAgentComposerCaret(workbench);
     return;
@@ -21851,7 +21871,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const project = creationMode === "free" ? null : await createCanvasProject(workbench);
       if (creationMode === "free") prepareFreeGenerationSurface(workbench);
       if (project) touchRecentCanvasProject(workbench.ui, project.id);
-      workbench.ui.activeNavTab = creationMode === "free" ? "free-generation" : "tools";
+      workbench.ui.activeNavTab = creationMode === "free"
+        ? "free-generation"
+        : workbench.session?.features?.newCanvas === false ? "tools" : "new-canvas";
       workbench.ui.canvasProjectView = "detail";
       workbench.ui.selectedCanvasNodeId = null;
       workbench.ui.canvasEditorOpen = false;
@@ -21862,6 +21884,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.canvasAgentCapabilityProfile = creationMode === "free" ? "media_generation_only" : "";
       workbench.ui.homeAgentModeMenuOpen = false;
       workbench.ui.homeAgentModelMenuOpen = false;
+      workbench.ui.homeAgentSkillPickerOpen = false;
+      workbench.ui.homeAgentSkillDraftPlazaIds = [];
       if (typeof window !== "undefined") {
         if (creationMode !== "free") syncCanvasProjectIdInLocation(project?.id);
         if (window.history?.pushState) {
@@ -21878,13 +21902,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         loadAppliedCanvasToolbar(workbench),
       ]);
       const preferredModels = resolveHomeAgentPreferredModels(workbench);
+      const plazaSkillIds = homeAgentPlazaSkillIdsForSubmission(workbench);
       workbench.pendingHomeAgentPrompt = {
         text,
-        mode: ["b", "c", "plan", "expert"].includes(workbench.ui.homeAgentMode)
+        mode: ["b", "c", "plan"].includes(workbench.ui.homeAgentMode)
           ? workbench.ui.homeAgentMode
           : "c",
         files: Array.from(workbench.homeAgentFiles ?? []),
         ...(Object.keys(preferredModels).length ? { preferredModels } : {}),
+        ...(plazaSkillIds.length ? { plazaSkillIds } : {}),
         ...(creationMode === "free" ? { capabilityProfile: "media_generation_only" } : {}),
       };
       return project;
@@ -25145,6 +25171,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.episodeWorkbenchLayout = "standard";
     workbench.ui.homeWorkflowOrigin = false;
     workbench.ui.workflowGenerationWorkbenchOpen = false;
+    resetSingleEpisodeModalState(workbench);
     render(workbench);
     return;
   }
@@ -25581,7 +25608,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "create-empty-single-episode") {
     const nextName = getNextEpisodeTitle(getDetailEpisodes(workbench.state));
-    await createSingleEpisodeAndEnterWorkbench(workbench, nextName);
+    const scriptText = truncateScriptTextByCharacters(
+      workbench.root?.querySelector?.("#single-episode-script-input")?.value ??
+        workbench.ui.singleEpisodeScript ??
+        "",
+      5000,
+    );
+    await createSingleEpisodeAndEnterWorkbench(workbench, nextName, { scriptText });
     return;
   }
 
@@ -25935,6 +25968,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-skill-create-from-picker") {
     workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     workbench.ui.activeNavTab = "skills";
     workbench.ui.skillCreateOpen = true;
     workbench.ui.skillCreateDraft = null;
@@ -25946,6 +25981,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-skill-plaza-from-picker") {
     workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     workbench.ui.activeNavTab = "skills";
     workbench.ui.skillCreateOpen = false;
     workbench.ui.skillPlazaSection = workbench.ui.episodePromptSkillSourceTab === "mine"
@@ -25964,6 +26001,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const skillId = String(target.dataset.skillId ?? "").trim();
     if (!skillId || typeof workbench.api?.getSkillDetail !== "function") return;
     workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftPlazaIds = [];
     workbench.ui.activeNavTab = "skills";
     workbench.ui.skillCreateOpen = false;
     await runAction(workbench, "正在加载 Skill 详情...", async () => {
@@ -34527,6 +34566,7 @@ async function createCanvasProject(workbench, options = {}) {
     updateActiveCanvasDocument(workbench, createStandaloneCanvasDocument({
       canvasProjectId: project.id,
     }));
+    workbench.ui.canvasSessionUiStateReady = true;
   } else {
     workbench.ui.canvasDocumentsByProject = {
       ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
@@ -37429,6 +37469,10 @@ export function homeAgentPromptTextForSubmissionForTest(workbench) {
   return homeAgentPromptTextForSubmission(workbench);
 }
 
+export function homeAgentPlazaSkillIdsForSubmissionForTest(workbench) {
+  return homeAgentPlazaSkillIdsForSubmission(workbench);
+}
+
 export function setHomeWorkflowScriptFileForTest(workbench, file) {
   return setHomeWorkflowScriptFile(workbench, file);
 }
@@ -38051,6 +38095,13 @@ async function syncSingleEpisodeGenerationConfig(workbench) {
 
 async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = {}) {
   const runCreation = async () => {
+    const scriptText = truncateScriptTextByCharacters(
+      options.scriptText ??
+        workbench.root?.querySelector?.("#single-episode-script-input")?.value ??
+        workbench.ui.singleEpisodeScript ??
+        "",
+      5000,
+    );
     const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
     const created =
       projectId && typeof workbench.api.createProjectEpisode === "function"
@@ -38059,17 +38110,35 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
             projectId,
             title,
           });
+    const createdEpisode = created?.episode ?? created?.body?.episode ?? null;
+    appendCommittedEpisodeToProjectDetail(workbench, createdEpisode);
     if (workbench.ui.selectedProjectCardId) {
       await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
+      appendCommittedEpisodeToProjectDetail(workbench, createdEpisode);
     }
 
-    const createdEpisodeId = resolveCreatedEpisodeWorkbenchId(workbench, created?.episode ?? created?.body?.episode, title);
+    const createdEpisodeId = resolveCreatedEpisodeWorkbenchId(workbench, createdEpisode, title);
+    if (createdEpisodeId) {
+      saveScriptReaderDraftToState(workbench, createdEpisodeId, scriptText);
+      workbench.ui.scriptReaderDrafts = {
+        ...(workbench.ui.scriptReaderDrafts ?? {}),
+        [createdEpisodeId]: scriptText,
+      };
+      await persistScriptReaderSection(workbench, createdEpisodeId, { body: scriptText });
+    }
     resetSingleEpisodeModalState(workbench);
     workbench.ui.episodeCardMenuId = null;
-    await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
-      toast: "",
-      shouldRender: false,
-    });
+    workbench.ui.homeProjectWorkflowProjectId = null;
+    workbench.ui.homeProjectWorkflowLoading = false;
+    workbench.ui.homeProjectWorkflowNotice = "";
+    workbench.ui.homeWorkflowOrigin = false;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
+    workbench.ui.activeNavTab = "project";
+    workbench.ui.projectPanelMode = "detail";
+    workbench.ui.projectInteriorSection = "episodes";
+    workbench.ui.projectEpisodesTab = "scripts";
+    workbench.ui.selectedScriptEpisodeId = createdEpisodeId ?? "";
+    syncProjectDetailHash(workbench);
   };
 
   if (options.skipRunAction) {
@@ -42014,6 +42083,19 @@ function toggleSingleEpisodeLookPackage(workbench, input = {}) {
 }
 
 async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
+  if (String(workbench.ui.homeProjectWorkflowProjectId ?? "").trim()) {
+    workbench.ui.homeProjectWorkflowProjectId = null;
+    workbench.ui.homeProjectWorkflowLoading = false;
+    workbench.ui.homeProjectWorkflowNotice = "";
+    workbench.ui.episodeWorkbenchLayout = "workflow";
+    workbench.ui.homeWorkflowOrigin = true;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
+    options = {
+      ...options,
+      preserveRoute: options.preserveRoute ?? true,
+      scopeMode: options.scopeMode ?? resolveWorkflowDefaultGenerationScopeMode(workbench),
+    };
+  }
   const requestId = Number(workbench.ui.episodeWorkbenchEnterRequestId ?? 0) + 1;
   workbench.ui.episodeWorkbenchEnterRequestId = requestId;
   const previousStoryboardId = workbench.ui.selectedStoryboardId ?? null;
@@ -56920,7 +57002,9 @@ function positionPlazaSkillPicker(workbench) {
   }
   const trigger = root.querySelector(".plaza-skill-chip-control.is-open")
     ?? root.querySelector(".plaza-skill-chip-control")
-    ?? root.querySelector('[data-action="open-episode-prompt-skill-modal"]');
+    ?? root.querySelector('[data-action="open-episode-prompt-skill-modal"]')
+    ?? root.querySelector(".home-agent-skill-trigger")
+    ?? root.querySelector('[data-action="open-home-agent-skill-picker"]');
   if (!trigger) {
     return;
   }

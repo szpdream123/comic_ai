@@ -956,6 +956,78 @@ test("Canvas Agent adds granted visual attachments only for compatible model cap
   assert.equal(userMessage.content.filter((part) => part.type === "video_url").length, 0);
 });
 
+test("Canvas Agent injects plaza skill.md from ids and Chinese skill tokens", async () => {
+  const resolved = [];
+  const messages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+    modelInput: { protocol: { version: 1 }, context: {} },
+    context: {
+      messages: [{
+        role: "user",
+        content: {
+          text: "【Skill：导演skill】按这个技能执行",
+          plazaSkillIds: ["plaza-director"],
+        },
+      }],
+    },
+    modelCapabilities: {},
+    resolvePlazaSkill: async (input) => {
+      resolved.push(input);
+      return {
+        id: "plaza-director",
+        title: "导演skill",
+        content: "# SKILL.md\n按分镜节奏导演全场。",
+      };
+    },
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor: { ownerUserId: "user-1", capabilities: new Set<string>() },
+  });
+
+  assert.deepEqual(resolved, [{ userId: "user-1", skillId: "plaza-director" }]);
+  assert.match(String(messages[0]?.content), /Plaza skill 导演skill/);
+  assert.match(String(messages[0]?.content), /按分镜节奏导演全场/);
+
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.plazaSkillTokensFromText("先分析画布 /library-skill https://example.com/path /character-design 【Skill：导演skill】"),
+    ["library-skill", "导演skill"],
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.plazaSkillTokensFromText("@skill{plaza-director|%E5%AF%BC%E6%BC%94skill}"),
+    ["plaza-director", "导演skill"],
+  );
+
+  const tokenMessages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+    modelInput: { protocol: { version: 1 }, context: {} },
+    context: {
+      messages: [{
+        role: "user",
+        content: { text: "/导演skill 按这个技能执行" },
+      }],
+    },
+    modelCapabilities: {},
+    resolvePlazaSkill: async (input) => {
+      assert.deepEqual(input, { userId: "user-1", name: "导演skill" });
+      return {
+        id: "plaza-director",
+        title: "导演skill",
+        content: "# SKILL.md\n按名称加载。",
+      };
+    },
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor: { ownerUserId: "user-1", capabilities: new Set<string>() },
+  });
+  assert.match(String(tokenMessages[0]?.content), /按名称加载/);
+
+  const compacted = __canvasAgentExecutorTestUtils.compactCanvasReadMessagesForModel({
+    messages: [{
+      role: "user",
+      content: { text: "【Skill：导演skill】", plazaSkillIds: ["plaza-director"] },
+    }],
+  });
+  assert.deepEqual(compacted.messages[0].content.plazaSkillIds, ["plaza-director"]);
+});
+
 test("model instructions use the 灵曦AI product identity", async () => {
   const messages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
     modelInput: { protocol: { version: 1 }, context: {} },

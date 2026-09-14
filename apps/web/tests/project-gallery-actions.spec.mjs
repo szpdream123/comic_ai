@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   deriveInitialNavTabForTest,
   handleWorkbenchActionForTest,
+  homeAgentPlazaSkillIdsForSubmissionForTest,
   homeAgentPromptTextForSubmissionForTest,
   initProductionWorkbench,
   refreshProductionWorkbenchForTest,
@@ -1884,12 +1885,10 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
   workbench.ui.activeNavTab = "home";
   workbench.ui.homeAgentComposerSegments = [{ type: "text", text: "请按" }];
   workbench.homeAgentComposerCaret = { offset: 2 };
-  workbench.api.getPromptSkills = async (input) => {
+  workbench.api.getSkills = async (input) => {
     calls.push(input);
     return {
-      items: input.source === "official"
-        ? [{ id: "official-style", title: "电影感画面", summary: "统一镜头语言", category: "image_style" }]
-        : [{ id: "private-shot", title: "我的分镜模板", summary: "镜头拆解", category: "storyboard" }],
+      items: [{ id: "official-style", title: "电影感画面", summary: "统一镜头语言", category: "general" }],
     };
   };
 
@@ -1899,13 +1898,11 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
 
   assert.equal(workbench.ui.activeNavTab, "home");
   assert.equal(workbench.ui.homeAgentSkillPickerOpen, true);
-  assert.deepEqual(calls, [
-    { source: "official", category: "all", page: 1, pageSize: 100 },
-    { source: "private", category: "all", page: 1, pageSize: 100 },
-  ]);
+  assert.deepEqual(calls, [{ category: "all", page: 1, pageSize: 50 }]);
+  assert.equal(workbench.ui.episodePlazaOfficialSkills.some((skill) => skill.id === "official-style"), true);
 
   await handleWorkbenchActionForTest(workbench, {
-    dataset: { action: "select-home-agent-skill", skillId: "official-style", skillCategory: "image_style" },
+    dataset: { action: "select-home-agent-skill", episodeSkillId: "official-style", skillCategory: "general" },
   });
   await handleWorkbenchActionForTest(workbench, {
     dataset: { action: "confirm-home-agent-skill" },
@@ -1917,6 +1914,7 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
     { type: "skill", skillId: "official-style" },
   ]);
   assert.equal(homeAgentPromptTextForSubmissionForTest(workbench), "请按【Skill：电影感画面】");
+  assert.deepEqual(homeAgentPlazaSkillIdsForSubmissionForTest(workbench), ["official-style"]);
 
   await handleWorkbenchActionForTest(workbench, {
     dataset: { action: "remove-home-agent-skill", skillId: "official-style" },
@@ -2263,10 +2261,14 @@ test("home free generation opens the standalone media conversation route", async
 
 test("home Agent creation uses the Canvas default model when none was selected", async () => {
   const workbench = createWorkbench();
+  const pushedRoutes = [];
   const originalWindow = globalThis.window;
   globalThis.window = {
     location: { pathname: "/app.html", search: "", hash: "#home" },
-    history: { pushState() {}, replaceState() {} },
+    history: {
+      pushState(_state, _title, route) { pushedRoutes.push(route); },
+      replaceState() {},
+    },
   };
   workbench.ui.activeNavTab = "home";
   workbench.ui.homeCreationMode = "agent";
@@ -2290,7 +2292,89 @@ test("home Agent creation uses the Canvas default model when none was selected",
     else globalThis.window = originalWindow;
   }
 
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
+  assert.equal(workbench.ui.canvasProjectView, "detail");
+  assert.equal(workbench.ui.selectedCanvasProjectId, "agent-default-model");
+  assert.equal(workbench.ui.canvasSessionUiStateReady, true);
+  assert.deepEqual(pushedRoutes, ["#new-canvas-canvas"]);
+  assert.equal(workbench.pendingHomeAgentPrompt.text, "帮我生成一张大树图片");
+  assert.equal(workbench.pendingHomeAgentPrompt.mode, "c");
   assert.deepEqual(workbench.pendingHomeAgentPrompt.preferredModels, { image: "image-enabled" });
+});
+
+test("home Agent prompt submission carries selected plaza skill ids", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { pathname: "/app.html", search: "", hash: "#home" },
+    history: { pushState() {}, replaceState() {} },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.ui.homeAgentComposerSegments = [
+    { type: "text", text: "请按" },
+    { type: "skill", skillId: "official-style" },
+  ];
+  workbench.ui.episodePlazaOfficialSkills = [{
+    id: "official-style",
+    title: "电影感画面",
+    name: "电影感画面",
+    category: "general",
+  }];
+  workbench.ui.membershipStatus = { status: "active" };
+  workbench.api.createCanvasProject = async () => ({ project: { id: "agent-plaza-skill" } });
+  workbench.api.listGlobalGenerationConfig = async () => ({ models: [] });
+  workbench.api.getCanvasSettings = async () => ({ settings: { defaultModels: {} } });
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-home-agent-prompt" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.pendingHomeAgentPrompt.text, "请按【Skill：电影感画面】");
+  assert.deepEqual(workbench.pendingHomeAgentPrompt.plazaSkillIds, ["official-style"]);
+});
+
+test("home Agent prompt submission carries uploaded files", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { pathname: "/app.html", search: "", hash: "#home" },
+    history: { pushState() {}, replaceState() {} },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.homeAgentFiles = [{ name: "角色说明.txt" }];
+  workbench.ui.homeAgentAttachments = [{
+    id: "attachment-txt",
+    name: "角色说明.txt",
+    kind: "file",
+  }];
+  workbench.ui.homeAgentComposerSegments = [
+    { type: "text", text: "请参考" },
+    { type: "attachment", attachmentId: "attachment-txt" },
+  ];
+  workbench.ui.membershipStatus = { status: "active" };
+  workbench.api.createCanvasProject = async () => ({ project: { id: "agent-home-file" } });
+  workbench.api.listGlobalGenerationConfig = async () => ({ models: [] });
+  workbench.api.getCanvasSettings = async () => ({ settings: { defaultModels: {} } });
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-home-agent-prompt" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.pendingHomeAgentPrompt.text, "请参考【附件：角色说明.txt】");
+  assert.equal(workbench.pendingHomeAgentPrompt.files.length, 1);
+  assert.equal(workbench.pendingHomeAgentPrompt.files[0].name, "角色说明.txt");
 });
 
 test("free generation route is independent from Canvas routing", () => {

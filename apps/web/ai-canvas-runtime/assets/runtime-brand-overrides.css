@@ -1968,3 +1968,260 @@
 .ai-canvas-standalone-mount .model-selector-trigger > * {
   visibility: hidden !important;
 }
+
+.new-canvas-root .chat-panel-root .chat-panel-input-box {
+  position: relative !important;
+}
+
+.new-canvas-root .chat-panel-root #chat-skill-suggestions[data-host-skill-picker-hidden="true"],
+.new-canvas-root .chat-panel-root [role="listbox"][aria-label="Skill 引用"][data-host-skill-picker-hidden="true"] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker.plaza-skill-picker-layer,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker.episode-skill-picker-layer {
+  position: absolute !important;
+  inset: auto 12px calc(100% + 8px) 12px !important;
+  z-index: 40 !important;
+  display: block !important;
+  width: auto !important;
+  height: min(28rem, 52vh) !important;
+  max-height: min(28rem, 52vh) !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  isolation: auto !important;
+  pointer-events: auto !important;
+  place-items: stretch !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .episode-skill-picker-scrim {
+  display: none !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-modal {
+  position: relative !important;
+  z-index: 1 !important;
+  display: grid !important;
+  grid-template-rows: auto auto minmax(0, 1fr) auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--theme-control-border, rgba(152, 170, 203, 0.2)) !important;
+  border-radius: 14px !important;
+  background: var(--theme-panel-background, #15171d) !important;
+  color: var(--theme-text, #f4f6fb) !important;
+  box-shadow: 0 1.6rem 4rem rgb(0 0 0 / 0.45) !important;
+  pointer-events: auto !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-header,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-toolbar,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-footer {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.6rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-header {
+  justify-content: space-between !important;
+  padding: 0.85rem 0.95rem 0.55rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-header h2 {
+  margin: 0 !important;
+  font-size: 1.05rem !important;
+  letter-spacing: 0 !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-header-actions {
+  display: flex !important;
+  gap: 0.4rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-header-actions button,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-confirm,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-detail {
+  min-height: 1.9rem !important;
+  padding: 0 0.7rem !important;
+  border: 1px solid var(--theme-control-border, rgba(152, 170, 203, 0.2)) !important;
+  border-radius: 999px !important;
+  background: var(--theme-control-background, #171c21) !important;
+  color: var(--theme-text, #f4f6fb) !important;
+  font-size: 0.76rem !important;
+  font-weight: 800 !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-toolbar {
+  padding: 0 0.95rem 0.7rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-tabs {
+  display: flex !important;
+  gap: 0.75rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-tabs button {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+  font-size: 0.82rem !important;
+  font-weight: 800 !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-tabs button.active {
+  color: var(--theme-text, #f4f6fb) !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-search {
+  display: flex !important;
+  flex: 1 !important;
+  align-items: center !important;
+  gap: 0.4rem !important;
+  min-width: 0 !important;
+  padding: 0 0.7rem !important;
+  border: 1px solid var(--theme-control-border, rgba(152, 170, 203, 0.2)) !important;
+  border-radius: 999px !important;
+  background: var(--theme-control-background, #171c21) !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-search input {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 1.9rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--theme-text, #f4f6fb) !important;
+  font: inherit !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-list {
+  display: grid !important;
+  align-content: start !important;
+  gap: 0.15rem !important;
+  min-height: 0 !important;
+  padding: 0 0.45rem 0.4rem !important;
+  overflow-y: auto !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  border-radius: 10px !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item > button[role="option"] {
+  display: grid !important;
+  grid-template-columns: 1.7rem minmax(0, 1fr) !important;
+  gap: 0.7rem !important;
+  width: 100% !important;
+  min-height: 3.4rem !important;
+  padding: 0.45rem 0.55rem !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  color: inherit !important;
+  text-align: left !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item.active,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item:hover {
+  background: var(--theme-control-hover-background, #202a31) !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-icon {
+  display: grid !important;
+  width: 1.7rem !important;
+  height: 1.7rem !important;
+  place-items: center !important;
+  border-radius: 50% !important;
+  background: var(--theme-accent-soft, rgba(154, 126, 228, 0.16)) !important;
+  color: var(--theme-accent-icon, #a98df1) !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-copy {
+  display: grid !important;
+  min-width: 0 !important;
+  gap: 0.12rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-copy strong,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-copy small {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-copy strong {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.4rem !important;
+  font-size: 0.86rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-copy em {
+  display: inline-flex !important;
+  max-width: 9rem !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  padding: 0.08rem 0.4rem !important;
+  border-radius: 999px !important;
+  background: var(--theme-muted-background, rgba(255, 255, 255, 0.08)) !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+  font-size: 0.68rem !important;
+  font-style: normal !important;
+  font-weight: 700 !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-copy small {
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+  font-size: 0.73rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-detail {
+  margin-right: 0.45rem !important;
+  opacity: 0 !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item:hover .plaza-skill-picker-detail,
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item.active .plaza-skill-picker-detail {
+  opacity: 1 !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-footer {
+  justify-content: space-between !important;
+  padding: 0.7rem 0.95rem 0.9rem !important;
+  border-top: 1px solid var(--theme-control-border, rgba(152, 170, 203, 0.2)) !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-footer > button:first-child {
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+  font-size: 0.76rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-footer strong {
+  margin-left: auto !important;
+  margin-right: 0.6rem !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+  font-size: 0.76rem !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-confirm {
+  background: var(--theme-accent-gradient, linear-gradient(90deg, #7658de, #378ebc)) !important;
+  color: var(--theme-control-active-text, #f3f7fa) !important;
+}
+
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .episode-skill-empty {
+  padding: 1.2rem 0.8rem !important;
+  color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
+  font-size: 0.82rem !important;
+  text-align: center !important;
+}

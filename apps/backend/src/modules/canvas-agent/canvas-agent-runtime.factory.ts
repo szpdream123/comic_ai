@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { reserveCreditsInTransaction } from "../credit-billing/credit-ledger.service.ts";
@@ -13,8 +15,9 @@ import { OpenAICompatibleTextAdapter } from "../model-gateway/openai-compatible-
 import { ModelflareResponsesAdapter } from "../model-gateway/modelflare-responses.adapter.ts";
 import { TextModelGatewayService } from "../model-gateway/text-model-gateway.service.ts";
 import { upsertQueuedGenerationTaskSnapshot } from "../model-gateway/generation-task-snapshot.service.ts";
+import { createSkillPlazaService, SkillPlazaError } from "../skill-plaza/skill-plaza.service.ts";
 import { createStorageAdapterFromEnv } from "../storage/storage-adapter.factory.ts";
-import { buildSignedObjectUrls } from "../storage/storage.service.ts";
+import { buildSignedObjectUrls, findStorageObject } from "../storage/storage.service.ts";
 import {
   CanvasConflictError,
   createCanvasNodeRun,
@@ -252,6 +255,15 @@ export function createCanvasAgentWorkerRuntime(input: {
     env,
     now,
   });
+  const storageAdapter = createStorageAdapterFromEnv(env);
+  const skillPlaza = createSkillPlazaService({
+    db: input.db,
+    readSkillFileContent: (storageObjectId) => readCanvasAgentSkillStorageObjectText({
+      db: input.db,
+      storageObjectId,
+      adapter: storageAdapter,
+    }),
+  });
   const executor = new CanvasAgentExecutor({
     db: input.db,
     textGateway,
@@ -267,6 +279,25 @@ export function createCanvasAgentWorkerRuntime(input: {
       actorTeamMemberId: task.actorTeamMemberId,
     }),
     resolveFileAttachment,
+    resolvePlazaSkill: async ({ userId, skillId, name }) => {
+      try {
+        const requestedId = String(skillId ?? "").trim();
+        const requestedName = String(name ?? "").trim();
+        const resolvedId = requestedId
+          ? (isCanvasAgentSkillUuid(requestedId) ? requestedId : "")
+          : await skillPlaza.findAccessibleSkillIdByName({ userId, name: requestedName }) ?? "";
+        if (!resolvedId) return null;
+        const skill = await skillPlaza.resolveWorkflowSkill({ userId, skillId: resolvedId });
+        return {
+          id: String(skill.id),
+          title: String(skill.title ?? ""),
+          content: String(skill.content ?? ""),
+        };
+      } catch (error) {
+        if (error instanceof SkillPlazaError) return null;
+        throw error;
+      }
+    },
     now,
     maxRounds: input.maxRounds,
     maxToolCalls: input.maxToolCalls,
@@ -797,6 +828,57 @@ function readRecord(value: unknown): Record<string, unknown> {
     return asRecord(JSON.parse(value));
   } catch {
     return {};
+  }
+}
+
+function isCanvasAgentSkillUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function resolveCanvasAgentLocalStorageObjectPath(bucket: string, objectKey: string) {
+  const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
+  const absolutePath = resolve(uploadRoot, "storage", bucket, objectKey);
+  const expectedRoot = resolve(uploadRoot, "storage");
+  if (!absolutePath.startsWith(`${expectedRoot}${sep}`)) {
+    throw new Error("upload_path_outside_root");
+  }
+  return absolutePath;
+}
+
+async function readCanvasAgentSkillStorageObjectText(input: {
+  db: SqlDatabase;
+  storageObjectId: string;
+  adapter: ReturnType<typeof createStorageAdapterFromEnv>;
+}) {
+  const object = await findStorageObject(input.db, input.storageObjectId);
+  if (!object || object.status !== "available") return null;
+  if (typeof input.adapter.getObject === "function") {
+    try {
+      const result = await input.adapter.getObject({ bucket: object.bucket, objectKey: object.objectKey });
+      const text = Buffer.from(result.bytes).toString("utf8").trim();
+      if (text) return text;
+    } catch {
+    }
+  }
+  try {
+    const signed = await input.adapter.createSignedReadUrl({
+      bucket: object.bucket,
+      objectKey: object.objectKey,
+      expiresAt: new Date(Date.now() + 60 * 1000),
+    });
+    if (/^https?:\/\//i.test(signed.url)) {
+      const response = await fetch(signed.url);
+      if (response.ok) {
+        const text = (await response.text()).trim();
+        if (text) return text;
+      }
+    }
+  } catch {
+  }
+  try {
+    return (await readFile(resolveCanvasAgentLocalStorageObjectPath(object.bucket, object.objectKey))).toString("utf8");
+  } catch {
+    return null;
   }
 }
 

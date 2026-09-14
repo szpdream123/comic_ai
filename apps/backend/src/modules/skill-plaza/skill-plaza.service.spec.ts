@@ -102,11 +102,103 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       });
       assert.equal(created.authorName, "官方");
       assert.equal(created.detail.howToUse, "输入剧本");
+      assert.equal(created.detail.fileListPublic, true);
+      const hidden = await service.createOfficial({
+        name: "官方隐藏文件清单",
+        summary: "不公开文件",
+        category: "short-drama",
+        status: "published",
+        files: [{ name: "SKILL.md", kind: "instruction", content: "## 做什么\n隐藏文件" }],
+        detail: {
+          introduction: "## 做什么\n隐藏文件",
+          usageScene: "内部流程",
+          howToUse: "输入剧本",
+          outputContent: "镜头表",
+          fileListPublic: false,
+        },
+      });
+      assert.equal(hidden.detail.fileListPublic, false);
+      const updated = await service.updateOfficial({
+        skillId: String(hidden.id),
+        name: "官方隐藏文件清单",
+        summary: "不公开文件",
+        category: "short-drama",
+        status: "published",
+        files: [{ name: "SKILL.md", kind: "instruction", content: "## 做什么\n隐藏文件" }],
+        detail: {
+          introduction: "## 做什么\n隐藏文件",
+          usageScene: "内部流程",
+          howToUse: "输入剧本",
+          outputContent: "镜头表",
+          fileListPublic: false,
+        },
+      });
+      assert.equal(updated.detail.fileListPublic, false);
       const admin = await service.listAdmin({ status: "published", query: "官方短剧" });
       assert.equal(admin.items[0]?.fileCount, 1);
       const detail = await service.getAdminDetail(String(created.id));
       assert.equal(detail.files[0]?.name, "SKILL.md");
       assert.equal(detail.files[0]?.content, "## 做什么\n拆分镜头");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects official and user skills that exceed 50 files", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "91000000-0000-4000-8000-000000000005";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+         VALUES ($1, '13800139005', 'Skill 作者', 'plain:test-password', 'active')`,
+        [userId],
+      );
+      const service = createSkillPlazaService({ db });
+      const tooMany = Array.from({ length: 51 }, (_, index) => ({
+        name: index === 0 ? "SKILL.md" : `references/file-${index}.md`,
+        kind: "instruction",
+        content: `# file ${index}`,
+      }));
+      const allowed = tooMany.slice(0, 50);
+
+      const official = await service.createOfficial({
+        name: "官方 50 文件上限",
+        summary: "允许 50 个文件",
+        category: "general",
+        status: "draft",
+        files: allowed,
+        detail: { introduction: "# SKILL.md" },
+      });
+      assert.equal((await service.getAdminDetail(String(official.id))).files.length, 50);
+      await assert.rejects(
+        () => service.createOfficial({
+          name: "官方超限",
+          summary: "超过 50 个文件",
+          category: "general",
+          files: tooMany,
+          detail: { introduction: "# SKILL.md" },
+        }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_files_too_many" && error.message === "Skill 文件最多上传 50 个",
+      );
+
+      const created = await service.create({
+        userId,
+        name: "用户 50 文件上限",
+        summary: "允许 50 个文件",
+        category: "general",
+        detail: { introduction: "# SKILL.md", files: allowed },
+      });
+      assert.equal((await service.getAdminDetail(String(created.id))).files.length, 50);
+      await assert.rejects(
+        () => service.create({
+          userId,
+          name: "用户超限",
+          summary: "超过 50 个文件",
+          category: "general",
+          detail: { introduction: "# SKILL.md", files: tooMany },
+        }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_files_too_many" && error.message === "Skill 文件最多上传 50 个",
+      );
     } finally {
       await db.close();
     }
@@ -253,6 +345,8 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       assert.deepEqual(resolvePlazaSkillWorkflowStages([resolved], { skipScriptStage: true }), ["shot"]);
       const usage = await db.query<{ usage_count: number }>("SELECT usage_count FROM skills WHERE id = $1", [created.id]);
       assert.equal(Number(usage.rows[0]?.usage_count ?? 0), 1);
+      assert.equal(await service.findAccessibleSkillIdByName({ userId, name: "短剧一键转分镜" }), String(created.id));
+      assert.equal(await service.findAccessibleSkillIdByName({ userId, name: "不存在的技能" }), null);
     } finally {
       await db.close();
     }

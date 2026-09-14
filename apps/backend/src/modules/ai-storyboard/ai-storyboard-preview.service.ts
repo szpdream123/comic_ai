@@ -734,7 +734,14 @@ function* splitTextForLiveEcho(text: string) {
   }
 }
 
+function hasPlazaSkillInstructions(input: AiStoryboardPreviewInput) {
+  return Boolean(String(input.skillInstructions ?? "").trim());
+}
+
 function buildScriptPrompt(input: AiStoryboardPreviewInput) {
+  if (hasPlazaSkillInstructions(input)) {
+    return String(input.scriptText ?? "").trim();
+  }
   const skillPrompt = String(input.packages.skillPrompt ?? "").trim();
   return [
     skillPrompt || input.packages.genrePrompt || "",
@@ -745,14 +752,23 @@ function buildScriptPrompt(input: AiStoryboardPreviewInput) {
 }
 
 function buildScenePrompt(scriptText: string, input: AiStoryboardPreviewInput) {
+  if (hasPlazaSkillInstructions(input)) {
+    return scriptText;
+  }
   return buildAssetStagePrompt("scene", input.templates?.scenePrompt || "", scriptText);
 }
 
 function buildCharacterPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
+  if (hasPlazaSkillInstructions(input)) {
+    return scriptText;
+  }
   return buildAssetStagePrompt("character", input.templates?.characterPrompt || "", scriptText);
 }
 
 function buildPropPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
+  if (hasPlazaSkillInstructions(input)) {
+    return scriptText;
+  }
   return buildAssetStagePrompt("prop", input.templates?.propPrompt || "", scriptText);
 }
 
@@ -765,7 +781,9 @@ function buildShotPrompt(
     props: Record<string, unknown>[];
   },
 ) {
-  const basePrompt = buildAssetStagePrompt("shot", input.templates?.shotPrompt || "", scriptText);
+  const basePrompt = hasPlazaSkillInstructions(input)
+    ? scriptText
+    : buildAssetStagePrompt("shot", input.templates?.shotPrompt || "", scriptText);
   const assetCatalog = buildStoryboardCanonicalAssetCatalog(assets);
   return assetCatalog ? `${basePrompt}\n\n${assetCatalog}` : basePrompt;
 }

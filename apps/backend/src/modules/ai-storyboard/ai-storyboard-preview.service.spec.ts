@@ -603,9 +603,18 @@ describe("ai storyboard preview service", () => {
       assert.match(system, /Codex loads SKILL.md/);
       assert.match(system, /按短剧节奏拆镜/);
       assert.doesNotMatch(call.prompt ?? "", /SKILL\.md/);
+      assert.doesNotMatch(call.prompt ?? "", /场景模板/);
+      assert.doesNotMatch(call.prompt ?? "", /人物模板/);
+      assert.doesNotMatch(call.prompt ?? "", /道具模板/);
+      assert.doesNotMatch(call.prompt ?? "", /分镜模板/);
+      assert.doesNotMatch(call.prompt ?? "", /【输出顺序】/);
+      assert.doesNotMatch(call.prompt ?? "", /\[\[DETAILS\]\]/);
     }
-    assert.match(gateway.calls[1]?.prompt ?? "", /场景模板/);
-    assert.match(gateway.calls[4]?.prompt ?? "", /分镜模板/);
+    assert.equal(gateway.calls[0]?.prompt ?? "", "小说原文。");
+    assert.equal(gateway.calls[1]?.prompt ?? "", "Skill 改编后的剧本。");
+    assert.equal(gateway.calls[2]?.prompt ?? "", "Skill 改编后的剧本。");
+    assert.equal(gateway.calls[3]?.prompt ?? "", "Skill 改编后的剧本。");
+    assert.match(gateway.calls[4]?.prompt ?? "", /^Skill 改编后的剧本。/);
     assert.match(gateway.calls[0]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is script only/);
     assert.match(gateway.calls[4]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is storyboard generation only/);
   });

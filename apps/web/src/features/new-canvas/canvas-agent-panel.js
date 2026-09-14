@@ -251,6 +251,7 @@ export function ensureCanvasAgentState(ui = {}) {
     skillLibraryItems: Array.isArray(previous.skillLibraryItems) ? previous.skillLibraryItems : [],
     skillMineItems: Array.isArray(previous.skillMineItems) ? previous.skillMineItems : [],
     skillDraftIds: normalizePlazaSkillIds(previous.skillDraftIds),
+    promptPlazaSkillIds: normalizePlazaSkillIds(previous.promptPlazaSkillIds),
     skillSourceTab: previous.skillSourceTab === "library" || previous.skillSourceTab === "mine" ? previous.skillSourceTab : "official",
     skillStatus: "idle",
     skillQuery: "",
@@ -271,6 +272,7 @@ export function ensureCanvasAgentState(ui = {}) {
     skillLibraryItems: Array.isArray(previous.skillLibraryItems) ? previous.skillLibraryItems : [],
     skillMineItems: Array.isArray(previous.skillMineItems) ? previous.skillMineItems : [],
     skillDraftIds: normalizePlazaSkillIds(previous.skillDraftIds),
+    promptPlazaSkillIds: normalizePlazaSkillIds(previous.promptPlazaSkillIds),
     skillSourceTab: previous.skillSourceTab === "library" || previous.skillSourceTab === "mine" ? previous.skillSourceTab : "official",
     ...(Number(previous.panelWidth) === LEGACY_CANVAS_AGENT_PANEL_WIDTH
       ? { panelWidth: DEFAULT_CANVAS_AGENT_PANEL_WIDTH }
@@ -1341,6 +1343,7 @@ export function createCanvasAgentController({
   const captureComposerDraft = () => structuredClone({
     promptDraft: agent.promptDraft, promptAttachments: agent.promptAttachments,
     promptCreativeDocumentId: agent.promptCreativeDocumentId, selectedSkillId: agent.selectedSkillId,
+    promptPlazaSkillIds: agent.promptPlazaSkillIds,
     selectedModelOverrides: agent.selectedModelOverrides, promptPreferredModels: agent.promptPreferredModels,
     generationKind: agent.generationKind, generationModelCodes: agent.generationModelCodes,
     generationParameters: agent.generationParameters, visualStyleId: agent.visualStyleId,
@@ -1349,6 +1352,7 @@ export function createCanvasAgentController({
   const restoreComposerDraft = (draft) => {
     Object.assign(agent, {
       promptDraft: "", promptAttachments: [], promptCreativeDocumentId: "", selectedSkillId: "",
+      promptPlazaSkillIds: [],
       selectedModelOverrides: {}, promptPreferredModels: {}, visualStyleId: "anime",
       visualStylePending: false, interjectionDraft: "",
       ...(draft ? structuredClone(draft) : {}),
@@ -2124,11 +2128,16 @@ export function createCanvasAgentController({
     ...normalizePlazaEpisodeSkills(agent.skillMineItems, "mine"),
   ];
   const insertSelectedAgentSkills = (skills) => {
-    const tokens = (Array.isArray(skills) ? skills : [])
+    const selected = Array.isArray(skills) ? skills : [];
+    const tokens = selected
       .map((skill) => String(skill?.slug || skill?.name || skill?.title || "").trim())
       .filter(Boolean)
       .map((token) => token.startsWith("/") ? token : `/${token}`);
     if (!tokens.length) return false;
+    const ids = normalizePlazaSkillIds(selected.map((skill) => skill?.id));
+    if (ids.length) {
+      agent.promptPlazaSkillIds = normalizePlazaSkillIds([...(agent.promptPlazaSkillIds ?? []), ...ids]);
+    }
     const prefix = String(agent.promptDraft ?? "").trim() ? `${String(agent.promptDraft).trim()} ` : "";
     agent.promptDraft = `${prefix}${tokens.join(" ")} `;
     return true;
@@ -2710,6 +2719,7 @@ export function createCanvasAgentController({
         if (fromPrompt) {
           agent.promptDraft = "";
           agent.selectedSkillId = "";
+          agent.promptPlazaSkillIds = [];
           agent.selectedModelOverrides = {};
           agent.visualStylePending = false;
           agent.promptMention = null;
@@ -3357,6 +3367,7 @@ export function createCanvasAgentController({
             canvasId,
             conversationId,
           );
+          const plazaSkillIds = normalizePlazaSkillIds(agent.promptPlazaSkillIds);
           const payload = await agentApi.sendMessage(canvasId, conversationId, {
             ...(modelCode ? { modelCode } : {}),
             mode: agent.mode,
@@ -3365,6 +3376,7 @@ export function createCanvasAgentController({
             message: {
               text,
               ...(creativeDocumentId ? { creativeDocumentId } : {}),
+              ...(plazaSkillIds.length ? { plazaSkillIds } : {}),
               ...(mediaOnly || Object.keys(agent.promptPreferredModels ?? {}).length ? {
                 preferredModels,
               } : {}),
@@ -3419,6 +3431,7 @@ export function createCanvasAgentController({
           syncCurrentAgentTaskItem(agent, { goal: text, conversationId });
           agent.promptDraft = "";
           agent.selectedSkillId = "";
+          agent.promptPlazaSkillIds = [];
           agent.selectedModelOverrides = {};
           agent.visualStylePending = false;
           agent.promptCreativeDocumentId = "";
@@ -3496,10 +3509,12 @@ export function createCanvasAgentController({
             canvasId,
             agent.conversationId,
           );
+          const plazaSkillIds = fromPrompt ? normalizePlazaSkillIds(agent.promptPlazaSkillIds) : [];
           await control("interject", {
             message: {
               text,
               ...(creativeDocumentId ? { creativeDocumentId } : {}),
+              ...(plazaSkillIds.length ? { plazaSkillIds } : {}),
               ...(mediaOnly || Object.keys(agent.promptPreferredModels ?? {}).length ? {
                 preferredModels: mediaOnly
                   ? (agentGeneration
@@ -3542,6 +3557,7 @@ export function createCanvasAgentController({
           if (fromPrompt) {
             agent.promptDraft = "";
             agent.selectedSkillId = "";
+            agent.promptPlazaSkillIds = [];
             agent.selectedModelOverrides = {};
             agent.visualStylePending = false;
             agent.promptCreativeDocumentId = "";
@@ -3603,6 +3619,7 @@ export function createCanvasAgentController({
       }
       agent.panelOpen = true;
       agent.promptDraft = text;
+      agent.promptPlazaSkillIds = normalizePlazaSkillIds(input.plazaSkillIds);
       agent.promptCreativeDocumentId = "";
       agent.promptPreferredModels = Object.fromEntries(
         ["image", "video", "audio"]

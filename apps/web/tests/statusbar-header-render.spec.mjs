@@ -144,6 +144,7 @@ test("home renders the AI creation hub without changing the workbench navigation
         { id: "attachment-video", name: "镜头参考.mp4", kind: "video", previewUrl: "blob:home-agent-video" },
         { id: "attachment-file", name: "剧情设定.md", kind: "file", previewUrl: "" },
       ],
+      homeAgentModeMenuOpen: true,
       homeAgentModelMenuOpen: true,
       homeAgentModelTab: "image",
       homeAgentSelectedModels: { image: "image-pro", video: "video-pro" },
@@ -175,10 +176,15 @@ test("home renders the AI creation hub without changing the workbench navigation
   });
   assert.match(html, /home-agent-composer/);
   assert.match(html, /class="home-agent-rich-editor"[^>]*data-home-agent-prompt[^>]*contenteditable="true"/);
-  assert.match(html, /说出你的创意，或者选一个 Skill 开始创作/);
+  assert.match(html, /输入消息，@n 节点 · @a 资产 · @m 模型 · \/ 调用 Skill/);
   assert.match(html, /data-action="submit-home-agent-prompt"/);
   assert.match(html, /data-action="toggle-home-agent-mode-menu"/);
-  assert.match(html, />自动执行</);
+  assert.match(html, />自主</);
+  assert.match(html, /data-agent-mode="plan"/);
+  assert.match(html, /data-agent-mode="b"/);
+  assert.match(html, /data-agent-mode="c"/);
+  assert.doesNotMatch(html, /data-agent-mode="expert"/);
+  assert.doesNotMatch(html, />分析</);
   assert.match(html, /data-home-agent-attachment-input/);
   assert.match(html, /data-home-agent-attachment-list/);
   assert.match(html, /home-agent-attachment image/);
@@ -192,10 +198,14 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(html, /data-action="remove-home-agent-model"/);
   assert.match(html, /图片 Pro/);
   assert.match(html, /视频 Pro/);
-  assert.doesNotMatch(html, /data-action="toggle-home-agent-model-menu"/);
-  assert.doesNotMatch(html, /data-action="set-home-agent-model-tab"/);
-  assert.doesNotMatch(html, /data-action="select-home-agent-model"/);
-  assert.doesNotMatch(html, /data-action="open-home-agent-skill-picker"/);
+  assert.match(html, /data-action="toggle-home-agent-model-menu"/);
+  assert.match(html, /data-action="set-home-agent-model-tab"/);
+  assert.match(html, /data-action="select-home-agent-model"/);
+  assert.match(html, /data-action="open-home-agent-skill-picker"/);
+  assert.match(html, /home-agent-send-hint/);
+  assert.doesNotMatch(html, /home-agent-disclaimer/);
+  assert.doesNotMatch(html, /重要操作执行前会请求确认/);
+  assert.doesNotMatch(html, /home-agent-context-usage/);
   assert.doesNotMatch(html, /aria-label="进入画布选择创作节点"/);
   assert.doesNotMatch(html, /home-agent-tip/);
   assert.doesNotMatch(html, /home-capability-grid/);
@@ -226,6 +236,10 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(css, /\.home-agent-attachment-hover-preview\.video-preview > video\s*\{[\s\S]*?object-fit:\s*contain/);
   assert.match(css, /\.home-agent-rich-editor\s*\{[\s\S]*?white-space:\s*pre-wrap/);
   assert.match(css, /\.home-agent-model-menu\s*\{[\s\S]*?width:\s*min\(22rem, calc\(100vw - 3rem\)\)/);
+  assert.match(css, /\[data-workbench-theme="daylight"\] \.workbench-main\.home-mode \.home-hero\.has-background-video \.hero-title,[\s\S]*?color:\s*#f5f7f8/);
+  assert.match(css, /\[data-workbench-theme="daylight"\] \.home-agent-mode-menu small\s*\{[\s\S]*?color:\s*#6c7e89/);
+  assert.match(css, /\[data-workbench-theme="daylight"\] \.home-agent-rich-editor:empty::before,[\s\S]*?color:\s*#6c7e89/);
+  assert.match(css, /\[data-workbench-theme="daylight"\] \.home-creation-mode-switch button\s*\{[\s\S]*?color:\s*#687989/);
   assert.match(css, /@media \(max-width: 640px\)[\s\S]*?\.home-agent-attachment-hover-preview\s*\{[\s\S]*?left:\s*0[\s\S]*?transform:\s*translateY\(0\.3rem\)/);
   assert.match(css, /\.home-capability-grid\s*\{[\s\S]*?width:\s*min\(1120px, 100%\)[\s\S]*?margin:\s*1\.75rem auto 0/);
   assert.match(css, /\.home-capability-grid > button\s*\{[\s\S]*?min-height:\s*4\.35rem/);
@@ -234,32 +248,34 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(css, /\.home-tv\s*\{[\s\S]*?width:\s*100%[\s\S]*?max-width:\s*100%[\s\S]*?margin:\s*3\.2rem auto 0 0/);
 });
 
-test("home Skill entry reuses the existing generation Skill modal", () => {
+test("home Skill entry reuses the existing plaza Skill picker", () => {
   const html = renderProjectDetail({
     state: createBaseState(),
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "home",
       homeAgentSkillPickerOpen: true,
-      homeAgentSkillSource: "official",
-      homeAgentSkillCategory: "image_style",
-      homeAgentOfficialSkills: [{
+      homeAgentSkillSourceTab: "official",
+      episodePlazaOfficialSkills: [{
         id: "film-look",
         title: "电影感画面",
         summary: "统一镜头语言",
-        category: "image_style",
-        official: true,
+        category: "general",
       }],
-      homeAgentPrivateSkills: [],
-      homeAgentSkillPagination: { official: { total: 1, category: "all" }, private: {} },
+      episodePlazaLibrarySkills: [],
+      episodePlazaMineSkills: [],
     },
   });
 
-  assert.match(html, /class="canvas-text-skill-layer"/);
-  assert.match(html, />选择生成技能</);
-  assert.match(html, />生图风格</);
+  assert.match(html, /class="episode-skill-picker-layer plaza-skill-picker-layer"/);
+  assert.match(html, /plaza-skill-picker-modal/);
+  assert.match(html, /data-action="open-home-agent-skill-picker"/);
   assert.match(html, /data-action="select-home-agent-skill"/);
-  assert.match(html, />引用到输入框</);
+  assert.match(html, /data-action="confirm-home-agent-skill"/);
+  assert.match(html, />电影感画面</);
+  assert.match(html, />确认选择</);
+  assert.doesNotMatch(html, /class="canvas-text-skill-layer"/);
+  assert.doesNotMatch(html, />选择生成技能</);
   assert.doesNotMatch(html, /selection-picker-layer/);
 });
 

@@ -1384,10 +1384,15 @@ test("Canvas Agent stages a homepage prompt visibly even when the panel was clos
   };
   const controller = createCanvasAgentController({ surface, workbench: { ui, api: {} } });
 
-  await controller.stagePrompt({ text: "首页传入的创作指令", mode: "c" });
+  await controller.stagePrompt({
+    text: "首页传入的创作指令",
+    mode: "c",
+    plazaSkillIds: ["plaza-home-skill"],
+  });
 
   assert.equal(ui.canvasAgent.panelOpen, true);
   assert.equal(ui.canvasAgent.promptDraft, "首页传入的创作指令");
+  assert.deepEqual(ui.canvasAgent.promptPlazaSkillIds, ["plaza-home-skill"]);
   assert.equal(ui.canvasAgent.mode, "c");
   assert.equal(ui.canvasSessionUiState.canvasAgent.panelOpen, true);
   assert.match(renderCanvasAgentPanel(ui), /首页传入的创作指令/);
@@ -4086,6 +4091,7 @@ test("Canvas Agent skill picker reuses the plaza catalog as an upward popover", 
   });
   await controller.handleAction({ dataset: { agentAction: "confirm-agent-skills" } });
   assert.equal(workbench.ui.canvasAgent.promptDraft, "先分析画布 /library-skill ");
+  assert.deepEqual(workbench.ui.canvasAgent.promptPlazaSkillIds, ["plaza-library"]);
   assert.equal(workbench.ui.canvasAgent.skillMenuOpen, false);
   assert.deepEqual(workbench.ui.canvasAgent.skillDraftIds, []);
 
@@ -4153,5 +4159,56 @@ test("Canvas Agent still sends document attachments through a text-only model", 
   await controller.handleAction({ dataset: { agentAction: "send" } });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].message.attachments[0].kind, "document");
+  controller.dispose();
+});
+
+test("Canvas Agent send and prompt interject include selected plaza skill ids", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-plaza-skill",
+      canvasAgent: {
+        conversationId: "conversation-plaza-skill",
+        promptDraft: "/导演skill 按这个技能执行",
+        promptPlazaSkillIds: ["plaza-director"],
+        modelCode: "agent-text-1",
+        modelsStatus: "ready",
+        models: [{ modelCode: "agent-text-1", modelLabel: "Agent Text 1" }],
+      },
+    },
+    api: {
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        calls.push(["message", input]);
+        return { task: { id: "task-plaza-send", status: "queued" } };
+      },
+      async controlCanvasAgentTask(_canvasId, taskId, action, input) {
+        calls.push(["control", taskId, action, input]);
+        return { result: { status: "running" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  assert.deepEqual(calls[0], ["message", {
+    modelCode: "agent-text-1",
+    mode: "b",
+    message: {
+      text: "/导演skill 按这个技能执行",
+      plazaSkillIds: ["plaza-director"],
+    },
+  }]);
+  assert.deepEqual(workbench.ui.canvasAgent.promptPlazaSkillIds, []);
+
+  workbench.ui.canvasAgent.taskId = "task-plaza-skill";
+  workbench.ui.canvasAgent.status = "running";
+  workbench.ui.canvasAgent.promptDraft = "【Skill：导演skill】继续";
+  workbench.ui.canvasAgent.promptPlazaSkillIds = ["plaza-director"];
+  await controller.handleAction({ dataset: { agentAction: "interject-prompt" } });
+  assert.deepEqual(calls[1], ["control", "task-plaza-skill", "interject", {
+    message: {
+      text: "【Skill：导演skill】继续",
+      plazaSkillIds: ["plaza-director"],
+    },
+  }]);
   controller.dispose();
 });

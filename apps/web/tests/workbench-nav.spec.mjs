@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
@@ -223,6 +224,15 @@ test("skill create form exposes real categories instead of recommendation", () =
   assert.doesNotMatch(html, /option value="recommended"/);
   assert.doesNotMatch(html, /<select name="category"/);
   assert.doesNotMatch(html, /<select name="coverType"/);
+});
+
+test("skill create rejects more than 50 markdown files before submit", async () => {
+  const source = await readFile(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const start = source.indexOf('if (action === "create-skill")');
+  const block = source.slice(start, source.indexOf('if (action === "copy-skill-share-link")', start));
+  assert.notEqual(start, -1, "create-skill action exists");
+  assert.match(block, /markdownFiles\.length > 50/);
+  assert.match(block, /Skill 文件最多上传 50 个/);
 });
 
 test("skill plaza recommended tab only shows admin-recommended skills", () => {
@@ -1056,6 +1066,75 @@ test("switching the project episodes tab persists scripts and selects an episode
     dataset: { action: "select-project-episode-script", episodeId: "episode-1" },
   });
   assert.equal(workbench.ui.selectedScriptEpisodeId, "episode-1");
+});
+
+test("creating an empty single episode saves modal script and opens the scripts tab", async () => {
+  const createCalls = [];
+  const persistCalls = [];
+  const workbench = {
+    root: {
+      innerHTML: "",
+      querySelector(selector) {
+        return selector === "#single-episode-script-input"
+          ? { value: "夜色里的港口灯火一闪一闪。" }
+          : null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    },
+    state: {
+      project: { id: "project-1" },
+      projectDetail: { project: { id: "project-1" }, script: { id: "script-1" }, episodes: [] },
+    },
+    session: { user: { phone: "+86 13800138000" } },
+    api: {
+      async createProjectEpisode(projectId, payload) {
+        createCalls.push({ projectId, payload });
+        return { episode: { id: "episode-new", title: payload.title } };
+      },
+      async getProjectEpisodes() {
+        return { episodes: [{ id: "episode-new", title: "第 1 集" }] };
+      },
+      async updateScriptReaderSection(scriptId, sectionId, patch) {
+        persistCalls.push({ scriptId, sectionId, patch });
+        return { section: { id: sectionId, body: patch.body } };
+      },
+    },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      selectedProjectCardId: "project-1",
+      isSingleEpisodeModalOpen: true,
+      singleEpisodeScript: "夜色里的港口灯火一闪一闪。",
+      projectEpisodesTab: "episodes",
+      selectedScriptEpisodeId: "",
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "create-empty-single-episode" },
+  });
+
+  assert.equal(createCalls.length, 1);
+  assert.equal(createCalls[0].projectId, "project-1");
+  assert.deepEqual(createCalls[0].payload, { title: "第 1 集" });
+  assert.equal(workbench.ui.isSingleEpisodeModalOpen, false);
+  assert.equal(workbench.ui.projectPanelMode, "detail");
+  assert.equal(workbench.ui.projectInteriorSection, "episodes");
+  assert.equal(workbench.ui.projectEpisodesTab, "scripts");
+  assert.equal(workbench.ui.selectedScriptEpisodeId, "episode-new");
+  assert.equal(workbench.ui.scriptReaderDrafts["episode-new"], "夜色里的港口灯火一闪一闪。");
+  assert.equal(
+    workbench.state.projectDetail.episodes.find((episode) => episode.id === "episode-new")?.scriptText,
+    "夜色里的港口灯火一闪一闪。",
+  );
+  assert.deepEqual(persistCalls, [{
+    scriptId: "script-1",
+    sectionId: "episode-new",
+    patch: { body: "夜色里的港口灯火一闪一闪。" },
+  }]);
 });
 
 test("reanalyzing a project episode script prefills the existing episode text", async () => {

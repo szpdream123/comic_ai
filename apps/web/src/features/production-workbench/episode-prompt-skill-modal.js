@@ -139,11 +139,8 @@ export function renderEpisodePromptSkillControl({
   if (variant === "plaza") {
     return `
       <section class="episode-prompt-skill-control plaza-skill-chip-control${open ? " is-open" : ""}" aria-label="Skill">
-        <div class="single-episode-look-label">
-          <span>Skill</span>
-          <i aria-hidden="true">?</i>
-        </div>
-        <div class="plaza-skill-chip-row">
+        <div class="single-episode-look-label"><span>Skill</span></div>
+        <div class="plaza-skill-chip-row${selectedSkills.length ? "" : " is-empty"}">
           ${selectedSkills.map((skill) => `
             <button
               class="plaza-skill-chip"

@@ -22,6 +22,10 @@ describe("Canvas Agent runtime composition", () => {
 
     assert.match(source, /grantId:\s*request\.grantId/);
     assert.doesNotMatch(source, /grantId:\s*request\.fileGrantId/);
+    assert.match(source, /createSkillPlazaService/);
+    assert.match(source, /findAccessibleSkillIdByName/);
+    assert.match(source, /resolvePlazaSkill/);
+    assert.match(source, /readCanvasAgentSkillStorageObjectText/);
   });
 
   it("keeps image billing modes distinct without changing video billing", () => {

@@ -2,7 +2,6 @@ import { renderAssetExtractModal } from "./asset-extract-modal.js";
 import { renderAssetInspectorModal, renderEpisodeBatchModal, renderEpisodeBatchStyleModal, renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
 import {
   CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES,
-  normalizeCanvasTextSkills,
   renderCanvasTextSkillModal,
   resolveCanvasGenerationSkillCategories,
 } from "./canvas-text-skill-modal.js";
@@ -10,7 +9,7 @@ import { renderCanvasScriptBatchModal } from "./canvas-script-batch-modal.js";
 import { renderCanvasScriptStartModal } from "./canvas-script-start-modal.js";
 import { renderExportPanel } from "./export-panel.js";
 import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
-import { normalizeHomeAgentGenerationModel } from "./home-agent-model-picker.js";
+import { normalizeHomeAgentGenerationModel, renderHomeAgentModelPicker } from "./home-agent-model-picker.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-login-onboarding.js";
@@ -9745,12 +9744,20 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
             <span>当前项目：</span><strong>${escapeHtml(projectName)}</strong>
           </div>
           ${selectedEpisodeId ? "" : '<span class="home-project-workflow-selection-title">请选择进入的集数</span>'}
-          <button type="button" class="home-project-workflow-close" data-action="close-home-project-workflow" aria-label="关闭工作流">×</button>
+          ${selectedEpisodeId ? `
+            <button type="button" class="home-project-workflow-close" data-action="close-home-project-workflow" aria-label="关闭工作流">×</button>
+          ` : `
+            <div class="home-project-workflow-head-actions">
+              <button type="button" class="home-project-workflow-create" data-action="open-single-episode-flow">创建单集</button>
+              <button type="button" class="home-project-workflow-close" data-action="close-home-project-workflow" aria-label="关闭工作流">×</button>
+            </div>
+          `}
         </header>
         <div class="home-project-workflow-body">${content}</div>
       </div>
       ${renderEpisodeBatchModal(ui.episodeBatchModal)}
       ${renderEpisodeBatchStyleModal(ui.episodeBatchModal ?? {})}
+      ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui, state) : ""}
     </section>
   `;
 }
@@ -12507,8 +12514,10 @@ function renderCanvasIcon(icon) {
     markdown: '<path d="M4 6h16v12H4z" /><path d="M7 15V9l3 3 3-3v6M16 9v6m-2-2 2 2 2-2" />',
     minus: '<path d="M5 12h14" />',
     model: '<path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z" /><path d="m7 16.5-4.74-2.85" /><path d="m7 16.5 5-3" /><path d="M7 16.5v5.17" /><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z" /><path d="m17 16.5-5-3" /><path d="m17 16.5 4.74-2.85" /><path d="M17 16.5v5.17" /><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z" /><path d="M12 8 7.26 5.15" /><path d="m12 8 4.74-2.85" /><path d="M12 13.5V8" />',
+    paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />',
     panel: '<rect x="4" y="5" width="16" height="14" rx="2" /><path d="M9 5v14" />',
     plus: '<path d="M12 5v14M5 12h14" />',
+    skill: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M13 3v6h6" /><path d="m9.2 14.2.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8.8-1.8Z" />',
     role: '<rect x="5" y="5" width="14" height="14" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" />',
     redo: '<path d="M17 7h3v-3" /><path d="M20 7a8 8 0 1 0 1 7" />',
     search: '<circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4 4" />',
@@ -12795,13 +12804,13 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
     selectedHomeAgentModels,
     homeAgentAttachments,
   );
-  const homeAgentMode = ["b", "c", "plan", "expert"].includes(ui.homeAgentMode) ? ui.homeAgentMode : "c";
+  const homeAgentMode = ["b", "c", "plan"].includes(ui.homeAgentMode) ? ui.homeAgentMode : "c";
   const homeAgentModeLabels = {
-    b: "审核批准",
-    c: "自动执行",
-    plan: "计划模式",
-    expert: "分析模式",
+    plan: "规划",
+    b: "协作",
+    c: "自主",
   };
+  const homeAgentModelTab = ["image", "video"].includes(ui.homeAgentModelTab) ? ui.homeAgentModelTab : "image";
   const homeTvCategories = Array.isArray(ui.homeTvCategories) ? ui.homeTvCategories : [];
   const homeTvCategory = homeTvCategories.some((item) => item.code === ui.homeTvCategory)
     ? ui.homeTvCategory
@@ -12820,7 +12829,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
   const creationModeCopy = {
     agent: {
       label: "Agent",
-      placeholder: "说出你的创意，或者选一个 Skill 开始创作",
+      placeholder: "输入消息，@n 节点 · @a 资产 · @m 模型 · / 调用 Skill",
       tip: "Agent 会进入画布，协助规划并执行完整创作流程",
     },
     workflow: {
@@ -12856,17 +12865,30 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
           </div>
           <footer class="home-agent-composer-footer">
             <div class="home-agent-tools">
-              <button type="button" class="home-agent-icon-button" data-action="pick-home-agent-attachments" aria-label="添加图片、视频或文件" title="添加图片、视频或文件" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("plus")}</button>
+              <button type="button" class="home-agent-icon-button" data-action="pick-home-agent-attachments" aria-label="添加图片、视频或文件" title="添加图片、视频或文件" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("paperclip")}</button>
               <input type="file" data-home-agent-attachment-input accept="image/*,video/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" multiple hidden />
+              ${renderHomeAgentModelPicker({
+                models: homeAgentModels,
+                mediaType: homeAgentModelTab,
+                selectedModelCodes: homeAgentSelectedModels,
+                open: ui.homeAgentModelMenuOpen === true,
+                disabled: isTeamMember,
+                triggerLabel: "模型",
+                ariaLabel: "选择生成模型",
+                tabAction: "set-home-agent-model-tab",
+                tabs: [["image", "图片"], ["video", "视频"]],
+              })}
+              <button type="button" class="home-agent-skill-trigger" data-action="open-home-agent-skill-picker" aria-label="调用 Skill" title="调用 Skill" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("skill")}<span>Skill</span></button>
               ${homeCreationMode === "agent" ? `<div class="home-agent-mode-picker">
                 <button type="button" class="home-agent-mode-trigger${ui.homeAgentModeMenuOpen ? " active" : ""}" data-action="toggle-home-agent-mode-menu" aria-haspopup="listbox" aria-expanded="${ui.homeAgentModeMenuOpen === true}" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("sparkles")}<span>${escapeHtml(homeAgentModeLabels[homeAgentMode])}</span>${renderUiChevronIcon(ui.homeAgentModeMenuOpen ? "up" : "down")}</button>
                 ${ui.homeAgentModeMenuOpen ? `<div class="home-agent-mode-menu" role="listbox" aria-label="Agent 模式">
-                  ${Object.entries(homeAgentModeLabels).map(([mode, label]) => `<button type="button" role="option" aria-selected="${homeAgentMode === mode}" class="${homeAgentMode === mode ? "active" : ""}" data-action="set-home-agent-mode" data-agent-mode="${mode}"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(mode === "c" ? "分析并自动调用画布能力执行" : mode === "b" ? "修改前请求你的确认" : mode === "plan" ? "只生成执行计划" : "只读分析，不修改画布")}</small></button>`).join("")}
+                  ${Object.entries(homeAgentModeLabels).map(([mode, label]) => `<button type="button" role="option" aria-selected="${homeAgentMode === mode}" class="${homeAgentMode === mode ? "active" : ""}" data-action="set-home-agent-mode" data-agent-mode="${mode}"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(mode === "c" ? "分析并自动调用画布能力执行" : mode === "b" ? "修改前请求你的确认" : "只生成执行计划")}</small></button>`).join("")}
                 </div>` : ""}
               </div>` : ""}
             </div>
             <div class="home-agent-submit-group">
               <span data-home-agent-file-count>${Number(ui.homeAgentAttachmentCount ?? 0) > 0 ? `${Number(ui.homeAgentAttachmentCount)} 个附件` : ""}</span>
+              <small class="home-agent-send-hint">Enter</small>
               <button type="button" class="home-agent-composer-action" data-action="submit-home-agent-prompt" aria-label="发送${escapeAttr(creationModeCopy.label)}指令" title="发送${escapeAttr(creationModeCopy.label)}指令" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("arrow-up")}</button>
             </div>
           </footer>
@@ -13078,33 +13100,31 @@ function renderHomeAgentComposerSegments(segments, selectedModels, attachments, 
 
 function resolveHomeAgentSkillCatalog(ui = {}) {
   return [
-    ...normalizeCanvasTextSkills(ui.homeAgentOfficialSkills, "official"),
-    ...normalizeCanvasTextSkills(ui.homeAgentPrivateSkills, "private"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine"),
   ];
 }
 
 function renderHomeAgentSkillPicker(ui = {}) {
-  return renderCanvasTextSkillModal({
-    show: ui.homeAgentSkillPickerOpen === true,
-    title: "选择生成技能",
-    sourceTab: ui.homeAgentSkillSource,
-    activeCategory: ui.homeAgentSkillCategory,
-    officialSkills: ui.homeAgentOfficialSkills,
-    privateSkills: ui.homeAgentPrivateSkills,
-    draftSkillId: ui.homeAgentSkillDraftId,
-    officialPagination: ui.homeAgentSkillPagination?.official,
-    privatePagination: ui.homeAgentSkillPagination?.private,
-    loading: ui.homeAgentSkillLoading,
+  return renderEpisodePromptSkillModal({
+    show: ui.homeAgentSkillPickerOpen === true
+      && ui.activeNavTab === "home"
+      && ui.homeCreationMode !== "workflow",
+    variant: "plaza",
+    sourceTab: ui.homeAgentSkillSourceTab,
+    officialSkills: ui.episodePlazaOfficialSkills,
+    librarySkills: ui.episodePlazaLibrarySkills,
+    mineSkills: ui.episodePlazaMineSkills,
+    draftPlazaSkillIds: ui.homeAgentSkillDraftPlazaIds,
+    query: ui.episodePlazaSkillQuery,
+    loading: ui.episodePromptSkillLoading,
     actions: {
       close: "close-home-agent-skill-picker",
       source: "set-home-agent-skill-source",
-      category: "set-home-agent-skill-category",
-      page: "set-home-agent-skill-page",
       select: "select-home-agent-skill",
-      clear: "clear-home-agent-skill-draft",
       confirm: "confirm-home-agent-skill",
     },
-    confirmLabel: "引用到输入框",
   });
 }
 

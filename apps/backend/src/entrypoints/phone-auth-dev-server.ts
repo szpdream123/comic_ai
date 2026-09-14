@@ -34496,7 +34496,7 @@ export function createPhoneAuthDevServer(
             ? { stages: plazaSelectedStages, skipScriptStage }
             : null);
           const usesDefaultComicPipeline = usesLegacyPackages || (useDefaultWorkflowStages && !usesPlazaSkill);
-          const needsDefaultTemplates = usesDefaultComicPipeline || (usesPlazaSkill && plazaSelectedStages.some((stage) => stage !== "script"));
+          const needsDefaultTemplates = usesDefaultComicPipeline;
           if (needsDefaultTemplates) {
             await Promise.all([
               ensureDefaultStoryboardPromptData(db),
@@ -34643,18 +34643,32 @@ export function createPhoneAuthDevServer(
               props: Array.isArray(body.context?.props) ? body.context.props.slice(0, 500) : [],
             },
             skillInstructions: plazaSkillContent || null,
-            packages: {
-              skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
-              genrePrompt: genrePackage ? formatStoryboardPromptPackageContents([genrePackage]) : "",
-              emotionPrompt: emotionPackage ? formatStoryboardPromptPackageContents([emotionPackage]) : "",
-              tabooPrompt: formatStoryboardPromptPackageContents(tabooPackages),
-            },
-            templates: {
-              scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? "",
-              characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? "",
-              propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? "",
-              shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? "",
-            },
+            packages: usesPlazaSkill
+              ? {
+                  skillPrompt: "",
+                  genrePrompt: "",
+                  emotionPrompt: "",
+                  tabooPrompt: "",
+                }
+              : {
+                  skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
+                  genrePrompt: genrePackage ? formatStoryboardPromptPackageContents([genrePackage]) : "",
+                  emotionPrompt: emotionPackage ? formatStoryboardPromptPackageContents([emotionPackage]) : "",
+                  tabooPrompt: formatStoryboardPromptPackageContents(tabooPackages),
+                },
+            templates: usesPlazaSkill
+              ? {
+                  scenePrompt: "",
+                  characterPrompt: "",
+                  propPrompt: "",
+                  shotPrompt: "",
+                }
+              : {
+                  scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? "",
+                  characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? "",
+                  propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? "",
+                  shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? "",
+                },
           };
           const previewService = createAiStoryboardPreviewService({ gateway: aiStoryboardTextChatGateway });
           const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("stream") === "1";

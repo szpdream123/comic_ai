@@ -218,6 +218,28 @@ test("canvas header restores project switch and help after upstream chrome split
   assert.match(appSource, /切换项目/);
 });
 
+test("ChatPanel slash Skill picker is replaced by a host plaza overlay", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  assert.match(appSource, /function installAiCanvasRuntimeSkillPicker/);
+  assert.match(appSource, /#chat-skill-suggestions/);
+  assert.match(appSource, /data-host-skill-picker="true"/);
+  assert.match(appSource, /data-host-skill-action=/);
+  assert.match(appSource, /createAiCanvasRuntimeSkillChip/);
+  assert.match(appSource, /@skill\{\$\{id\}\|\$\{encodeURIComponent\(label\)\}\}/);
+  assert.match(appSource, /suppressReopen = Boolean\(findNativeSkillList\(\)\)/);
+  assert.match(appSource, /if \(suppressReopen\) return/);
+  assert.match(appSource, /if \(slashRange\) slashRange\.deleteContents\(\)/);
+  assert.match(appSource, /composer\.dispatchEvent\(new Event\("input", \{ bubbles: true \}\)/);
+  assert.doesNotMatch(appSource, /\[aria-label="调用 Skill"\][\s\S]{0,80}trigger\?\.click/);
+  assert.doesNotMatch(appSource, /open-skill-create-from-picker/);
+  assert.match(appSource, /onOpenSkills: context\.onOpenSkills/);
+  assert.match(workbenchSource, /async function openAiCanvasRuntimeSkills/);
+  assert.match(brandCss, /\.host-chat-skill-picker\.plaza-skill-picker-layer/);
+  assert.match(brandCss, /inset: auto 12px calc\(100% \+ 8px\) 12px/);
+});
+
 test("canvas drawing toolbar restores the pan hand tool before drawing tools", () => {
   const appRuntime = readRuntimeAsset("App-");
   const toolbar = appRuntime.match(/function lu\(\{activeTool:e,imageReady:t,interactionMode:n[\s\S]*?var uu=\(0,Z\.memo\)\(lu\)/)?.[0] ?? "";

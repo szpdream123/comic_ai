@@ -3109,6 +3109,25 @@ test("admin shell provides submitting and success feedback for write actions", (
   }
 });
 
+test("admin official skill create surfaces a 50-file limit error", () => {
+  const drawerStart = script.indexOf("async function openAdminSkillDrawer");
+  const drawerBlock = script.slice(drawerStart, script.indexOf("async function openAdminSkillReviewDrawer", drawerStart));
+  assert.notEqual(drawerStart, -1, "official skill drawer exists");
+  for (const contract of [
+    "admin-skill-error",
+    "files.length > 50",
+    "Skill 文件最多上传 50 个",
+    "err.payload?.error?.message",
+    "showToast",
+    "name=\"fileListPublic\"",
+    "公开 Skill 文件给其他用户查看",
+    "fileListPublic: form.get(\"fileListPublic\") === \"on\"",
+  ]) {
+    assert.match(drawerBlock, new RegExp(escapeRegExp(contract)));
+  }
+  assert.doesNotMatch(drawerBlock, /fileListPublic:\s*true/);
+});
+
 test("admin password change drawer can reveal each password field", () => {
   const drawerStart = script.indexOf("function openPasswordChangeDrawer");
   const drawerBlock = script.slice(drawerStart, script.indexOf("function parseConfigValue", drawerStart));

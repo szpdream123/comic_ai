@@ -46,6 +46,30 @@ describe("episode prompt skill modal", () => {
     assert.doesNotMatch(html, /转剧本提示词/);
   });
 
+  it("keeps the plaza skill picker on the same chrome layer as the text model control", async () => {
+    const empty = renderEpisodePromptSkillControl({
+      variant: "plaza",
+      skills: [],
+      selectedPlazaSkillIds: [],
+    });
+    const css = await readFile(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+    const emptyAddBlock = css.match(
+      /\.single-episode-skill-controls \.plaza-skill-chip-row\.is-empty \.plaza-skill-chip-add\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const skillControlsBlock = css.match(
+      /\.single-episode-skill-controls\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(empty, /<div class="single-episode-look-label"><span>Skill<\/span><\/div>/);
+    assert.match(empty, /plaza-skill-chip-row is-empty/);
+    assert.match(empty, />请选择 Skill</);
+    assert.match(skillControlsBlock, /grid-template-columns:\s*minmax\(10\.5rem,\s*11\.5rem\)\s+minmax\(10\.5rem,\s*11\.5rem\)/);
+    assert.match(skillControlsBlock, /width:\s*auto/);
+    assert.match(emptyAddBlock, /width:\s*100%/);
+    assert.match(emptyAddBlock, /min-height:\s*2\.25rem/);
+    assert.match(emptyAddBlock, /border-radius:\s*0\.5rem/);
+  });
+
   it("renders independent source tabs and all five workflow categories", () => {
     const html = renderEpisodePromptSkillModal({
       show: true,

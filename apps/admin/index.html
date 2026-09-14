@@ -1332,13 +1332,39 @@
       .admin-skill-mode-toggle { display: flex; gap: 4px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #f6f9fd; }
       .admin-skill-mode-toggle button { min-width: 48px; min-height: 28px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
       .admin-skill-mode-toggle button.active { background: #fff; font-weight: 700; }
-      .admin-skill-editor { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 22rem; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
-      .admin-skill-tree { border-right: 1px solid var(--line); background: #f8fbff; }
-      .admin-skill-tree header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; color: var(--muted); font-size: 12px; }
-      .admin-skill-tree-list { display: grid; gap: 4px; padding: 0 8px 10px; }
-      .admin-skill-tree-row { display: flex; align-items: center; min-height: 30px; border-radius: 8px; }
-      .admin-skill-tree-row.is-active { background: #e8f0ff; }
-      .admin-skill-tree-row button { flex: 1; border: 0; background: transparent; text-align: left; cursor: pointer; padding: 6px 8px; }
+      .admin-skill-editor { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 22rem; border: 1px solid var(--line); border-radius: 12px; overflow: visible; background: #fff; }
+      .admin-skill-upload-menu-wrap { position: relative; }
+      .admin-skill-upload-menu-wrap > button { min-width: 48px; min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+      .admin-skill-upload-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 6; display: none; min-width: 120px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(18, 36, 61, .12); }
+      .admin-skill-upload-menu.is-open, .admin-skill-tree-menu.is-open { display: grid; }
+      .admin-skill-upload-menu[hidden], .admin-skill-tree-menu[hidden] { display: none !important; }
+      .admin-skill-upload-menu label { position: relative; display: block; padding: 8px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+      .admin-skill-upload-menu label:hover { background: #f6f9fd; }
+      .admin-skill-upload-menu input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+      .admin-skill-tree { position: relative; overflow: visible; border-right: 1px solid var(--line); background: #f8fbff; }
+      .admin-skill-tree header { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 10px 12px; color: var(--muted); font-size: 12px; }
+      .admin-skill-tree-actions { display: flex; gap: 2px; }
+      .admin-skill-icon-button { display: grid; width: 26px; min-width: 26px; min-height: 26px; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+      .admin-skill-icon-button:hover { background: #e8f0ff; color: var(--text); }
+      .admin-skill-icon-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+      .admin-skill-tree-list { display: grid; align-content: start; gap: 4px; min-height: 0; overflow: auto; padding: 0 8px 10px; }
+      .admin-skill-tree-row { display: flex; align-items: center; min-height: 30px; padding-right: 2px; border-radius: 8px; }
+      .admin-skill-tree-row.is-active, .admin-skill-tree-row.is-draft { background: #e8f0ff; }
+      .admin-skill-tree-row > button[data-admin-skill-file], .admin-skill-tree-row > button[data-admin-skill-folder] { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; overflow: hidden; padding: 6px 8px; border: 0; background: transparent; text-align: left; cursor: pointer; color: var(--text); }
+      .admin-skill-tree-row.is-nested { padding-left: 12px; }
+      .admin-skill-tree-icon { width: 12px; height: 12px; flex: 0 0 auto; background: currentColor; opacity: .55; }
+      .admin-skill-tree-icon.is-file { clip-path: polygon(18% 8%, 68% 8%, 82% 24%, 82% 92%, 18% 92%); }
+      .admin-skill-tree-icon.is-folder { clip-path: polygon(8% 28%, 38% 28%, 46% 18%, 92% 18%, 92% 86%, 8% 86%); }
+      .admin-skill-tree-chevron { width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+      .admin-skill-tree-chevron.is-open { transform: rotate(45deg); }
+      .admin-skill-tree-pin { width: 10px; height: 10px; margin-right: 6px; background: #d7a24a; clip-path: polygon(50% 8%, 70% 38%, 92% 42%, 76% 62%, 82% 92%, 50% 76%, 18% 92%, 24% 62%, 8% 42%, 30% 38%); }
+      .admin-skill-tree-more { width: 22px; min-width: 22px; height: 22px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; opacity: 0; }
+      .admin-skill-tree-row:hover .admin-skill-tree-more, .admin-skill-tree-row.is-active .admin-skill-tree-more { opacity: 1; }
+      .admin-skill-tree-more:hover { background: #dce8fb; }
+      .admin-skill-tree-row input { min-width: 0; flex: 1; height: 24px; margin-right: 4px; border: 1px solid var(--primary); border-radius: 6px; padding: 0 6px; background: #fff; font: inherit; font-size: 12px; }
+      .admin-skill-tree-menu { position: absolute; z-index: 6; display: none; min-width: 96px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(18, 36, 61, .12); }
+      .admin-skill-tree-menu button { padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+      .admin-skill-tree-menu button:hover { background: #f6f9fd; }
       .admin-skill-editor-main { position: relative; min-width: 0; }
       .admin-skill-markdown-item { display: none; height: 22rem; }
       .admin-skill-markdown-item.is-active { display: block; }
@@ -1347,6 +1373,10 @@
       .admin-skill-editor[data-mode="preview"] .admin-skill-markdown-files { display: none; }
       .admin-skill-editor[data-mode="preview"] .admin-skill-preview { display: block; }
       .admin-skill-cover { display: grid; gap: 8px; }
+      .admin-skill-create .field.checkbox { display: flex; align-items: center; gap: 10px; }
+      .admin-skill-create .field.checkbox span { margin: 0; }
+      .admin-skill-create .field.checkbox input { width: auto; margin: 0; }
+      .admin-skill-create .field.checkbox small { flex: 1 1 100%; margin: 0; }
       .admin-skill-review { display: grid; gap: 12px; }
       .admin-skill-review article { display: grid; gap: 8px; }
       .admin-skill-review pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; background: #f6f9fd; border-radius: 10px; padding: 12px; }
@@ -15431,26 +15461,299 @@
         return [{ name: "SKILL.md", content: String(introduction || "") }];
       }
 
+      function normalizeAdminSkillFileName(value) {
+        return String(value ?? "")
+          .replace(/\\/g, "/")
+          .split("/")
+          .map((part) => part.trim())
+          .filter((part) => part && part !== "." && part !== "..")
+          .join("/")
+          .slice(0, 240);
+      }
+
+      function adminSkillCreatePath(value) {
+        return String(value ?? "").replace(/\\/g, "/");
+      }
+
+      function adminSkillCreatePackageRoot(paths) {
+        const skillMd = paths.map(adminSkillCreatePath).find((path) => /(^|\/)SKILL\.md$/i.test(path));
+        if (!skillMd || !skillMd.includes("/")) return "";
+        return skillMd.slice(0, skillMd.lastIndexOf("/"));
+      }
+
+      function adminSkillCreateRelativePath(path, packageRoot) {
+        const next = adminSkillCreatePath(path);
+        if (!next || next.split("/").includes("..")) return "";
+        if (packageRoot && (next === packageRoot || next.startsWith(`${packageRoot}/`))) {
+          return next.slice(packageRoot.length + (next === packageRoot ? 0 : 1));
+        }
+        return next;
+      }
+
       function renderAdminSkillMarkdownItem(fileName, content, active) {
         return `<article class="admin-skill-markdown-item ${active ? "is-active" : ""}" data-admin-skill-markdown-item data-file-name="${escapeAttribute(fileName)}"><input name="skillMarkdownName" value="${escapeAttribute(fileName)}" hidden /><textarea name="skillMarkdownContent" maxlength="20000" ${fileName === "SKILL.md" ? "required " : ""}placeholder="${escapeAttribute(ADMIN_SKILL_MARKDOWN_PLACEHOLDER)}">${escapeHtml(content || "")}</textarea></article>`;
+      }
+
+      function listAdminSkillCreateFiles(form) {
+        return Array.from(form?.querySelectorAll?.("[data-admin-skill-markdown-item]") ?? []).map((item) => {
+          const name = String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? item.dataset.fileName ?? "").replace(/\\/g, "/").trim();
+          return name || "SKILL.md";
+        });
+      }
+
+      function findAdminSkillCreateFolder(form, folderName) {
+        return Array.from(form?.querySelectorAll?.("[data-admin-skill-folder]") ?? []).find((el) => String(el.dataset.folderName || el.value) === folderName) ?? null;
+      }
+
+      function ensureAdminSkillCreateFolder(form, folderName, collapsed = false) {
+        const host = form?.querySelector?.("[data-admin-skill-folders]");
+        const name = normalizeAdminSkillFileName(folderName);
+        if (!host || !name) return null;
+        const existing = findAdminSkillCreateFolder(form, name);
+        if (existing) return existing;
+        host.insertAdjacentHTML("beforeend", `<input type="hidden" data-admin-skill-folder data-folder-name="${escapeAttribute(name)}" value="${escapeAttribute(name)}" data-collapsed="${collapsed ? "true" : "false"}" />`);
+        return findAdminSkillCreateFolder(form, name);
+      }
+
+      function listAdminSkillCreateFolders(form) {
+        const stored = Array.from(form?.querySelectorAll?.("[data-admin-skill-folder]") ?? []).map((el) => ({
+          name: normalizeAdminSkillFileName(el.dataset.folderName || el.value),
+          collapsed: el.dataset.collapsed === "true",
+        })).filter((item) => item.name);
+        const fromFiles = listAdminSkillCreateFiles(form).map((name) => name.includes("/") ? name.split("/")[0] : "").filter(Boolean);
+        const collapsed = new Map(stored.map((item) => [item.name, item.collapsed]));
+        return [...new Set([...stored.map((item) => item.name), ...fromFiles])].map((name) => {
+          ensureAdminSkillCreateFolder(form, name, collapsed.get(name) === true);
+          return { name, collapsed: collapsed.get(name) === true };
+        });
+      }
+
+      function toggleAdminSkillCreateMenu(menu, open, anchor, relative) {
+        if (!menu) return;
+        menu.hidden = !open;
+        menu.classList.toggle("is-open", open);
+        if (!open || !anchor) return;
+        const host = relative ?? menu.offsetParent ?? menu.parentElement;
+        if (!host) return;
+        const hostBox = host.getBoundingClientRect();
+        const anchorBox = anchor.getBoundingClientRect();
+        menu.style.top = `${anchorBox.bottom - hostBox.top + 4}px`;
+        menu.style.left = `${Math.max(8, Math.min(anchorBox.left - hostBox.left, hostBox.width - menu.offsetWidth - 8))}px`;
+      }
+
+      function hideAdminSkillCreateMenus(form) {
+        toggleAdminSkillCreateMenu(form?.querySelector?.("[data-admin-skill-tree-menu]"), false);
+        toggleAdminSkillCreateMenu(form?.querySelector?.("[data-admin-skill-upload-menu]"), false);
+      }
+
+      function renderAdminSkillCreateTreeFileRow(name, activeName, nested = false) {
+        const base = name.split("/").pop();
+        const isEntry = name === "SKILL.md";
+        return `<div class="admin-skill-tree-row is-file ${name === activeName ? "is-active" : ""} ${nested ? "is-nested" : ""}" data-tree-kind="file" data-file-name="${escapeAttribute(name)}"><button type="button" data-admin-skill-file="${escapeAttribute(name)}"><span class="admin-skill-tree-icon is-file"></span><span>${escapeHtml(base)}</span></button>${isEntry ? `<span class="admin-skill-tree-pin" title="入口文件" aria-hidden="true"></span>` : `<button class="admin-skill-tree-more" type="button" data-admin-skill-tree-menu-open data-kind="file" data-name="${escapeAttribute(name)}" aria-label="更多">⋯</button>`}</div>`;
       }
 
       function refreshAdminSkillCreateTree(form) {
         const tree = form?.querySelector?.("[data-admin-skill-tree]");
         if (!tree) return;
-        const items = Array.from(form.querySelectorAll("[data-admin-skill-markdown-item]"));
-        tree.innerHTML = items.map((item) => {
-          const name = String(item.querySelector('input[name="skillMarkdownName"]')?.value || item.dataset.fileName || "SKILL.md");
-          const active = item.classList.contains("is-active");
-          return `<div class="admin-skill-tree-row ${active ? "is-active" : ""}"><button type="button" data-admin-skill-file="${escapeAttribute(name)}">${escapeHtml(name.split("/").pop())}</button></div>`;
-        }).join("");
+        const files = listAdminSkillCreateFiles(form);
+        const folders = listAdminSkillCreateFolders(form);
+        const activeItem = form.querySelector("[data-admin-skill-markdown-item].is-active");
+        const activeName = activeItem ? String(activeItem.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") : "";
+        const selectedFolder = String(form.dataset.selectedFolder ?? "");
+        const rootFiles = files.filter((name) => !name.includes("/"));
+        tree.innerHTML = [
+          ...rootFiles.map((name) => renderAdminSkillCreateTreeFileRow(name, activeName)),
+          ...folders.map((folder) => {
+            const children = files.filter((name) => name.startsWith(`${folder.name}/`));
+            const open = folder.collapsed !== true;
+            return `<div class="admin-skill-tree-folder ${selectedFolder === folder.name ? "is-selected" : ""}" data-tree-kind="folder" data-folder-name="${escapeAttribute(folder.name)}" data-collapsed="${folder.collapsed ? "true" : "false"}"><div class="admin-skill-tree-row is-folder ${selectedFolder === folder.name ? "is-active" : ""}"><button type="button" data-admin-skill-folder="${escapeAttribute(folder.name)}"><span class="admin-skill-tree-chevron ${open ? "is-open" : ""}"></span><span class="admin-skill-tree-icon is-folder"></span><span>${escapeHtml(folder.name)}</span></button><button class="admin-skill-tree-more" type="button" data-admin-skill-tree-menu-open data-kind="folder" data-name="${escapeAttribute(folder.name)}" aria-label="更多">⋯</button></div>${open ? `<div class="admin-skill-tree-children">${children.map((name) => renderAdminSkillCreateTreeFileRow(name, activeName, true)).join("")}</div>` : ""}</div>`;
+          }),
+        ].join("");
       }
 
       function activateAdminSkillCreateFile(form, fileName) {
+        if (!form) return;
+        form.dataset.selectedFolder = "";
         Array.from(form.querySelectorAll("[data-admin-skill-markdown-item]")).forEach((item) => {
           const name = String(item.querySelector('input[name="skillMarkdownName"]')?.value || "");
           item.classList.toggle("is-active", name === fileName);
         });
+        hideAdminSkillCreateMenus(form);
+        refreshAdminSkillCreateTree(form);
+        updateAdminSkillCreatePreview(form);
+      }
+
+      function selectAdminSkillCreateFolder(form, folderName) {
+        if (!form) return;
+        form.dataset.selectedFolder = folderName || "";
+        form.querySelectorAll("[data-admin-skill-markdown-item]").forEach((item) => item.classList.remove("is-active"));
+        hideAdminSkillCreateMenus(form);
+        refreshAdminSkillCreateTree(form);
+      }
+
+      function uniqueAdminSkillCreateName(existing, desired) {
+        if (!existing.has(desired)) return desired;
+        const stem = desired.replace(/\.md$/i, "");
+        const ext = /\.md$/i.test(desired) ? ".md" : "";
+        let index = 2;
+        while (existing.has(`${stem}-${index}${ext}`)) index += 1;
+        return `${stem}-${index}${ext}`;
+      }
+
+      function startAdminSkillCreateFolderDraft(form) {
+        const tree = form?.querySelector?.("[data-admin-skill-tree]");
+        if (!tree || tree.querySelector("[data-admin-skill-name-input]")) return;
+        hideAdminSkillCreateMenus(form);
+        tree.insertAdjacentHTML("beforeend", `<div class="admin-skill-tree-row is-folder is-draft" data-tree-kind="folder-draft"><span class="admin-skill-tree-icon is-folder"></span><input data-admin-skill-name-input data-draft-kind="folder" maxlength="80" /></div>`);
+        tree.querySelector("[data-admin-skill-name-input]")?.focus?.();
+      }
+
+      function startAdminSkillCreateFileDraft(form) {
+        const tree = form?.querySelector?.("[data-admin-skill-tree]");
+        if (!tree || tree.querySelector("[data-admin-skill-name-input]")) return;
+        hideAdminSkillCreateMenus(form);
+        const folderName = String(form.dataset.selectedFolder ?? "");
+        const folder = folderName ? findAdminSkillCreateFolder(form, folderName) : null;
+        if (folder) folder.dataset.collapsed = "false";
+        refreshAdminSkillCreateTree(form);
+        const parent = folderName
+          ? Array.from(tree.querySelectorAll("[data-folder-name]")).find((el) => el.dataset.folderName === folderName)?.querySelector(".admin-skill-tree-children") ?? tree
+          : tree;
+        parent.insertAdjacentHTML("beforeend", `<div class="admin-skill-tree-row is-file is-draft ${folderName ? "is-nested" : ""}" data-tree-kind="file-draft"><span class="admin-skill-tree-icon is-file"></span><input data-admin-skill-name-input data-draft-kind="file" data-folder-name="${escapeAttribute(folderName)}" maxlength="80" /></div>`);
+        parent.querySelector("[data-admin-skill-name-input]")?.focus?.();
+      }
+
+      function startAdminSkillCreateRename(form, kind, name, keepValue = true) {
+        const tree = form?.querySelector?.("[data-admin-skill-tree]");
+        if (!tree || !name || name === "SKILL.md") return;
+        const row = kind === "folder"
+          ? tree.querySelector(`[data-folder-name="${CSS.escape(name)}"] > .admin-skill-tree-row`)
+          : tree.querySelector(`[data-file-name="${CSS.escape(name)}"]`);
+        if (!row) return;
+        const label = kind === "folder" ? name : name.split("/").pop();
+        row.classList.add("is-draft");
+        const button = row.querySelector("button[data-admin-skill-file], button[data-admin-skill-folder]");
+        if (button) button.insertAdjacentHTML("afterend", `<input data-admin-skill-name-input data-draft-kind="rename-${kind}" data-original-name="${escapeAttribute(name)}" maxlength="80" value="${keepValue ? escapeAttribute(label) : ""}" />`);
+        button?.setAttribute("hidden", "");
+        row.querySelector(".admin-skill-tree-more")?.setAttribute("hidden", "");
+        const input = row.querySelector("[data-admin-skill-name-input]");
+        input?.focus?.();
+        input?.select?.();
+      }
+
+      function commitAdminSkillCreateNameInput(input) {
+        const form = input?.closest?.("#admin-skill-form");
+        if (!form) return;
+        const kind = String(input.dataset.draftKind ?? "");
+        let raw = String(input.value ?? "").trim().replace(/[\\/]/g, "");
+        if (!raw && kind === "folder") raw = "文件夹";
+        if (!raw) {
+          cancelAdminSkillCreateNameInput(input);
+          return;
+        }
+        if (kind === "folder") {
+          const name = uniqueAdminSkillCreateName(new Set(listAdminSkillCreateFolders(form).map((item) => item.name)), normalizeAdminSkillFileName(raw) || "文件夹");
+          ensureAdminSkillCreateFolder(form, name, false);
+          selectAdminSkillCreateFolder(form, name);
+          return;
+        }
+        if (kind === "file") {
+          const folder = String(input.dataset.folderName ?? "");
+          const fileName = uniqueAdminSkillCreateName(new Set(listAdminSkillCreateFiles(form)), normalizeAdminSkillFileName(`${folder ? `${folder}/` : ""}${/\.md$/i.test(raw) ? raw : `${raw}.md`}`));
+          const host = form.querySelector("[data-admin-skill-markdown-files]");
+          host?.insertAdjacentHTML("beforeend", renderAdminSkillMarkdownItem(fileName, "", false));
+          activateAdminSkillCreateFile(form, fileName);
+          return;
+        }
+        if (kind === "rename-folder") {
+          renameAdminSkillCreateFolder(form, String(input.dataset.originalName ?? ""), raw);
+          return;
+        }
+        if (kind === "rename-file") {
+          renameAdminSkillCreateFile(form, String(input.dataset.originalName ?? ""), raw);
+        }
+      }
+
+      function cancelAdminSkillCreateNameInput(input) {
+        const form = input?.closest?.("#admin-skill-form");
+        const kind = String(input?.dataset.draftKind ?? "");
+        if (kind.startsWith("rename-")) {
+          refreshAdminSkillCreateTree(form);
+          return;
+        }
+        input?.closest?.(".admin-skill-tree-row")?.remove?.();
+      }
+
+      function renameAdminSkillCreateFile(form, fromName, rawName) {
+        if (!fromName || fromName === "SKILL.md") return;
+        const folder = fromName.includes("/") ? fromName.split("/")[0] : "";
+        const nextBase = /\.md$/i.test(rawName) ? rawName : `${rawName}.md`;
+        const nextName = uniqueAdminSkillCreateName(new Set(listAdminSkillCreateFiles(form).filter((name) => name !== fromName)), normalizeAdminSkillFileName(`${folder ? `${folder}/` : ""}${nextBase}`));
+        const item = Array.from(form.querySelectorAll("[data-admin-skill-markdown-item]")).find((el) => String(el.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") === fromName);
+        if (!item) return;
+        const input = item.querySelector('input[name="skillMarkdownName"]');
+        if (input) input.value = nextName;
+        item.dataset.fileName = nextName;
+        activateAdminSkillCreateFile(form, nextName);
+      }
+
+      function renameAdminSkillCreateFolder(form, fromName, rawName) {
+        if (!fromName) return;
+        const nextName = uniqueAdminSkillCreateName(new Set(listAdminSkillCreateFolders(form).map((item) => item.name).filter((name) => name !== fromName)), normalizeAdminSkillFileName(rawName) || fromName);
+        const folder = findAdminSkillCreateFolder(form, fromName);
+        if (folder) {
+          folder.dataset.folderName = nextName;
+          folder.value = nextName;
+        }
+        Array.from(form.querySelectorAll("[data-admin-skill-markdown-item]")).forEach((item) => {
+          const input = item.querySelector('input[name="skillMarkdownName"]');
+          const current = String(input?.value ?? "");
+          if (!current.startsWith(`${fromName}/`)) return;
+          const next = `${nextName}/${current.slice(fromName.length + 1)}`;
+          input.value = next;
+          item.dataset.fileName = next;
+        });
+        selectAdminSkillCreateFolder(form, nextName);
+      }
+
+      function deleteAdminSkillCreateTreeItem(form, kind, name) {
+        if (!name || name === "SKILL.md") return;
+        if (kind === "folder") {
+          findAdminSkillCreateFolder(form, name)?.remove?.();
+          Array.from(form.querySelectorAll("[data-admin-skill-markdown-item]")).forEach((item) => {
+            if (String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "").startsWith(`${name}/`)) item.remove();
+          });
+          form.dataset.selectedFolder = "";
+          activateAdminSkillCreateFile(form, "SKILL.md");
+          return;
+        }
+        Array.from(form.querySelectorAll("[data-admin-skill-markdown-item]")).forEach((item) => {
+          if (String(item.querySelector?.('input[name="skillMarkdownName"]')?.value ?? "") === name) item.remove();
+        });
+        activateAdminSkillCreateFile(form, "SKILL.md");
+      }
+
+      async function ingestAdminSkillCreateUploadedMarkdown(form) {
+        const host = form?.querySelector?.("[data-admin-skill-markdown-files]");
+        if (!host) return;
+        const files = [
+          ...Array.from(form.querySelector?.('input[name="skillFiles"]')?.files ?? []),
+          ...Array.from(form.querySelector?.('input[name="skillFolderFiles"]')?.files ?? []),
+        ].filter((file) => /\.(?:md|markdown|txt)$/i.test(String(file.name || "")));
+        const packageRoot = adminSkillCreatePackageRoot(files.map((file) => file.webkitRelativePath || file.name));
+        for (const file of files) {
+          const fileName = adminSkillCreateRelativePath(file.webkitRelativePath || file.name, packageRoot) || file.name;
+          const content = typeof file.text === "function" ? await file.text() : "";
+          const existing = Array.from(host.querySelectorAll("[data-admin-skill-markdown-item]")).find((item) => adminSkillCreatePath(item.querySelector?.('input[name="skillMarkdownName"]')?.value) === fileName);
+          if (existing) {
+            const textarea = existing.querySelector?.('textarea[name="skillMarkdownContent"]');
+            if (textarea) textarea.value = content;
+          } else {
+            host.insertAdjacentHTML("beforeend", renderAdminSkillMarkdownItem(fileName, content, false));
+          }
+        }
+        const active = host.querySelector("[data-admin-skill-markdown-item].is-active") ?? host.querySelector("[data-admin-skill-markdown-item]");
+        if (active && !host.querySelector("[data-admin-skill-markdown-item].is-active")) active.classList.add("is-active");
         refreshAdminSkillCreateTree(form);
         updateAdminSkillCreatePreview(form);
       }
@@ -15474,18 +15777,100 @@
         summary?.addEventListener("input", updateCount);
         updateCount();
         form.addEventListener("click", (event) => {
-          const mode = event.target.closest?.("[data-admin-skill-mode]");
+          const target = event.target?.closest ? event.target : event.target?.parentElement;
+          if (!target?.closest?.("[data-admin-skill-tree-menu], [data-admin-skill-tree-menu-open]")) {
+            toggleAdminSkillCreateMenu(form.querySelector("[data-admin-skill-tree-menu]"), false);
+          }
+          if (!target?.closest?.(".admin-skill-upload-menu-wrap")) {
+            toggleAdminSkillCreateMenu(form.querySelector("[data-admin-skill-upload-menu]"), false);
+          }
+          const mode = target.closest?.("[data-admin-skill-mode]");
           if (mode && editor) {
             editor.dataset.mode = mode.dataset.adminSkillMode === "preview" ? "preview" : "code";
             form.querySelectorAll("[data-admin-skill-mode]").forEach((button) => button.classList.toggle("active", button === mode));
             updateAdminSkillCreatePreview(form);
             return;
           }
-          const fileButton = event.target.closest?.("[data-admin-skill-file]");
+          const uploadToggle = target.closest?.("[data-admin-skill-upload-menu-toggle]");
+          if (uploadToggle) {
+            const menu = form.querySelector("[data-admin-skill-upload-menu]");
+            if (menu) toggleAdminSkillCreateMenu(menu, menu.hidden);
+            return;
+          }
+          const addFolder = target.closest?.("[data-admin-skill-add-folder]");
+          if (addFolder) {
+            startAdminSkillCreateFolderDraft(form);
+            return;
+          }
+          const addFile = target.closest?.("[data-admin-skill-add-markdown]");
+          if (addFile) {
+            startAdminSkillCreateFileDraft(form);
+            return;
+          }
+          const treeMenuOpen = target.closest?.("[data-admin-skill-tree-menu-open]");
+          if (treeMenuOpen) {
+            const menu = form.querySelector("[data-admin-skill-tree-menu]");
+            if (!menu) return;
+            const kind = String(treeMenuOpen.dataset.kind ?? "file");
+            const name = String(treeMenuOpen.dataset.name ?? "");
+            if (!name || name === "SKILL.md") return;
+            const same = !menu.hidden && menu.dataset.kind === kind && menu.dataset.name === name;
+            if (same) {
+              toggleAdminSkillCreateMenu(menu, false);
+              return;
+            }
+            menu.dataset.kind = kind;
+            menu.dataset.name = name;
+            toggleAdminSkillCreateMenu(menu, true, treeMenuOpen, form.querySelector(".admin-skill-tree"));
+            return;
+          }
+          const renameItem = target.closest?.("[data-admin-skill-rename]");
+          if (renameItem) {
+            const menu = form.querySelector("[data-admin-skill-tree-menu]");
+            startAdminSkillCreateRename(form, menu?.dataset.kind, menu?.dataset.name, false);
+            toggleAdminSkillCreateMenu(menu, false);
+            return;
+          }
+          const deleteItem = target.closest?.("[data-admin-skill-delete]");
+          if (deleteItem) {
+            const menu = form.querySelector("[data-admin-skill-tree-menu]");
+            deleteAdminSkillCreateTreeItem(form, menu?.dataset.kind, menu?.dataset.name);
+            toggleAdminSkillCreateMenu(menu, false);
+            return;
+          }
+          const folderButton = target.closest?.("[data-admin-skill-folder]");
+          if (folderButton) {
+            const folder = findAdminSkillCreateFolder(form, String(folderButton.dataset.adminSkillFolder ?? ""));
+            if (!folder) return;
+            folder.dataset.collapsed = folder.dataset.collapsed === "true" ? "false" : "true";
+            selectAdminSkillCreateFolder(form, folder.dataset.folderName);
+            return;
+          }
+          const fileButton = target.closest?.("[data-admin-skill-file]");
           if (fileButton) activateAdminSkillCreateFile(form, fileButton.dataset.adminSkillFile);
         });
         form.addEventListener("input", (event) => {
           if (event.target.matches?.('textarea[name="skillMarkdownContent"]')) updateAdminSkillCreatePreview(form);
+        });
+        form.addEventListener("change", async (event) => {
+          if (!event.target.matches?.('input[name="skillFiles"], input[name="skillFolderFiles"]')) return;
+          await ingestAdminSkillCreateUploadedMarkdown(form);
+          toggleAdminSkillCreateMenu(form.querySelector("[data-admin-skill-upload-menu]"), false);
+        });
+        form.addEventListener("focusout", (event) => {
+          if (event.target.matches?.("[data-admin-skill-name-input]")) commitAdminSkillCreateNameInput(event.target);
+        });
+        form.addEventListener("keydown", (event) => {
+          if (!event.target.matches?.("[data-admin-skill-name-input]")) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitAdminSkillCreateNameInput(event.target);
+            return;
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            cancelAdminSkillCreateNameInput(event.target);
+          }
         });
         coverType?.addEventListener("change", () => {
           const type = coverType.value;
@@ -15524,7 +15909,7 @@
         const files = adminSkillMarkdownFiles(detail.files, detail.introduction);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
-        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);"><div class="drawer-head"><h3>${existing ? "编辑官方 Skill" : "新增官方 Skill"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="admin-skill-form" class="admin-skill-create"><div class="admin-skill-create-head"><strong>${existing ? "编辑官方 Skill" : "创建 Skill"}</strong><button class="btn primary" type="submit">保存</button></div><label class="field"><span>Skill 名称 *</span><input name="name" required minlength="2" maxlength="80" value="${escapeAttribute(existing?.name || "")}" placeholder="给你的 Skill 起个名字" /></label><label class="field"><span>分类 *</span><select name="category">${adminSkillCategoryOptions(existing?.category || "general")}</select></label><label class="field checkbox"><span>推荐到广场</span><input type="checkbox" name="isRecommended" ${existing?.isRecommended === true ? "checked" : ""} /><small class="metric-note">推荐不是分类，设置后仍会显示在原分类中。</small></label><label class="field"><span>一句话介绍 *</span><span class="admin-skill-counter"><input name="summary" required maxlength="30" value="${escapeAttribute(existing?.summary || "")}" placeholder="简短描述该 Skill 的能力" data-admin-skill-summary /><small data-admin-skill-summary-count>0/30</small></span></label><section><div class="admin-skill-content-head"><span>Skill 内容 *</span><div class="admin-skill-content-tools"><div class="admin-skill-mode-toggle"><button type="button" data-admin-skill-mode="preview">预览</button><button class="active" type="button" data-admin-skill-mode="code">代码</button></div></div></div><div class="admin-skill-editor" data-admin-skill-editor data-mode="code"><aside class="admin-skill-tree"><header><span>目录</span></header><div class="admin-skill-tree-list" data-admin-skill-tree></div></aside><div class="admin-skill-editor-main"><div class="admin-skill-markdown-files">${files.map((file, index) => renderAdminSkillMarkdownItem(file.name, file.content, index === 0)).join("")}</div><pre class="admin-skill-preview" data-admin-skill-preview></pre></div></div></section><label class="field"><span>使用场景 *</span><textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息">${escapeHtml(detail.usageScene || "")}</textarea></label><label class="field"><span>如何使用 *</span><textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息">${escapeHtml(detail.howToUse || "")}</textarea></label><label class="field"><span>输出内容 *</span><textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么">${escapeHtml(detail.outputContent || "")}</textarea></label><label class="field"><span>选择类型</span><select name="coverType" data-admin-skill-cover-type><option value="image" ${detail.effectVideoUrl ? "" : "selected"}>图片</option><option value="video" ${detail.effectVideoUrl ? "selected" : ""}>视频</option><option value="text" ${!detail.effectImageUrl && !detail.effectVideoUrl ? "" : ""}>文本</option></select></label><section class="admin-skill-cover" data-admin-skill-cover><span>上传封面（选填）</span><input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" /><input type="hidden" name="effectImageUrl" value="${escapeAttribute(detail.effectImageUrl || "")}" /><input type="hidden" name="effectVideoUrl" value="${escapeAttribute(detail.effectVideoUrl || "")}" /></section><label class="field"><span>状态</span><select name="status"><option value="draft" ${existing?.status === "draft" || !existing ? "selected" : ""}>待审核</option><option value="published" ${existing?.status === "published" ? "selected" : ""}>已发布</option><option value="disabled" ${existing?.status === "disabled" ? "selected" : ""}>已下架</option></select></label><div class="error-text" id="admin-skill-error"></div></form></aside>`;
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);"><div class="drawer-head"><h3>${existing ? "编辑官方 Skill" : "新增官方 Skill"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="admin-skill-form" class="admin-skill-create"><div class="admin-skill-create-head"><strong>${existing ? "编辑官方 Skill" : "创建 Skill"}</strong><button class="btn primary" type="submit">保存</button></div><label class="field"><span>Skill 名称 *</span><input name="name" required minlength="2" maxlength="80" value="${escapeAttribute(existing?.name || "")}" placeholder="给你的 Skill 起个名字" /></label><label class="field"><span>分类 *</span><select name="category">${adminSkillCategoryOptions(existing?.category || "general")}</select></label><label class="field checkbox"><span>推荐到广场</span><input type="checkbox" name="isRecommended" ${existing?.isRecommended === true ? "checked" : ""} /><small class="metric-note">推荐不是分类，设置后仍会显示在原分类中。</small></label><label class="field"><span>一句话介绍 *</span><span class="admin-skill-counter"><input name="summary" required maxlength="30" value="${escapeAttribute(existing?.summary || "")}" placeholder="简短描述该 Skill 的能力" data-admin-skill-summary /><small data-admin-skill-summary-count>0/30</small></span></label><section><div class="admin-skill-content-head"><span>Skill 内容 *</span><div class="admin-skill-content-tools"><div class="admin-skill-mode-toggle"><button type="button" data-admin-skill-mode="preview">预览</button><button class="active" type="button" data-admin-skill-mode="code">代码</button></div><div class="admin-skill-upload-menu-wrap"><button type="button" data-admin-skill-upload-menu-toggle>上传</button><div class="admin-skill-upload-menu" data-admin-skill-upload-menu hidden><label>上传文件<input name="skillFiles" type="file" multiple accept=".txt,.md,.markdown,.csv,.json,.docx,.pdf,image/*,video/*,audio/*" /></label><label>上传文件夹<input name="skillFolderFiles" type="file" multiple webkitdirectory directory accept=".md,.markdown,.txt,.csv,.json,.pdf,.docx,image/*,video/*,audio/*" /></label></div></div></div></div><div class="admin-skill-editor" data-admin-skill-editor data-mode="code"><aside class="admin-skill-tree"><header><span>目录</span><span class="admin-skill-tree-actions"><button class="admin-skill-icon-button" type="button" data-admin-skill-add-folder title="新建文件夹" aria-label="新建文件夹"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button><button class="admin-skill-icon-button" type="button" data-admin-skill-add-markdown title="新建MD文件" aria-label="新建MD文件"><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 6h16v12H4z" /><path d="M7 15V9l3 3 3-3v6M16 9v6m-2-2 2 2 2-2" /></svg></button></span></header><div class="admin-skill-tree-list" data-admin-skill-tree></div><div class="admin-skill-folders" data-admin-skill-folders hidden></div><div class="admin-skill-tree-menu" data-admin-skill-tree-menu hidden><button type="button" data-admin-skill-rename>重命名</button><button type="button" data-admin-skill-delete>删除</button></div></aside><div class="admin-skill-editor-main"><div class="admin-skill-markdown-files" data-admin-skill-markdown-files>${files.map((file, index) => renderAdminSkillMarkdownItem(file.name, file.content, index === 0)).join("")}</div><pre class="admin-skill-preview" data-admin-skill-preview></pre></div></div></section><label class="field"><span>使用场景 *</span><textarea name="usageScene" required maxlength="4000" rows="4" placeholder="详细描述该 Skill 的使用场景信息">${escapeHtml(detail.usageScene || "")}</textarea></label><label class="field"><span>如何使用 *</span><textarea name="howToUse" required maxlength="4000" rows="4" placeholder="描述用户如何使用该 Skill，需要输入什么信息">${escapeHtml(detail.howToUse || "")}</textarea></label><label class="field"><span>输出内容 *</span><textarea name="outputContent" required maxlength="4000" rows="4" placeholder="描述用户使用该 Skill 后，预期输出的结果产物是什么">${escapeHtml(detail.outputContent || "")}</textarea></label><label class="field checkbox"><span>公开 Skill 文件给其他用户查看</span><input type="checkbox" name="fileListPublic" ${detail.fileListPublic !== false ? "checked" : ""} /><small class="metric-note">关闭后，广场详情只提示作者未公开文件清单。</small></label><label class="field"><span>选择类型</span><select name="coverType" data-admin-skill-cover-type><option value="image" ${detail.effectVideoUrl ? "" : "selected"}>图片</option><option value="video" ${detail.effectVideoUrl ? "selected" : ""}>视频</option><option value="text" ${!detail.effectImageUrl && !detail.effectVideoUrl ? "" : ""}>文本</option></select></label><section class="admin-skill-cover" data-admin-skill-cover><span>上传封面（选填）</span><input name="effectMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/avif,.jpg,.jpeg,.png,.webp,.avif" /><input type="hidden" name="effectImageUrl" value="${escapeAttribute(detail.effectImageUrl || "")}" /><input type="hidden" name="effectVideoUrl" value="${escapeAttribute(detail.effectVideoUrl || "")}" /></section><label class="field"><span>状态</span><select name="status"><option value="draft" ${existing?.status === "draft" || !existing ? "selected" : ""}>待审核</option><option value="published" ${existing?.status === "published" ? "selected" : ""}>已发布</option><option value="disabled" ${existing?.status === "disabled" ? "selected" : ""}>已下架</option></select></label><div class="error-text" id="admin-skill-error"></div></form></aside>`;
         const formEl = document.getElementById("admin-skill-form");
         bindAdminSkillCreateInteractions(formEl);
         formEl.addEventListener("submit", async (event) => {
@@ -15533,6 +15918,7 @@
           const error = document.getElementById("admin-skill-error");
           await runAdminMutation(event.currentTarget, error, async () => {
             const files = await collectAdminSkillMarkdownFiles(event.currentTarget);
+            if (files.length > 50) throw new Error("Skill 文件最多上传 50 个");
             const introduction = String(files.find((file) => file.name === "SKILL.md")?.content || files[0]?.content || "").trim();
             let effectImageUrl = String(form.get("effectImageUrl") || "").trim();
             let effectVideoUrl = String(form.get("effectVideoUrl") || "").trim();
@@ -15557,10 +15943,12 @@
               summary: String(form.get("summary") || "").trim(),
               status: String(form.get("status") || "draft"),
               files,
-              detail: { introduction, usageScene: String(form.get("usageScene") || "").trim(), howToUse: String(form.get("howToUse") || "").trim(), outputContent: String(form.get("outputContent") || "").trim(), effectImageUrl, effectVideoUrl, fileListPublic: true },
+              detail: { introduction, usageScene: String(form.get("usageScene") || "").trim(), howToUse: String(form.get("howToUse") || "").trim(), outputContent: String(form.get("outputContent") || "").trim(), effectImageUrl, effectVideoUrl, fileListPublic: form.get("fileListPublic") === "on" },
             }) });
             await loadAdminSkills(); closeDrawer(); renderShell();
-          }, "官方 Skill 已保存").catch(() => undefined);
+          }, "官方 Skill 已保存").catch((err) => {
+            showToast(err.payload?.error?.message || err.message || "操作失败");
+          });
         });
       }
 
