@@ -4225,8 +4225,6 @@ export async function initProductionWorkbench({
       return;
     }
     if (
-      actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
-      actionTarget.matches?.('input[data-action="upload-episode-cover"]') ||
       actionTarget.matches?.('input[data-action="upload-asset-generator-image"]') ||
       actionTarget.matches?.('input[data-action="upload-prompt-marketplace-cover"]') ||
       actionTarget.matches?.('input[data-action="toggle-membership-payment-agreement"]') ||
@@ -5066,58 +5064,6 @@ export async function initProductionWorkbench({
       workbench.ui.scriptCardMenuId = null;
       await runAction(workbench, "正在上传剧本封面...", async () => {
         await uploadScriptCoverFile(workbench, file, { scriptId });
-      });
-      return;
-    }
-
-    if (target?.matches?.('input[data-action="upload-project-cover"]')) {
-      const [file] = [...(target.files ?? [])];
-      if (!file) {
-        return;
-      }
-
-      const projectId = target.dataset.projectId ?? null;
-      target.value = "";
-      workbench.ui.projectCardMenuId = null;
-      await runAction(workbench, "正在上传项目封面...", async () => {
-        await uploadProjectCoverFile(workbench, file, projectId);
-      });
-      return;
-    }
-
-    if (target?.matches?.('input[data-action="upload-episode-cover"]')) {
-      const [file] = [...(target.files ?? [])];
-      target.value = "";
-      if (!file) return;
-      const episodeId = target.dataset.episodeId ?? "";
-      await runAction(workbench, "正在上传剧集封面...", async () => {
-        const projectId =
-          String(target.dataset.projectId ?? "").trim() ||
-          String(workbench.ui.homeProjectWorkflowProjectId ?? "").trim() ||
-          resolveActiveProjectId(workbench);
-        const uploadLimits = getProjectCoverUploadLimits();
-        validateUploadFile(file, uploadLimits);
-        const uploadFile = await prepareProjectCoverUploadFile(file);
-        const upload = await uploadLocalFile(workbench, uploadFile, "episode-covers", {
-          projectId,
-          uploadLimits,
-        });
-        const updateInput = {
-          uploadSessionId: upload.uploadSessionId,
-          storageObjectId: upload.storageObjectId,
-        };
-        const result = typeof workbench.api.updateProjectEpisode === "function"
-          ? await workbench.api.updateProjectEpisode(projectId, episodeId, updateInput)
-          : await workbench.api.updateEpisode({ projectId, episodeId, ...updateInput });
-        const updatedEpisode = result?.episode;
-        if (updatedEpisode?.id) {
-          applyProjectDetailPatch(workbench, {
-            episodes: (workbench.state?.projectDetail?.episodes ?? []).map((episode) =>
-              episode.id === updatedEpisode.id ? { ...episode, ...updatedEpisode } : episode,
-            ),
-          });
-        }
-        await ensureProjectEpisodesLoaded(workbench, projectId, { force: true });
       });
       return;
     }
@@ -11018,6 +10964,9 @@ async function syncNewCanvasMount(workbench) {
                 workbench.updateCanvasDocument(document, {
                   scheduleSave: metadata.scheduleSave !== false,
                   immediateSave: metadata.immediateSave === true,
+                  ...(typeof metadata.nodeDragActive === "boolean"
+                    ? { nodeDragActive: metadata.nodeDragActive }
+                    : {}),
                 });
               }
               return document;
@@ -11180,11 +11129,12 @@ function updateMountedNewCanvasSurface(workbench, options = {}) {
     return false;
   }
   syncPersistentWorkbenchToastState(workbench);
-  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") persistWorkbenchState(workbench);
-  const shouldSyncHostDocument = options.syncHostDocument === true
+  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading" && workbench.canvasNodeDragActive !== true) persistWorkbenchState(workbench);
+  const shouldSyncHostDocument = workbench.canvasNodeDragActive !== true
+    && (options.syncHostDocument === true
     || options.nodeOnly === true
     || Object.prototype.hasOwnProperty.call(options, "document")
-    || Object.prototype.hasOwnProperty.call(options, "canvasDocument");
+    || Object.prototype.hasOwnProperty.call(options, "canvasDocument"));
   const pending = workbench.newCanvasInstance.update({
     state: workbench.state,
     session: workbench.session,
@@ -11202,7 +11152,9 @@ function updateMountedNewCanvasSurface(workbench, options = {}) {
     ...options,
     ...(shouldSyncHostDocument
       ? { document: options.document ?? options.canvasDocument ?? workbench.ui?.canvasDocument }
-      : {}),
+      : workbench.canvasNodeDragActive === true
+        ? { document: undefined, canvasDocument: undefined }
+        : {}),
   }).then(() => syncCanvasPromptEditor(workbench, host.shadowRoot)).catch((error) => {
     console.warn("[creator-app] new canvas surface update failed", error);
   });
@@ -26331,9 +26283,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       ? resolvePlazaSelectedSkills(collectProjectWorkflowPlazaSkills(workbench.ui), episodePlazaSkillIds)
       : [];
     const plazaWorkflowStages = isHomeWorkflowAnalysis
-      ? resolvePlazaSkillWorkflowStages(plazaWorkflowSkills, { skipScriptStage: true })
+      ? resolvePlazaSkillWorkflowStages(plazaWorkflowSkills)
       : [];
     const homeWorkflowStages = plazaWorkflowStages.length ? plazaWorkflowStages : null;
+    const homeSkipScriptStage = Boolean(isHomeWorkflowAnalysis && !plazaWorkflowStages.includes("script"));
     const singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
     const hasLegacyPromptPackages = Array.isArray(workbench.ui.storyboardPromptPackages)
       && workbench.ui.storyboardPromptPackages.length > 0;
@@ -26442,9 +26395,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.singleEpisodeAiPreviewAbortController = abortController;
       const previewInput = {
         scriptText: nextScript,
-        ...(isHomeWorkflowAnalysis ? {
-          skipScriptStage: true,
-        } : {}),
+        ...(homeSkipScriptStage ? { skipScriptStage: true } : {}),
         ...(isManualScriptAnalysis
           ? { skillId, modelCode: singleEpisodeTextModelCode }
           : episodePlazaSkillId
@@ -26452,7 +26403,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
                 plazaSkillId: episodePlazaSkillId,
                 plazaSkillIds: episodePlazaSkillIds,
                 modelCode: singleEpisodeTextModelCode,
-                ...(isHomeWorkflowAnalysis ? { skipScriptStage: true } : {}),
               }
             : hasEpisodeSkills
               ? { skills: episodeSkills, modelCode: singleEpisodeTextModelCode }
@@ -28491,24 +28441,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
-    return;
-  }
-
-  if (action === "pick-project-cover") {
-    if (target.tagName === "LABEL") {
-      return;
-    }
-    const projectId = target.dataset.projectId ?? null;
-    findProjectCoverInput(workbench.root, projectId)?.click();
-    return;
-  }
-
-  if (action === "pick-episode-cover") {
-    if (target.tagName === "LABEL") {
-      return;
-    }
-    const episodeId = target.dataset.episodeId ?? "";
-    findEpisodeCoverInput(workbench.root, episodeId)?.click();
     return;
   }
 
@@ -33546,15 +33478,40 @@ function shouldSkipEmptyCanvasSave(workbench, document) {
   return Number.isFinite(revision) && revision > 1;
 }
 
+function canvasDocumentHasActiveNodeDrag(document) {
+  return (Array.isArray(document?.nodes) ? document.nodes : []).some((node) => node?.dragging === true);
+}
+
 function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
   const selectedProjectId = workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID;
   const currentDocument = workbench.ui.canvasDocument;
-  if (options.skipEquality !== true && currentDocument && canvasDocument && areCanvasDocumentsEqual(currentDocument, canvasDocument)) {
+  const runtimeNodeDrag = options.nodeDragActive === true
+    || (options.nodeDragActive !== false && canvasDocumentHasActiveNodeDrag(canvasDocument));
+  if (runtimeNodeDrag) {
+    workbench.canvasNodeDragActive = true;
+    if (workbench.canvasNodeDragBaselineDocument == null) {
+      workbench.canvasNodeDragBaselineDocument = currentDocument;
+    }
+    return currentDocument;
+  }
+  const endingRuntimeNodeDrag = options.scheduleSave !== false
+    && !runtimeNodeDrag
+    && workbench.canvasNodeDragBaselineDocument != null;
+  if (
+    options.skipEquality !== true
+    && currentDocument
+    && canvasDocument
+    && areCanvasDocumentsEqual(currentDocument, canvasDocument)
+    && !endingRuntimeNodeDrag
+  ) {
     return currentDocument;
   }
   const positionChanges = options.scheduleSave === false
     ? null
-    : collectCanvasNodePositionChanges(currentDocument, canvasDocument);
+    : collectCanvasNodePositionChanges(
+      endingRuntimeNodeDrag ? (workbench.canvasNodeDragBaselineDocument ?? currentDocument) : currentDocument,
+      canvasDocument,
+    );
   workbench.ui.canvasDocument = canvasDocument;
   workbench.ui.canvasDocumentsByProject = {
     ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
@@ -33563,6 +33520,10 @@ function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
     [selectedProjectId]: canvasDocument,
   };
   applyCanvasProjectMetaFromDocument(workbench, selectedProjectId, canvasDocument);
+  if (endingRuntimeNodeDrag) {
+    workbench.canvasNodeDragBaselineDocument = null;
+    workbench.canvasNodeDragActive = false;
+  }
   if (options.scheduleSave !== false) {
     if (positionChanges) {
       if (positionChanges.length) {
@@ -34078,6 +34039,7 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
     || workbench.canvasPositionSaveInFlight
     || workbench.canvasSaveTimer
     || workbench.canvasSaveQueuedDocument
+    || workbench.canvasNodeDragActive === true
     || ["pending", "saving"].includes(String(workbench.ui?.canvasSaveStatus ?? "")),
   );
   const currentRevision = Number(workbench.ui.canvasServerRevision ?? 0);
@@ -38318,7 +38280,6 @@ async function openSingleEpisodeFlow(workbench, options = {}) {
   workbench.ui.uploadNotice = "";
   await Promise.all([
     ensureProjectEpisodesLoaded(workbench),
-    syncEpisodePromptSkills(workbench),
     syncSingleEpisodeGenerationConfig(workbench),
   ]);
   workbench.ui.singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
@@ -40634,20 +40595,16 @@ function parseSingleEpisodeAiStageRows(raw, tableKey) {
 
 function parseSingleEpisodeAiLabeledAssetRows(raw, tableKey) {
   const config = tableKey === "scenes"
-    ? { label: "场景名称", nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
+    ? { labels: ["场景名称", "场景名"], nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
     : tableKey === "characters"
-      ? { label: "角色名称", nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
+      ? { labels: ["角色名称"], nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
       : tableKey === "props"
-        ? { label: "道具名称", nameKey: "propName", descriptionKey: "propDescription", promptKey: "propImagePrompt" }
+        ? { labels: ["道具名称"], nameKey: "propName", descriptionKey: "propDescription", promptKey: "propImagePrompt" }
         : null;
   if (!config) {
     return null;
   }
   const lines = extractSingleEpisodeAiMarkdownBody(raw).split("\n");
-  const normalizedLines = lines.map(normalizeSingleEpisodeAiLabeledAssetLine);
-  const markerLabel = normalizedLines.some((line) => new RegExp(`^${config.label}\\s*[:：]`).test(line))
-    ? config.label
-    : "名称";
   const records = [];
   let name = "";
   let block = [];
@@ -40665,14 +40622,16 @@ function parseSingleEpisodeAiLabeledAssetRows(raw, tableKey) {
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeSingleEpisodeAiLabeledAssetLine(rawLine);
-    const marker = normalizedLine.match(new RegExp(`^${markerLabel}\\s*[:：]\\s*(.+)$`));
+    const marker = matchSingleEpisodeAiLabeledAssetHeading(normalizedLine, config.labels)
+      || (tableKey === "scenes" ? matchSingleEpisodeAiBareSceneBracketHeading(normalizedLine) : null);
     if (marker) {
       flush();
-      name = String(marker[1] ?? "").replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").trim();
+      name = String(marker[1] ?? "").replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").replace(/^[:：]\s*/, "").trim();
       block.push(rawLine);
       continue;
     }
-    if (name && isSingleEpisodeAiLabeledAssetNumberHeading(rawLine)) {
+    if (name && (isSingleEpisodeAiLabeledAssetNumberHeading(rawLine) || isSingleEpisodeAiLabeledProjectHeading(normalizedLine))) {
+      flush();
       continue;
     }
     if (name) {
@@ -40681,6 +40640,41 @@ function parseSingleEpisodeAiLabeledAssetRows(raw, tableKey) {
   }
   flush();
   return records.length ? records : null;
+}
+
+function matchSingleEpisodeAiLabeledAssetHeading(line, labels) {
+  const escapedLabels = (Array.isArray(labels) ? labels : [])
+    .map((label) => String(label ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length)
+    .join("|");
+  if (!escapedLabels) {
+    return null;
+  }
+  return String(line ?? "").match(new RegExp(`^(?:(?:${escapedLabels})\\s*[:：]|(?:【|\\[)\\s*(?:${escapedLabels})\\s*(?:】|\\]))\\s*(.+)$`));
+}
+
+function matchSingleEpisodeAiBareSceneBracketHeading(line) {
+  const match = String(line ?? "").match(/^(?:【|\[)\s*([^】\]]+?)\s*(?:】|\])\s*(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const name = String(match[1] ?? "").trim();
+  if (!name || name.startsWith("@") || isSingleEpisodeAiReservedAssetBracketName(name)) {
+    return null;
+  }
+  return [match[0], name];
+}
+
+const SINGLE_EPISODE_AI_RESERVED_ASSET_BRACKET_NAMES = "角色名称|场景名称|道具名称|场景名|角色名|道具名|分镜(?:\\s*[一二三四五六七八九十百千两零〇\\d]+)?|画幅构图|视觉风格|场景描述|环境类型|时间时刻|空间氛围|主要特征|正向提示词|负向提示词|画面构图|生图提示词|Prompt";
+
+function isSingleEpisodeAiReservedAssetBracketName(name) {
+  return new RegExp(`^(?:${SINGLE_EPISODE_AI_RESERVED_ASSET_BRACKET_NAMES})$`, "iu")
+    .test(String(name ?? "").trim());
+}
+
+function isSingleEpisodeAiLabeledProjectHeading(line) {
+  return /^(?:(?:【|\[)\s*)?(?:角色名称|场景名称|道具名称|场景名|角色名|道具名|分镜(?:\s*[一二三四五六七八九十百千两零〇\d]+)?)(?:\s*(?:】|\]))?(?:\s*[:：].*)?$/u.test(String(line ?? ""));
 }
 
 function parseSingleEpisodeAiPlainCharacterRows(raw) {
@@ -41179,11 +41173,14 @@ function parseSingleEpisodeAiStoryboardBlocks(raw) {
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeSingleEpisodeAiLabeledAssetLine(rawLine);
-    const marker = normalizedLine.match(/^【?\s*分镜\s*([一二三四五六七八九十百千两零〇\d]+)\s*】?(?=\s*(?:[（(:：]|$))/);
+    const marker = normalizedLine.match(/^(?:【\s*分镜\s*([一二三四五六七八九十百千两零〇\d]*)\s*】|分镜\s*([一二三四五六七八九十百千两零〇\d]+))(?:\s*[:：-]?\s*(.*))?$/u);
     if (marker) {
       flush();
-      shotNo = normalizeSingleEpisodeAiStoryboardSectionShotNo(marker[1], records.length);
-      block.push(rawLine);
+      shotNo = normalizeSingleEpisodeAiStoryboardSectionShotNo(marker[1] || marker[2] || String(records.length + 1), records.length);
+      const inlineContent = String(marker[3] ?? "").trim();
+      if (inlineContent) {
+        block.push(inlineContent);
+      }
       continue;
     }
     if (shotNo) {
@@ -41284,7 +41281,7 @@ function splitSingleEpisodeAiLiveLabeledStoryboardBlocks(raw) {
 
 function isSingleEpisodeAiLabeledStoryboardHeader(line) {
   return /^第\s*[一二三四五六七八九十百千两零〇\d]+\s*场\b/.test(line)
-    || /^【?\s*分镜\s*[一二三四五六七八九十百千两零〇\d]+/.test(line)
+    || /^【?\s*分镜(?:\s*[一二三四五六七八九十百千两零〇\d]+)?/.test(line)
     || /^#{1,6}\s*分镜/.test(line);
 }
 
@@ -62846,13 +62843,6 @@ export function findScriptCoverInput(root, scriptId) {
   }
   return root.querySelector(
     `input[data-action="upload-script-cover"][data-script-id="${scriptId}"]`,
-  );
-}
-
-export function findEpisodeCoverInput(root, episodeId) {
-  if (!episodeId) return null;
-  return root.querySelector(
-    `input[data-action="upload-episode-cover"][data-episode-id="${episodeId}"]`,
   );
 }
 

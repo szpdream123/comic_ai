@@ -311,7 +311,7 @@ test("home Skill entry reuses the existing plaza Skill picker", () => {
   assert.doesNotMatch(html, /selection-picker-layer/);
 });
 
-test("project gallery shows a hover replacement action only for existing covers", () => {
+test("project gallery cards use a fixed icon instead of cover upload actions", () => {
   const html = renderProjectDetail({
     state: createBaseState(),
     session: { user: { phone: "+86 13800138000" } },
@@ -325,11 +325,12 @@ test("project gallery shows a hover replacement action only for existing covers"
       projectLibraryPagination: { page: 1, pageSize: 18, total: 2, totalPages: 1 },
     },
   });
-  const replacementActions = html.match(/class="project-cover-replace-button"/g) ?? [];
-  assert.equal(replacementActions.length, 1);
-  assert.match(html, /project-cover-replace-button[^>]*data-action="pick-project-cover"[^>]*data-project-id="covered-project"/);
-  assert.match(html, /aria-label="替换 已有封面 的项目封面"/);
-  assert.match(html, />替换封面<\/span>/);
+  assert.equal((html.match(/class="project-gallery-mark-icon"/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /project-cover-replace-button/);
+  assert.doesNotMatch(html, /data-action="pick-project-cover"/);
+  assert.doesNotMatch(html, /aria-label="替换 已有封面 的项目封面"/);
+  assert.doesNotMatch(html, />替换封面<\/span>/);
+  assert.doesNotMatch(html, /上传封面/);
 });
 
 test("global statusbar account card prefers nickname and shows experience membership expiry", () => {

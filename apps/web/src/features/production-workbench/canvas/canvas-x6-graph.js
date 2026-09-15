@@ -2025,7 +2025,16 @@ function resolveCanvasStoryboardReturnTarget(mount, graphNode, event = {}) {
 }
 
 function wireGraphSync(graph, workbench, mount) {
-  const stage = mount?.closest?.(".canvas-stage");
+  const resolveStage = () => mount?.closest?.(".canvas-stage") ?? null;
+  const isZoomedOutView = () => Number(graph.zoom?.() ?? 1) < 1
+    || mount?.classList?.contains?.("is-zoomed-out") === true
+    || resolveStage()?.classList?.contains?.("is-zoomed-out") === true;
+  const setNodeDraggingClass = (dragging) => {
+    mount?.classList?.toggle?.("is-node-dragging", dragging === true);
+    resolveStage()?.classList?.toggle?.("is-node-dragging", dragging === true);
+    if (dragging === true) armCanvasMovePointerRelease();
+    else if (!pendingNodeMovedEvent) disarmCanvasMovePointerRelease();
+  };
   const sync = (options = {}) => {
     if (graph.__comicAiReconciling === true) return;
     const dragging = workbench.canvasNodeDragActive === true;
@@ -2061,13 +2070,46 @@ function wireGraphSync(graph, workbench, mount) {
   let selectionMovePending = false;
   let dragSnaplineSuspended = false;
   let zoomedOutDragAsync = false;
+  const collapsedForeignObjects = [];
   let graphCommitFrame = null;
   let selectionPresentationFrame = null;
   let viewportCommitTimer = null;
   let viewportFrame = null;
   let storyboardReturnCell = null;
   let activeDraggedNode = null;
+  let pendingNodeMovedEvent = null;
+  let canvasMovePointerReleased = false;
+  let pointerReleaseArmed = false;
   const draggedGroupChildIds = new Map();
+  const ownerDocument = mount?.ownerDocument ?? globalThis.document;
+  const disarmCanvasMovePointerRelease = () => {
+    if (!pointerReleaseArmed) return;
+    pointerReleaseArmed = false;
+    ownerDocument?.removeEventListener?.("pointerup", markCanvasMovePointerReleased, true);
+    ownerDocument?.removeEventListener?.("pointercancel", markCanvasMovePointerReleased, true);
+  };
+  const markCanvasMovePointerReleased = () => {
+    canvasMovePointerReleased = true;
+    disarmCanvasMovePointerRelease();
+    if (pendingNodeMovedEvent) {
+      const event = pendingNodeMovedEvent;
+      pendingNodeMovedEvent = null;
+      commitCanvasNodeMoved(event);
+      return;
+    }
+    if (workbench.canvasNodeDragActive === true && !activeDraggedNode) {
+      workbench.canvasNodeDragActive = false;
+      setNodeDraggingClass(false);
+      endZoomedOutDragAsync();
+    }
+  };
+  const armCanvasMovePointerRelease = () => {
+    if (pointerReleaseArmed) return;
+    pointerReleaseArmed = true;
+    canvasMovePointerReleased = false;
+    ownerDocument?.addEventListener?.("pointerup", markCanvasMovePointerReleased, true);
+    ownerDocument?.addEventListener?.("pointercancel", markCanvasMovePointerReleased, true);
+  };
   const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis)
     ?? ((callback) => globalThis.setTimeout?.(callback, 16));
   const scheduleSelectionPresentation = () => {
@@ -2090,7 +2132,7 @@ function wireGraphSync(graph, workbench, mount) {
     graph.findViewByCell?.(node)?.container?.classList?.toggle?.("is-canvas-node-flowing", dragging);
   };
   const scheduleViewportSync = ({ panning = false } = {}) => {
-    if (panning) stage?.classList?.add?.("is-panning");
+    if (panning) resolveStage()?.classList?.add?.("is-panning");
     if (viewportFrame == null) {
       viewportFrame = requestFrame(() => {
         viewportFrame = null;
@@ -2106,7 +2148,7 @@ function wireGraphSync(graph, workbench, mount) {
       viewportCommitTimer = null;
       syncCanvasGraphViewport(graph, workbench);
       refreshCanvasDistributionGapHandles(graph, workbench, mount);
-      stage?.classList?.remove?.("is-panning");
+      resolveStage()?.classList?.remove?.("is-panning");
     }, CANVAS_VIEWPORT_COMMIT_DELAY_MS);
   };
   const scheduleGraphCommit = (options = {}) => {
@@ -2130,16 +2172,65 @@ function wireGraphSync(graph, workbench, mount) {
     dragSnaplineSuspended = false;
     if (snapEnabled()) graph.getPlugin?.("snapline")?.enable?.();
   };
+  const collapseZoomedOutDragForeignObjects = () => {
+    const root = resolveStage() ?? mount;
+    const nodes = root?.querySelectorAll?.(".x6-node foreignObject");
+    if (!nodes?.length) return;
+    for (const fo of nodes) {
+      if (fo.dataset.comicAiFoCollapsed === "1") continue;
+      fo.dataset.comicAiFoCollapsed = "1";
+      collapsedForeignObjects.push({
+        fo,
+        width: fo.getAttribute("width"),
+        height: fo.getAttribute("height"),
+        overflow: fo.style.overflow,
+      });
+      fo.setAttribute("width", "1");
+      fo.setAttribute("height", "1");
+      fo.style.overflow = "hidden";
+    }
+  };
+  const restoreZoomedOutDragForeignObjects = () => {
+    for (const item of collapsedForeignObjects) {
+      const fo = item?.fo;
+      if (!fo) continue;
+      if (item.width == null) fo.removeAttribute("width");
+      else fo.setAttribute("width", item.width);
+      if (item.height == null) fo.removeAttribute("height");
+      else fo.setAttribute("height", item.height);
+      fo.style.overflow = item.overflow ?? "";
+      delete fo.dataset.comicAiFoCollapsed;
+    }
+    collapsedForeignObjects.length = 0;
+  };
   const beginZoomedOutDragAsync = () => {
-    if (zoomedOutDragAsync || !stage?.classList?.contains?.("is-zoomed-out") || !graph.options) return;
+    if (zoomedOutDragAsync || !isZoomedOutView() || !graph.options) return;
     if (graph.options.embedding) graph.options.embedding.enabled = false;
     zoomedOutDragAsync = true;
+    collapseZoomedOutDragForeignObjects();
   };
   const endZoomedOutDragAsync = () => {
     if (!zoomedOutDragAsync || !graph.options) return;
     if (graph.options.embedding) graph.options.embedding.enabled = true;
     zoomedOutDragAsync = false;
+    restoreZoomedOutDragForeignObjects();
+    const cells = [activeDraggedNode, ...(graph.getSelectedCells?.() ?? [])];
+    const seen = new Set();
+    for (const cell of cells) {
+      const id = cell?.id;
+      if (id == null || seen.has(id)) continue;
+      seen.add(id);
+      graph.findViewByCell?.(cell)?.updateConnectedEdges?.();
+    }
   };
+  const scheduler = graph.renderer?.schedule;
+  const requestViewUpdate = scheduler?.requestViewUpdate?.bind?.(scheduler);
+  if (scheduler && typeof requestViewUpdate === "function") {
+    scheduler.requestViewUpdate = (view, flag, options, priority, flush) => {
+      if (zoomedOutDragAsync === true && view?.isEdgeView?.()) return;
+      return requestViewUpdate(view, flag, options, priority, flush);
+    };
+  }
   const updateStoryboardReturnTarget = (event) => {
     const target = resolveCanvasStoryboardReturnTarget(mount, event?.node, event);
     if (storyboardReturnCell !== target?.cell) {
@@ -2158,7 +2249,7 @@ function wireGraphSync(graph, workbench, mount) {
     if (event?.options?.ui || event?.options?.selection) {
       const alreadyDragging = workbench.canvasNodeDragActive === true;
       workbench.canvasNodeDragActive = true;
-      stage?.classList?.add?.("is-node-dragging");
+      setNodeDraggingClass(true);
       beginZoomedOutDragAsync();
       if (!alreadyDragging) {
         workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([event?.node]);
@@ -2197,7 +2288,7 @@ function wireGraphSync(graph, workbench, mount) {
   });
   graph.on("node:move", ({ node } = {}) => {
     workbench.canvasNodeDragActive = true;
-    stage?.classList?.add?.("is-node-dragging");
+    setNodeDraggingClass(true);
     beginZoomedOutDragAsync();
     if (activeDraggedNode === node) return;
     if (activeDraggedNode) setNodeDragMotion(activeDraggedNode, false);
@@ -2206,20 +2297,29 @@ function wireGraphSync(graph, workbench, mount) {
   });
   graph.on("node:moving", () => {
     workbench.canvasNodeDragActive = true;
-    stage?.classList?.add?.("is-node-dragging");
+    setNodeDraggingClass(true);
     beginZoomedOutDragAsync();
   });
   graph.on("node:moved", (event) => {
-    const pointerReleased = isCanvasNodeMovePointerReleased(event, workbench.canvasNodeDragActive === true);
+    const pointerReleased = isCanvasNodeMovePointerReleased(
+      event,
+      workbench.canvasNodeDragActive === true,
+      canvasMovePointerReleased,
+    );
     if (!pointerReleased) {
       if (workbench.canvasNodeDragActive === true) {
-        stage?.classList?.add?.("is-node-dragging");
+        setNodeDraggingClass(true);
         workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([event?.node]);
+        pendingNodeMovedEvent = event;
       }
       return;
     }
+    commitCanvasNodeMoved(event);
+  });
+  const commitCanvasNodeMoved = (event) => {
+    pendingNodeMovedEvent = null;
     workbench.canvasNodeDragActive = false;
-    stage?.classList?.remove?.("is-node-dragging");
+    setNodeDraggingClass(false);
     endZoomedOutDragAsync();
     setNodeDragMotion(event?.node, false);
     activeDraggedNode = null;
@@ -2246,7 +2346,7 @@ function wireGraphSync(graph, workbench, mount) {
       event?.node,
     ]);
     scheduleGraphCommit({ clearToast: true });
-  });
+  };
   graph.on("node:resized", ({ node } = {}) => {
     const data = node?.getData?.() ?? {};
     const canvasNode = data.canvasNode;
@@ -2299,11 +2399,18 @@ function wireGraphSync(graph, workbench, mount) {
     selectCanvasNodeFromGraph(workbench, node?.id);
   };
   graph.on("node:click", ({ node }) => selectGraphNode(node));
-  graph.on("node:mouseup", ({ node }) => {
-    const wasDragging = workbench.canvasNodeDragActive === true
-      || stage?.classList?.contains?.("is-node-dragging");
+  graph.on("node:mouseup", ({ node, e }) => {
+    const pointerReleased = isCanvasNodeMovePointerReleased(
+      { e },
+      workbench.canvasNodeDragActive === true,
+      canvasMovePointerReleased,
+    );
+    if (activeDraggedNode || (workbench.canvasNodeDragActive === true && !pointerReleased)) {
+      setNodeDraggingClass(true);
+      return;
+    }
     workbench.canvasNodeDragActive = false;
-    mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    setNodeDraggingClass(false);
     endZoomedOutDragAsync();
     setNodeDragMotion(node, false);
     restoreDragSnapline();
@@ -2312,20 +2419,17 @@ function wireGraphSync(graph, workbench, mount) {
     positionCanvasSelectionActionToolbar(graph, mount);
     positionCanvasNodeActionToolbar(graph, mount);
     selectGraphNode(node);
-    if (wasDragging && workbench.canvasPendingPositionNodeIds?.length) {
-      workbench.canvasPendingPositionNodeIds = canvasGraphCellAndDescendantIds([
-        ...canvasSelectedGraphCells(graph),
-        node,
-      ]);
-      snapCanvasGraphNodesToGrid([node], snapEnabled());
-      scheduleGraphCommit({ clearToast: true });
-    }
   });
   graph.on("cell:click", ({ cell }) => {
     if (cell?.isNode?.()) selectGraphNode(cell);
   });
   graph.on("node:mousedown", ({ node, e }) => {
     suspendDragSnapline();
+    beginZoomedOutDragAsync();
+    if (isZoomedOutView()) {
+      workbench.canvasNodeDragActive = true;
+      setNodeDraggingClass(true);
+    }
     duplicateCanvasNodeForModifierDrag(graph, workbench, node, e);
   });
   graph.on("node:dblclick", ({ node, e }) => {
@@ -2360,13 +2464,13 @@ function wireGraphSync(graph, workbench, mount) {
   selectionPlugin?.on?.("box:mousemove", ({ e } = {}) => {
     if (!isCanvasSelectionTranslationEvent(e)) return;
     workbench.canvasNodeDragActive = true;
-    mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
+    setNodeDraggingClass(true);
     beginZoomedOutDragAsync();
     constrainCanvasGraphSelectionToGroups(graph.getSelectedCells?.() ?? []);
   });
   selectionPlugin?.on?.("box:mouseup", () => {
     workbench.canvasNodeDragActive = false;
-    mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    setNodeDraggingClass(false);
     endZoomedOutDragAsync();
     refreshCanvasConnectedEdgeMotion(graph);
     requestFrame(() => refreshCanvasSelectionActionToolbar(graph, workbench, mount));
@@ -2420,10 +2524,15 @@ function refreshCanvasConnectedEdgeMotion(graph, nodeIds = []) {
   }
 }
 
-function isCanvasNodeMovePointerReleased(event = {}, dragActive = false) {
+function isCanvasNodeMovePointerReleased(event = {}, dragActive = false, pointerUpSeen = false) {
   const pointerEvent = event?.e?.originalEvent ?? event?.e ?? event;
   const type = String(pointerEvent?.type ?? "").toLowerCase();
-  if (["mouseup", "pointerup", "pointercancel", "touchend", "touchcancel"].includes(type)) return true;
+  const buttons = Number(pointerEvent?.buttons);
+  if (["mouseup", "pointerup", "pointercancel", "touchend", "touchcancel"].includes(type)) {
+    if (dragActive === true && type === "mouseup" && pointerUpSeen !== true) return false;
+    if (dragActive === true && Number.isFinite(buttons) && buttons > 0) return false;
+    return true;
+  }
   if (dragActive === true) return false;
   if (["mousemove", "pointermove", "touchmove", "mousedown", "pointerdown", "touchstart"].includes(type)) return false;
   return false;
@@ -2685,7 +2794,9 @@ export function clearCanvasGraphEditorOverlay(graph) {
 }
 
 function syncCanvasGraphEditorOverlay(graph, node) {
-  if (graph?.__comicAiCanvasMount?.closest?.(".canvas-stage")?.classList?.contains?.("is-node-dragging")) return false;
+  const mount = graph?.__comicAiCanvasMount;
+  if (mount?.classList?.contains?.("is-node-dragging")
+    || mount?.closest?.(".canvas-stage")?.classList?.contains?.("is-node-dragging")) return false;
   const editor = graph?.getCellById?.(CANVAS_EDITOR_OVERLAY_ID);
   if (!editor || String(editor.getData?.()?.parentNodeId ?? "") !== String(node?.id ?? "")) return false;
   const size = node.getSize?.() ?? { width: 360, height: 170 };
@@ -2961,7 +3072,8 @@ export function syncCanvasGraphViewport(graph, workbench) {
 }
 
 function applyCanvasGraphViewportStyles(graph, workbench, viewport = null) {
-  const stage = graph?.__comicAiCanvasMount?.closest?.(".canvas-stage");
+  const mount = graph?.__comicAiCanvasMount;
+  const stage = mount?.closest?.(".canvas-stage");
   const translation = viewport ?? graph?.translate?.() ?? {};
   const zoom = Number(viewport?.zoom ?? graph?.zoom?.() ?? 1);
   const x = Number(viewport?.x ?? translation.tx ?? 0);
@@ -2970,7 +3082,9 @@ function applyCanvasGraphViewportStyles(graph, workbench, viewport = null) {
   const visualZoom = Math.max(0.1, normalizedZoom);
   const gridSize = Math.max(CANVAS_GRID_SIZE, Math.round(CANVAS_GRID_SIZE * visualZoom * 100) / 100);
   const gridDotMix = Math.min(14, Math.max(2, Math.round(14 * visualZoom * 100) / 100));
-  stage?.classList?.toggle?.("is-zoomed-out", visualZoom < 0.5);
+  const zoomedOut = visualZoom < 1;
+  mount?.classList?.toggle?.("is-zoomed-out", zoomedOut);
+  stage?.classList?.toggle?.("is-zoomed-out", zoomedOut);
   stage?.style?.setProperty?.("--canvas-grid-size", `${gridSize}px`);
   stage?.style?.setProperty?.("--canvas-grid-major-size", `${gridSize * 5}px`);
   stage?.style?.setProperty?.("--canvas-grid-dot-mix", `${gridDotMix}%`);
@@ -3067,7 +3181,8 @@ export function mountCanvasGraphNodeActionToolbar(graph, nodeId, toolbarHtml, mo
 }
 
 function positionCanvasNodeActionToolbar(graph, mount = graph?.__comicAiCanvasMount) {
-  if (mount?.closest?.(".canvas-stage")?.classList?.contains?.("is-node-dragging")) {
+  if (mount?.classList?.contains?.("is-node-dragging")
+    || mount?.closest?.(".canvas-stage")?.classList?.contains?.("is-node-dragging")) {
     return Boolean(mount?.querySelector?.("[data-canvas-node-action-toolbar]"));
   }
   const toolbar = mount?.querySelector?.("[data-canvas-node-action-toolbar]");

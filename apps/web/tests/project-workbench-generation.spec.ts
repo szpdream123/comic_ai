@@ -203,6 +203,53 @@ it("splits plain character prompt paragraphs into the character prompt list", ()
   assert.match(rows[1].characterDescription, /皮肤灰白/);
 });
 
+it("splits format-card bracket labels into live asset and storyboard rows", () => {
+  const characterRows = parseSingleEpisodeAiStageRowsForTest([
+    "【角色名称】任小野",
+    "黑发少年，衣着朴素。",
+  ].join("\n"), "characters");
+  const sceneRows = parseSingleEpisodeAiStageRowsForTest([
+    "【场景名称】黄昏城门口",
+    "暮色压在高大的铁木城门上。",
+  ].join("\n"), "scenes");
+  const propRows = parseSingleEpisodeAiStageRowsForTest([
+    "【道具名称】切割刀",
+    "黑色短刀，刃口有缺损。",
+  ].join("\n"), "props");
+  const storyboardRows = parseSingleEpisodeAiStageRowsForTest([
+    "【分镜】任小野站在【@黄昏城门口】，握紧【@切割刀】。",
+  ].join("\n"), "storyboards");
+
+  assert.equal(characterRows[0].characterName, "任小野");
+  assert.match(characterRows[0].characterDescription, /黑发少年/);
+  assert.equal(sceneRows[0].sceneName, "黄昏城门口");
+  assert.match(sceneRows[0].sceneDescription, /暮色/);
+  assert.equal(propRows[0].propName, "切割刀");
+  assert.match(propRows[0].propDescription, /黑色短刀/);
+  assert.equal(storyboardRows.length, 1);
+  assert.match(storyboardRows[0].plot, /任小野站在/);
+});
+
+it("splits markdown scene names and bare scene brackets into scene table rows", () => {
+  const markdownRows = parseSingleEpisodeAiStageRowsForTest([
+    "**场景名称**: 薄暗天色下的城墙阴影",
+    "画幅构图：横向16:9电影级场景设定图。",
+  ].join("\n"), "scenes");
+  const bareRows = parseSingleEpisodeAiStageRowsForTest([
+    "## 场景",
+    "",
+    "【城墙根阴影处】",
+    "画幅构图：横向16:9电影级场景设定图，极高画质，纯净无人的空间。",
+    "视觉风格：影视概念设定图，写实细腻，极致细节。",
+    "正向提示词：不能出现其他人，无人，纯场景。",
+  ].join("\n"), "scenes");
+
+  assert.equal(markdownRows[0].sceneName, "薄暗天色下的城墙阴影");
+  assert.match(markdownRows[0].sceneDescription, /画幅构图/);
+  assert.equal(bareRows[0].sceneName, "城墙根阴影处");
+  assert.match(bareRows[0].sceneDescription, /正向提示词/);
+});
+
 it("does not treat director diagnosis labels as character names", () => {
   const rows = parseSingleEpisodeAiStageRowsForTest([
     "核心问题：谁能在城门口活下来。",
@@ -24057,7 +24104,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /Beta Two/);
   });
 
-  it("renders project card actions for cover upload, rename, and delete", () => {
+  it("renders project card actions for rename and delete with a fixed icon", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({
       state,
@@ -24078,13 +24125,14 @@ describe("production workbench project tab", () => {
 
     const menuHtml = html.match(/<div class="project-card-menu"[\s\S]*?<\/div>/)?.[0] ?? "";
     assert.match(html, /toggle-project-card-menu/);
-    assert.match(html, /upload-project-cover/);
-    assert.match(menuHtml, /<label class="project-card-menu-item"[^>]*for="project-cover-menu-input-project-card-1"[^>]*>上传封面<\/label>/);
+    assert.match(html, /project-gallery-mark-icon/);
+    assert.doesNotMatch(html, /upload-project-cover/);
+    assert.doesNotMatch(html, /pick-project-cover/);
+    assert.doesNotMatch(menuHtml, /上传封面/);
     assert.doesNotMatch(menuHtml, /替换封面/);
-    assert.match(html, /上传封面/);
+    assert.doesNotMatch(html, /<img class="project-gallery-cover"/);
     assert.match(html, /重命名/);
     assert.match(html, /删除/);
-    assert.match(html, /<img class="project-gallery-cover" src="data:image\/png;base64,abc123"/);
   });
 
   it("uses an explicit pending script seed until backend supports metadata-only project creation", () => {
@@ -24123,7 +24171,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /value="9:16" checked/);
   });
 
-  it("renders new projects with an upload-cover placeholder", () => {
+  it("renders new projects with a fixed gallery icon instead of an upload-cover placeholder", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({
       state,
@@ -24141,11 +24189,13 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /project-gallery-poster needs-cover/);
-    assert.match(html, /project-cover-placeholder/);
-    assert.match(html, /data-action="pick-project-cover"/);
-    assert.match(html, /<label class="project-cover-placeholder"[^>]*for="project-cover-input-project-card-1"/);
-    assert.match(html, /id="project-cover-input-project-card-1" class="project-cover-input" type="file" accept="image\/\*"/);
+    assert.match(html, /project-gallery-poster/);
+    assert.match(html, /project-gallery-mark-icon/);
+    assert.doesNotMatch(html, /project-gallery-poster needs-cover/);
+    assert.doesNotMatch(html, /project-cover-placeholder/);
+    assert.doesNotMatch(html, /data-action="pick-project-cover"/);
+    assert.doesNotMatch(html, /id="project-cover-input-project-card-1"/);
+    assert.doesNotMatch(html, /上传封面/);
   });
 
   it("finds the exact cover input for the requested project", () => {
@@ -24582,7 +24632,12 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-action="open-single-episode-flow"/);
     assert.match(html, /episode-library-card/);
     assert.doesNotMatch(html, /episode-hub-shell empty/);
-    assert.match(html, /<video src="https:\/\/cdn\.example\.com\/storyboard-1\.mp4"/);
+    assert.match(html, /project-gallery-mark-icon/);
+    assert.match(html, /<rect x="4" y="6" width="13" height="12" rx="2"/);
+    assert.doesNotMatch(html, /<video src="https:\/\/cdn\.example\.com\/storyboard-1\.mp4"/);
+    assert.doesNotMatch(html, /pick-episode-cover/);
+    assert.doesNotMatch(html, /upload-episode-cover/);
+    assert.doesNotMatch(html, /上传封面/);
     assert.match(html, /data-action="open-episode-workbench"/);
     assert.match(html, /data-action="toggle-episode-card-menu"/);
   });
@@ -35852,6 +35907,9 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /canvas-project-card-menu/);
+    assert.match(html, /canvas-project-play/);
+    assert.match(html, /M3\.7 15\.9 5\.3 7\.4h14\.9l-1\.6 8\.5H3\.7/);
+    assert.doesNotMatch(html, /<rect x="4" y="6" width="13" height="12" rx="2"/);
     assert.match(html, /data-action="rename-canvas-project"/);
     assert.match(html, /data-action="toggle-canvas-project-archive"/);
     assert.match(html, /data-action="delete-canvas-project"/);
@@ -43175,6 +43233,93 @@ describe("production workbench project tab", () => {
     assert.match(x6Source, /if \(!pointerReleased\) \{[\s\S]*?canvasNodeDragActive === true[\s\S]*?return;/);
     assert.match(x6Source, /function isCanvasNodeMovePointerReleased[\s\S]*?if \(dragActive === true\) return false;/);
     assert.match(x6Source, /const dragging = workbench\.canvasNodeDragActive === true;/);
+  });
+
+  it("does not persist AI Canvas node positions while React Flow reports a node drag", async () => {
+    const documentSaves = [];
+    const positionSaves = [];
+    const initialDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: "node-1", type: "image", position: { x: 40, y: 80 }, data: { prompt: "keep" } },
+        { id: "node-2", type: "video", position: { x: 400, y: 80 }, data: { prompt: "still" } },
+      ],
+      edges: [{ id: "edge-1", source: "node-1", target: "node-2" }],
+    };
+    const workbench = {
+      api: {
+        async saveStandaloneCanvas(canvasProjectId, payload) {
+          documentSaves.push({ canvasProjectId, payload });
+          return { canvas: { canvasProjectId, serverRevision: 8, document: payload.document } };
+        },
+        async saveCanvasNodePositions(canvasProjectId, payload) {
+          positionSaves.push({ canvasProjectId, payload });
+          return { canvas: { canvasProjectId, serverRevision: 7 } };
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 7,
+        canvasProjects: [{ id: "canvas-main", title: "画布" }],
+        canvasDocument: initialDocument,
+        canvasDocumentsByProject: { "canvas-main": initialDocument },
+      }),
+    };
+
+    updateActiveCanvasDocumentForTest(workbench, {
+      ...initialDocument,
+      nodes: [
+        { ...initialDocument.nodes[0], position: { x: 120, y: 160 }, dragging: true },
+        initialDocument.nodes[1],
+      ],
+    });
+    assert.equal(positionSaves.length, 0);
+    assert.equal(documentSaves.length, 0);
+    assert.equal(workbench.canvasNodeDragActive, true);
+    assert.equal(workbench.ui.canvasDocument, initialDocument);
+
+    updateActiveCanvasDocumentForTest(workbench, {
+      ...initialDocument,
+      nodes: [
+        { ...initialDocument.nodes[0], position: { x: 180, y: 240 }, dragging: true },
+        initialDocument.nodes[1],
+      ],
+    });
+    assert.equal(positionSaves.length, 0);
+    assert.equal(documentSaves.length, 0);
+    assert.equal(workbench.ui.canvasDocument, initialDocument);
+
+    updateActiveCanvasDocumentForTest(workbench, {
+      ...initialDocument,
+      nodes: [
+        { ...initialDocument.nodes[0], position: { x: 180, y: 240 }, dragging: false },
+        initialDocument.nodes[1],
+      ],
+    });
+    await workbench.canvasPositionSaveInFlight;
+
+    assert.equal(documentSaves.length, 0);
+    assert.equal(positionSaves.length, 1);
+    assert.deepEqual(positionSaves[0].payload.positions, [{ nodeKey: "node-1", x: 180, y: 240 }]);
+    assert.equal(workbench.canvasNodeDragActive, false);
+    assert.equal(workbench.canvasNodeDragBaselineDocument ?? null, null);
+
+    const workbenchSource = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+    assert.match(workbenchSource, /function canvasDocumentHasActiveNodeDrag/);
+    assert.match(workbenchSource, /canvasNodeDragBaselineDocument/);
+    assert.match(workbenchSource, /workbench\.canvasNodeDragActive !== true/);
+    assert.match(workbenchSource, /workbench\.canvasNodeDragActive === true/);
+    assert.match(workbenchSource, /singleEpisodeAiPreview\?\.status !== "loading" && workbench\.canvasNodeDragActive !== true\) persistWorkbenchState/);
+    assert.match(appSource, /nodeDragActive: nextNodeDragActive/);
+    assert.match(appSource, /if \(nextNodeDragActive && nodeDragActive\)/);
+    assert.match(appSource, /metadata\.nodeDragActive === true \|\| documentHasNodeDrag\(nextDocument\)/);
   });
 
   it("loads the Canvas document and user session concurrently", async () => {
@@ -54765,6 +54910,61 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
   });
 
+  it("keeps the script stage for a home novel-to-script plaza skill", async () => {
+    const previewCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          yield { event: "intent_resolved", data: { stages: ["script"], skipScriptStage: false } };
+          yield { event: "script_start", data: {} };
+          yield { event: "script_done", data: { text: "第一场 乌坦城。萧炎出场。", rawText: "第一场 乌坦城。萧炎出场。" } };
+          yield { event: "complete", data: {
+            scriptText: "第一场 乌坦城。萧炎出场。",
+            resolvedIntent: { stages: ["script"], skipScriptStage: false },
+            displayTables: {
+              script: { title: "剧本", columns: ["剧本文字"], rows: [{ scriptContent: "第一场 乌坦城。萧炎出场。" }] },
+            },
+            commitPayload: {
+              scriptText: "第一场 乌坦城。萧炎出场。",
+              characters: [],
+              scenes: [],
+              props: [],
+              storyboards: [],
+            },
+          } };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeScript: "萧炎在乌坦城修炼。",
+        singleEpisodeTextModelCode: "deepseek-noval",
+        episodePlazaOfficialSkills: [
+          { id: "plaza-script-skill", title: "通用小说转剧本", category: "project-workflow", summary: "把小说转成剧本", outputContent: "剧本文本" },
+        ],
+        selectedEpisodePlazaSkillIds: ["plaza-script-skill"],
+        episodeGenerationConfig: {
+          models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek", mediaType: "text" }],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode", workflowOrigin: "home" },
+    });
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(previewCalls[0].input.plazaSkillId, "plaza-script-skill");
+    assert.equal(Object.prototype.hasOwnProperty.call(previewCalls[0].input, "skipScriptStage"), false);
+    assert.deepEqual(workbench.ui.singleEpisodeAiPreview.selectedStages, ["script"]);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
+  });
+
   it("allows a single selected non-script skill and sends the selected text model", async () => {
     const previewCalls = [];
     const workbench = {
@@ -57599,6 +57799,60 @@ describe("production workbench project tab", () => {
     );
   });
 
+  it("renders labeled scene prose as a two-column prompt table while loading", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "detail",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+        }),
+        singleEpisodeAiPreview: {
+          status: "loading",
+          activeStage: "shot",
+          assetPromptSteps: [
+            {
+              stage: "scene",
+              title: "场景提示词生成",
+              rawResponseText: [
+                "## 场景",
+                "",
+                "【城墙根阴影处】",
+                "画幅构图：横向16:9电影级场景设定图，极高画质，纯净无人的空间。",
+                "视觉风格：影视概念设定图，写实细腻，极致细节。",
+                "正向提示词：不能出现其他人，无人，纯场景。",
+              ].join("\n"),
+              status: "done",
+            },
+            {
+              stage: "character",
+              title: "角色提示词生成",
+              rawResponseText: [
+                "| 角色名称 | 角色描述 |",
+                "| --- | --- |",
+                "| 任小野 | 清瘦少年，旧布短衣。 |",
+              ].join("\n"),
+              status: "done",
+            },
+          ],
+        },
+      },
+    });
+
+    const sceneSection = html.match(/data-prompt-stage="scene-response"[\s\S]*?<\/section>/)?.[0] ?? "";
+    assert.match(sceneSection, /single-episode-ai-prompt-detail-table/);
+    assert.match(sceneSection, /<th>场景名称<\/th>/);
+    assert.match(sceneSection, /<th>提示词详情<\/th>/);
+    assert.match(sceneSection, /<td>城墙根阴影处<\/td>/);
+    assert.match(sceneSection, /正向提示词/);
+    assert.doesNotMatch(sceneSection, /<pre>[\s\S]*【城墙根阴影处】/);
+  });
+
   it("centers the AI storyboard progress before the first streamed response", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
@@ -57689,6 +57943,7 @@ describe("production workbench project tab", () => {
       source,
       /root\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*?close-ai-storyboard-preview[\s\S]*?handleAction\(workbench, closeTarget\)[\s\S]*?\}, \{ capture: true \}\);/,
     );
+    assert.match(source, /root\.addEventListener\("click", swallowClick, \{ capture: true, once: true \}\);/);
   });
 
   it("renders chapter storyboard rows from backend-defined columns", () => {
@@ -58900,6 +59155,7 @@ describe("storyboard state", () => {
 
   it("refreshes script model credits every time single-episode creation opens", async () => {
     const configCalls = [];
+    const skillCalls = [];
     const state = {
       project: {
         id: "project-1",
@@ -58915,30 +59171,47 @@ describe("storyboard state", () => {
       state,
       session: { user: { phone: "+86 13800138000" } },
       api: {
+        async getSkillCategories() {
+          skillCalls.push("getSkillCategories");
+          return { items: [] };
+        },
+        async getPromptSkills() {
+          skillCalls.push("getPromptSkills");
+          return { items: [] };
+        },
         async getPromptMarketplace() {
+          skillCalls.push("getPromptMarketplace");
           return { items: [
             { id: "official-script-default", title: "官方默认剧本技能", category: "script", official: true, isDefault: true, priceCredits: 4 },
             { id: "official-shot-default", title: "官方默认分镜技能", category: "shot", official: true, isDefault: true, priceCredits: 0 },
           ] };
         },
         async getPromptMarketplaceLibrary() {
+          skillCalls.push("getPromptMarketplaceLibrary");
           return { items: [
             { id: "fresh-script-skill", title: "私人默认剧本技能", category: "script", official: false, isDefault: true, priceCredits: 9 },
             { id: "private-shot-non-default", title: "私人普通分镜技能", category: "shot", official: false, isDefault: false, priceCredits: 2 },
           ] };
         },
         async getSkills() {
+          skillCalls.push("getSkills");
           return { items: [
             { id: "plaza-official-skill", title: "官方短剧 Skill", category: "project-workflow", priceCredits: 0 },
             { id: "plaza-short-drama", title: "短剧改编 Skill", category: "short-drama", priceCredits: 8 },
           ] };
         },
         async getMySkills() {
+          skillCalls.push("getMySkills");
           return { items: [
             { id: "plaza-mine-skill", title: "我的短剧 Skill", category: "project-workflow", priceCredits: 9 },
           ] };
         },
         async getSkillLibrary() {
+          skillCalls.push("getSkillLibrary");
+          return { items: [] };
+        },
+        async getSkillFavorites() {
+          skillCalls.push("getSkillFavorites");
           return { items: [] };
         },
         async listGlobalGenerationConfig(options = {}) {
@@ -58995,8 +59268,8 @@ describe("storyboard state", () => {
     });
 
     assert.deepEqual(configCalls, [{ fresh: true, mediaType: undefined }]);
-    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.script, "fresh-script-skill");
-    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "official-shot-default");
+    assert.deepEqual(skillCalls, []);
+    assert.deepEqual(workbench.ui.selectedEpisodePromptSkillIds, {});
     assert.deepEqual(workbench.ui.selectedEpisodePlazaSkillIds, []);
     assert.match(workbench.root.innerHTML, /AI 小说分镜/);
     assert.doesNotMatch(workbench.root.innerHTML, /AI 小说分镜 200 \+/);

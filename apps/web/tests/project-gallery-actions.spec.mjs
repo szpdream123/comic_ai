@@ -2084,7 +2084,7 @@ test("home workflow submission uploads a script and opens the shared episode wor
   workbench.ui.homeWorkflowScriptFileName = "第一集.txt";
   workbench.ui.selectedEpisodePlazaSkillIds = ["plaza-skill-1"];
   workbench.ui.episodePlazaOfficialSkills = [
-    { id: "plaza-skill-1", title: "项目工作流 Skill", category: "project-workflow" },
+    { id: "plaza-skill-1", title: "项目工作流 Skill", category: "project-workflow", summary: "保持角色三视图一致", outputContent: "角色提示词" },
   ];
   workbench.ui.membershipStatus = { status: "active" };
   workbench.ui.projectStyles = [{ code: "animation" }];

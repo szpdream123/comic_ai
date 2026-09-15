@@ -333,6 +333,18 @@ test("confirming skill delete calls the creator API and refreshes mine", async (
   assert.equal(workbench.ui.toast, "Skill 已删除。");
 });
 
+test("skill plaza places the prompt guide trigger after mine", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "skills",
+      skillPlazaSection: "catalog",
+    },
+  });
+  assert.match(html, /data-section="mine"[^>]*>我的<\/button><button class="prompt-marketplace-guide-trigger" type="button" data-action="open-prompt-marketplace-guide"[^>]*>[\s\S]*自定义skill说明<\/button>/);
+});
+
 test("skill plaza recommended tab only shows admin-recommended skills", () => {
   const html = renderProjectDetail({
     state: {},

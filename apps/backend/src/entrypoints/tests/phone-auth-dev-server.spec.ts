@@ -6919,6 +6919,68 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("runs the script stage for a novel-to-script plaza skill even without skipScriptStage", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 5);
+    const skillId = "79797979-7979-4979-8979-797979797979";
+    await db.query(
+      `INSERT INTO skills (
+         id, owner_user_id, name, summary, category, author_name, detail_json, status, visibility, is_recommended
+       ) VALUES (
+         $1, NULL, '通用小说转剧本', '把小说转成剧本', 'animation-game', '官方',
+         $2::jsonb, 'published', 'public', true
+       )`,
+      [skillId, JSON.stringify({
+        introduction: "# SKILL.md\n把小说转成可拍摄剧本。",
+        usageScene: "小说转剧本",
+        howToUse: "上传小说",
+        outputContent: "剧本文本",
+        workflow: [{ stage: "script" }],
+        files: [{ name: "SKILL.md", kind: "instruction", content: "# SKILL.md\n把小说转成可拍摄剧本。" }],
+      })],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      "第一场 乌坦城。萧炎出场。",
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138245");
+      await seedGenerationAccessForPhone(db, "13800138245", 5000);
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "plaza-script-skill");
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-plaza-script-skill",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "萧炎在乌坦城修炼。",
+            plazaSkillId: skillId,
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200, JSON.stringify(envelope));
+      assert.equal(textChatGateway.calls.length, 1);
+      assert.equal(envelope.data.modelRunCount, 1);
+      assert.deepEqual(envelope.data.resolvedIntent, { stages: ["script"], skipScriptStage: false });
+      assert.match(envelope.data.scriptText ?? "", /第一场 乌坦城/);
+      assert.deepEqual(envelope.data.commitPayload.scenes, []);
+      assert.deepEqual(envelope.data.commitPayload.characters, []);
+      assert.deepEqual(envelope.data.commitPayload.props, []);
+      assert.deepEqual(envelope.data.commitPayload.storyboards, []);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("does not load default extraction templates when a plaza skill is selected", async () => {
     const db = await createMigratedTestDb();
     await seedPreviewScriptModelConfig(db, 5);

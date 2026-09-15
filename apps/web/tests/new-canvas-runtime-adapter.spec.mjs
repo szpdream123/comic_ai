@@ -341,6 +341,41 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
   await handle.dispose();
 });
 
+test("AI Canvas adapter does not duplicate text models from agent and generation catalogs", async () => {
+  let runtimeContext;
+  const adapter = createAiCanvasRuntimeAdapter({
+    creatorApi: {
+      listCanvasAgentModels: async () => ({
+        models: [
+          { modelCode: "gpt-5-6-sol", modelLabel: "GPT-5.6 Sol", capabilities: { vision: true } },
+          { modelCode: "claude-opus-4-8", modelLabel: "Claude Opus 4.8" },
+        ],
+      }),
+      listGlobalGenerationConfig: async () => ({
+        models: [
+          { modelCode: "gpt-5-6-sol", modelLabel: "GPT-5.6 Sol", mediaType: "text" },
+          { modelCode: "claude-opus-4-8", modelLabel: "Claude Opus 4.8", mediaType: "text" },
+          { modelId: "image-1", modelName: "图片模型", mediaType: "image" },
+          { modelId: "video-1", modelName: "视频模型", mediaType: "video" },
+        ],
+      }),
+      getSkills: async () => ({ items: [] }),
+      getMySkills: async () => ({ items: [] }),
+    },
+    mountRuntime: async (_surface, context) => {
+      runtimeContext = context;
+      return { dispose() {} };
+    },
+  });
+  const handle = await adapter.mount({}, { canvasProjectId: "canvas-dedupe-catalog" });
+  await handle.catalogsReady;
+  assert.deepEqual(
+    runtimeContext.modelCatalog.map((model) => `${model.category}:${model.modelCode}`),
+    ["text:gpt-5-6-sol", "text:claude-opus-4-8", "image:image-1", "video:video-1"],
+  );
+  await handle.dispose();
+});
+
 test("AI Canvas adapter chrome updates keep injected catalogs", async () => {
   const updates = [];
   const adapter = createAiCanvasRuntimeAdapter({
@@ -751,7 +786,7 @@ test("AI Canvas polling refreshes the mounted runtime without a full host render
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.match(adapterSource, /Object\.prototype\.hasOwnProperty\.call\(next, "document"\)/);
   assert.doesNotMatch(adapterSource, /next\.ui\?\.canvasDocument/);
-  assert.match(appSource, /const documentProvided = next\.document !== undefined \|\| next\.canvasDocument !== undefined/);
+  assert.match(appSource, /const documentProvided = !liveNodeDragActive\s*&& \(next\.document !== undefined \|\| next\.canvasDocument !== undefined\)/);
   assert.match(appSource, /documentProvided && !saveEnabled/);
   assert.match(appSource, /arePersistableCanvasRuntimeDocumentsEqual/);
   assert.match(appSource, /omitRuntimeEphemeralNodeFields/);
@@ -759,8 +794,12 @@ test("AI Canvas polling refreshes the mounted runtime without a full host render
 
 test("host live head documents do not echo back as canvas saves", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
-  assert.match(appSource, /if \(documentProvided\) \{\s*document = readRuntimeDocument\(\);/);
+  assert.match(appSource, /if \(documentProvided && !nodeDragActive\) \{\s*document = readRuntimeDocument\(\);/);
   assert.match(appSource, /context\.onDocumentChange = \(nextDocument, metadata = \{\}\) => \{[\s\S]*arePersistableCanvasRuntimeDocumentsEqual\(document, nextDocument\)/);
+  assert.match(appSource, /nodeDragActive: nextNodeDragActive/);
+  assert.match(appSource, /if \(nextNodeDragActive && nodeDragActive\) \{\s*return undefined;/);
+  assert.match(appSource, /metadata\.nodeDragActive === true \|\| documentHasNodeDrag\(nextDocument\)/);
+  assert.match(appSource, /originalOnDocumentChange\?\.\(nextDocument \?\? document,/);
 });
 
 test("AI Canvas runtime document sync skips duplicate host deep equality", () => {
@@ -977,6 +1016,15 @@ test("web canvas falls back to the in-page editor when shotlist push has no Taur
   assert.match(hostSource, /dataset\.canvasVideoEditorHost/);
 });
 
+test("AI Canvas runtime skips document clone while a node is dragging", () => {
+  const runtimeAssetSource = readRuntimeAsset("main-upstream-");
+  const runtimeAppSource = readRuntimeAsset("App-");
+  assert.match(runtimeAssetSource, /\(\$\.getState\(\)\.nodes\|\|\[\]\)\.some\(e=>e\?\.dragging===!0\)/);
+  assert.match(runtimeAssetSource, /e\.onDocumentChange\?\.\(void 0,\{nodeDragActive:!0\}\)/);
+  assert.match(runtimeAssetSource, /let d=\(t\.nodes\|\|\[\]\)\.some\(e=>e\?\.dragging===!0\);if\(d\)/);
+  assert.match(runtimeAppSource, /onlyRenderVisibleElements:!0,autoPanOnNodeDrag:!1,fitView:!0/);
+});
+
 test("new Canvas mounts the standalone React Flow runtime directly in the page", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
@@ -1176,6 +1224,10 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(runtimeAssetSource, /embedded/);
   assert.match(runtimeAssetSource, /ai-canvas:document/);
   assert.match(runtimeAssetSource, /onDocumentChange/);
+  assert.match(runtimeAssetSource, /\(\$\.getState\(\)\.nodes\|\|\[\]\)\.some\(e=>e\?\.dragging===!0\)/);
+  assert.match(runtimeAssetSource, /e\.onDocumentChange\?\.\(void 0,\{nodeDragActive:!0\}\)/);
+  assert.match(runtimeAssetSource, /let d=\(t\.nodes\|\|\[\]\)\.some\(e=>e\?\.dragging===!0\);if\(d\)/);
+  assert.match(runtimeAppSource, /onlyRenderVisibleElements:!0,autoPanOnNodeDrag:!1,fitView:!0/);
   assert.doesNotMatch(runtimeAssetSource, /creatorApi|projectCatalog|onSwitchProject/);
   assert.doesNotMatch(runtimeAppSource, /aria-label: e\("画布更多操作"\)/);
   assert.match(runtimeDialogSource, /supportedQuality/);

@@ -40,6 +40,9 @@ test("canvas project gallery paginates cards with the shared gallery footer", ()
   assert.match(html, /画布 21/);
   assert.match(html, /画布 22/);
   assert.doesNotMatch(html, /画布 01/);
+  assert.match(html, /canvas-project-play/);
+  assert.match(html, /M3\.7 15\.9 5\.3 7\.4h14\.9l-1\.6 8\.5H3\.7/);
+  assert.doesNotMatch(html, /<rect x="4" y="6" width="13" height="12" rx="2"/);
 });
 
 test("canvas project gallery filters archived projects and exposes reversible archive actions", () => {

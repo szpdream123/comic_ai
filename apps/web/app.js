@@ -898,13 +898,35 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     }
   };
   let saveEnabled = false;
+  let nodeDragActive = false;
+  const documentHasNodeDrag = (value) => (
+    Array.isArray(value?.nodes) ? value.nodes : []
+  ).some((node) => node?.dragging === true);
   const originalOnDocumentChange = context.onDocumentChange;
   context.onDocumentChange = (nextDocument, metadata = {}) => {
-    if (arePersistableCanvasRuntimeDocumentsEqual(document, nextDocument)) {
+    const nextNodeDragActive = metadata.nodeDragActive === true || documentHasNodeDrag(nextDocument);
+    if (nextNodeDragActive && nodeDragActive) {
       return undefined;
     }
-    document = persistableCanvasRuntimeDocument(nextDocument);
-    return originalOnDocumentChange?.(nextDocument, metadata);
+    if (nextNodeDragActive && !nodeDragActive) {
+      nodeDragActive = true;
+      return originalOnDocumentChange?.(nextDocument ?? document, {
+        ...metadata,
+        nodeDragActive: true,
+      });
+    }
+    const persistableUnchanged = arePersistableCanvasRuntimeDocumentsEqual(document, nextDocument);
+    if (persistableUnchanged && !nextNodeDragActive && !nodeDragActive) {
+      return undefined;
+    }
+    if (!persistableUnchanged) {
+      document = persistableCanvasRuntimeDocument(nextDocument);
+    }
+    nodeDragActive = nextNodeDragActive;
+    return originalOnDocumentChange?.(nextDocument, {
+      ...metadata,
+      nodeDragActive: nextNodeDragActive,
+    });
   };
   const readRuntimeDocument = () => {
     const state = store.getState();
@@ -933,7 +955,12 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     });
   };
   const applyHostProjectState = (next = {}) => {
-    const documentProvided = next.document !== undefined || next.canvasDocument !== undefined;
+    const liveNodes = store.getState()?.nodes;
+    const liveNodeDragActive = nodeDragActive || (
+      Array.isArray(liveNodes) ? liveNodes : []
+    ).some((node) => node?.dragging === true);
+    const documentProvided = !liveNodeDragActive
+      && (next.document !== undefined || next.canvasDocument !== undefined);
     if (next.projectCatalog !== undefined) {
       projectCatalog = normalizeAiCanvasRuntimeProjects(next.projectCatalog);
     }
@@ -966,13 +993,13 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       projectName: currentProject?.name ?? "",
       ...(documentProvided && !saveEnabled ? { projectLoadStatus: "loading" } : {}),
     };
-    if (documentProvided) {
+    if (documentProvided && !nodeDragActive) {
       patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
       patch.edges = Array.isArray(document.edges) ? cloneValue(document.edges) : [];
       patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
     }
     store.setState(patch);
-    if (documentProvided) {
+    if (documentProvided && !nodeDragActive) {
       document = readRuntimeDocument();
     }
   };

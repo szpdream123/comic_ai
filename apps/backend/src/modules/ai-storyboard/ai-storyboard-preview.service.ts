@@ -7,6 +7,7 @@ import {
 import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
 import type { TextGatewayChatStreamResult } from "../model-gateway/text-model-gateway.service.ts";
 import { isRetrySafeTransientDatabasePersistenceError } from "../shared/db/dev-db.ts";
+import { composePlazaSkillStageInstructions } from "../skill-plaza/skill-plaza.service.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
 const AI_STORYBOARD_SHOT_MAX_TOKENS = 32_768;
@@ -140,6 +141,12 @@ export interface AiStoryboardPreviewInput {
     shotPrompt?: string;
   };
   skillInstructions?: string | null;
+  skillFiles?: Array<{
+    name?: string | null;
+    fileName?: string | null;
+    kind?: string | null;
+    content?: string | null;
+  }> | null;
   signal?: AbortSignal;
 }
 
@@ -371,6 +378,7 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
           model: modelCode,
           prompt: requestPrompt,
           skillInstructions: input.skillInstructions,
+          skillFiles: input.skillFiles,
           stage,
           projectId: input.canvasProjectId ? null : input.projectId,
           canvasProjectId: input.canvasProjectId,
@@ -420,6 +428,7 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
           model: modelCode,
           prompt: requestPrompt,
           skillInstructions: input.skillInstructions,
+          skillFiles: input.skillFiles,
           stage: "script",
           projectId: input.canvasProjectId ? null : input.projectId,
           canvasProjectId: input.canvasProjectId,
@@ -660,6 +669,7 @@ async function* streamJsonText(input: {
   model: string;
   prompt: string;
   skillInstructions?: string | null;
+  skillFiles?: AiStoryboardPreviewInput["skillFiles"];
   stage?: AiStoryboardPromptStage;
   messages?: TextGatewayChatCompletionRequest["messages"];
   projectId?: string | null;
@@ -671,7 +681,7 @@ async function* streamJsonText(input: {
   requestKeyPrefix?: string;
   signal?: AbortSignal;
 }) {
-  const skillInstructions = String(input.skillInstructions ?? "").trim();
+  const skillInstructions = resolvePlazaSkillInstructionsForStage(input);
   const messages = input.messages ?? (skillInstructions
     ? [
         { role: "system" as const, content: buildPlazaSkillSystemInstruction(skillInstructions, input.stage) },
@@ -744,8 +754,24 @@ function* splitTextForLiveEcho(text: string) {
   }
 }
 
+function resolvePlazaSkillInstructionsForStage(input: {
+  skillInstructions?: string | null;
+  skillFiles?: AiStoryboardPreviewInput["skillFiles"];
+  stage?: AiStoryboardPromptStage;
+}) {
+  const files = Array.isArray(input.skillFiles) ? input.skillFiles : [];
+  if (files.length) {
+    return composePlazaSkillStageInstructions({
+      skillMarkdown: input.skillInstructions,
+      files,
+      stage: input.stage,
+    });
+  }
+  return String(input.skillInstructions ?? "").trim();
+}
+
 function hasPlazaSkillInstructions(input: AiStoryboardPreviewInput) {
-  return Boolean(String(input.skillInstructions ?? "").trim());
+  return Boolean(resolvePlazaSkillInstructionsForStage(input));
 }
 
 function buildScriptPrompt(input: AiStoryboardPreviewInput) {
@@ -2028,7 +2054,7 @@ function parseStandaloneAssetMarkdownTableRecords(raw: string, tableKey: string)
 
 function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record<string, unknown>[] {
   const config = tableKey === "scenes"
-    ? { labels: ["场景名称"], nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
+    ? { labels: ["场景名称", "场景名"], nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
     : tableKey === "characters"
       ? { labels: ["角色名称"], nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
       : tableKey === "props"
@@ -2055,10 +2081,11 @@ function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
-    const marker = matchLabeledAssetMarkdownHeading(normalizedLine, config.labels);
+    const marker = matchLabeledAssetMarkdownHeading(normalizedLine, config.labels)
+      ?? (tableKey === "scenes" ? matchBareSceneBracketHeading(normalizedLine) : null);
     if (marker) {
       flush();
-      name = text(marker[1]).replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").trim();
+      name = text(marker[1]).replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").replace(/^[:：]\s*/, "").trim();
       block.push(rawLine);
       continue;
     }
@@ -2082,8 +2109,22 @@ function matchLabeledAssetMarkdownHeading(line: string, labels: string[]) {
   return line.match(new RegExp(`^(?:(?:${escapedLabels})\\s*[:：]|(?:【|\\[)\\s*(?:${escapedLabels})\\s*(?:】|\\]))\\s*(.+)$`));
 }
 
+const RESERVED_ASSET_BRACKET_NAMES = "角色名称|场景名称|道具名称|场景名|角色名|道具名|分镜(?:\\s*[一二三四五六七八九十百千两零〇\\d]+)?|画幅构图|视觉风格|场景描述|环境类型|时间时刻|空间氛围|主要特征|正向提示词|负向提示词|画面构图|生图提示词|Prompt";
+
+function matchBareSceneBracketHeading(line: string) {
+  const match = line.match(/^(?:【|\[)\s*([^】\]]+?)\s*(?:】|\])\s*(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const name = text(match[1]).trim();
+  if (!name || name.startsWith("@") || new RegExp(`^(?:${RESERVED_ASSET_BRACKET_NAMES})$`, "iu").test(name)) {
+    return null;
+  }
+  return [match[0], name] as const;
+}
+
 function isLabeledProjectMarkdownHeading(line: string) {
-  return /^(?:(?:【|\[)\s*)?(?:角色名称|场景名称|道具名称|分镜\s*[一二三四五六七八九十百千两零〇\d]+)(?:\s*(?:】|\]))?(?:\s*[:：].*)?$/u.test(line);
+  return /^(?:(?:【|\[)\s*)?(?:角色名称|场景名称|道具名称|场景名|角色名|道具名|分镜(?:\s*[一二三四五六七八九十百千两零〇\d]+)?)(?:\s*(?:】|\]))?(?:\s*[:：].*)?$/u.test(line);
 }
 
 function normalizeLabeledAssetMarkdownLine(line: string) {
@@ -2221,10 +2262,10 @@ function parseLabeledStoryboardMarkdownBlocks(raw: string) {
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
-    const marker = normalizedLine.match(/^(?:【\s*分镜\s*([一二三四五六七八九十百千两零〇\d]+)\s*】|分镜\s*([一二三四五六七八九十百千两零〇\d]+))(?:\s*[:：-]?\s*(.*))?$/u);
+    const marker = normalizedLine.match(/^(?:【\s*分镜\s*([一二三四五六七八九十百千两零〇\d]*)\s*】|分镜\s*([一二三四五六七八九十百千两零〇\d]+))(?:\s*[:：-]?\s*(.*))?$/u);
     if (marker) {
       flush();
-      shotNo = marker[1] || marker[2] || "";
+      shotNo = marker[1] || marker[2] || String(records.length + 1);
       const inlineContent = text(marker[3]).trim();
       if (inlineContent) {
         block.push(inlineContent);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../shared/db/test-db.ts";
-import { createSkillPlazaService, resolvePlazaSkillWorkflowStages, SkillPlazaError } from "./skill-plaza.service.ts";
+import { composePlazaSkillStageInstructions, createSkillPlazaService, resolvePlazaSkillWorkflowStages, SkillPlazaError } from "./skill-plaza.service.ts";
 
 describe("skill plaza admin review", { concurrency: false }, () => {
   it("requires review comments for approve and reject, then exposes them on mine/detail", async () => {
@@ -409,6 +409,8 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       assert.equal(resolved.id, String(created.id));
       assert.equal(resolved.title, "短剧一键转分镜");
       assert.match(resolved.content, /按短剧节奏拆镜/);
+      assert.equal(resolved.files[0]?.name, "SKILL.md");
+      assert.match(resolved.files[0]?.content ?? "", /按短剧节奏拆镜/);
       assert.deepEqual(resolvePlazaSkillWorkflowStages([resolved], { skipScriptStage: true }), ["shot"]);
       const usage = await db.query<{ usage_count: number }>("SELECT usage_count FROM skills WHERE id = $1", [created.id]);
       assert.equal(Number(usage.rows[0]?.usage_count ?? 0), 1);
@@ -503,5 +505,53 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       summary: "一键生成工作流",
       outputContent: "场景、角色、道具和分镜表",
     }], { skipScriptStage: true }), ["scene", "character", "prop", "shot"]);
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "通用小说转剧本",
+      summary: "把小说转成剧本",
+      outputContent: "剧本文本",
+    }]), ["script"]);
+  });
+
+  it("filters only stage-named files and keeps unnamed user skill files on every stage", () => {
+    const files = [
+      { name: "SKILL.md", kind: "instruction", content: "# 小说转剧本流水线" },
+      { name: "references/script.md", kind: "instruction", content: "剧本改编规范" },
+      { name: "references/format-spec.md", kind: "instruction", content: "剧本格式规范" },
+      { name: "references/example.md", kind: "instruction", content: "剧本示例" },
+      { name: "references/qa-checklist.md", kind: "instruction", content: "剧本 QA" },
+      { name: "references/shot.md", kind: "instruction", content: "分镜手册 15秒 转场" },
+      { name: "references/character_extract.md", kind: "instruction", content: "角色三视图" },
+      { name: "scripts/validate_screenplay.md", kind: "instruction", content: "校验器正则 退出码" },
+      { name: "references/adaptation-workflow.md", kind: "instruction", content: "长篇改编工作流" },
+    ];
+    const script = composePlazaSkillStageInstructions({ files, stage: "script" });
+    assert.match(script, /小说转剧本流水线/);
+    assert.match(script, /剧本改编规范/);
+    assert.match(script, /剧本格式规范/);
+    assert.match(script, /长篇改编工作流/);
+    assert.doesNotMatch(script, /分镜手册 15秒 转场/);
+    assert.doesNotMatch(script, /角色三视图/);
+    assert.doesNotMatch(script, /校验器正则 退出码/);
+    const shot = composePlazaSkillStageInstructions({ files, stage: "shot" });
+    assert.match(shot, /小说转剧本流水线/);
+    assert.match(shot, /分镜手册 15秒 转场/);
+    assert.match(shot, /剧本格式规范/);
+    assert.match(shot, /长篇改编工作流/);
+    assert.doesNotMatch(shot, /剧本改编规范/);
+    assert.doesNotMatch(shot, /校验器正则 退出码/);
+    const unstaged = composePlazaSkillStageInstructions({ files });
+    assert.match(unstaged, /分镜手册 15秒 转场/);
+    assert.match(unstaged, /校验器正则 退出码/);
+    const userSkill = composePlazaSkillStageInstructions({
+      files: [
+        { name: "SKILL.md", kind: "instruction", content: "# 我的风格手册" },
+        { name: "语气要求.md", kind: "instruction", content: "对白要短" },
+        { name: "examples/demo.md", kind: "instruction", content: "示例段落" },
+      ],
+      stage: "script",
+    });
+    assert.match(userSkill, /我的风格手册/);
+    assert.match(userSkill, /对白要短/);
+    assert.match(userSkill, /示例段落/);
   });
 });

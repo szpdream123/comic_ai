@@ -419,6 +419,43 @@ describe("ai storyboard preview service", () => {
     assert.match(result.commitPayload.storyboards[1]?.videoPrompt ?? "", /【镜头2】全景逃跑/);
   });
 
+  it("splits bare scene brackets into named scene rows", async () => {
+    const gateway = new FakeTextGateway([
+      [
+        "## 场景",
+        "",
+        "【城墙根阴影处】",
+        "画幅构图：横向16:9电影级场景设定图，极高画质，纯净无人的空间。",
+        "视觉风格：影视概念设定图，写实细腻，极致细节。",
+        "正向提示词：不能出现其他人，无人，纯场景。",
+      ].join("\n"),
+      [
+        "| 角色名称 | 角色描述 |",
+        "| --- | --- |",
+        "| 任小野 | 清瘦少年 |",
+      ].join("\n"),
+      [
+        "| 道具名称 | 道具描述 |",
+        "| --- | --- |",
+        "| 切割刀 | 黑色短刀 |",
+      ].join("\n"),
+      [
+        "| 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |",
+        "| --- | --- | --- | --- |",
+        "| 任小野站在城墙根。 | 无台词 | 城墙阴影 | 低机位广角 |",
+      ].join("\n"),
+    ]);
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000012",
+      scriptText: "任小野站在城墙根阴影处。",
+      skipScriptStage: true,
+      packages: {},
+    });
+
+    assert.equal(result.commitPayload.scenes[0]?.sceneName, "城墙根阴影处");
+    assert.match(result.commitPayload.scenes[0]?.sceneDescription ?? "", /正向提示词/);
+  });
+
   it("skips the script generation stage when skipScriptStage is enabled", async () => {
     const gateway = new FakeTextGateway([
       JSON.stringify({
@@ -618,6 +655,50 @@ describe("ai storyboard preview service", () => {
     assert.match(gateway.calls[4]?.prompt ?? "", /^Skill 改编后的剧本。/);
     assert.match(gateway.calls[0]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is script only/);
     assert.match(gateway.calls[4]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is storyboard generation only/);
+  });
+
+  it("loads only current-stage plaza skill files instead of the full handbook", async () => {
+    const gateway = new FakeTextGateway([
+      "Skill 改编后的剧本。",
+      JSON.stringify({ scenes: [{ sceneName: "闵婶家门前" }] }),
+      JSON.stringify({ characters: [{ characterName: "任小野" }] }),
+      JSON.stringify({ props: [{ propName: "饭食" }] }),
+      JSON.stringify({ storyboards: [{ shotNo: 1, plot: "递出饭食" }] }),
+    ]);
+    const service = createAiStoryboardPreviewService({ gateway });
+    const skillFiles = [
+      { name: "SKILL.md", kind: "instruction", content: "# SKILL.md\n按短剧节奏拆镜。" },
+      { name: "references/script.md", kind: "instruction", content: "剧本改编规范" },
+      { name: "references/shot.md", kind: "instruction", content: "分镜手册 15秒 转场 资产对照表" },
+      { name: "scripts/validate_screenplay.md", kind: "instruction", content: "校验器正则 退出码 JSON" },
+    ];
+
+    await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000027",
+      scriptText: "小说原文。",
+      modelCode: "selected-text-model",
+      skillInstructions: "# SKILL.md\n按短剧节奏拆镜。\n分镜手册 15秒 转场 资产对照表\n校验器正则 退出码 JSON",
+      skillFiles,
+      packages: {},
+      templates: {
+        scenePrompt: "场景模板",
+        characterPrompt: "人物模板",
+        propPrompt: "道具模板",
+        shotPrompt: "分镜模板",
+      },
+    });
+
+    assert.equal(gateway.calls.length, 5);
+    const scriptSystem = gateway.calls[0]?.messages?.find((message) => message.role === "system")?.content ?? "";
+    assert.match(scriptSystem, /Current stage is script only/);
+    assert.match(scriptSystem, /剧本改编规范/);
+    assert.doesNotMatch(scriptSystem, /分镜手册 15秒 转场 资产对照表/);
+    assert.doesNotMatch(scriptSystem, /校验器正则 退出码 JSON/);
+    const shotSystem = gateway.calls[4]?.messages?.find((message) => message.role === "system")?.content ?? "";
+    assert.match(shotSystem, /Current stage is storyboard generation only/);
+    assert.match(shotSystem, /分镜手册 15秒 转场 资产对照表/);
+    assert.doesNotMatch(shotSystem, /剧本改编规范/);
+    assert.doesNotMatch(shotSystem, /校验器正则 退出码 JSON/);
   });
 
   it("keeps the skill-parsed plaza result without a canonicalizer rewrite", async () => {
@@ -928,6 +1009,32 @@ describe("ai storyboard preview service", () => {
     assert.equal(result.commitPayload.props[0]?.propName, "切割刀");
     assert.equal(result.commitPayload.storyboards.length, 1);
     assert.match(result.commitPayload.storyboards[0]?.plot ?? "", /白玫鬼来到/);
+  });
+
+  it("splits unnumbered format-card storyboard markers into shots", async () => {
+    const gateway = new FakeTextGateway([[
+      "【角色名称】白纹鬼",
+      "白衣剑客。",
+      "【场景名称】黄昏尸骸战场",
+      "暮色中的荒凉战场。",
+      "【道具名称】切割刀",
+      "刀刃有明显缺口。",
+      "【分镜】一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人。",
+    ].join("\n")]);
+
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000024",
+      scriptText: "白纹鬼来到黄昏尸骸战场。",
+      skipScriptStage: true,
+      selectedStages: ["shot"],
+      packages: {},
+    });
+
+    assert.equal(result.commitPayload.characters[0]?.characterName, "白纹鬼");
+    assert.equal(result.commitPayload.scenes[0]?.sceneName, "黄昏尸骸战场");
+    assert.equal(result.commitPayload.props[0]?.propName, "切割刀");
+    assert.equal(result.commitPayload.storyboards.length, 1);
+    assert.match(result.commitPayload.storyboards[0]?.plot ?? "", /一只【@白纹鬼】/);
   });
 
   it("streams raw DeepSeek output before returning the final parsed preview", async () => {

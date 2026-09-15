@@ -89,6 +89,71 @@ function collectPlazaWorkflowStagesFromFileName(fileName: string, collected: Set
   if (/(?:^|\/)(?:shot|storyboard)s?(?:[-_.]|$)/.test(name) || name.includes("分镜") || name.includes("拆镜")) collected.add("shot");
 }
 
+export type PlazaSkillInstructionFile = {
+  name?: string | null;
+  fileName?: string | null;
+  kind?: string | null;
+  content?: string | null;
+};
+
+export type PlazaSkillFileLoadStage = PlazaWorkflowStage | "shared" | "deferred";
+
+function plazaSkillFileBaseName(fileName: string) {
+  return String(fileName ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+}
+
+function isPlazaSkillToolFile(fileName: string) {
+  return /(?:^|\/)scripts\//i.test(String(fileName ?? "").replace(/\\/g, "/"));
+}
+
+export function resolvePlazaSkillFileLoadStage(fileName: string): PlazaSkillFileLoadStage {
+  const name = String(fileName ?? "").replace(/\\/g, "/").trim();
+  const base = plazaSkillFileBaseName(name);
+  if (!name) return "shared";
+  if (base === "skill.md") return "shared";
+  if (isPlazaSkillToolFile(name)) return "deferred";
+  const collected = new Set<PlazaWorkflowStage>();
+  collectPlazaWorkflowStagesFromFileName(name, collected);
+  if (collected.size === 1) return [...collected][0]!;
+  if (collected.size > 1) {
+    return plazaWorkflowStages.find((stage) => stage !== "script" && collected.has(stage)) ?? [...collected][0]!;
+  }
+  return "shared";
+}
+
+export function composePlazaSkillStageInstructions(input: {
+  skillMarkdown?: string | null;
+  files?: PlazaSkillInstructionFile[] | null;
+  stage?: string | null;
+}) {
+  const files = Array.isArray(input.files) ? input.files : [];
+  const stage = plazaWorkflowStages.includes(input.stage as PlazaWorkflowStage)
+    ? input.stage as PlazaWorkflowStage
+    : null;
+  const skillMd = files.find((file) => plazaSkillFileBaseName(String(file.name ?? file.fileName ?? "")) === "skill.md");
+  const skillMarkdown = String(skillMd ? skillMd.content ?? "" : input.skillMarkdown ?? "").trim();
+  if (!files.length) return skillMarkdown;
+  const instructionFiles = files
+    .filter((file) => file !== skillMd)
+    .filter((file) => {
+      const kind = String(file.kind ?? "instruction").trim() || "instruction";
+      const name = String(file.name ?? file.fileName ?? "").trim();
+      if (!(kind === "instruction" || name.toLowerCase().endsWith(".md"))) return false;
+      const loadStage = resolvePlazaSkillFileLoadStage(name);
+      if (!stage) return true;
+      if (loadStage === "deferred") return false;
+      if (loadStage === "shared") return true;
+      return loadStage === stage;
+    })
+    .map((file) => {
+      const name = String(file.name ?? file.fileName ?? "").trim();
+      const body = String(file.content ?? "").trim();
+      return body ? (name ? `【${name}】\n${body}` : body) : "";
+    })
+    .filter(Boolean);
+  return [skillMarkdown, ...instructionFiles].filter(Boolean).join("\n\n");
+}
+
 export function resolvePlazaSkillWorkflowStages(
   skills: Array<{
     title?: string | null;
@@ -528,18 +593,10 @@ export function createSkillPlazaService(deps: {
     const hydrated = await hydrateSkillDetail(row, input.userId, { forceFiles: true });
     const files = Array.isArray(hydrated.files) ? hydrated.files : [];
     const skillMd = files.find((file) => String(file.name ?? file.fileName ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() === "skill.md");
-    const instructionFiles = files
-      .filter((file) => file !== skillMd && (file.kind === "instruction" || String(file.name ?? "").toLowerCase().endsWith(".md")))
-      .map((file) => {
-        const name = String(file.name ?? file.fileName ?? "").trim();
-        const body = String(file.content ?? "").trim();
-        return body ? (name ? `【${name}】\n${body}` : body) : "";
-      })
-      .filter(Boolean);
-    const content = [
-      String(skillMd?.content ?? hydrated.skill.detail?.introduction ?? "").trim(),
-      ...instructionFiles,
-    ].filter(Boolean).join("\n\n");
+    const content = composePlazaSkillStageInstructions({
+      skillMarkdown: String(skillMd?.content ?? hydrated.skill.detail?.introduction ?? "").trim(),
+      files,
+    });
     await deps.db.query("UPDATE skills SET usage_count = usage_count + 1, updated_at = $2 WHERE id = $1", [row.id, input.now ?? new Date()]);
     await deps.db.query("UPDATE skill_library SET last_used_at = $3 WHERE skill_id = $1 AND user_id = $2", [row.id, input.userId, input.now ?? new Date()]);
     return {
@@ -552,6 +609,7 @@ export function createSkillPlazaService(deps: {
       files: files.map((file) => ({
         name: String(file.name ?? file.fileName ?? ""),
         kind: String(file.kind ?? "instruction"),
+        content: String(file.content ?? ""),
       })),
       content,
       official: row.owner_user_id == null,

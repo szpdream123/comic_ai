@@ -4889,6 +4889,7 @@
 
 .canvas-stage.is-x6-ready .canvas-x6-special-node :is(input, textarea, select, [contenteditable="true"]):not(:focus),
 .canvas-stage.is-x6-ready.is-node-dragging .canvas-x6-special-node :is(input, textarea, select, [contenteditable="true"]),
+.canvas-stage.is-x6-ready .canvas-x6-mount.is-node-dragging .canvas-x6-special-node :is(input, textarea, select, [contenteditable="true"]),
 .canvas-stage.is-x6-ready.is-panning .canvas-x6-special-node :is(input, textarea, select, [contenteditable="true"]),
 .canvas-stage.is-x6-ready.is-zoomed-out .canvas-x6-special-node :is(input, textarea, select, [contenteditable="true"]):not(:focus) {
   transform: none;
@@ -6838,21 +6839,50 @@
 }
 
 .new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-special-node,
-.new-canvas-root .canvas-stage.is-node-dragging .canvas-x6-special-node {
+.new-canvas-root .canvas-stage.is-node-dragging .canvas-x6-special-node,
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging .canvas-x6-special-node {
   contain: layout paint;
   box-shadow: none;
 }
 
-.new-canvas-root .canvas-stage.is-node-dragging .canvas-x6-special-node * {
-  pointer-events: none !important;
-}
-
 .new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-edge,
-.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .canvas-x6-special-node :is(img, video, iframe, canvas) {
+.new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-mount.is-node-dragging .x6-edge,
+.new-canvas-root .canvas-x6-mount.is-zoomed-out.is-node-dragging .x6-edge {
   visibility: hidden;
 }
 
-.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-node-selected.is-canvas-node-flowing .canvas-x6-special-node::after {
+.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-node foreignObject,
+.new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-mount.is-node-dragging .x6-node foreignObject,
+.new-canvas-root .canvas-x6-mount.is-zoomed-out.is-node-dragging .x6-node foreignObject {
+  opacity: 0;
+  pointer-events: auto;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+}
+
+.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-node .canvas-x6-special-node,
+.new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-mount.is-node-dragging .x6-node .canvas-x6-special-node,
+.new-canvas-root .canvas-x6-mount.is-zoomed-out.is-node-dragging .x6-node .canvas-x6-special-node {
+  visibility: hidden;
+}
+
+.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-node rect,
+.new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-mount.is-node-dragging .x6-node rect,
+.new-canvas-root .canvas-x6-mount.is-zoomed-out.is-node-dragging .x6-node rect {
+  fill: #121719;
+  stroke: #334047;
+  filter: none;
+}
+
+.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-node-selected rect,
+.new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-mount.is-node-dragging .x6-node-selected rect,
+.new-canvas-root .canvas-x6-mount.is-zoomed-out.is-node-dragging .x6-node-selected rect {
+  stroke: #5ec7ff;
+}
+
+.new-canvas-root .canvas-stage.is-zoomed-out.is-node-dragging .x6-node-selected.is-canvas-node-flowing .canvas-x6-special-node::after,
+.new-canvas-root .canvas-stage.is-zoomed-out .canvas-x6-mount.is-node-dragging .x6-node-selected.is-canvas-node-flowing .canvas-x6-special-node::after {
   animation: none;
 }
 
@@ -6862,23 +6892,30 @@
 }
 
 .new-canvas-root .canvas-stage.is-node-dragging [data-canvas-node-action-toolbar],
+.new-canvas-root .canvas-x6-mount.is-node-dragging [data-canvas-node-action-toolbar],
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging [data-canvas-node-action-toolbar],
 .new-canvas-root .canvas-stage.is-node-dragging [data-canvas-selection-action-toolbar],
-.new-canvas-root .canvas-stage.is-node-dragging [data-canvas-distribution-gap] {
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging [data-canvas-selection-action-toolbar],
+.new-canvas-root .canvas-stage.is-node-dragging [data-canvas-distribution-gap],
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging [data-canvas-distribution-gap] {
   visibility: hidden;
   pointer-events: none;
 }
 
-.new-canvas-root .canvas-stage.is-node-dragging .x6-node-selected .canvas-x6-special-node::after {
+.new-canvas-root .canvas-stage.is-node-dragging .x6-node-selected .canvas-x6-special-node::after,
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging .x6-node-selected .canvas-x6-special-node::after {
   animation: none;
   opacity: .45;
 }
 
-.new-canvas-root .canvas-stage.is-node-dragging .x6-node-selected.is-canvas-node-flowing .canvas-x6-special-node::after {
+.new-canvas-root .canvas-stage.is-node-dragging .x6-node-selected.is-canvas-node-flowing .canvas-x6-special-node::after,
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging .x6-node-selected.is-canvas-node-flowing .canvas-x6-special-node::after {
   animation: canvas-x6-selected-border-flow 1.2s linear infinite;
   opacity: .78;
 }
 
-.new-canvas-root .canvas-stage.is-node-dragging .x6-node[data-cell-id="__comic-ai-canvas-editor-overlay__"] {
+.new-canvas-root .canvas-stage.is-node-dragging .x6-node[data-cell-id="__comic-ai-canvas-editor-overlay__"],
+.new-canvas-root .canvas-stage .canvas-x6-mount.is-node-dragging .x6-node[data-cell-id="__comic-ai-canvas-editor-overlay__"] {
   visibility: hidden;
 }
 

@@ -265,7 +265,8 @@ test("home workflow submission starts the AI storyboard modal instead of parsing
   assert.doesNotMatch(workflowSubmit, /parseScript\(/);
   assert.doesNotMatch(workflowSubmit, /enterEpisodeWorkbench\(/);
   assert.match(source, /isManualScriptAnalysis \|\| isHomeWorkflowAnalysis/);
-  assert.match(source, /skipScriptStage: true/);
+  assert.match(source, /homeSkipScriptStage = Boolean\(isHomeWorkflowAnalysis && !plazaWorkflowStages\.includes\("script"\)\)/);
+  assert.match(source, /homeSkipScriptStage \? \{ skipScriptStage: true \} : \{\}/);
   assert.match(source, /selectedStages: isHomeWorkflowAnalysis \? homeWorkflowStages : null/);
   assert.match(source, /activeStage: isHomeWorkflowAnalysis[\s\S]*homeWorkflowStages\?\.\[0\]/);
   assert.doesNotMatch(source, /selectedStages: isHomeWorkflowAnalysis \? \["scene", "character", "prop", "shot"\]/);

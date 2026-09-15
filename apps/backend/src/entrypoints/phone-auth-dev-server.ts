@@ -34510,7 +34510,7 @@ export function createPhoneAuthDevServer(
           }
           const plazaSkillContent = plazaSkills.map((item) => String(item.content ?? "").trim()).filter(Boolean).join("\n\n");
           const plazaSkillStages = usesPlazaSkill
-            ? resolvePlazaSkillWorkflowStages(plazaSkills, { skipScriptStage })
+            ? resolvePlazaSkillWorkflowStages(plazaSkills)
             : [];
           const plazaSelectedStages = requestedStages.length
             ? requestedStages as Array<"script" | "scene" | "character" | "prop" | "shot">
@@ -34518,8 +34518,11 @@ export function createPhoneAuthDevServer(
           if (usesPlazaSkill && !plazaSelectedStages.length) {
             return writeJson(response, envelopedError(400, "workflow_plaza_skill_stage_unresolved", "当前 Skill 未声明可执行的工作流阶段"));
           }
+          const plazaSkipScriptStage = usesPlazaSkill
+            ? !plazaSelectedStages.includes("script")
+            : skipScriptStage;
           const workflowResolvedIntent = resolvedIntent ?? (usesPlazaSkill
-            ? { stages: plazaSelectedStages, skipScriptStage }
+            ? { stages: plazaSelectedStages, skipScriptStage: plazaSkipScriptStage }
             : null);
           const usesDefaultComicPipeline = usesLegacyPackages || (useDefaultWorkflowStages && !usesPlazaSkill);
           const needsDefaultTemplates = usesDefaultComicPipeline;
@@ -34662,13 +34665,14 @@ export function createPhoneAuthDevServer(
                     : item.category === "prop_extract"
                       ? "prop"
                       : item.category) as Array<"script" | "scene" | "character" | "prop" | "shot">,
-            skipScriptStage,
+            skipScriptStage: plazaSkipScriptStage,
             context: {
               scenes: Array.isArray(body.context?.scenes) ? body.context.scenes.slice(0, 500) : [],
               characters: Array.isArray(body.context?.characters) ? body.context.characters.slice(0, 500) : [],
               props: Array.isArray(body.context?.props) ? body.context.props.slice(0, 500) : [],
             },
             skillInstructions: plazaSkillContent || null,
+            skillFiles: plazaSkills.flatMap((item) => Array.isArray(item.files) ? item.files : []),
             packages: usesPlazaSkill
               ? {
                   skillPrompt: "",

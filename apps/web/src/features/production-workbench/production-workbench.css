@@ -6088,6 +6088,43 @@
     linear-gradient(135deg, oklch(18% 0.02 255), oklch(28% 0.07 285));
 }
 
+.project-gallery-card .project-gallery-poster {
+  background: transparent;
+}
+
+.project-gallery-mark {
+  display: grid;
+  place-items: center;
+  transition: transform 160ms ease;
+}
+
+.project-gallery-mark-icon {
+  display: grid;
+  width: clamp(2.45rem, 2.7vw, 3rem);
+  height: clamp(2.45rem, 2.7vw, 3rem);
+  place-items: center;
+  border-radius: 0.45rem;
+  background:
+    radial-gradient(circle at 72% 24%, rgba(205, 202, 255, 0.85) 0 0.18rem, transparent 0.2rem),
+    linear-gradient(145deg, rgba(151, 131, 166, 0.78), rgba(61, 63, 90, 0.92));
+  color: rgba(230, 232, 255, 0.74);
+  box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.28);
+}
+
+.project-gallery-mark-icon svg {
+  width: clamp(1.18rem, 1.35vw, 1.45rem);
+  height: clamp(1.18rem, 1.35vw, 1.45rem);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.project-gallery-card:hover .project-gallery-mark {
+  transform: translateY(-0.18rem);
+}
+
 .project-gallery-cover {
   position: absolute;
   inset: 0;
@@ -8298,6 +8335,7 @@
   bottom: 0;
   z-index: 1;
   margin-top: auto;
+  padding-bottom: 0.35rem;
 }
 
 .canvas-project-card {
@@ -8385,7 +8423,9 @@
 .canvas-project-play svg {
   width: clamp(1.18rem, 1.35vw, 1.45rem);
   height: clamp(1.18rem, 1.35vw, 1.45rem);
-  stroke-width: 1.7;
+  fill: currentColor;
+  stroke: none;
+  stroke-width: 0;
 }
 
 .canvas-project-card-copy {
@@ -8560,7 +8600,7 @@
   box-shadow:
     0 1rem 2.6rem rgba(104, 71, 255, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
 }
 
 .canvas-create-project-button svg {
@@ -17763,10 +17803,12 @@
 }
 
 .episode-card-preview.project-gallery-poster {
-  background:
-    radial-gradient(circle at 30% 30%, oklch(70% 0.12 260 / 0.18), transparent 8rem),
-    radial-gradient(circle at 70% 65%, oklch(68% 0.14 300 / 0.14), transparent 10rem),
-    linear-gradient(135deg, oklch(18% 0.02 255), oklch(28% 0.07 285));
+  background: transparent;
+}
+
+.episode-library-card:hover .project-gallery-mark,
+.home-project-episode-option:hover .project-gallery-mark {
+  transform: translateY(-0.18rem);
 }
 
 .episode-card-preview img,
@@ -40534,6 +40576,7 @@ button.asset-generator-task-preview:focus-visible {
 }
 
 .workbench-body .canvas-project-play,
+.workbench-body .project-gallery-mark-icon,
 .workbench-body .asset-toolbar-button__icon {
   background:
     radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.22), transparent 58%),
@@ -40600,6 +40643,12 @@ button.asset-generator-task-preview:focus-visible {
     radial-gradient(circle at 28% 26%, var(--theme-accent-soft), transparent 10rem),
     radial-gradient(circle at 72% 66%, var(--theme-accent-soft), transparent 12rem),
     var(--theme-surface-background);
+}
+
+.workbench-body .project-gallery-card .project-gallery-poster,
+.workbench-body .episode-card-preview.project-gallery-poster,
+.workbench-body .home-project-episode-option-cover.project-gallery-poster {
+  background: transparent;
 }
 
 .workbench-body[data-workbench-theme="daylight"] .project-gallery-meta {
@@ -42193,6 +42242,8 @@ button.asset-generator-task-preview:focus-visible {
 .skill-plaza-tabs button { min-height: 2.55rem; padding: 0 .25rem; border: 0; color: var(--theme-text-muted, rgba(255,255,255,.45)); background: transparent; font: inherit; font-size: 1.05rem; cursor: pointer; }
 .skill-plaza-tabs button.active { color: var(--theme-control-active-text, var(--theme-text-primary)); font-weight: 700; }
 .skill-plaza-tabs button:disabled { cursor: default; }
+.skill-plaza-tabs button.prompt-marketplace-guide-trigger { display: inline-flex; min-height: 2rem; align-self: center; align-items: center; gap: 0.42rem; margin-left: 0.25rem; padding: 0 0.7rem; border: 1px solid var(--theme-control-border); border-radius: 0.45rem; background: var(--theme-control-background); color: var(--theme-text-muted); font-size: 0.74rem; font-weight: 650; }
+.skill-plaza-tabs button.prompt-marketplace-guide-trigger:hover { border-color: var(--theme-control-active-border); background: var(--theme-control-active-background); color: var(--theme-control-active-text, var(--theme-text-primary)); }
 .skill-plaza-search { display: flex; width: auto; min-width: 0; flex: 1 1 auto; align-items: center; gap: .65rem; min-height: 3.35rem; padding: .72rem 1.15rem; border: 1px solid var(--theme-control-border); border-radius: 999px; color: var(--theme-text-muted); background: color-mix(in srgb, var(--theme-surface-background) 90%, #fff 4%); font-size: .95rem; }
 .skill-plaza-search input { min-width: 0; flex: 1; border: 0; outline: 0; color: inherit; background: transparent; font: inherit; }
 .skill-plaza-header-actions > button { min-width: 9.4rem; min-height: 3.35rem; padding: 0 1.45rem; border: 1px solid var(--theme-control-active-border); border-radius: 6px; color: var(--theme-control-active-text, #fff); background: var(--theme-control-active-background); font: inherit; font-size: .95rem; font-weight: 800; white-space: nowrap; cursor: pointer; }
@@ -43513,6 +43564,41 @@ button.asset-generator-task-preview:focus-visible {
   line-height: 1.65;
 }
 
+.prompt-marketplace-guide-notes {
+  margin: 1rem 0 0;
+  padding: 0.85rem 0.95rem 0.85rem 1.7rem;
+  border: 1px solid color-mix(in srgb, var(--theme-accent-icon) 48%, var(--theme-control-border));
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--theme-accent-icon) 16%, #141a21);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.7;
+}
+
+.prompt-marketplace-guide-notes li + li {
+  margin-top: 0.38rem;
+}
+
+.prompt-marketplace-guide-notes strong,
+.prompt-marketplace-guide-notes code,
+.prompt-marketplace-guide-notes mark {
+  color: #efe7ff;
+  font-weight: 750;
+}
+
+.prompt-marketplace-guide-notes code,
+.prompt-marketplace-guide-notes mark {
+  padding: 0.05rem 0.32rem;
+  border-radius: 0.28rem;
+  background: color-mix(in srgb, var(--theme-accent-icon) 28%, transparent);
+}
+
+.prompt-marketplace-guide-notes mark {
+  color: #fff6c8;
+  background: color-mix(in srgb, #f5c84b 38%, transparent);
+}
+
 .prompt-marketplace-guide > section > header button {
   display: inline-grid;
   width: 2rem;
@@ -43524,11 +43610,38 @@ button.asset-generator-task-preview:focus-visible {
   font-size: 1.2rem;
 }
 
+.prompt-marketplace-guide-workflow {
+  margin-top: 1rem;
+}
+
+.prompt-marketplace-guide-workflow > header {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+  justify-items: center;
+  text-align: center;
+}
+
+.prompt-marketplace-guide-workflow > header span {
+  color: var(--theme-accent-icon);
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+}
+
+.prompt-marketplace-guide-workflow > header h3 {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 1.12rem;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
 .prompt-marketplace-guide-rules {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
-  padding: 1rem 0;
+  padding: 0.75rem 0 1rem;
 }
 
 .prompt-marketplace-guide-rules article {
@@ -43580,56 +43693,6 @@ button.asset-generator-task-preview:focus-visible {
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.72rem;
   line-height: 1.55;
-}
-
-.prompt-marketplace-guide-shot-sizes {
-  margin-bottom: 1rem;
-  padding: 0.85rem;
-  border: 1px solid var(--theme-control-border);
-  border-radius: 0.55rem;
-  background: color-mix(in srgb, var(--theme-control-background) 82%, transparent);
-}
-
-.prompt-marketplace-guide-shot-sizes > header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.75rem;
-}
-
-.prompt-marketplace-guide-shot-sizes > header > div {
-  display: grid;
-  gap: 0.3rem;
-}
-
-.prompt-marketplace-guide-shot-sizes > header strong {
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 0.84rem;
-}
-
-.prompt-marketplace-guide-shot-sizes > header p {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.48);
-  font-size: 0.72rem;
-}
-
-.prompt-marketplace-guide-shot-sizes > div {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0.45rem;
-}
-
-.prompt-marketplace-guide-shot-sizes > div > span {
-  display: grid;
-  min-height: 2rem;
-  place-items: center;
-  padding: 0.3rem;
-  border: 1px solid var(--theme-control-border);
-  border-radius: 0.38rem;
-  background: rgba(255, 255, 255, 0.035);
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 0.73rem;
 }
 
 .prompt-marketplace-guide-example {
@@ -43801,10 +43864,6 @@ button.asset-generator-task-preview:focus-visible {
 
   .prompt-marketplace-guide-rules {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .prompt-marketplace-guide-shot-sizes > div {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .prompt-publish-submit {
@@ -44082,6 +44141,7 @@ button.asset-generator-task-preview:focus-visible {
   .episode-library-asset-card.is-selected .episode-library-asset-check,
   .asset-toolbar-button__icon,
   .canvas-project-play,
+  .project-gallery-mark-icon,
   .canvas-create-project-button,
   .canvas-generate-button,
   .canvas-send-button,
@@ -46148,7 +46208,8 @@ button.asset-generator-task-preview:focus-visible {
   color: #9aabba;
 }
 
-.workbench-body[data-workbench-theme="daylight"] .canvas-project-play {
+.workbench-body[data-workbench-theme="daylight"] .canvas-project-play,
+.workbench-body[data-workbench-theme="daylight"] .project-gallery-mark-icon {
   background:
     radial-gradient(circle at 72% 24%, rgba(255, 255, 255, 0.78) 0 0.18rem, transparent 0.2rem),
     var(--theme-accent-gradient);
@@ -46156,8 +46217,18 @@ button.asset-generator-task-preview:focus-visible {
   box-shadow: 0 0.95rem 1.9rem rgba(42, 151, 224, 0.18);
 }
 
-.workbench-body[data-workbench-theme="daylight"] .canvas-project-play svg {
+.workbench-body[data-workbench-theme="daylight"] .canvas-project-play svg,
+.workbench-body[data-workbench-theme="daylight"] .project-gallery-mark-icon svg {
   color: currentColor;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .canvas-project-play svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .project-gallery-mark-icon svg {
+  fill: none;
   stroke: currentColor;
 }
 
@@ -46833,6 +46904,8 @@ button.asset-generator-task-preview:focus-visible {
   .gallery-create-button *,
   .canvas-project-play,
   .canvas-project-play *,
+  .project-gallery-mark-icon,
+  .project-gallery-mark-icon *,
   .canvas-create-project-button,
   .canvas-create-project-button *,
   .canvas-generate-button,
@@ -46877,6 +46950,7 @@ button.asset-generator-task-preview:focus-visible {
   .upload-confirm-button,
   .gallery-create-button,
   .canvas-project-play,
+  .project-gallery-mark-icon,
   .canvas-create-project-button,
   .canvas-generate-button,
   .canvas-send-button,
@@ -46906,7 +46980,7 @@ button.asset-generator-task-preview:focus-visible {
   .rename-save-button svg,
   .upload-confirm-button svg,
   .gallery-create-button svg,
-  .canvas-project-play svg,
+  .project-gallery-mark-icon svg,
   .canvas-create-project-button svg,
   .canvas-generate-button svg,
   .canvas-send-button svg,
@@ -46918,6 +46992,12 @@ button.asset-generator-task-preview:focus-visible {
 ) {
   color: currentColor;
   stroke: currentColor;
+}
+
+.workbench-body[data-workbench-theme="daylight"] :where(.canvas-project-play svg) {
+  color: currentColor;
+  fill: currentColor;
+  stroke: none;
 }
 
 .workbench-body[data-workbench-theme="daylight"] :where(
@@ -47182,6 +47262,7 @@ button.asset-generator-task-preview:focus-visible {
   .upload-confirm-button,
   .gallery-create-button,
   .canvas-project-play,
+  .project-gallery-mark-icon,
   .canvas-create-project-button,
   .canvas-generate-button,
   .canvas-send-button,
@@ -47215,6 +47296,7 @@ button.asset-generator-task-preview:focus-visible {
   .upload-confirm-button,
   .gallery-create-button,
   .canvas-project-play,
+  .project-gallery-mark-icon,
   .canvas-create-project-button,
   .canvas-generate-button,
   .canvas-send-button,

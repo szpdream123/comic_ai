@@ -84,7 +84,7 @@ test("prompt marketplace combines catalog and private library without a publish 
   assert.doesNotMatch(html, /prompt-marketplace-default-badge">默认/);
   assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="prompts"/);
   assert.ok(html.indexOf('data-action="set-prompt-plaza-type"') < html.indexOf("data-prompt-plaza-search-input"));
-  assert.match(html, /data-action="open-prompt-marketplace-guide"/);
+  assert.doesNotMatch(html, /data-action="open-prompt-marketplace-guide"/);
 });
 
 test("prompt marketplace guide explains required prefixes and shows at-prefixed references", async () => {
@@ -92,23 +92,27 @@ test("prompt marketplace guide explains required prefixes and shows at-prefixed 
     state: {},
     session: { user: { phone: "13800138000" } },
     ui: {
-      activeNavTab: "prompts",
-      promptPlazaSection: "marketplace",
+      activeNavTab: "skills",
+      skillPlazaSection: "catalog",
       promptMarketplaceGuideOpen: true,
-      promptMarketplaceItems: [],
-      promptMarketplaceRankings: [],
-      promptMarketplaceMeta: { page: 1, pageSize: 12, total: 0, totalPages: 1, hasNext: false },
     },
   });
 
   assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title"/);
+  assert.match(html, /SKILL开发说明/);
+  assert.match(html, /class="prompt-marketplace-guide-notes"/);
+  assert.match(html, /项目工作流分类中生成必须以对应的<strong>名称标记<\/strong>开头；/);
+  assert.match(html, /其它形式的 skill 不限，但必须以一个 <code>skill.md<\/code> 总入口进行。/);
+  assert.match(html, /skill 目前最多支持 <mark>50个文件<\/mark>、如有其它需求请联系客服。/);
+  assert.match(html, /skill 目前<strong>不支持脚本<\/strong>。上传到广场需客服审核、个人使用不受限制。/);
+  assert.match(html, /<h3>项目工作流格式要求<\/h3>/);
   assert.match(html, /【角色名称】角色名/);
   assert.match(html, /【道具名称】道具名/);
   assert.match(html, /【场景名称】场景名/);
   assert.match(html, /【分镜】分镜内容/);
-  assert.match(html, /aria-label="镜头运行方式"/);
-  assert.match(html, /大远景.*远景.*全景.*中远景.*中景.*中近景.*近景.*特写.*大特写.*头肩景.*半身景.*全身景/);
-  assert.match(html, /角色名称：白纹鬼\n场景名称:黄昏尸骸战场\n道具名称：切割刀\n分镜1：一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人/);
+  assert.doesNotMatch(html, /镜头运行方式/);
+  assert.doesNotMatch(html, /SHOT SIZE/);
+  assert.match(html, /【角色名称】白纹鬼\n【场景名称】黄昏尸骸战场\n【道具名称】切割刀\n【分镜】一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人/);
   assert.match(html, /data-action="close-prompt-marketplace-guide"/);
 
   const workbench = {
@@ -117,8 +121,8 @@ test("prompt marketplace guide explains required prefixes and shows at-prefixed 
     session: { user: { phone: "13800138000" } },
     api: {},
     ui: {
-      activeNavTab: "prompts",
-      promptPlazaSection: "marketplace",
+      activeNavTab: "skills",
+      skillPlazaSection: "catalog",
       promptMarketplaceItems: [],
       promptMarketplaceRankings: [],
       promptMarketplaceMeta: { page: 1, pageSize: 12, total: 0, totalPages: 1, hasNext: false },

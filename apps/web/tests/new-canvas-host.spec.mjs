@@ -1836,6 +1836,7 @@ test("new Canvas forwards the injected runtime bridge, creator API, document, an
   assert.match(mountSync, /syncDocument: async \(document, metadata = \{\}\)/);
   assert.match(mountSync, /workbench\.updateCanvasDocument\(document/);
   assert.match(mountSync, /immediateSave:\s*metadata\.immediateSave === true/);
+  assert.match(mountSync, /metadata\.nodeDragActive/);
   assert.doesNotMatch(mountSync, /CANVAS_VIEWPORT_SAVE_DELAY_MS/);
   assert.doesNotMatch(mountSync, /await workbench\.saveCanvasNow\(\)/);
 });

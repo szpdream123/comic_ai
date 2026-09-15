@@ -358,8 +358,18 @@ async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, depe
       rowsFromPayload(payload, ["models", "items"]).map((model) => ({ ...model, mediaType: model?.mediaType ?? mediaType }))
     ))
     : [];
+  const models = [];
+  const seenModelKeys = new Set();
+  for (const model of [...modelRows, ...generationRows]) {
+    const normalized = normalizeAiCanvasRuntimeModel(model, model.mediaType ?? model.media_type ?? model.mediaKind ?? "text");
+    if (!normalized) continue;
+    const key = `${normalized.category}:${normalized.modelCode}`;
+    if (seenModelKeys.has(key)) continue;
+    seenModelKeys.add(key);
+    models.push(normalized);
+  }
   return {
-    models: [...modelRows, ...generationRows].map((model) => normalizeAiCanvasRuntimeModel(model, model.mediaType ?? model.media_type ?? model.mediaKind ?? "text")).filter(Boolean),
+    models,
     skills: skillRows.map(normalizeAiCanvasRuntimeSkill).filter(Boolean),
   };
 }

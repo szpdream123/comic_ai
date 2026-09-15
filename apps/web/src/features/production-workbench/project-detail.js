@@ -4000,25 +4000,13 @@ function renderEpisodeHub({ episodes = [], ui }) {
 
 function renderEpisodeHubCard(episode, ui) {
   const isMenuOpen = ui.episodeCardMenuId === episode.id;
-  const coverInputId = `episode-cover-input-${String(episode.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const hasCover = Boolean(
-    episode.coverImageUrl ??
-    episode.cover_image_url ??
-    episode.coverStorageObjectId ??
-    episode.cover_storage_object_id,
-  );
-  const coverSrc = getEpisodeCoverSrc(episode);
   return `
     <article class="episode-card episode-library-card" data-action="open-episode-workbench" data-episode-id="${escapeHtml(episode.id)}">
-      <div class="episode-card-preview project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}" aria-label="${escapeAttr(episode.title)}封面">
-        <label class="project-cover-placeholder" for="${escapeAttr(coverInputId)}" data-action="pick-episode-cover" data-episode-id="${escapeAttr(episode.id)}">
-          <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
-          <strong>上传封面</strong>
-        </label>
-        <img class="project-gallery-cover" data-deferred-src="${escapeAttr(coverSrc)}" alt="${escapeAttr(episode.title)} 封面" loading="lazy" decoding="async" />
-        ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-episode-cover" data-episode-id="${escapeAttr(episode.id)}" aria-label="替换 ${escapeAttr(episode.title)} 的剧集封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
+      <div class="episode-card-preview project-gallery-poster">
+        <span class="project-gallery-mark" aria-hidden="true">
+          <span class="project-gallery-mark-icon">${renderCanvasIcon("video")}</span>
+        </span>
       </div>
-      <input id="${escapeAttr(coverInputId)}" class="project-cover-input" type="file" accept="image/*" data-action="upload-episode-cover" data-episode-id="${escapeAttr(episode.id)}" />
       <div class="episode-card-body">
         <div class="episode-card-copy">
           <h3 title="${escapeHtml(episode.title)}">${escapeHtml(truncateEpisodeTitle(episode.title))}</h3>
@@ -4039,17 +4027,6 @@ function renderEpisodeHubCard(episode, ui) {
       </div>
     </article>
   `;
-}
-
-function getEpisodeCoverSrc(episode) {
-  const storageObjectId = String(episode?.coverStorageObjectId ?? episode?.cover_storage_object_id ?? "").trim();
-  if (storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
-  }
-  const coverImageUrl = String(episode?.coverImageUrl ?? episode?.cover_image_url ?? "").trim();
-  return coverImageUrl
-    ? resolveApiUrl(coverImageUrl)
-    : "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 }
 
 function renderEpisodeHubMenu(episode) {
@@ -4996,9 +4973,10 @@ function renderSingleEpisodeAiResponseBlocks(preview, options = {}) {
       const stage = String(step?.stage ?? "").trim();
       const responseText = String(step?.rawResponseText ?? step?.responseText ?? "").trim();
       const { listText, detailsText } = splitSingleEpisodeAiLiveResponse(responseText);
-      const renderShotRawAsDetails = stage === "shot" && !detailsText
+      const renderLabeledRawAsDetails = !detailsText
+        && ["scene", "character", "prop", "shot"].includes(stage)
         && splitSingleEpisodeAiPromptDetailEntries(stage, listText).some((entry) => entry.heading);
-      const renderedDetailsText = detailsText || (renderShotRawAsDetails ? listText : "");
+      const renderedDetailsText = detailsText || (renderLabeledRawAsDetails ? listText : "");
       const renderedListText = renderedDetailsText ? "" : listText;
       if (!renderedListText && !renderedDetailsText) {
         return "";
@@ -5226,9 +5204,21 @@ function resolveSingleEpisodeAiAssetPromptDetailRows(stage, entries) {
         .replace(/\*\*|__/g, "")
         .trim();
       const match = heading.match(headingPattern);
-      return match?.[1]?.trim()
-        ? { name: match[1].trim(), content: String(entry.content ?? "").trim() }
-        : null;
+      if (match?.[1]?.trim()) {
+        return { name: match[1].trim(), content: String(entry.content ?? "").trim() };
+      }
+      if (String(stage ?? "").trim() === "scene") {
+        const bracket = heading.match(/^(?:【|\[)\s*([^】\]]+?)\s*(?:】|\])\s*(.*)$/);
+        const name = String(bracket?.[1] ?? "").trim();
+        const inline = String(bracket?.[2] ?? "").trim();
+        if (name && !isSingleEpisodeAiReservedAssetBracketName(name)) {
+          return {
+            name,
+            content: [inline, String(entry.content ?? "").trim()].filter(Boolean).join("\n"),
+          };
+        }
+      }
+      return null;
     })
     .filter(Boolean);
   return rows.length === entries.filter((entry) => entry.heading).length ? rows : [];
@@ -5245,11 +5235,18 @@ function resolveSingleEpisodeAiAssetPromptDetailNameLabel(stage) {
 
 function resolveSingleEpisodeAiAssetPromptDetailNameAliases(stage) {
   const aliases = {
-    scene: ["场景名称"],
+    scene: ["场景名称", "场景名"],
     character: ["角色名称"],
     prop: ["道具名称"],
   };
   return aliases[String(stage ?? "").trim()] ?? [];
+}
+
+const SINGLE_EPISODE_AI_RESERVED_ASSET_BRACKET_NAMES = "角色名称|场景名称|道具名称|场景名|角色名|道具名|分镜(?:\\s*[一二三四五六七八九十百千两零〇\\d]+)?|画幅构图|视觉风格|场景描述|环境类型|时间时刻|空间氛围|主要特征|正向提示词|负向提示词|画面构图|生图提示词|Prompt";
+
+function isSingleEpisodeAiReservedAssetBracketName(name) {
+  return new RegExp(`^(?:${SINGLE_EPISODE_AI_RESERVED_ASSET_BRACKET_NAMES})$`, "iu")
+    .test(String(name ?? "").trim());
 }
 
 function splitSingleEpisodeAiPromptDetailEntries(stage, rawText) {
@@ -5282,7 +5279,7 @@ function splitSingleEpisodeAiPromptDetailEntries(stage, rawText) {
 function resolveSingleEpisodeAiPromptDetailEntryMarker(stage) {
   const normalizedStage = String(stage ?? "").trim();
   const assetLabelByStage = {
-    scene: ["场景名称"],
+    scene: ["场景名称", "场景名"],
     character: ["角色名称"],
     prop: ["道具名称"],
   };
@@ -5293,8 +5290,11 @@ function resolveSingleEpisodeAiPromptDetailEntryMarker(stage) {
       .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
       .sort((left, right) => right.length - left.length)
       .join("|");
+    const sceneBracketName = normalizedStage === "scene"
+      ? `|(?:【|\\[)\\s*(?!@|${SINGLE_EPISODE_AI_RESERVED_ASSET_BRACKET_NAMES})[^】\\]]{2,48}\\s*(?:】|\\])`
+      : "";
     return new RegExp(
-      `${prefix}(?:(?:${escapedLabels})(?:\\*\\*|__)?\\s*[:：]|(?:【|\\[)\\s*(?:${escapedLabels})\\s*(?:】|\\]))\\s*[^\\n]*`,
+      `${prefix}(?:(?:${escapedLabels})(?:\\*\\*|__)?\\s*[:：]|(?:【|\\[)\\s*(?:${escapedLabels})\\s*(?:】|\\])${sceneBracketName})\\s*[^\\n]*`,
       "g",
     );
   }
@@ -9336,6 +9336,30 @@ function renderSkillPlazaPage(ui = {}) {
     return `<section class="skill-detail-files skill-detail-files-browser"><header class="skill-detail-files-header"><div><h3>Skill</h3><span>${detailFiles.length} 个文件</span></div><div class="skill-detail-file-picker"><button type="button" data-action="toggle-skill-detail-file-menu" aria-expanded="${ui.skillDetailFileMenuOpen ? "true" : "false"}">${escapeHtml(fileName)} <span aria-hidden="true">⌃</span></button>${ui.skillDetailFileMenuOpen ? `<div class="skill-detail-file-menu" role="menu">${detailFiles.map((file, index) => `<button type="button" role="menuitem" class="${index === selectedFileIndex ? "active" : ""}" data-action="set-skill-detail-file" data-file-index="${index}">${escapeHtml(file.name ?? file.fileName ?? "未命名文件")}</button>`).join("")}</div>` : ""}</div></header>${fileBody}</section>`;
   };
   const section = (label, value) => value ? `<section class="skill-detail-section"><h3>${label}</h3><p>${escapeHtml(String(value))}</p></section>` : "";
+  const guideDialog = ui.promptMarketplaceGuideOpen ? `<div class="prompt-marketplace-guide" role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title">
+    <section>
+      <header><div><span>SKILL FORMAT</span><h2 id="prompt-guide-title">SKILL开发说明</h2></div><button type="button" data-action="close-prompt-marketplace-guide" aria-label="关闭SKILL开发说明">×</button></header>
+      <ol class="prompt-marketplace-guide-notes" aria-label="SKILL 使用说明">
+        <li>项目工作流分类中生成必须以对应的<strong>名称标记</strong>开头；</li>
+        <li>其它形式的 skill 不限，但必须以一个 <code>skill.md</code> 总入口进行。</li>
+        <li>skill 目前最多支持 <mark>50个文件</mark>、如有其它需求请联系客服。</li>
+        <li>skill 目前<strong>不支持脚本</strong>。上传到广场需客服审核、个人使用不受限制。</li>
+      </ol>
+      <section class="prompt-marketplace-guide-workflow" aria-label="项目工作流格式要求">
+        <header><span>WORKFLOW FORMAT</span><h3>项目工作流格式要求</h3></header>
+        <div class="prompt-marketplace-guide-rules">
+          <article><b>01</b><div><strong>角色提示词</strong><code>【角色名称】角色名</code><p>人物名称必须以【角色名称】开头。</p></div></article>
+          <article><b>02</b><div><strong>道具提示词</strong><code>【道具名称】道具名</code><p>道具名称必须以【道具名称】开头。</p></div></article>
+          <article><b>03</b><div><strong>场景提示词</strong><code>【场景名称】场景名</code><p>场景名称必须以【场景名称】开头。</p></div></article>
+          <article><b>04</b><div><strong>分镜提示词</strong><code>【分镜】分镜内容</code><p>分镜必须以【分镜】开头，其中生成的角色、道具和场景引用名称必须使用【@名称】格式。</p></div></article>
+        </div>
+      </section>
+      <section class="prompt-marketplace-guide-example" aria-label="提示词格式示例"><header><span>EXAMPLE</span><strong>完整示例</strong></header><pre>【角色名称】白纹鬼
+【场景名称】黄昏尸骸战场
+【道具名称】切割刀
+【分镜】一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人</pre></section>
+    </section>
+  </div>` : "";
   const renderCard = (item) => {
     const cover = String(item.coverUrl ?? "").trim();
     const preview = String(item.detail?.effectVideoUrl ?? item.previewUrl ?? "").trim();
@@ -9352,12 +9376,13 @@ function renderSkillPlazaPage(ui = {}) {
     </article>`;
   };
   return `<section class="skill-plaza-page" aria-label="Skill 广场">
-    <header class="skill-plaza-header"><nav class="skill-plaza-tabs" aria-label="Skill 页面"><button class="${activeSection === "catalog" ? "active" : ""}" type="button" data-action="set-skill-plaza-section" data-section="catalog" aria-selected="${activeSection === "catalog" ? "true" : "false"}">Skill</button><button class="${activeSection === "library" ? "active" : ""}" type="button" data-action="set-skill-plaza-section" data-section="library" aria-selected="${activeSection === "library" ? "true" : "false"}">收藏</button><button class="${activeSection === "mine" ? "active" : ""}" type="button" data-action="set-skill-plaza-section" data-section="mine" aria-selected="${activeSection === "mine" ? "true" : "false"}">我的</button></nav><div class="skill-plaza-header-actions"><label class="skill-plaza-search"><span>⌕</span><input type="search" data-skill-plaza-search value="${escapeAttr(ui.skillPlazaQuery ?? "")}" placeholder="搜索 Skill" aria-label="搜索 Skill" /></label><button type="button" data-action="open-skill-create">创建 Skill</button></div></header>
+    <header class="skill-plaza-header"><nav class="skill-plaza-tabs" aria-label="Skill 页面"><button class="${activeSection === "catalog" ? "active" : ""}" type="button" data-action="set-skill-plaza-section" data-section="catalog" aria-selected="${activeSection === "catalog" ? "true" : "false"}">Skill</button><button class="${activeSection === "library" ? "active" : ""}" type="button" data-action="set-skill-plaza-section" data-section="library" aria-selected="${activeSection === "library" ? "true" : "false"}">收藏</button><button class="${activeSection === "mine" ? "active" : ""}" type="button" data-action="set-skill-plaza-section" data-section="mine" aria-selected="${activeSection === "mine" ? "true" : "false"}">我的</button><button class="prompt-marketplace-guide-trigger" type="button" data-action="open-prompt-marketplace-guide" aria-haspopup="dialog"><span aria-hidden="true">?</span>自定义skill说明</button></nav><div class="skill-plaza-header-actions"><label class="skill-plaza-search"><span>⌕</span><input type="search" data-skill-plaza-search value="${escapeAttr(ui.skillPlazaQuery ?? "")}" placeholder="搜索 Skill" aria-label="搜索 Skill" /></label><button type="button" data-action="open-skill-create">创建 Skill</button></div></header>
     <nav class="skill-plaza-categories" aria-label="Skill 分类">${categories.map(([id, label]) => `<button type="button" class="${activeCategory === id ? "active" : ""}" data-action="set-skill-plaza-category" data-skill-category="${id}">${label}</button>`).join("")}</nav>
     ${ui.skillPlazaError ? `<p class="skill-plaza-error">${escapeHtml(ui.skillPlazaError)}</p>` : ""}
     <div class="skill-plaza-grid">${ui.skillPlazaLoading ? `<div class="skill-plaza-empty">正在加载 Skill...</div>` : items.length ? items.map(renderCard).join("") : `<div class="skill-plaza-empty">暂无公开 Skill</div>`}</div>
     ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div>        <div class="skill-detail-actions"><button type="button" data-action="copy-skill-share-link" data-skill-id="${escapeAttr(detail.id)}" aria-label="分享" title="分享">${renderCanvasIcon("share")}</button>${detail.isMine ? `<button class="primary" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(detail.id)}">编辑</button><button class="skill-plaza-delete" type="button" data-action="request-delete-skill" data-skill-id="${escapeAttr(detail.id)}">删除</button>` : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${detail.isMine && detail.reviewComment ? section("审核意见", detail.reviewComment) : ""}${section("简介", detail.summary || detailText.summary)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
     ${ui.skillPlazaDeleteConfirm?.skillId ? `<div class="prompt-marketplace-confirm" role="dialog" aria-modal="true" aria-labelledby="skill-delete-title"><div><span>删除 Skill</span><h2 id="skill-delete-title">删除自己的 Skill？</h2><p>删除后将从「我的」和 Skill 广场下架，其他用户也无法继续添加。</p><footer><button type="button" data-action="cancel-delete-skill">取消</button><button type="button" class="danger" data-action="confirm-delete-skill">确认删除</button></footer></div></div>` : ""}
+    ${guideDialog}
   </section>`;
 }
 
@@ -9634,28 +9659,10 @@ function renderPromptPlazaPage(ui = {}) {
     </section>
   </div>` : "";
 
-  const guideDialog = ui.promptMarketplaceGuideOpen ? `<div class="prompt-marketplace-guide" role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title">
-    <section>
-      <header><div><span>PROMPT FORMAT</span><h2 id="prompt-guide-title">提示词格式说明</h2><p>每个条目必须以对应的名称标记开头；分镜中的资产引用统一使用“【@名称】”格式。</p></div><button type="button" data-action="close-prompt-marketplace-guide" aria-label="关闭提示词格式说明">×</button></header>
-      <div class="prompt-marketplace-guide-rules">
-        <article><b>01</b><div><strong>角色提示词</strong><code>【角色名称】角色名</code><p>人物名称必须以【角色名称】开头。</p></div></article>
-        <article><b>02</b><div><strong>道具提示词</strong><code>【道具名称】道具名</code><p>道具名称必须以【道具名称】开头。</p></div></article>
-        <article><b>03</b><div><strong>场景提示词</strong><code>【场景名称】场景名</code><p>场景名称必须以【场景名称】开头。</p></div></article>
-        <article><b>04</b><div><strong>分镜提示词</strong><code>【分镜】分镜内容</code><p>分镜必须以【分镜】开头，其中生成的角色、道具和场景引用名称必须使用【@名称】格式。</p></div></article>
-      </div>
-      <section class="prompt-marketplace-guide-shot-sizes" aria-label="镜头运行方式"><header><div><span>SHOT SIZE</span><strong>镜头运行方式</strong></div><p>景别选择</p></header><div>${["大远景", "远景", "全景", "中远景", "中景", "中近景", "近景", "特写", "大特写", "头肩景", "半身景", "全身景"].map((label) => `<span>${label}</span>`).join("")}</div></section>
-      <section class="prompt-marketplace-guide-example" aria-label="提示词格式示例"><header><span>EXAMPLE</span><strong>完整示例</strong></header><pre>角色名称：白纹鬼
-场景名称:黄昏尸骸战场
-道具名称：切割刀
-分镜1：一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人</pre></section>
-    </section>
-  </div>` : "";
-
   return `
     <section class="prompt-plaza-page" aria-label="提示词管理与广场">
       <nav class="prompt-workspace-tabs" aria-label="提示词工作区">
         ${Object.entries(sectionLabels).map(([section, label]) => `<button class="${section === activeSection ? "active" : ""}" type="button" data-action="set-prompt-plaza-section" data-section="${section}">${label}</button>`).join("")}
-        <button class="prompt-marketplace-guide-trigger" type="button" data-action="open-prompt-marketplace-guide" aria-haspopup="dialog"><span aria-hidden="true">?</span>使用说明</button>
       </nav>
       <div class="prompt-plaza-tools">
         <nav class="prompt-plaza-tabs" aria-label="提示词分类">
@@ -9671,7 +9678,6 @@ function renderPromptPlazaPage(ui = {}) {
       ${ui.promptMarketplaceError ? `<div class="prompt-marketplace-error">${escapeHtml(ui.promptMarketplaceError)}</div>` : ""}
       ${activeSection === "library" ? libraryContent : marketplaceContent}
       ${deleteDraft ? `<div class="prompt-marketplace-confirm" role="dialog" aria-modal="true" aria-labelledby="prompt-delete-title"><div><span>删除提示词</span><h2 id="prompt-delete-title">${deleteDraft.owned ? "停止发布并删除自己的提示词？" : "从私人提示词库移除？"}</h2><p>${deleteDraft.owned ? "删除后其他用户将无法继续添加该提示词。" : "移除后仍可随时从广场免费添加。"}</p><footer><button type="button" data-action="cancel-delete-prompt-marketplace-item">取消</button><button type="button" class="danger" data-action="confirm-delete-prompt-marketplace-item">确认删除</button></footer></div></div>` : ""}
-      ${guideDialog}
       ${rankingDetailDialog}
       ${createDialog}
       ${editDialog}
@@ -9698,24 +9704,13 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
           ${episodes.map((episode) => {
             const episodeId = String(episode.id ?? episode.episodeId ?? "").trim();
             const title = String(episode.title ?? "未命名分集").trim() || "未命名分集";
-            const coverInputId = `home-workflow-episode-cover-${episodeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-            const hasCover = Boolean(
-              episode.coverImageUrl ??
-              episode.cover_image_url ??
-              episode.coverStorageObjectId ??
-              episode.cover_storage_object_id,
-            );
             return `
               <article class="home-project-episode-option" role="listitem" data-action="select-home-project-workflow-episode" data-episode-id="${escapeAttr(episodeId)}" tabindex="0">
-                <div class="home-project-episode-option-cover project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}" aria-label="${escapeAttr(title)}封面">
-                  <label class="project-cover-placeholder" for="${escapeAttr(coverInputId)}" data-action="pick-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}">
-                    <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
-                    <strong>上传封面</strong>
-                  </label>
-                  <img class="project-gallery-cover" data-deferred-src="${escapeAttr(getEpisodeCoverSrc(episode))}" alt="${escapeAttr(title)} 封面" loading="lazy" decoding="async" />
-                  ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}" aria-label="替换 ${escapeAttr(title)} 的剧集封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
+                <div class="home-project-episode-option-cover project-gallery-poster">
+                  <span class="project-gallery-mark" aria-hidden="true">
+                    <span class="project-gallery-mark-icon">${renderCanvasIcon("video")}</span>
+                  </span>
                 </div>
-                <input id="${escapeAttr(coverInputId)}" class="project-cover-input" type="file" accept="image/*" data-action="upload-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}" />
                 <button class="home-project-episode-option-enter" type="button" data-action="select-home-project-workflow-episode" data-episode-id="${escapeAttr(episodeId)}">
                   <span class="home-project-episode-option-title">${escapeHtml(title)}</span>
                 </button>
@@ -10656,7 +10651,7 @@ function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = tru
       ><span aria-hidden="true"></span></button>` : ""}
       <button${openingAttrs} type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
         <span class="canvas-project-cover" aria-hidden="true">
-          <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
+          <span class="canvas-project-play">${renderCanvasIcon("wand")}</span>
           ${opening ? '<span class="canvas-project-opening-label">正在打开画布</span>' : ""}
         </span>
       </button>
@@ -12543,6 +12538,8 @@ function renderCanvasIcon(icon) {
     translate: '<path d="M5 5h8" /><path d="M9 5v14" /><path d="M4 19h10" /><path d="M7 9c.7 2.1 2.2 3.9 5 5" /><path d="M12 9c-.7 2.1-2.2 3.9-5 5" /><path d="M17 10l3.5 9" /><path d="M14.5 19l3.5-9" /><path d="M15.5 16h4" />',
     upload: '<path d="M12 16V5" /><path d="m7 10 5-5 5 5" /><path d="M5 19h14" />',
     video: '<rect x="4" y="6" width="13" height="12" rx="2" /><path d="m17 10 4-2v8l-4-2" /><path d="M8 10.5 11.5 12 8 13.5z" />',
+    wand: '<path fill="currentColor" stroke="none" d="M3.7 15.9 5.3 7.4h14.9l-1.6 8.5H3.7Zm4.4-2.9h7.9l0.5-2.7H8.6L8.1 13Z" />',
+    clapperboard: '<path d="M4.6 8.7h14.8a1.5 1.5 0 0 1 1.5 1.5v8.7a1.5 1.5 0 0 1-1.5 1.5H4.6a1.5 1.5 0 0 1-1.5-1.5v-8.7a1.5 1.5 0 0 1 1.5-1.5Z" /><path d="m5.2 8.7 1.2-4.9 14 3.4-.4 1.5" /><path d="m8.2 4.2 2.3 5" /><path d="m13.1 5.4 2.3 5" /><path d="M7.1 13.1h9.8" />',
     "arrow-up": '<path d="M12 19V5" /><path d="m5 12 7-7 7 7" />',
     user: '<circle cx="12" cy="8.5" r="3" /><path d="M6.5 19a5.5 5.5 0 0 1 11 0" />',
   };
@@ -13425,10 +13422,6 @@ function buildProjectPageItems(currentPage, totalPages) {
 }
 
 function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true, isGuideTarget = false) {
-  const hasCover = Boolean(project.coverImageUrl);
-  const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
-  const coverSrc = getProjectCoverSrc(project);
-  const coverAttribute = coverSrc.startsWith("data:") ? `src="${escapeHtml(coverSrc)}"` : `data-deferred-src="${escapeHtml(coverSrc)}"`;
   return `
     <article class="project-gallery-card${isMenuOpen ? " is-menu-open" : ""} ${isSelected ? "is-selected" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
       <button
@@ -13442,15 +13435,11 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
       >
         <span aria-hidden="true"></span>
       </button>
-      <div class="project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}">
-        <label class="project-cover-placeholder" for="${coverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">
-          <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
-          <strong>上传封面</strong>
-        </label>
-        <img class="project-gallery-cover" ${coverAttribute} alt="${escapeHtml(project.name)} 封面" loading="lazy" decoding="async" />
-        ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}" aria-label="替换 ${escapeHtml(project.name)} 的项目封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
+      <div class="project-gallery-poster">
+        <span class="project-gallery-mark" aria-hidden="true">
+          <span class="project-gallery-mark-icon">${renderCanvasIcon("clapperboard")}</span>
+        </span>
       </div>
-      <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
       <div class="project-gallery-meta">
         <div class="project-gallery-copy">
           <h2>${escapeHtml(project.name)}</h2>
@@ -13474,64 +13463,9 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
   `;
 }
 
-function getProjectCoverSrc(project) {
-  const storageObjectId = String(project?.coverStorageObjectId ?? project?.cover_storage_object_id ?? "").trim();
-  if (storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
-  }
-  if (project.coverImageUrl) {
-    return resolveApiUrl(project.coverImageUrl);
-  }
-
-  const name = String(project.name ?? "新项目");
-  const seed = String(project.id ?? name);
-  const hue = computeHue(seed);
-  const accent = (hue + 28) % 360;
-  const monogram = [...name].slice(0, 2).join("") || "项目";
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720">
-      <defs>
-        <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="hsl(${hue} 28% 16%)"/>
-          <stop offset="100%" stop-color="hsl(${accent} 36% 24%)"/>
-        </linearGradient>
-        <radialGradient id="glow" cx="28%" cy="22%" r="46%">
-          <stop offset="0%" stop-color="hsla(${accent} 90% 72% / 0.24)"/>
-          <stop offset="100%" stop-color="transparent"/>
-        </radialGradient>
-      </defs>
-      <rect width="1200" height="720" rx="48" fill="url(#bg)"/>
-      <rect width="1200" height="720" rx="48" fill="url(#glow)"/>
-      <text x="96" y="590" fill="rgba(255,255,255,0.9)" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="118" font-weight="700">${escapeSvg(monogram)}</text>
-      <text x="102" y="650" fill="rgba(255,255,255,0.44)" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="36">${escapeSvg(name)}</text>
-    </svg>
-  `;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-}
-
-function computeHue(seed) {
-  let total = 0;
-  for (const char of seed) {
-    total = (total * 31 + char.charCodeAt(0)) % 360;
-  }
-  return total;
-}
-
-function escapeSvg(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
 function renderProjectCardMenu(project, canDelete = true) {
-  const menuCoverInputId = `project-cover-menu-input-${escapeHtml(project.id)}`;
   return `
     <div class="project-card-menu" role="menu" aria-label="项目操作">
-      <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
-      <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">上传封面</label>
       <button class="project-card-menu-item" type="button" data-action="rename-project-card" data-project-id="${escapeHtml(project.id)}">重命名</button>
       ${canDelete ? `<button class="project-card-menu-item danger" type="button" data-action="delete-project-card" data-project-id="${escapeHtml(project.id)}">删除</button>` : ""}
     </div>

@@ -191,6 +191,11 @@ describe("episode prompt skill modal", () => {
       summary: "一键生成工作流",
       outputContent: "场景、角色、道具和分镜表",
     }], { skipScriptStage: true }), ["scene", "character", "prop", "shot"]);
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{
+      title: "通用小说转剧本",
+      summary: "把小说转成剧本",
+      outputContent: "剧本文本",
+    }]), ["script"]);
   });
 
   it("uses workbench theme variables for active and selected states", async () => {
