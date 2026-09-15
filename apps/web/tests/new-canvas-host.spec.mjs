@@ -155,7 +155,16 @@ test("AI Canvas initializes the browser process shim before the runtime bridge i
     source.indexOf("async function createAiCanvasRuntimeProjectBridge"),
     source.indexOf("function resolveAiCanvasRuntimeConversationProjectId"),
   );
-  assert.match(bridgeBlock, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?import\("\/ai-canvas-runtime\/runtime\.js"\)/);
+  assert.match(source, /function prefetchAiCanvasRuntimeModule\(\)/);
+  assert.match(source, /token === "tools-canvas" \|\| token === "new-canvas-canvas"/);
+  assert.match(source, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?aiCanvasRuntimePromise \?\?= import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
+  assert.match(bridgeBlock, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
+  assert.match(source, /action === "confirm-host-skills"[\s\S]*?injectHydratedAiCanvasRuntimeSkills/);
+  assert.match(source, /async function submitAiCanvasRuntimeAgentPrompt[\s\S]*?hydrateAiCanvasRuntimePromptSkills/);
+  assert.doesNotMatch(
+    source.slice(source.indexOf("const loadCatalogs = async"), source.indexOf("const closePicker")),
+    /hydrateAiCanvasRuntimeSkillRows/,
+  );
 });
 
 test("canvas grid toggle does not leave the off-white theme texture visible", () => {
@@ -208,6 +217,17 @@ test("series rail and script workbench match the canvas header type size", () =>
   assert.match(source, /\[aria-label="剧本创作工作台"\][\s\S]*font-size:\s*18px\s*!important/);
   assert.match(source, /\.group\\\/series aside\[role="dialog"\] svg[\s\S]*width:\s*18px\s*!important/);
   assert.match(source, /\[aria-label="剧本创作工作台"\] svg[\s\S]*width:\s*18px\s*!important/);
+});
+
+test("empty canvas uses the header brand mark and hides the title copy", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(appRuntime, /src:`\/favicon\.svg`/);
+  assert.match(appRuntime, /className:`h-16 w-16 select-none`/);
+  assert.match(appRuntime, /e\(`AI画布`\)/);
+  assert.match(source, /background: url\("\/assets\/brand\/lingxi-ai-favicon\.png"\) center \/ cover no-repeat !important/);
+  assert.match(source, /\.flex\.flex-col\.items-center\.gap-4\.opacity-50 > img\.h-16\.w-16\.select-none[\s\S]*lingxi-ai-favicon\.png/);
+  assert.match(source, /\.flex\.flex-col\.items-center\.gap-4\.opacity-50 > \.text-center > \.text-lg\.font-medium\.text-canvas-text\.mb-1[\s\S]*display:\s*none\s*!important/);
 });
 
 test("canvas header restores project switch and help after upstream chrome split", () => {

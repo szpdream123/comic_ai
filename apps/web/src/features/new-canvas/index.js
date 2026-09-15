@@ -2279,6 +2279,7 @@ export {
   applyAiCanvasRuntimeNodeModel,
   createAiCanvasRuntimeAdapter,
   deserializeAiCanvasDocument,
+  hydrateAiCanvasRuntimeSkillRows,
   normalizeAiCanvasRuntimeProjectDefaultModels,
   resolveAiCanvasRuntimeNodeMediaKind,
   serializeAiCanvasDocument,

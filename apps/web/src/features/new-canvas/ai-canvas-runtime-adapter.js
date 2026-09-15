@@ -259,6 +259,45 @@ export function normalizeAiCanvasRuntimeSkill(skill = {}) {
   };
 }
 
+function mergeAiCanvasRuntimeSkillDetail(skill, detailPayload) {
+  const payload = detailPayload && typeof detailPayload === "object" && !Array.isArray(detailPayload)
+    ? detailPayload
+    : {};
+  const nested = payload.skill && typeof payload.skill === "object" && !Array.isArray(payload.skill)
+    ? payload.skill
+    : payload.data?.skill && typeof payload.data.skill === "object" && !Array.isArray(payload.data.skill)
+      ? payload.data.skill
+      : payload;
+  const files = Array.isArray(payload.files)
+    ? payload.files
+    : Array.isArray(payload.data?.files)
+      ? payload.data.files
+      : Array.isArray(nested?.files)
+        ? nested.files
+        : Array.isArray(skill?.files)
+          ? skill.files
+          : [];
+  return { ...skill, ...nested, files };
+}
+
+export async function hydrateAiCanvasRuntimeSkillRows(creatorApi, rows) {
+  if (!Array.isArray(rows) || typeof creatorApi?.getSkillDetail !== "function") return rows;
+  return Promise.all(rows.map(async (skill) => {
+    const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+    if (!id) return skill;
+    const existingFiles = listAiCanvasRuntimeSkillFiles(skill);
+    if (existingFiles.some((file) => String(file.content ?? "").trim())
+      || (String(skill.content ?? "").trim() && existingFiles.length === 0)) {
+      return skill;
+    }
+    try {
+      return mergeAiCanvasRuntimeSkillDetail(skill, await creatorApi.getSkillDetail(id));
+    } catch {
+      return skill;
+    }
+  }));
+}
+
 async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, dependencies) {
   const rowsFromPayload = (payload, keys) => {
     if (Array.isArray(payload)) return payload;
@@ -279,56 +318,18 @@ async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, depe
       : Promise.resolve([]);
   const generationPromise = modelCatalog !== undefined || typeof creatorApi?.listGlobalGenerationConfig !== "function"
     ? Promise.resolve([])
-    : Promise.all(["image", "video", "audio"].map(async (mediaType) => ({
-      mediaType,
-      payload: await creatorApi.listGlobalGenerationConfig({ mediaType, fresh: true }).catch(() => null),
-    })));
-  const mergeSkillDetail = (skill, detailPayload) => {
-    const payload = detailPayload && typeof detailPayload === "object" && !Array.isArray(detailPayload)
-      ? detailPayload
-      : {};
-    const nested = payload.skill && typeof payload.skill === "object" && !Array.isArray(payload.skill)
-      ? payload.skill
-      : payload.data?.skill && typeof payload.data.skill === "object" && !Array.isArray(payload.data.skill)
-        ? payload.data.skill
-        : payload;
-    const files = Array.isArray(payload.files)
-      ? payload.files
-      : Array.isArray(payload.data?.files)
-        ? payload.data.files
-        : Array.isArray(nested?.files)
-          ? nested.files
-          : Array.isArray(skill?.files)
-            ? skill.files
-            : [];
-    return { ...skill, ...nested, files };
-  };
-  const hydrateSkillRows = async (rows) => {
-    if (typeof creatorApi?.getSkillDetail !== "function") return rows;
-    return Promise.all(rows.map(async (skill) => {
-      const id = String(skill?.id ?? skill?.skillId ?? "").trim();
-      if (!id) return skill;
-      const existingFiles = listAiCanvasRuntimeSkillFiles(skill);
-      if (existingFiles.some((file) => String(file.content ?? "").trim())
-        || (String(skill.content ?? "").trim() && existingFiles.length === 0)) {
-        return skill;
-      }
-      try {
-        return mergeSkillDetail(skill, await creatorApi.getSkillDetail(id));
-      } catch {
-        return skill;
-      }
-    }));
-  };
+    : creatorApi.listGlobalGenerationConfig().catch(() => null).then((payload) => (
+      payload == null ? [] : [{ mediaType: null, payload }]
+    ));
   const skillsPromise = skillCatalog !== undefined
-    ? Promise.resolve(skillCatalog).then((payload) => hydrateSkillRows(rowsFromPayload(payload, ["items", "skills"])))
+    ? Promise.resolve(skillCatalog)
     : typeof creatorApi?.getSkills === "function"
       ? Promise.all([
           creatorApi.getSkills({ page: 1, pageSize: 50 }),
           typeof creatorApi?.getMySkills === "function"
             ? creatorApi.getMySkills().catch(() => ({ items: [] }))
             : Promise.resolve({ items: [] }),
-        ]).then(async ([catalogPayload, minePayload]) => {
+        ]).then(([catalogPayload, minePayload]) => {
           const catalogRows = rowsFromPayload(catalogPayload, ["items", "skills"]).map((skill) => ({
             ...skill,
             source: skill?.source ?? (skill?.ownerUserId ? "mine" : "official"),
@@ -342,7 +343,7 @@ async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, depe
             const id = String(skill?.id ?? skill?.skillId ?? "").trim();
             if (id) byId.set(id, skill);
           }
-          return hydrateSkillRows([...byId.values()]);
+          return [...byId.values()];
         })
       : Promise.resolve([]);
   const [modelsPayload, generationPayload, skillsPayload] = await Promise.allSettled([modelsPromise, generationPromise, skillsPromise]);
@@ -795,11 +796,46 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
       );
       const creatorApi = resolveCreatorApi(dependencies, context);
       const creatorApiBridge = createCreatorApiBridge(creatorApi, canvasProjectId, dependencies);
-      const catalog = await resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, dependencies);
+      let catalog = { models: [], skills: [] };
+      const catalogPromise = resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, dependencies);
       let document = deserializeAiCanvasDocument(context.document ?? context.canvasDocument);
       let disposed = false;
       const syncDocument = context.syncDocument ?? dependencies.syncDocument;
       const runtimeMount = resolveRuntimeMount(dependencies, runtime);
+      const mergeRuntimeSkillCatalog = (current = [], incoming) => {
+        if (!Array.isArray(incoming)) return incoming ?? current;
+        const byId = new Map();
+        for (const skill of current) {
+          const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+          if (id) byId.set(id, skill);
+        }
+        for (const skill of incoming) {
+          const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+          if (!id) continue;
+          const previous = byId.get(id);
+          byId.set(id, {
+            ...previous,
+            ...skill,
+            content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+          });
+        }
+        return [...byId.values()];
+      };
+      const injectRuntimeCatalogs = async (next = {}) => {
+        if (disposed) return false;
+        if (next.modelCatalog !== undefined || next.models !== undefined) {
+          catalog.models = next.modelCatalog ?? next.models;
+        }
+        if (next.skillCatalog !== undefined || next.skills !== undefined) {
+          catalog.skills = mergeRuntimeSkillCatalog(catalog.skills, next.skillCatalog ?? next.skills);
+        }
+        runtimeContext.modelCatalog = catalog.models;
+        runtimeContext.skillCatalog = catalog.skills;
+        return runtimeHandle?.update?.({
+          modelCatalog: catalog.models,
+          skillCatalog: catalog.skills,
+        });
+      };
       const runtimeContext = {
         ...context,
         canvasProjectId,
@@ -809,6 +845,7 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
         api: creatorApiBridge,
         onGenerationTaskCreated: context.onGenerationTaskCreated,
         taskCenterActiveCount: context.taskCenterActiveCount,
+        injectRuntimeCatalogs,
         modelCatalog: catalog.models,
         skillCatalog: catalog.skills,
         document,
@@ -827,6 +864,18 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
       runtimeHandle = runtimeMount
         ? await runtimeMount(surface, runtimeContext)
         : null;
+      const catalogsReady = catalogPromise.then(async (resolved) => {
+        if (disposed) return catalog;
+        catalog.models = resolved.models;
+        catalog.skills = mergeRuntimeSkillCatalog(catalog.skills, resolved.skills);
+        if (catalog.models.length > 0 || catalog.skills.length > 0) {
+          await injectRuntimeCatalogs({
+            modelCatalog: catalog.models,
+            skillCatalog: catalog.skills,
+          });
+        }
+        return catalog;
+      }).catch(() => catalog);
       const handle = {
         runtime: runtimeHandle,
         api: creatorApiBridge,
@@ -845,8 +894,15 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
           }
           return runtimeResult ?? document;
         },
+        catalogsReady,
         async update(next = {}) {
           if (disposed) return false;
+          if (next.modelCatalog !== undefined || next.models !== undefined) {
+            catalog.models = next.modelCatalog ?? next.models;
+          }
+          if (next.skillCatalog !== undefined || next.skills !== undefined) {
+            catalog.skills = mergeRuntimeSkillCatalog(catalog.skills, next.skillCatalog ?? next.skills);
+          }
           const nextDocument = Object.prototype.hasOwnProperty.call(next, "document")
             ? next.document
             : next.canvasDocument;

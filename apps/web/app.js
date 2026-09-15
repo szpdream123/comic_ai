@@ -3,7 +3,7 @@ import {
   consumeFirstLoginOnboarding,
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
-import { applyAiCanvasRuntimeNodeModel, normalizeAiCanvasRuntimeGrouping } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import { applyAiCanvasRuntimeNodeModel, hydrateAiCanvasRuntimeSkillRows, normalizeAiCanvasRuntimeGrouping, normalizeAiCanvasRuntimeSkill } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
 import {
   normalizePlazaEpisodeSkills,
@@ -19,6 +19,25 @@ const productionWorkbenchPromise = root
 let aiCanvasRuntimePromise;
 let aiCanvasRuntimeStorePromise;
 let aiCanvasRuntimeGlobalStyle;
+const AI_CANVAS_RUNTIME_MODULE_URL = "/ai-canvas-runtime/runtime.js";
+
+function isAiCanvasRuntimeDetailRoute(hash = globalThis.window?.location?.hash ?? globalThis.location?.hash) {
+  const token = String(hash ?? "").replace(/^#/, "");
+  return token === "tools-canvas" || token === "new-canvas-canvas";
+}
+
+function prefetchAiCanvasRuntimeModule() {
+  globalThis.process ??= { env: { NODE_ENV: "production" } };
+  aiCanvasRuntimePromise ??= import(AI_CANVAS_RUNTIME_MODULE_URL);
+  const documentRef = globalThis.document;
+  if (!documentRef?.head || typeof documentRef.createElement !== "function") return;
+  const selector = `link[rel="modulepreload"][href="${AI_CANVAS_RUNTIME_MODULE_URL}"]`;
+  if (documentRef.querySelector?.(selector)) return;
+  const link = documentRef.createElement("link");
+  link.rel = "modulepreload";
+  link.href = AI_CANVAS_RUNTIME_MODULE_URL;
+  documentRef.head.append(link);
+}
 
 function acquireAiCanvasRuntimeGlobalStyle() {
   if (aiCanvasRuntimeGlobalStyle?.isConnected) {
@@ -26,7 +45,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-06";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260915-01";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -372,7 +391,19 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
   return {
     update(next = {}) {
       if (next.modelCatalog !== undefined || next.models !== undefined) modelCatalog = normalizeModels(next.modelCatalog ?? next.models);
-      if (next.skillCatalog !== undefined || next.skills !== undefined) skillCatalog = normalizeSkills(next.skillCatalog ?? next.skills);
+      if (next.skillCatalog !== undefined || next.skills !== undefined) {
+        const incoming = normalizeSkills(next.skillCatalog ?? next.skills);
+        const byId = new Map(skillCatalog.map((skill) => [skill.id, skill]));
+        for (const skill of incoming) {
+          const previous = byId.get(skill.id);
+          byId.set(skill.id, {
+            ...previous,
+            ...skill,
+            content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+          });
+        }
+        skillCatalog = [...byId.values()];
+      }
       if (next.modelCatalog !== undefined || next.models !== undefined || next.skillCatalog !== undefined || next.skills !== undefined) apply();
     },
     dispose() {
@@ -1009,7 +1040,7 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
     // compatibility shim before the first runtime import (the mount path is
     // reached later and cannot protect this bridge import).
     globalThis.process ??= { env: { NODE_ENV: "production" } };
-    aiCanvasRuntimeStorePromise ??= aiCanvasRuntimePromise ?? import("/ai-canvas-runtime/runtime.js");
+    aiCanvasRuntimeStorePromise ??= aiCanvasRuntimePromise ?? import(AI_CANVAS_RUNTIME_MODULE_URL);
     const storeModule = await aiCanvasRuntimeStorePromise;
     const store = storeModule?.useAppStore ?? storeModule?.t;
     if (!store?.getState || !store?.setState) {
@@ -1876,6 +1907,7 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     if (action === "confirm-host-skills") {
       const selected = resolvePlazaSelectedSkills(collectSkills(), draftIds);
       insertAiCanvasRuntimeSkillChips(findComposer(), selected);
+      void injectHydratedAiCanvasRuntimeSkills(hostApi(), selected, context, runtimeStore);
       closePicker();
       return;
     }
@@ -1921,6 +1953,7 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     }
     const selected = resolvePlazaSelectedSkills(collectSkills(), draftIds);
     insertAiCanvasRuntimeSkillChips(findComposer(), selected);
+    void injectHydratedAiCanvasRuntimeSkills(hostApi(), selected, context, runtimeStore);
     closePicker();
   };
 
@@ -2064,6 +2097,59 @@ function resolveAiCanvasRuntimeSkillLabel(skill, fallback = "") {
       ?? fallback
       ?? "",
   ).trim();
+}
+
+function mergeAiCanvasRuntimeSkillCatalog(existing = [], next = []) {
+  const byId = new Map();
+  for (const skill of existing) {
+    const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+    if (id) byId.set(id, skill);
+  }
+  for (const skill of next) {
+    const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+    if (!id) continue;
+    const previous = byId.get(id);
+    byId.set(id, {
+      ...previous,
+      ...skill,
+      content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+    });
+  }
+  return [...byId.values()];
+}
+
+async function injectHydratedAiCanvasRuntimeSkills(api, rows, context = {}, runtimeStore) {
+  if (!Array.isArray(rows) || !rows.length || typeof api?.getSkillDetail !== "function") return;
+  const hydrated = await hydrateAiCanvasRuntimeSkillRows(api, rows);
+  const existing = [
+    ...(Array.isArray(context.skillCatalog) ? context.skillCatalog : []),
+    ...(Array.isArray(context.skills) ? context.skills : []),
+    ...(Array.isArray(runtimeStore?.getState?.()?.userSkills) ? runtimeStore.getState().userSkills : []),
+  ];
+  const skills = mergeAiCanvasRuntimeSkillCatalog(existing, hydrated)
+    .map((skill) => normalizeAiCanvasRuntimeSkill(skill))
+    .filter(Boolean);
+  if (!skills.length) return;
+  context.skillCatalog = skills;
+  await context.injectRuntimeCatalogs?.({ skillCatalog: skills });
+}
+
+async function hydrateAiCanvasRuntimePromptSkills(runtimeStore, input = {}, context = {}) {
+  const ids = Array.isArray(input?.plazaSkillIds)
+    ? [...new Set(input.plazaSkillIds.map((id) => String(id ?? "").trim()).filter(Boolean))]
+    : [];
+  const api = context.api ?? context.creatorApi;
+  if (!ids.length || typeof api?.getSkillDetail !== "function") return;
+  const state = runtimeStore?.getState?.();
+  const catalog = [
+    ...(Array.isArray(state?.userSkills) ? state.userSkills : []),
+    ...(Array.isArray(context?.skillCatalog) ? context.skillCatalog : []),
+    ...(Array.isArray(context?.skills) ? context.skills : []),
+  ];
+  const rows = ids.map((id) => (
+    catalog.find((skill) => String(skill?.id ?? skill?.skillId ?? "").trim() === id) ?? { id }
+  ));
+  await injectHydratedAiCanvasRuntimeSkills(api, rows, context, runtimeStore);
 }
 
 function plazaSkillTokensForAiCanvasRuntimePrompt(input = {}, runtimeStore, context = {}) {
@@ -2412,6 +2498,7 @@ async function authorizeAiCanvasRuntimePromptAttachments(conversationId, files =
 }
 
 async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, context = {}) {
+  await hydrateAiCanvasRuntimePromptSkills(runtimeStore, input, context);
   const skillTokens = plazaSkillTokensForAiCanvasRuntimePrompt(input, runtimeStore, context);
   const withSkills = applyAiCanvasRuntimePlazaSkillTokens(String(input.text ?? input.content ?? ""), skillTokens);
   const state = runtimeStore?.getState?.();
@@ -2732,7 +2819,8 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
 
 function mountStandaloneAiCanvasRuntime(surface, context = {}) {
   globalThis.process ??= { env: { NODE_ENV: "production" } };
-  aiCanvasRuntimePromise ??= import("/ai-canvas-runtime/runtime.js");
+  prefetchAiCanvasRuntimeModule();
+  aiCanvasRuntimePromise ??= import(AI_CANVAS_RUNTIME_MODULE_URL);
   return aiCanvasRuntimePromise.then((runtimeModule) => {
     const mountAiCanvasRuntime = runtimeModule?.mountAiCanvasRuntime;
     const runtimeStore = runtimeModule?.useAppStore ?? runtimeModule?.t;
@@ -2740,7 +2828,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260914-06";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260915-01";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -3371,6 +3459,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       api: context.api ?? context.creatorApi,
       modelCatalog: context.modelCatalog ?? context.models,
       skillCatalog: context.skillCatalog ?? context.skills,
+      injectRuntimeCatalogs: context.injectRuntimeCatalogs,
       ...(context.document !== undefined || context.canvasDocument !== undefined
         ? {
             document: normalizeAiCanvasRuntimeDocument(
@@ -3458,6 +3547,14 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           themeBridge.update(next.theme);
           configBridge.update(next.theme);
         }
+        if (next.modelCatalog !== undefined) runtimeContext.modelCatalog = next.modelCatalog;
+        if (next.models !== undefined && next.modelCatalog === undefined) runtimeContext.modelCatalog = next.models;
+        if (next.skillCatalog !== undefined || next.skills !== undefined) {
+          runtimeContext.skillCatalog = mergeAiCanvasRuntimeSkillCatalog(
+            runtimeContext.skillCatalog,
+            next.skillCatalog ?? next.skills,
+          );
+        }
         catalogBridge.update(next);
         hostProjectGuard.update(next);
         projectBridge.update(next);
@@ -3525,6 +3622,10 @@ const GLOBAL_TOAST_DURATION_MS = 2000;
 const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace", "getHomeRecommendations", "getSkills"]);
 
 async function bootstrap() {
+  if (isAiCanvasRuntimeDetailRoute()) prefetchAiCanvasRuntimeModule();
+  globalThis.window?.addEventListener?.("hashchange", () => {
+    if (isAiCanvasRuntimeDetailRoute()) prefetchAiCanvasRuntimeModule();
+  });
   renderInitialWorkbenchShell(root);
   const sessionPromise = creatorApi.getSession();
   const { initProductionWorkbench } = await productionWorkbenchPromise;

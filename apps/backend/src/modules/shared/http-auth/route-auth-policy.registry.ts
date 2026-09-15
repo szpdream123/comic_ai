@@ -279,6 +279,7 @@ export const criticalApiRouteAuthRegistrations = [
   { id: "creator.skills.create", method: "POST", path: "/api/creator/skills", policy: "user" },
   { id: "creator.skills.detail", method: "GET", path: "/api/creator/skills/{skillId}", policy: "user" },
   { id: "creator.skills.update", method: "PATCH", path: "/api/creator/skills/{skillId}", policy: "user" },
+  { id: "creator.skills.delete", method: "DELETE", path: "/api/creator/skills/{skillId}", policy: "user" },
   { id: "creator.skills.library.add", method: "POST", path: "/api/creator/skills/{skillId}/library", policy: "user" },
   { id: "creator.skills.favorite.add", method: "POST", path: "/api/creator/skills/{skillId}/favorite", policy: "user" },
   { id: "creator.skills.favorite.remove", method: "DELETE", path: "/api/creator/skills/{skillId}/favorite", policy: "user" },

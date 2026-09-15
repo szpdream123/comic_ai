@@ -84,6 +84,67 @@ describe("skill plaza admin review", { concurrency: false }, () => {
     }
   });
 
+  it("lets the owner hard-delete their own skill and rejects other users", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const ownerId = "91000000-0000-4000-8000-000000000011";
+      const otherId = "91000000-0000-4000-8000-000000000012";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+         VALUES ($1, '13800139011', 'Skill 作者', 'plain:test-password', 'active'),
+                ($2, '13800139012', '其他用户', 'plain:test-password', 'active')`,
+        [ownerId, otherId],
+      );
+      const service = createSkillPlazaService({ db });
+      const created = await service.create({
+        userId: ownerId,
+        name: "通用小说转剧本",
+        summary: "待审核草稿",
+        category: "general",
+        detail: {
+          introduction: "# SKILL.md\n\n把小说转成剧本。",
+          usageScene: "小说转剧本",
+          howToUse: "输入小说正文",
+          outputContent: "剧本",
+        },
+      });
+      const official = await service.createOfficial({
+        name: "官方短剧分镜导演",
+        summary: "把剧本拆成镜头表",
+        category: "short-drama",
+        status: "published",
+        files: [{ name: "SKILL.md", kind: "instruction", content: "## 做什么\n拆分镜头" }],
+        detail: {
+          introduction: "## 做什么\n拆分镜头",
+          usageScene: "短剧分镜",
+          howToUse: "输入剧本",
+          outputContent: "镜头表",
+        },
+      });
+
+      await assert.rejects(
+        () => service.deleteMine({ userId: otherId, skillId: String(created.id) }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_not_found",
+      );
+      await assert.rejects(
+        () => service.deleteMine({ userId: ownerId, skillId: String(official.id) }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_not_found",
+      );
+
+      const deleted = await service.deleteMine({ userId: ownerId, skillId: String(created.id) });
+      assert.deepEqual(deleted, { deleted: true, skillId: String(created.id) });
+
+      const mine = await service.listMine(ownerId);
+      assert.equal(mine.items.some((item) => String(item.id) === String(created.id)), false);
+      await assert.rejects(
+        () => service.getDetail({ skillId: String(created.id), userId: ownerId }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_not_found",
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("creates official skills with the same content fields as the frontend create form", async () => {
     const db = await createMigratedTestDb();
     try {

@@ -2082,6 +2082,10 @@ test("home workflow submission uploads a script and opens the shared episode wor
   workbench.ui.homeCreationMode = "workflow";
   workbench.ui.homeWorkflowScriptFile = { name: "第一集.txt", type: "text/plain" };
   workbench.ui.homeWorkflowScriptFileName = "第一集.txt";
+  workbench.ui.selectedEpisodePlazaSkillIds = ["plaza-skill-1"];
+  workbench.ui.episodePlazaOfficialSkills = [
+    { id: "plaza-skill-1", title: "项目工作流 Skill", category: "project-workflow" },
+  ];
   workbench.ui.membershipStatus = { status: "active" };
   workbench.ui.projectStyles = [{ code: "animation" }];
   workbench.ui.isCreateModalOpen = false;
@@ -2135,8 +2139,9 @@ test("home workflow submission uploads a script and opens the shared episode wor
   assert.deepEqual(calls[3][2], {
     scriptText: "第一集\n任小野走进雨夜车站。",
     skipScriptStage: true,
-    useDefaultWorkflowStages: true,
-    packages: null,
+    plazaSkillId: "plaza-skill-1",
+    plazaSkillIds: ["plaza-skill-1"],
+    modelCode: "deepseek-noval",
   });
   assert.equal(Object.hasOwn(calls[3][2], "instruction"), false);
   assert.equal(Object.hasOwn(calls[3][2], "resolveInstructionIntent"), false);

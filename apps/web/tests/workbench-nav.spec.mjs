@@ -226,6 +226,18 @@ test("skill create form exposes real categories instead of recommendation", () =
   assert.doesNotMatch(html, /<select name="coverType"/);
 });
 
+test("skill create content editor follows workbench theme tokens", async () => {
+  const css = await readFile(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+  assert.match(css, /\.skill-create-editor\s*\{[\s\S]*?background:\s*var\(--theme-/);
+  assert.match(css, /\.skill-create-page \.skill-create-editor-main\s*\{[\s\S]*?background:\s*var\(--theme-/);
+  assert.match(css, /\.skill-create-markdown-item textarea\s*\{[\s\S]*?color:\s*var\(--theme-text-primary/);
+  assert.match(css, /\.skill-create-line-numbers\s*\{[\s\S]*?color:\s*var\(--theme-/);
+  assert.match(css, /\.skill-create-page \.skill-create-preview\s*\{[\s\S]*?color:\s*var\(--theme-text-primary/);
+  assert.match(css, /\.skill-create-tree-row\.is-active,\s*\n\.skill-create-tree-row\.is-draft \{ background: var\(--theme-/);
+  assert.doesNotMatch(css, /\.skill-create-editor\s*\{[^}]*background:\s*#1c1c1f/);
+  assert.doesNotMatch(css, /\.skill-create-page \.skill-create-editor-main\s*\{[^}]*background:\s*#2a2a2e/);
+});
+
 test("skill create rejects more than 50 markdown files before submit", async () => {
   const source = await readFile(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   const start = source.indexOf('if (action === "create-skill")');
@@ -233,6 +245,92 @@ test("skill create rejects more than 50 markdown files before submit", async () 
   assert.notEqual(start, -1, "create-skill action exists");
   assert.match(block, /markdownFiles\.length > 50/);
   assert.match(block, /Skill 文件最多上传 50 个/);
+});
+
+test("skill plaza mine cards expose edit and delete with a confirm dialog", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "skills",
+      skillPlazaSection: "mine",
+      skillPlazaCategory: "general",
+      skillPlazaMine: [
+        { id: "skill-mine", title: "通用小说转剧本", category: "general", isMine: true, status: "draft", summary: "待审核" },
+      ],
+      skillPlazaDeleteConfirm: { skillId: "skill-mine" },
+    },
+  });
+  assert.match(html, /通用小说转剧本/);
+  assert.match(html, /data-action="open-skill-edit" data-skill-id="skill-mine"/);
+  assert.match(html, /data-action="request-delete-skill" data-skill-id="skill-mine"/);
+  assert.match(html, /id="skill-delete-title"/);
+  assert.match(html, /data-action="cancel-delete-skill"/);
+  assert.match(html, /data-action="confirm-delete-skill"/);
+});
+
+test("skill plaza mine cards do not expose delete on other people's skills", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    ui: {
+      activeNavTab: "skills",
+      skillPlazaSection: "catalog",
+      skillPlazaCategory: "general",
+      skillPlazaItems: [
+        { id: "skill-public", title: "官方短剧分镜导演", category: "general", isMine: false, summary: "官方" },
+      ],
+    },
+  });
+  assert.match(html, /官方短剧分镜导演/);
+  assert.doesNotMatch(html, /data-action="request-delete-skill"/);
+});
+
+test("confirming skill delete calls the creator API and refreshes mine", async () => {
+  const deleted = [];
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, user: { id: "user-1", phone: "13800138000" } },
+    api: {
+      async deleteSkill(skillId) {
+        deleted.push(skillId);
+        return { deleted: true, skillId };
+      },
+      async getSkillCategories() {
+        return { items: [{ id: "general", label: "通用技能" }] };
+      },
+      async getSkills() {
+        return { items: [] };
+      },
+      async getMySkills() {
+        return { items: [] };
+      },
+    },
+    ui: {
+      activeNavTab: "skills",
+      skillPlazaSection: "mine",
+      skillPlazaCategory: "general",
+      skillPlazaCategories: [{ id: "general", label: "通用技能" }],
+      skillPlazaQuery: "",
+      skillPlazaItems: [],
+      skillPlazaLibrary: [],
+      skillPlazaFavorites: [],
+      skillPlazaMine: [{ id: "skill-mine", title: "通用小说转剧本", isMine: true }],
+      skillPlazaDeleteConfirm: { skillId: "skill-mine" },
+      skillDetailItem: { id: "skill-mine", title: "通用小说转剧本", isMine: true },
+      toastQueue: [],
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-delete-skill" } });
+
+  assert.deepEqual(deleted, ["skill-mine"]);
+  assert.equal(workbench.ui.skillPlazaDeleteConfirm, null);
+  assert.equal(workbench.ui.skillDetailItem, null);
+  assert.equal(workbench.ui.skillPlazaSection, "mine");
+  assert.deepEqual(workbench.ui.skillPlazaMine, []);
+  assert.equal(workbench.ui.toast, "Skill 已删除。");
 });
 
 test("skill plaza recommended tab only shows admin-recommended skills", () => {

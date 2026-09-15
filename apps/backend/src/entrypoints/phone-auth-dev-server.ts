@@ -26810,6 +26810,15 @@ export function createPhoneAuthDevServer(
               previewStorageObjectId: body.previewStorageObjectId ? String(body.previewStorageObjectId) : null,
             }) });
           }
+          if (request.method === "DELETE" && skillMatch) {
+            return writeJson(response, {
+              status: 200,
+              body: await service.deleteMine({
+                userId: authenticated.user.id,
+                skillId: decodeURIComponent(skillMatch[1]),
+              }),
+            });
+          }
           const addMatch = pathname.match(/^\/api\/creator\/skills\/([^/]+)\/library$/);
           if (request.method === "POST" && addMatch) {
             return writeJson(response, { status: 200, body: await service.addToLibrary(authenticated.user.id, decodeURIComponent(addMatch[1])) });

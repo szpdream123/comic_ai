@@ -16,6 +16,7 @@ import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-
 import {
   EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
+  filterProjectWorkflowPlazaSkills,
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
   plazaSkillCreateCategories,
@@ -24,6 +25,7 @@ import {
   resolvePlazaSelectedSkills,
   resolvePlazaSkillCategories,
   sumEpisodePromptSkillCredits,
+  PROJECT_WORKFLOW_SKILL_CATEGORY,
 } from "./episode-prompt-skill-modal.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
@@ -1369,6 +1371,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
       query: ui.episodePlazaSkillQuery,
       loading: ui.episodePromptSkillLoading,
       categories: ui.skillPlazaCategories,
+      categoryFilter: PROJECT_WORKFLOW_SKILL_CATEGORY,
     })}
     ${renderCanvasTextSkillModal({
       show: ui.canvasTextSkillModalOpen === true
@@ -5944,10 +5947,10 @@ function resolveEpisodePromptSkillItems(ui = {}) {
 
 function resolveEpisodePlazaSkillItems(ui = {}) {
   return [
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official"),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library"),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine"),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaPrivateSkills, "private"),
+    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories),
+    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaLibrarySkills, "library", ui.skillPlazaCategories),
+    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaMineSkills, "mine", ui.skillPlazaCategories),
+    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaPrivateSkills, "private", ui.skillPlazaCategories),
   ];
 }
 
@@ -9210,7 +9213,8 @@ function renderSkillCreatePage(ui = {}) {
                 <button type="button" data-action="toggle-skill-create-upload-menu">上传</button>
                 <div class="skill-create-upload-menu" data-skill-create-upload-menu hidden>
                   <label>上传文件<input name="skillFiles" type="file" multiple accept="image/*,video/*,audio/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" /></label>
-                  <label>上传文件夹<input name="skillFolderFiles" type="file" multiple webkitdirectory directory accept=".md,.markdown,.txt,.csv,.json,.pdf,.docx,image/*,video/*,audio/*" /></label>
+                  <button type="button" data-action="upload-skill-create-folder">上传文件夹</button>
+                  <input name="skillFolderFiles" type="file" multiple hidden />
                 </div>
               </div>
               <button class="skill-create-icon-button" type="button" data-action="toggle-skill-create-editor-expand" title="放大" aria-label="放大">${renderCanvasIcon("fullscreen")}</button>
@@ -9343,8 +9347,8 @@ function renderSkillPlazaPage(ui = {}) {
       : "";
     return `<article class="skill-plaza-card" data-action="open-skill-detail" data-skill-id="${escapeAttr(item.id)}" tabindex="0" role="button">
       <div class="skill-plaza-card-cover">${cover ? `<img src="${escapeAttr(resolveApiUrl(cover))}" alt="" loading="lazy" />` : preview ? `<video src="${escapeAttr(resolveApiUrl(preview))}" muted playsinline preload="metadata" aria-label="Skill 效果视频"></video>` : `<span class="skill-plaza-card-cover-fallback">Skill</span>`}</div>
-      <div class="skill-plaza-card-body"><div class="skill-plaza-card-head"><h2>${escapeHtml(item.title ?? item.name ?? "未命名 Skill")}</h2><span class="skill-plaza-card-type">${escapeHtml(statusLabel || mediaLabel)}</span></div>${item.isMine ? `<button class="skill-plaza-edit" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(item.id)}">编辑</button>` : ""}
-      <p>${escapeHtml(item.summary ?? "")}</p>${item.isMine && item.reviewComment ? `<p class="skill-plaza-review">${escapeHtml(item.reviewComment)}</p>` : ""}<footer><span>${escapeHtml(item.author?.name ?? item.authorName ?? "官方")}</span><span>♧ ${Number(item.usageCount ?? 0).toLocaleString("zh-CN")}</span></footer></div>
+      <div class="skill-plaza-card-body"><div class="skill-plaza-card-head"><h2>${escapeHtml(item.title ?? item.name ?? "未命名 Skill")}</h2><span class="skill-plaza-card-type">${escapeHtml(statusLabel || mediaLabel)}</span></div>
+      <p>${escapeHtml(item.summary ?? "")}</p>${item.isMine && item.reviewComment ? `<p class="skill-plaza-review">${escapeHtml(item.reviewComment)}</p>` : ""}<footer><span>${escapeHtml(item.author?.name ?? item.authorName ?? "官方")}</span>${item.isMine ? `<div class="skill-plaza-card-actions"><button class="skill-plaza-edit" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(item.id)}">编辑</button><button class="skill-plaza-delete" type="button" data-action="request-delete-skill" data-skill-id="${escapeAttr(item.id)}">删除</button></div>` : `<span>♧ ${Number(item.usageCount ?? 0).toLocaleString("zh-CN")}</span>`}</footer></div>
     </article>`;
   };
   return `<section class="skill-plaza-page" aria-label="Skill 广场">
@@ -9352,7 +9356,8 @@ function renderSkillPlazaPage(ui = {}) {
     <nav class="skill-plaza-categories" aria-label="Skill 分类">${categories.map(([id, label]) => `<button type="button" class="${activeCategory === id ? "active" : ""}" data-action="set-skill-plaza-category" data-skill-category="${id}">${label}</button>`).join("")}</nav>
     ${ui.skillPlazaError ? `<p class="skill-plaza-error">${escapeHtml(ui.skillPlazaError)}</p>` : ""}
     <div class="skill-plaza-grid">${ui.skillPlazaLoading ? `<div class="skill-plaza-empty">正在加载 Skill...</div>` : items.length ? items.map(renderCard).join("") : `<div class="skill-plaza-empty">暂无公开 Skill</div>`}</div>
-    ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div>        <div class="skill-detail-actions"><button type="button" data-action="copy-skill-share-link" data-skill-id="${escapeAttr(detail.id)}" aria-label="分享" title="分享">${renderCanvasIcon("share")}</button>${detail.isMine ? `<button class="primary" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(detail.id)}">编辑</button>` : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${detail.isMine && detail.reviewComment ? section("审核意见", detail.reviewComment) : ""}${section("简介", detail.summary || detailText.summary)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
+    ${detail ? `<div class="skill-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="skill-detail-title"><section class="skill-detail-panel"><button class="skill-detail-close" type="button" data-action="close-skill-detail" aria-label="关闭">×</button><header class="skill-detail-header"><div><h2 id="skill-detail-title">${escapeHtml(detail.title ?? detail.name ?? "Skill")}</h2><p>${escapeHtml(detail.author?.name ?? detail.authorName ?? "官方")} · ${Number(detail.usageCount ?? 0).toLocaleString("zh-CN")} 次使用 · ☆ ${Number(detail.favoriteCount ?? 0).toLocaleString("zh-CN")}</p></div>        <div class="skill-detail-actions"><button type="button" data-action="copy-skill-share-link" data-skill-id="${escapeAttr(detail.id)}" aria-label="分享" title="分享">${renderCanvasIcon("share")}</button>${detail.isMine ? `<button class="primary" type="button" data-action="open-skill-edit" data-skill-id="${escapeAttr(detail.id)}">编辑</button><button class="skill-plaza-delete" type="button" data-action="request-delete-skill" data-skill-id="${escapeAttr(detail.id)}">删除</button>` : `<button class="skill-favorite-button ${detail.isFavorite ? "active" : ""}" type="button" data-action="toggle-skill-favorite" data-skill-id="${escapeAttr(detail.id)}" aria-label="${detail.isFavorite ? "取消收藏 Skill" : "收藏 Skill"}" title="${detail.isFavorite ? "取消收藏" : "收藏 Skill"}" aria-pressed="${detail.isFavorite ? "true" : "false"}">${detail.isFavorite ? "★" : "☆"}</button><button class="primary" type="button" data-action="add-skill-to-library" data-skill-id="${escapeAttr(detail.id)}" ${detail.isInLibrary ? "disabled" : ""}>${detail.isInLibrary ? "已添加" : "添加 Skill"}</button>`}</div></header>${detailMedia}<div class="skill-detail-content">${detail.isMine && detail.reviewComment ? section("审核意见", detail.reviewComment) : ""}${section("简介", detail.summary || detailText.summary)}${section("使用场景", detailText.usageScene)}${section("如何使用", detailText.howToUse)}${section("输出内容", detailText.outputContent)}${renderFileSection()}</div></section></div>` : ""}
+    ${ui.skillPlazaDeleteConfirm?.skillId ? `<div class="prompt-marketplace-confirm" role="dialog" aria-modal="true" aria-labelledby="skill-delete-title"><div><span>删除 Skill</span><h2 id="skill-delete-title">删除自己的 Skill？</h2><p>删除后将从「我的」和 Skill 广场下架，其他用户也无法继续添加。</p><footer><button type="button" data-action="cancel-delete-skill">取消</button><button type="button" class="danger" data-action="confirm-delete-skill">确认删除</button></footer></div></div>` : ""}
   </section>`;
 }
 

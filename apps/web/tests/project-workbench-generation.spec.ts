@@ -1438,6 +1438,9 @@ describe("production workbench home shell", () => {
         homeCreationMode: "workflow",
         homeWorkflowScriptFile: { name: "斗破.txt", type: "text/plain", size: 12 },
         selectedEpisodePlazaSkillIds: ["plaza-skill-1"],
+        episodePlazaOfficialSkills: [
+          { id: "plaza-skill-1", title: "项目工作流 Skill", category: "project-workflow" },
+        ],
         canvasProjectView: "detail",
         canvasProjects: [],
         selectedCanvasProjectId: "canvas-project-main",
@@ -53423,10 +53426,12 @@ describe("production workbench project tab", () => {
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "EP",
         episodePlazaOfficialSkills: [
-          { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", isRecommended: true, priceCredits: 12 },
+          { id: "plaza-official", title: "官方短剧 Skill", category: "project-workflow", isRecommended: true, priceCredits: 12 },
+          { id: "plaza-short-drama", title: "短剧改编 Skill", category: "short-drama", priceCredits: 8 },
         ],
         episodePlazaMineSkills: [
-          { id: "plaza-mine", title: "我的快节奏改编", category: "general", priceCredits: 23 },
+          { id: "plaza-mine", title: "我的快节奏改编", category: "project-workflow", priceCredits: 23 },
+          { id: "plaza-mine-general", title: "我的通用 Skill", category: "general", priceCredits: 5 },
         ],
         selectedEpisodePlazaSkillIds: ["plaza-official", "plaza-mine"],
         episodePromptSkillModalOpen: true,
@@ -53464,6 +53469,8 @@ describe("production workbench project tab", () => {
     assert.match(singleEpisodeHtml, />我的</);
     assert.match(singleEpisodeHtml, /搜索 Skill/);
     assert.match(singleEpisodeHtml, /我的快节奏改编/);
+    assert.doesNotMatch(singleEpisodeHtml, /短剧改编 Skill/);
+    assert.doesNotMatch(singleEpisodeHtml, /我的通用 Skill/);
     assert.match(singleEpisodeHtml, /已选 2 项/);
     assert.match(singleEpisodeHtml, /查看全部 Skill/);
     assert.match(singleEpisodeHtml, /AI 小说分镜 200 \+ 35积分/);
@@ -53497,10 +53504,11 @@ describe("production workbench project tab", () => {
         isSingleEpisodeModalOpen: true,
         selectedScriptConversionSkillId: "original-script-skill",
         episodePlazaOfficialSkills: [
-          { id: "plaza-official", title: "官方短剧 Skill", category: "short-drama", priceCredits: 0 },
+          { id: "plaza-official", title: "官方短剧 Skill", category: "project-workflow", priceCredits: 0 },
+          { id: "plaza-short-drama", title: "短剧改编 Skill", category: "short-drama", priceCredits: 8 },
         ],
         episodePlazaMineSkills: [
-          { id: "plaza-mine", title: "我的短剧 Skill", category: "short-drama", priceCredits: 9 },
+          { id: "plaza-mine", title: "我的短剧 Skill", category: "project-workflow", priceCredits: 9 },
         ],
         selectedEpisodePlazaSkillIds: ["plaza-official"],
       }),
@@ -53509,6 +53517,9 @@ describe("production workbench project tab", () => {
 
     await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-episode-prompt-skill-modal" } });
     await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-prompt-skill-source", skillSource: "mine" } });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-episode-prompt-skill-draft", episodeSkillId: "plaza-short-drama" },
+    });
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "select-episode-prompt-skill-draft", episodeSkillId: "plaza-mine" },
     });
@@ -53521,6 +53532,93 @@ describe("production workbench project tab", () => {
     assert.deepEqual(workbench.ui.selectedEpisodePlazaSkillIds, ["plaza-official", "plaza-mine"]);
     assert.equal(workbench.ui.episodePromptSkillModalOpen, false);
     assert.equal(workbench.ui.selectedScriptConversionSkillId, "original-script-skill");
+  });
+
+  it("opens the skill plaza on project-workflow from the single-episode picker", async () => {
+    const skillRequests = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getSkills(request) {
+          skillRequests.push(request);
+          return { items: [] };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        isSingleEpisodeModalOpen: true,
+        episodePromptSkillModalOpen: true,
+        skillPlazaCategory: "recommended",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-skill-plaza-from-picker" } });
+
+    assert.equal(workbench.ui.activeNavTab, "skills");
+    assert.equal(workbench.ui.skillPlazaCategory, "project-workflow");
+    assert.equal(workbench.ui.episodePromptSkillModalOpen, false);
+    assert.equal(skillRequests.at(-1)?.category, "project-workflow");
+  });
+
+  it("opens the skill plaza on project-workflow from the home workflow picker", async () => {
+    const skillRequests = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getSkills(request) {
+          skillRequests.push(request);
+          return { items: [] };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        homeCreationMode: "workflow",
+        isSingleEpisodeModalOpen: false,
+        episodePromptSkillModalOpen: true,
+        skillPlazaCategory: "recommended",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-skill-plaza-from-picker" } });
+
+    assert.equal(workbench.ui.activeNavTab, "skills");
+    assert.equal(workbench.ui.skillPlazaCategory, "project-workflow");
+    assert.equal(skillRequests.at(-1)?.category, "project-workflow");
+  });
+
+  it("keeps the skill plaza on the first category from the home Agent picker", async () => {
+    const skillRequests = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getSkills(request) {
+          skillRequests.push(request);
+          return { items: [] };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        homeCreationMode: "agent",
+        homeAgentSkillPickerOpen: true,
+        isSingleEpisodeModalOpen: false,
+        episodePromptSkillModalOpen: false,
+        skillPlazaCategory: "short-drama",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-skill-plaza-from-picker" } });
+
+    assert.equal(workbench.ui.activeNavTab, "skills");
+    assert.equal(workbench.ui.skillPlazaCategory, "recommended");
+    assert.equal(workbench.ui.homeAgentSkillPickerOpen, false);
+    assert.equal(skillRequests.at(-1)?.category, "recommended");
   });
 
   it("does not auto-select a plaza skill before the user confirms a choice", async () => {
@@ -53537,7 +53635,7 @@ describe("production workbench project tab", () => {
         async getSkills() {
           return {
             items: [
-              { id: "plaza-official-skill", title: "AI视频提示词优化", category: "general", priceCredits: 0 },
+              { id: "plaza-official-skill", title: "AI视频提示词优化", category: "project-workflow", priceCredits: 0 },
             ],
           };
         },
@@ -54355,7 +54453,7 @@ describe("production workbench project tab", () => {
           isSingleEpisodeModalOpen: true,
           singleEpisodeScript: "任小野把小草托付给闵婶子。",
           episodePlazaOfficialSkills: [
-            { id: "plaza-official-skill", title: "官方短剧 Skill", category: "short-drama", official: true, priceCredits: 0 },
+            { id: "plaza-official-skill", title: "官方短剧 Skill", category: "project-workflow", official: true, priceCredits: 0 },
           ],
         selectedEpisodePlazaSkillIds: ["plaza-official-skill"],
         }),
@@ -54527,7 +54625,7 @@ describe("production workbench project tab", () => {
         singleEpisodeScript: "工作流原始剧本。",
         singleEpisodeTextModelCode: "deepseek-noval",
         episodePlazaOfficialSkills: [
-          { id: "plaza-full-skill", title: "通用小说一键转分镜提取", summary: "一键生成工作流", outputContent: "场景、角色、道具和分镜表" },
+          { id: "plaza-full-skill", title: "通用小说一键转分镜提取", category: "project-workflow", summary: "一键生成工作流", outputContent: "场景、角色、道具和分镜表" },
         ],
         selectedEpisodePlazaSkillIds: ["plaza-full-skill"],
         episodeGenerationConfig: {
@@ -54586,7 +54684,7 @@ describe("production workbench project tab", () => {
         singleEpisodeScript: "任小野走入城门。",
         singleEpisodeTextModelCode: "deepseek-noval",
         episodePlazaOfficialSkills: [
-          { id: "plaza-full-skill", title: "通用小说一键转分镜提取", summary: "一键生成工作流", outputContent: "场景、角色、道具和分镜表" },
+          { id: "plaza-full-skill", title: "通用小说一键转分镜提取", category: "project-workflow", summary: "一键生成工作流", outputContent: "场景、角色、道具和分镜表" },
         ],
         selectedEpisodePlazaSkillIds: ["plaza-full-skill"],
         episodeGenerationConfig: {
@@ -54643,7 +54741,7 @@ describe("production workbench project tab", () => {
         singleEpisodeScript: "任小野进入乌坦城。",
         singleEpisodeTextModelCode: "deepseek-noval",
         episodePlazaOfficialSkills: [
-          { id: "plaza-character-skill", title: "漫画角色一致性", summary: "保持角色三视图一致", outputContent: "角色提示词" },
+          { id: "plaza-character-skill", title: "漫画角色一致性", category: "project-workflow", summary: "保持角色三视图一致", outputContent: "角色提示词" },
         ],
         selectedEpisodePlazaSkillIds: ["plaza-character-skill"],
         episodeGenerationConfig: {
@@ -55009,6 +55107,89 @@ describe("production workbench project tab", () => {
     assert.equal(backSignal?.aborted, true);
     assert.equal(backWorkbench.singleEpisodeAiPreviewAbortController, null);
     assert.equal(backWorkbench.ui.singleEpisodeAiPreview.status, "idle");
+  });
+
+  it("aborts the running storyboard preview even while incremental paints are in flight", async () => {
+    let capturedSignal = null;
+    let streamStarted;
+    const streamStartedPromise = new Promise((resolve) => {
+      streamStarted = resolve;
+    });
+    const waitForAbort = (signal) => new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      signal.addEventListener("abort", resolve, { once: true });
+    });
+    const overlay = {
+      patchCount: 0,
+      _outerHTML: "<section class=\"single-episode-ai-overlay\"></section>",
+      get outerHTML() {
+        return this._outerHTML;
+      },
+      set outerHTML(value) {
+        this._outerHTML = String(value ?? "");
+        this.patchCount += 1;
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (_projectId, _input, options = {}) {
+          capturedSignal = options.signal;
+          streamStarted();
+          yield { event: "script_delta", data: { text: "第一段实时剧本" } };
+          await waitForAbort(options.signal);
+          yield { event: "script_delta", data: { text: "关闭后不应继续写入" } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "detail",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector === ".single-episode-ai-overlay") {
+            return overlay;
+          }
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    const pendingPreview = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+    await streamStartedPromise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "close-ai-storyboard-preview" },
+    });
+    await pendingPreview;
+
+    assert.equal(capturedSignal?.aborted, true);
+    assert.equal(workbench.singleEpisodeAiPreviewAbortController, null);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "idle");
+    assert.doesNotMatch(String(workbench.ui.singleEpisodeAiPreview.scriptText ?? ""), /关闭后不应继续写入/);
   });
 
   it("builds a usable AI storyboard preview from completed stage rows when the final payload is missing", async () => {
@@ -57479,6 +57660,8 @@ describe("production workbench project tab", () => {
     assert.match(source, /SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS\s*=\s*450/);
     assert.match(source, /SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS\s*=\s*220/);
     assert.match(source, /scheduleSingleEpisodeAiTableSync\(workbench,\s*stage\)/);
+    assert.match(source, /function patchSingleEpisodeAiPreviewOverlay\(overlay, overlayHtml\)/);
+    assert.match(source, /if \(!patchSingleEpisodeAiPreviewOverlay\(overlay, overlayHtml\)\) \{\s*overlay\.outerHTML = overlayHtml;/);
     assert.doesNotMatch(source, /shouldRenderSingleEpisodeAiPreviewImmediately/);
     assert.doesNotMatch(source, /syncSingleEpisodeAiAssetTable\(workbench,\s*data\.stage\);\s*}\s*workbench\.ui\.singleEpisodeAiPreview\.activeStage/s);
   });
@@ -57493,6 +57676,19 @@ describe("production workbench project tab", () => {
     assert.match(source, /workbench\.ui\.singleEpisodeAiPreview\?\.status !== "ready"/);
     assert.match(source, /event\.stopPropagation\(\);[\s\S]*?handleAction\(workbench, commitTarget\)/);
     assert.match(source, /}, \{ capture: true \}\);/);
+  });
+
+  it("aborts AI storyboard generation on capture pointerdown for overlay close buttons", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /closest\?\.\('\[data-action="close-ai-storyboard-preview"\]'\)/);
+    assert.match(
+      source,
+      /root\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*?close-ai-storyboard-preview[\s\S]*?handleAction\(workbench, closeTarget\)[\s\S]*?\}, \{ capture: true \}\);/,
+    );
   });
 
   it("renders chapter storyboard rows from backend-defined columns", () => {
@@ -58637,7 +58833,7 @@ describe("storyboard state", () => {
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "EP",
         episodePlazaOfficialSkills: [
-          { id: "single-episode-skill", title: "单集小说改编", category: "general", official: true, priceCredits: 15 },
+          { id: "single-episode-skill", title: "单集小说改编", category: "project-workflow", official: true, priceCredits: 15 },
         ],
         selectedEpisodePlazaSkillIds: ["single-episode-skill"],
         episodeGenerationConfig: {
@@ -58733,12 +58929,13 @@ describe("storyboard state", () => {
         },
         async getSkills() {
           return { items: [
-            { id: "plaza-official-skill", title: "官方短剧 Skill", category: "short-drama", priceCredits: 0 },
+            { id: "plaza-official-skill", title: "官方短剧 Skill", category: "project-workflow", priceCredits: 0 },
+            { id: "plaza-short-drama", title: "短剧改编 Skill", category: "short-drama", priceCredits: 8 },
           ] };
         },
         async getMySkills() {
           return { items: [
-            { id: "plaza-mine-skill", title: "我的短剧 Skill", category: "general", priceCredits: 9 },
+            { id: "plaza-mine-skill", title: "我的短剧 Skill", category: "project-workflow", priceCredits: 9 },
           ] };
         },
         async getSkillLibrary() {

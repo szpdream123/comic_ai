@@ -315,6 +315,15 @@ function invalidateReadJsonCacheKey(key) {
   readJsonCache.delete(key);
 }
 
+function invalidateCreatorSkillListCaches() {
+  for (const key of [...fetchJsonCache.keys()]) {
+    if (key.startsWith("GET /api/creator/skills")) fetchJsonCache.delete(key);
+  }
+  for (const key of [...readJsonCache.keys()]) {
+    if (key.startsWith("GET /api/creator/skills")) invalidateReadJsonCacheKey(key);
+  }
+}
+
 function isProjectSelectionReadCacheKey(key) {
   return key === "GET /api/creator/state" || key.startsWith("GET /api/creator/assets/library");
 }
@@ -2912,7 +2921,12 @@ export const creatorApi = {
     params.set("page", String(Math.max(1, Number(input.page) || 1)));
     params.set("pageSize", String(Math.max(1, Math.min(50, Number(input.pageSize) || 20))));
     const suffix = params.size ? `?${params.toString()}` : "";
-    return fetchJson(`/api/creator/skills${suffix}`, { cache: "no-store", unwrapEnvelope: false });
+    const path = `/api/creator/skills${suffix}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 300000,
+      unwrapEnvelope: false,
+    });
   },
 
   getSkillLibrary() {
@@ -2924,7 +2938,12 @@ export const creatorApi = {
   },
 
   getMySkills() {
-    return fetchJson("/api/creator/skills?scope=mine", { cache: "no-store", unwrapEnvelope: false });
+    const path = "/api/creator/skills?scope=mine";
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 300000,
+      unwrapEnvelope: false,
+    });
   },
 
   getSkillDetail(skillId) {
@@ -2932,27 +2951,52 @@ export const creatorApi = {
   },
 
   createSkill(input) {
-    return postJson("/api/creator/skills", input);
+    return postJson("/api/creator/skills", input).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
   },
 
   updateSkill(skillId, input) {
-    return patchJson(`/api/creator/skills/${encodeURIComponent(skillId)}`, input);
+    return patchJson(`/api/creator/skills/${encodeURIComponent(skillId)}`, input).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
+  },
+
+  deleteSkill(skillId) {
+    return fetchJson(`/api/creator/skills/${encodeURIComponent(skillId)}`, { method: "DELETE" }).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
   },
 
   addSkillToLibrary(skillId) {
-    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/library`, {});
+    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/library`, {}).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
   },
 
   addSkillToFavorites(skillId) {
-    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/favorite`, {});
+    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/favorite`, {}).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
   },
 
   removeSkillFromFavorites(skillId) {
-    return fetchJson(`/api/creator/skills/${encodeURIComponent(skillId)}/favorite`, { method: "DELETE" });
+    return fetchJson(`/api/creator/skills/${encodeURIComponent(skillId)}/favorite`, { method: "DELETE" }).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
   },
 
   attachSkillFile(skillId, input) {
-    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/files`, input);
+    return postJson(`/api/creator/skills/${encodeURIComponent(skillId)}/files`, input).then((result) => {
+      invalidateCreatorSkillListCaches();
+      return result;
+    });
   },
 
   createAiStoryboardPreview(projectId, input, options = {}) {

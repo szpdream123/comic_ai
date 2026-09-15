@@ -728,6 +728,16 @@ export function createSkillPlazaService(deps: {
     return mapSkill({ ...row, is_in_library: true, is_favorite: false, is_mine: true });
   }
 
+  async function deleteMine(input: { userId: string; skillId: string }) {
+    const deleted = await queryOne<{ id: string }>(
+      deps.db,
+      "DELETE FROM skills WHERE id = $1 AND owner_user_id = $2 RETURNING id",
+      [input.skillId, input.userId],
+    );
+    if (!deleted) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在或不可删除");
+    return { deleted: true, skillId: deleted.id };
+  }
+
   async function addToLibrary(userId: string, skillId: string) {
     const skill = await queryOne<{ id: string }>(deps.db, "SELECT id FROM skills WHERE id = $1 AND status = 'published' AND visibility = 'public' AND owner_user_id IS DISTINCT FROM $2", [skillId, userId]);
     if (!skill) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在或不可添加");
@@ -860,5 +870,5 @@ export function createSkillPlazaService(deps: {
     return mapCategory(row);
   }
 
-  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, listCategories, createCategory, updateCategory, deleteCategory, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, findAccessibleSkillIdByName, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
+  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, listCategories, createCategory, updateCategory, deleteCategory, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, findAccessibleSkillIdByName, create, updateMine, deleteMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
 }

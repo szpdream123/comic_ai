@@ -14,6 +14,7 @@ import {
   AI_CANVAS_RUNTIME_KIND,
   applyAiCanvasRuntimeNodeModel,
   createAiCanvasRuntimeAdapter,
+  hydrateAiCanvasRuntimeSkillRows,
   normalizeAiCanvasRuntimeModel,
   normalizeAiCanvasRuntimeSkill,
   deserializeAiCanvasDocument,
@@ -292,7 +293,18 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
   const adapter = createAiCanvasRuntimeAdapter({
     creatorApi: {
       listCanvasAgentModels: async () => ({ models: [{ modelCode: "text-1", modelLabel: "文本模型", capabilities: { vision: true }, apiKey: "must-not-forward" }] }),
-      listGlobalGenerationConfig: async ({ mediaType }) => ({ models: [{ modelId: `${mediaType}-1`, modelName: `${mediaType}模型`, mediaType, apiKey: "must-not-forward" }] }),
+      listGlobalGenerationConfig: async (options = {}) => {
+        const mediaType = options?.mediaType;
+        const kinds = mediaType ? [mediaType] : ["image", "video", "audio"];
+        return {
+          models: kinds.map((kind) => ({
+            modelId: `${kind}-1`,
+            modelName: `${kind}模型`,
+            mediaType: kind,
+            apiKey: "must-not-forward",
+          })),
+        };
+      },
       getSkills: async () => ({ items: [{ id: "skill-1", name: "分镜 Skill", description: "用于分镜" }] }),
       getMySkills: async () => ({ items: [{ id: "skill-mine", name: "我的 Skill", summary: "私人", ownerUserId: "u1" }] }),
     },
@@ -302,6 +314,7 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
     },
   });
   const handle = await adapter.mount({}, { canvasProjectId: "canvas-catalog" });
+  await handle.catalogsReady;
   assert.deepEqual(runtimeContext.modelCatalog.map((model) => model.modelCode), ["text-1", "image-1", "video-1", "audio-1"]);
   assert.deepEqual(runtimeContext.skillCatalog, [{
     id: "skill-1",
@@ -328,40 +341,72 @@ test("AI Canvas adapter loads backend model and Skill catalogs without secrets",
   await handle.dispose();
 });
 
+test("AI Canvas adapter chrome updates keep injected catalogs", async () => {
+  const updates = [];
+  const adapter = createAiCanvasRuntimeAdapter({
+    creatorApi: {
+      listCanvasAgentModels: async () => ({ models: [{ modelCode: "text-1", modelLabel: "文本模型" }] }),
+      listGlobalGenerationConfig: async () => ({ models: [{ modelId: "image-1", modelName: "图片模型", mediaType: "image" }] }),
+      getSkills: async () => ({ items: [{ id: "skill-1", name: "分镜 Skill" }] }),
+      getMySkills: async () => ({ items: [] }),
+    },
+    mountRuntime: async () => ({
+      update(next) { updates.push(next); },
+      dispose() {},
+    }),
+  });
+  const handle = await adapter.mount({}, { canvasProjectId: "canvas-keep-catalog" });
+  await handle.catalogsReady;
+  updates.length = 0;
+  await handle.update({ ui: { selectedCanvasNodeId: "n1" }, selectionOnly: true });
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].modelCatalog[0].modelCode, "text-1");
+  assert.equal(updates[0].skillCatalog[0].id, "skill-1");
+  await handle.dispose();
+});
+
 test("AI Canvas adapter hydrates plaza skills from SKILL.md and only the files it names", async () => {
   const detailCalls = [];
   let runtimeContext;
-  const adapter = createAiCanvasRuntimeAdapter({
-    creatorApi: {
-      getSkills: async () => ({ items: [{ id: "skill-1", name: "短剧流水线", summary: "广场摘要" }] }),
-      getMySkills: async () => ({ items: [] }),
-      getSkillDetail: async (skillId) => {
-        detailCalls.push(skillId);
-        return {
-          skill: {
-            id: skillId,
-            name: "短剧流水线",
-            summary: "广场摘要",
-            detail: { introduction: "ignored introduction" },
+  const creatorApi = {
+    getSkills: async () => ({ items: [{ id: "skill-1", name: "短剧流水线", summary: "广场摘要" }] }),
+    getMySkills: async () => ({ items: [] }),
+    getSkillDetail: async (skillId) => {
+      detailCalls.push(skillId);
+      return {
+        skill: {
+          id: skillId,
+          name: "短剧流水线",
+          summary: "广场摘要",
+          detail: { introduction: "ignored introduction" },
+        },
+        files: [
+          {
+            name: "SKILL.md",
+            content: "---\nname: short-drama-pipeline\n---\n# 入口\n先读 `guides/scene.md`，再读 [角色](packs/character.md)。",
           },
-          files: [
-            {
-              name: "SKILL.md",
-              content: "---\nname: short-drama-pipeline\n---\n# 入口\n先读 `guides/scene.md`，再读 [角色](packs/character.md)。",
-            },
-            { name: "guides/scene.md", content: "场景提取正文" },
-            { name: "packs/character.md", content: "角色提取正文" },
-            { name: "unused/notes.md", content: "不应注入" },
-          ],
-        };
-      },
+          { name: "guides/scene.md", content: "场景提取正文" },
+          { name: "packs/character.md", content: "角色提取正文" },
+          { name: "unused/notes.md", content: "不应注入" },
+        ],
+      };
     },
+  };
+  const adapter = createAiCanvasRuntimeAdapter({
+    creatorApi,
     mountRuntime: async (_surface, context) => {
       runtimeContext = context;
       return { dispose() {} };
     },
   });
   const handle = await adapter.mount({}, { canvasProjectId: "canvas-skill-md" });
+  await handle.catalogsReady;
+  assert.deepEqual(detailCalls, []);
+  assert.equal(runtimeContext.skillCatalog[0]?.content, "");
+  const hydrated = await hydrateAiCanvasRuntimeSkillRows(creatorApi, runtimeContext.skillCatalog);
+  await runtimeContext.injectRuntimeCatalogs({
+    skillCatalog: hydrated.map((skill) => normalizeAiCanvasRuntimeSkill(skill)).filter(Boolean),
+  });
   assert.deepEqual(detailCalls, ["skill-1"]);
   const skill = runtimeContext.skillCatalog[0];
   assert.equal(skill.id, "skill-1");
@@ -953,7 +998,8 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
     "utf8",
   );
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
-  assert.match(appSource, /import\("\/ai-canvas-runtime\/runtime\.js"\)/);
+  assert.match(appSource, /const AI_CANVAS_RUNTIME_MODULE_URL = "\/ai-canvas-runtime\/runtime\.js"/);
+  assert.match(appSource, /import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
   assert.doesNotMatch(adapterSource, /mountAssistantLauncher|ai-canvas-agent-launcher/);
   assert.match(chatPanelSource, /chat-panel-input-toolbar-left/);
   assert.match(chatPanelSource, /tabler:file-spark/);

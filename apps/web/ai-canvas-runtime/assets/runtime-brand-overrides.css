@@ -43,6 +43,21 @@
   display: none;
 }
 
+/* Use the same product favicon for the empty canvas mark, and hide the title copy. */
+.flex.flex-col.items-center.gap-4.opacity-50 > img.h-16.w-16.select-none {
+  box-sizing: border-box !important;
+  width: 64px !important;
+  height: 64px !important;
+  padding-top: 64px !important;
+  overflow: hidden !important;
+  background: url("/assets/brand/lingxi-ai-favicon.png") center / cover no-repeat !important;
+  border-radius: 4px !important;
+}
+
+.flex.flex-col.items-center.gap-4.opacity-50 > .text-center > .text-lg.font-medium.text-canvas-text.mb-1 {
+  display: none !important;
+}
+
 .app-header .app-brand > svg {
   width: 14px !important;
   height: 14px !important;

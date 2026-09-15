@@ -20,6 +20,13 @@ export const EPISODE_PLAZA_SKILL_CATEGORIES = [
   { id: "project-workflow", label: "项目工作流", shortLabel: "工作流" },
 ];
 
+export const PROJECT_WORKFLOW_SKILL_CATEGORY = "project-workflow";
+
+export function filterProjectWorkflowPlazaSkills(items = [], source = "", categories = EPISODE_PLAZA_SKILL_CATEGORIES) {
+  return normalizePlazaEpisodeSkills(items, source, categories)
+    .filter((item) => item.category === PROJECT_WORKFLOW_SKILL_CATEGORY);
+}
+
 export function resolvePlazaSkillCategories(items) {
   const mapped = (Array.isArray(items) ? items : [])
     .map((item) => {
@@ -227,6 +234,7 @@ export function renderEpisodePromptSkillModal({
   privatePagination = {},
   loading = false,
   confirmLabel = "确认选择",
+  categoryFilter = "",
 } = {}) {
   if (!show) return "";
   const plazaMode = variant === "plaza";
@@ -242,6 +250,7 @@ export function renderEpisodePromptSkillModal({
       loading,
       actions,
       categories,
+      categoryFilter,
     });
   }
   const normalizedSource = sourceTab === "private" ? "private" : "official";
@@ -514,6 +523,7 @@ function renderPlazaSkillPickerModal({
   loading = false,
   actions = {},
   categories = EPISODE_PLAZA_SKILL_CATEGORIES,
+  categoryFilter = "",
 } = {}) {
   const resolvedActions = {
     close: "close-episode-prompt-skill-modal",
@@ -528,9 +538,9 @@ function renderPlazaSkillPickerModal({
   const normalizedSource = sourceTab === "library" || sourceTab === "mine" || sourceTab === "private"
     ? (sourceTab === "private" ? "mine" : sourceTab)
     : "official";
-  const official = normalizePlazaEpisodeSkills(officialSkills, "official", categories);
-  const library = normalizePlazaEpisodeSkills(librarySkills.length ? librarySkills : [], "library", categories);
-  const mine = normalizePlazaEpisodeSkills(mineSkills.length ? mineSkills : privateSkills, "mine", categories);
+  const official = applyPlazaCategoryFilter(normalizePlazaEpisodeSkills(officialSkills, "official", categories), categoryFilter);
+  const library = applyPlazaCategoryFilter(normalizePlazaEpisodeSkills(librarySkills.length ? librarySkills : [], "library", categories), categoryFilter);
+  const mine = applyPlazaCategoryFilter(normalizePlazaEpisodeSkills(mineSkills.length ? mineSkills : privateSkills, "mine", categories), categoryFilter);
   const sourceSkills = normalizedSource === "library" ? library : normalizedSource === "mine" ? mine : official;
   const queryText = String(query ?? "").trim().toLowerCase();
   const visibleSkills = sourceSkills.filter((skill) =>
@@ -575,6 +585,12 @@ function renderPlazaSkillPickerModal({
       </div>
     </section>
   `;
+}
+
+function applyPlazaCategoryFilter(skills = [], categoryFilter = "") {
+  const category = String(categoryFilter ?? "").trim();
+  if (!category) return skills;
+  return (Array.isArray(skills) ? skills : []).filter((skill) => skill.category === category);
 }
 
 function renderPlazaSourceTab(id, label, activeTab, action) {
