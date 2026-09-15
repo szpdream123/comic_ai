@@ -3,7 +3,7 @@ import {
   consumeFirstLoginOnboarding,
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
-import { normalizeAiCanvasRuntimeGrouping } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import { applyAiCanvasRuntimeNodeModel, normalizeAiCanvasRuntimeGrouping } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
 import {
   normalizePlazaEpisodeSkills,
@@ -692,6 +692,7 @@ function normalizeAiCanvasRuntimeNode(node, index = 0, options = {}) {
   delete nextData.ports;
   if (!nextData.role && type.startsWith("source-")) nextData.role = "source";
   if (!nextData.role && type.startsWith("ai-")) nextData.role = "generator";
+  applyAiCanvasRuntimeNodeModel(nextData, type);
   return {
     ...node,
     id: String(node.id ?? `node-${index + 1}`),
@@ -1148,7 +1149,11 @@ async function createAiCanvasRuntimeProjectBridge(context = {}) {
         && state.switchingProjectName === null
         && Array.isArray(state.projects)
         && state.projects.length === projects.length
-        && state.projects.every((project, index) => project.id === projects[index].id && project.name === projects[index].name)
+        && state.projects.every((project, index) => (
+          project.id === projects[index].id
+          && project.name === projects[index].name
+          && JSON.stringify(project.settings?.defaultModels ?? null) === JSON.stringify(projects[index].settings?.defaultModels ?? null)
+        ))
       ) {
         return;
       }
@@ -2099,6 +2104,16 @@ function applyAiCanvasRuntimePlazaSkillTokens(text, tokens = []) {
   return next.trim();
 }
 
+const AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES = 256 * 1024;
+const AI_CANVAS_RUNTIME_JSZIP_SRC = "/vendor/jszip/dist/jszip.min.js";
+let aiCanvasRuntimeJsZipPromise = null;
+
+function aiCanvasRuntimeAttachmentExtension(file = {}) {
+  const name = String(file?.name ?? "").toLowerCase();
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index) : "";
+}
+
 function isAiCanvasRuntimeTextAttachment(file = {}) {
   const type = String(file?.type ?? "").toLowerCase();
   const name = String(file?.name ?? "").toLowerCase();
@@ -2107,35 +2122,298 @@ function isAiCanvasRuntimeTextAttachment(file = {}) {
     || [".txt", ".md", ".markdown", ".csv", ".json"].some((extension) => name.endsWith(extension));
 }
 
-async function readAiCanvasRuntimePromptAttachment(file) {
-  const name = String(file?.name ?? "未命名附件").trim() || "未命名附件";
-  const marker = `【附件：${name}】`;
-  if (!isAiCanvasRuntimeTextAttachment(file) || typeof file?.text !== "function") return marker;
+function isAiCanvasRuntimeDocxAttachment(file = {}) {
+  const type = String(file?.type ?? "").toLowerCase();
+  return type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    || aiCanvasRuntimeAttachmentExtension(file) === ".docx";
+}
+
+function isAiCanvasRuntimePdfAttachment(file = {}) {
+  const type = String(file?.type ?? "").toLowerCase();
+  return type === "application/pdf" || aiCanvasRuntimeAttachmentExtension(file) === ".pdf";
+}
+
+function isAiCanvasRuntimeImageAttachment(file = {}) {
+  const type = String(file?.type ?? "").toLowerCase();
+  return type.startsWith("image/")
+    || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"].includes(aiCanvasRuntimeAttachmentExtension(file));
+}
+
+function isAiCanvasRuntimeVideoAttachment(file = {}) {
+  const type = String(file?.type ?? "").toLowerCase();
+  return type.startsWith("video/")
+    || [".mp4", ".webm", ".avi", ".mov", ".mkv"].includes(aiCanvasRuntimeAttachmentExtension(file));
+}
+
+async function readAiCanvasRuntimeFileBytes(file) {
+  if (typeof file?.arrayBuffer !== "function") return new Uint8Array();
+  const buffer = await file.arrayBuffer();
+  return buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+}
+
+function decodeAiCanvasRuntimeTextBytes(bytes) {
+  const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  if (source.length >= 2 && source[0] === 0xff && source[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(source);
+  }
+  if (source.length >= 2 && source[0] === 0xfe && source[1] === 0xff) {
+    return new TextDecoder("utf-16be").decode(source);
+  }
   try {
-    const body = String(await file.text()).trim();
-    return body ? `${marker}\n${body}` : marker;
+    return new TextDecoder("utf-8", { fatal: true }).decode(source);
+  } catch {}
+  try {
+    return new TextDecoder("gbk", { fatal: true }).decode(source);
+  } catch {}
+  return new TextDecoder("utf-8").decode(source);
+}
+
+function sliceAiCanvasRuntimeUtf8Bytes(bytes, maxBytes) {
+  const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  let end = Math.min(source.byteLength, Math.max(0, Number(maxBytes) || 0));
+  while (end > 0 && (source[end] & 0xc0) === 0x80) end -= 1;
+  return source.subarray(0, end);
+}
+
+function truncateAiCanvasRuntimeGrantText(text) {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(String(text ?? ""));
+  if (bytes.byteLength <= AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES) return String(text ?? "");
+  const notice = `\n\n[附件已截断：仅保留前 ${Math.floor(AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES / 1024)} KB 供助手读取]`;
+  const noticeBytes = encoder.encode(notice);
+  const budget = Math.max(0, AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES - noticeBytes.byteLength);
+  return `${new TextDecoder("utf-8").decode(sliceAiCanvasRuntimeUtf8Bytes(bytes, budget))}${notice}`;
+}
+
+function createAiCanvasRuntimeGrantFile(name, text, index = 0) {
+  const bytes = new TextEncoder().encode(String(text ?? ""));
+  const fileName = String(name ?? "未命名附件").trim() || "未命名附件";
+  const lastModified = Date.now() + Number(index || 0);
+  if (typeof File === "function") {
+    return new File([bytes], fileName, { type: "text/plain", lastModified });
+  }
+  const blob = new Blob([bytes], { type: "text/plain" });
+  try { blob.name = fileName; } catch {}
+  return blob;
+}
+
+function loadAiCanvasRuntimeJsZip() {
+  if (typeof globalThis.JSZip === "function") return Promise.resolve(globalThis.JSZip);
+  if (aiCanvasRuntimeJsZipPromise) return aiCanvasRuntimeJsZipPromise;
+  const documentRef = globalThis.document;
+  if (!documentRef?.createElement) {
+    return Promise.reject(new Error("JSZip 不可用"));
+  }
+  aiCanvasRuntimeJsZipPromise = new Promise((resolve, reject) => {
+    const existing = documentRef.querySelector?.(`script[src="${AI_CANVAS_RUNTIME_JSZIP_SRC}"]`);
+    const script = existing ?? documentRef.createElement("script");
+    const complete = () => {
+      if (typeof globalThis.JSZip === "function") resolve(globalThis.JSZip);
+      else reject(new Error("JSZip 不可用"));
+    };
+    script.addEventListener?.("load", complete, { once: true });
+    script.addEventListener?.("error", () => reject(new Error("JSZip 加载失败")), { once: true });
+    if (!existing) {
+      script.src = AI_CANVAS_RUNTIME_JSZIP_SRC;
+      script.async = true;
+      documentRef.head?.append?.(script);
+    } else if (typeof globalThis.JSZip === "function") {
+      resolve(globalThis.JSZip);
+    }
+  }).catch((error) => {
+    aiCanvasRuntimeJsZipPromise = null;
+    throw error;
+  });
+  return aiCanvasRuntimeJsZipPromise;
+}
+
+async function extractAiCanvasRuntimeDocxText(file) {
+  const JSZipCtor = await loadAiCanvasRuntimeJsZip();
+  const zip = await new JSZipCtor().loadAsync(await file.arrayBuffer());
+  const entry = zip.file("word/document.xml");
+  const xml = entry ? await entry.async("string") : "";
+  if (!xml) return "";
+  return xml
+    .replace(/<w:tab\b[^>]*\/>/g, "\t")
+    .replace(/<w:br\b[^>]*\/>/g, "\n")
+    .replace(/<w:p\b[^>]*>/g, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function extractAiCanvasRuntimePdfText(file) {
+  const pdfjs = await import("/vendor/pdfjs-dist/legacy/build/pdf.mjs");
+  const getDocument = pdfjs?.getDocument ?? pdfjs?.default?.getDocument;
+  if (typeof getDocument !== "function") throw new Error("PDF 解析不可用");
+  if (pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+    pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs-dist/legacy/build/pdf.worker.mjs";
+  }
+  const loadingTask = getDocument({
+    data: await readAiCanvasRuntimeFileBytes(file),
+    disableWorker: true,
+    disableFontFace: true,
+    isEvalSupported: false,
+    useSystemFonts: true,
+  });
+  const pdf = await loadingTask.promise;
+  const pages = [];
+  let extractedLength = 0;
+  try {
+    const pageCount = Math.min(Number(pdf.numPages) || 0, 200);
+    for (let pageNumber = 1; pageNumber <= pageCount && extractedLength < AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = (content.items ?? []).map((item) => item?.str ?? "").filter(Boolean).join(" ");
+      pages.push(text);
+      extractedLength += text.length;
+      page.cleanup?.();
+    }
+  } finally {
+    await pdf.destroy?.();
+  }
+  return pages.join("\n\n").trim();
+}
+
+async function normalizeAiCanvasRuntimeGrantFile(file, index = 0) {
+  const name = String(file?.name ?? "未命名附件").trim() || "未命名附件";
+  let text = "";
+  try {
+    if (isAiCanvasRuntimeDocxAttachment(file)) {
+      text = await extractAiCanvasRuntimeDocxText(file);
+      if (!text) text = `[无法从 Word 文档抽取文本：${name}]`;
+    } else if (isAiCanvasRuntimePdfAttachment(file)) {
+      text = await extractAiCanvasRuntimePdfText(file);
+      if (!text) text = `[无法从 PDF 抽取文本：${name}]`;
+    } else if (isAiCanvasRuntimeTextAttachment(file)) {
+      const bytes = await readAiCanvasRuntimeFileBytes(file);
+      if (bytes.byteLength <= AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES) {
+        try {
+          new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          return file;
+        } catch {}
+      }
+      text = decodeAiCanvasRuntimeTextBytes(bytes);
+    } else {
+      return null;
+    }
   } catch {
-    return marker;
+    text = `[无法读取附件：${name}]`;
+  }
+  return createAiCanvasRuntimeGrantFile(name, truncateAiCanvasRuntimeGrantText(text), index);
+}
+
+function createAiCanvasRuntimeAttachmentObjectUrl(file) {
+  try {
+    return typeof globalThis.URL?.createObjectURL === "function" ? globalThis.URL.createObjectURL(file) : "";
+  } catch {
+    return "";
   }
 }
 
-async function applyAiCanvasRuntimePromptAttachments(text, files = []) {
+function nextAiCanvasRuntimeAttachmentNodeId() {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ? `node-${uuid}` : `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function addAiCanvasRuntimeAttachmentSourceNode(runtimeStore, file, kind, index) {
+  const state = runtimeStore?.getState?.();
+  const addNode = typeof state?.addNode === "function"
+    ? state.addNode.bind(state)
+    : typeof state?.addNodeTransient === "function"
+      ? (node) => {
+        state.commitToHistory?.();
+        state.addNodeTransient(node);
+      }
+      : null;
+  if (typeof addNode !== "function") return null;
+  const url = createAiCanvasRuntimeAttachmentObjectUrl(file);
+  if (!url) return null;
+  const rawName = String(file?.name ?? "未命名附件").trim() || "未命名附件";
+  const label = rawName.replace(/[:}]/g, "-");
+  const id = nextAiCanvasRuntimeAttachmentNodeId();
+  const type = kind === "video" ? "ai-video" : "ai-image";
+  addNode({
+    id,
+    type,
+    position: { x: 80 + (index % 5) * 40, y: 80 + Math.floor(index / 5) * 40 },
+    data: {
+      label,
+      type,
+      role: "source",
+      fileName: rawName,
+      status: "success",
+      nodeWidth: 280,
+      nodeHeight: 160,
+      ...(type === "ai-video" ? { videoUrl: url } : { imageUrl: url }),
+    },
+  });
+  return { id, label };
+}
+
+async function prepareAiCanvasRuntimePromptAttachments(runtimeStore, files = []) {
+  const items = (Array.isArray(files) ? files : []).filter(Boolean);
+  const grantFiles = [];
+  const references = [];
+  let mediaIndex = 0;
+  let grantIndex = 0;
+  for (const file of items) {
+    if (isAiCanvasRuntimeImageAttachment(file) || isAiCanvasRuntimeVideoAttachment(file)) {
+      const kind = isAiCanvasRuntimeVideoAttachment(file) ? "video" : "image";
+      const reference = addAiCanvasRuntimeAttachmentSourceNode(runtimeStore, file, kind, mediaIndex);
+      if (reference) {
+        references.push(reference);
+        mediaIndex += 1;
+      }
+      continue;
+    }
+    const grantFile = await normalizeAiCanvasRuntimeGrantFile(file, grantIndex);
+    if (grantFile) {
+      grantFiles.push(grantFile);
+      grantIndex += 1;
+    }
+  }
+  return { grantFiles, references };
+}
+
+function applyAiCanvasRuntimePromptAttachmentMarkers(text, files = [], references = []) {
   let next = String(text ?? "");
   for (const file of Array.isArray(files) ? files : []) {
     if (!file) continue;
-    const block = await readAiCanvasRuntimePromptAttachment(file);
     const name = String(file?.name ?? "未命名附件").trim() || "未命名附件";
     const marker = `【附件：${name}】`;
-    next = next.includes(marker) ? next.replace(marker, block) : [next, block].filter(Boolean).join("\n");
+    if (!next.includes(marker)) next = [next, marker].filter(Boolean).join("\n");
+  }
+  for (const reference of Array.isArray(references) ? references : []) {
+    const id = String(reference?.id ?? "").trim();
+    const label = String(reference?.label ?? "未命名附件").trim() || "未命名附件";
+    if (!id) continue;
+    const marker = `@{${id}:${label}}`;
+    if (!next.includes(marker)) next = [next, marker].filter(Boolean).join("\n");
   }
   return next.trim();
+}
+
+async function authorizeAiCanvasRuntimePromptAttachments(conversationId, files = []) {
+  const id = String(conversationId ?? "").trim();
+  const candidates = (Array.isArray(files) ? files : []).filter(Boolean);
+  if (!id || !candidates.length) return [];
+  const main = await import("/ai-canvas-runtime/assets/main-upstream-665b2cc.js");
+  const authorize = main?.Qi ?? main?.ST;
+  if (typeof authorize !== "function") throw new Error("画布文件授权不可用");
+  return await authorize(id, candidates);
 }
 
 async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, context = {}) {
   const skillTokens = plazaSkillTokensForAiCanvasRuntimePrompt(input, runtimeStore, context);
   const withSkills = applyAiCanvasRuntimePlazaSkillTokens(String(input.text ?? input.content ?? ""), skillTokens);
-  const content = await applyAiCanvasRuntimePromptAttachments(withSkills, input.files);
-  if (!content) throw new Error("Agent 指令为空");
   const state = runtimeStore?.getState?.();
   if (!state) throw new Error("画布 Agent 未就绪");
   state.setChatPanelDetached?.(false);
@@ -2145,8 +2423,10 @@ async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, contex
     ? input.preferredModels
     : {};
   const configPatch = {};
+  const textModelId = resolveAiCanvasRuntimeAssistantMediaModelId(runtimeStore, preferred.text);
   const imageModelId = resolveAiCanvasRuntimeAssistantMediaModelId(runtimeStore, preferred.image);
   const videoModelId = resolveAiCanvasRuntimeAssistantMediaModelId(runtimeStore, preferred.video);
+  if (textModelId) configPatch.assistantModelId = textModelId;
   if (imageModelId) configPatch.assistantImageModelId = imageModelId;
   if (videoModelId) configPatch.assistantVideoModelId = videoModelId;
   if (Object.keys(configPatch).length) {
@@ -2177,6 +2457,10 @@ async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, contex
     ).trim();
   }
   if (!conversationId) throw new Error("画布会话未就绪");
+  const prepared = await prepareAiCanvasRuntimePromptAttachments(runtimeStore, input.files);
+  const content = applyAiCanvasRuntimePromptAttachmentMarkers(withSkills, input.files, prepared.references);
+  if (!content) throw new Error("Agent 指令为空");
+  await authorizeAiCanvasRuntimePromptAttachments(conversationId, prepared.grantFiles);
 
   const agentMode = resolveAiCanvasRuntimeAgentMode(input.mode);
   nextState.updateConversation?.(conversationId, { agentMode });

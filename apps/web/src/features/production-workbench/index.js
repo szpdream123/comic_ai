@@ -65,6 +65,7 @@ import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategor
 import { defaultUploadLimits, normalizeSkillFileName, resolveApiUrl, skillFileUploadLimits, validateUploadFile } from "../../shared/creator-api.js";
 import { PUBLIC_SEO_PAGE_BY_ID } from "../../shared/public-seo-content.js";
 import { resolveGenerationCreditCost } from "./generation-control-menu.js";
+import { resolveHomeAgentPreferredModels } from "./home-agent-model-picker.js";
 import { confirmCanvasAction } from "../new-canvas/canvas-ui-controls.js";
 import {
   clearResultImageAnnotation,
@@ -83,7 +84,9 @@ import {
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
   normalizePlazaSkillIds,
+  plazaSkillCreateCategories,
   resolvePlazaSelectedSkills,
+  resolvePlazaSkillCategories,
   resolvePlazaSkillWorkflowStages,
   syncEpisodePromptSkillDraft,
   togglePlazaSkillId,
@@ -184,6 +187,7 @@ import {
   mountNewCanvas,
   unmountNewCanvas,
 } from "../new-canvas/index.js";
+import { normalizeAiCanvasRuntimeProjectDefaultModels } from "../new-canvas/ai-canvas-runtime-adapter.js";
 import {
   applyCanvasPanoramaZoom,
   calculateCanvasStoryboardSourceRect,
@@ -2720,6 +2724,8 @@ function normalizeHomeAgentModelMediaType(value) {
   const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
   if (normalized.includes("video") || ["i2v", "t2v", "lip_sync"].includes(normalized)) return "video";
   if (normalized.includes("image") || ["i2i", "t2i", "multi_reference"].includes(normalized)) return "image";
+  if (normalized.includes("audio") || normalized.includes("speech") || ["tts", "music"].includes(normalized)) return "audio";
+  if (normalized.includes("text") || ["llm", "chat"].includes(normalized)) return "text";
   return normalized;
 }
 
@@ -2809,9 +2815,9 @@ function syncHomeAgentComposerFromDom(workbench, editor) {
   workbench.ui.homeAgentAttachments = nextAttachments;
   workbench.ui.homeAgentAttachmentCount = nextFiles.length;
   workbench.ui.homeAgentSelectedModels = Object.fromEntries(
-    ["image", "video"].map((kind) => [
+    ["text", "image", "video"].map((kind) => [
       kind,
-      modelKinds.has(kind) ? String(workbench.ui.homeAgentSelectedModels?.[kind] ?? "") : "",
+      kind === "text" || modelKinds.has(kind) ? String(workbench.ui.homeAgentSelectedModels?.[kind] ?? "") : "",
     ]),
   );
   workbench.ui.homeAgentComposerSegments = segments;
@@ -3130,7 +3136,7 @@ export async function initProductionWorkbench({
       homeAgentModeMenuOpen: false,
       homeAgentModelMenuOpen: false,
       homeAgentModelTab: "image",
-      homeAgentSelectedModels: { image: "", video: "" },
+      homeAgentSelectedModels: { text: "", image: "", video: "" },
       homeAgentSkillPickerOpen: false,
       homeAgentSkillSourceTab: "official",
       homeAgentSkillDraftPlazaIds: [],
@@ -3595,6 +3601,7 @@ export async function initProductionWorkbench({
       activePromptMarketplaceItem: null,
       skillPlazaSection: "catalog",
       skillPlazaCategory: "recommended",
+      skillPlazaCategories: EPISODE_PLAZA_SKILL_CATEGORIES,
       skillPlazaQuery: "",
       skillPlazaItems: [],
       skillPlazaLibrary: [],
@@ -8400,7 +8407,30 @@ async function syncPromptMarketplace(workbench) {
 
 const skillPlazaSyncPromises = new WeakMap();
 
+async function syncPlazaSkillCategories(workbench) {
+  if (typeof workbench.api?.getSkillCategories !== "function") {
+    workbench.ui.skillPlazaCategories = resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories);
+    return;
+  }
+  try {
+    const payload = await workbench.api.getSkillCategories();
+    const items = Array.isArray(payload?.items)
+      ? payload.items
+      : Array.isArray(payload?.data?.items)
+        ? payload.data.items
+        : [];
+    workbench.ui.skillPlazaCategories = resolvePlazaSkillCategories(items);
+  } catch {
+    workbench.ui.skillPlazaCategories = resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories);
+  }
+  const categories = resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories);
+  if (!categories.some((item) => item.id === workbench.ui.skillPlazaCategory)) {
+    workbench.ui.skillPlazaCategory = categories[0]?.id ?? "recommended";
+  }
+}
+
 async function syncSkillPlaza(workbench) {
+  await syncPlazaSkillCategories(workbench);
   const section = ["catalog", "library", "mine"].includes(workbench.ui.skillPlazaSection)
     ? workbench.ui.skillPlazaSection
     : "catalog";
@@ -8495,6 +8525,52 @@ async function syncScriptConversionSkills(workbench) {
   }
 }
 
+async function syncEpisodePlazaSkills(workbench) {
+  if (typeof workbench.api?.getSkills !== "function") {
+    workbench.ui.episodePlazaOfficialSkills = [];
+    workbench.ui.episodePlazaLibrarySkills = [];
+    workbench.ui.episodePlazaMineSkills = [];
+    workbench.ui.episodePlazaPrivateSkills = [];
+    workbench.ui.episodePromptSkillLoading = false;
+    return;
+  }
+  workbench.ui.episodePromptSkillLoading = true;
+  try {
+    await syncPlazaSkillCategories(workbench);
+    const authenticated = workbench.session?.authenticated !== false;
+    const [plazaCatalog, plazaMine, plazaLibrary] = await Promise.all([
+      workbench.api.getSkills({ category: "all", page: 1, pageSize: 50 }),
+      authenticated && typeof workbench.api.getMySkills === "function"
+        ? workbench.api.getMySkills()
+        : Promise.resolve({ items: [] }),
+      authenticated && typeof workbench.api.getSkillFavorites === "function"
+        ? workbench.api.getSkillFavorites()
+        : authenticated && typeof workbench.api.getSkillLibrary === "function"
+          ? workbench.api.getSkillLibrary()
+          : Promise.resolve({ items: [] }),
+    ]);
+    const plazaOfficial = normalizePlazaEpisodeSkills(plazaCatalog?.items, "official", workbench.ui.skillPlazaCategories);
+    const plazaLibraryItems = normalizePlazaEpisodeSkills(plazaLibrary?.items, "library", workbench.ui.skillPlazaCategories);
+    const plazaMineItems = normalizePlazaEpisodeSkills(plazaMine?.items, "mine", workbench.ui.skillPlazaCategories);
+    const plazaAll = [...plazaOfficial, ...plazaLibraryItems, ...plazaMineItems];
+    const currentPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds)
+      .filter((id) => plazaAll.some((item) => item.id === id));
+    workbench.ui.episodePlazaOfficialSkills = plazaOfficial;
+    workbench.ui.episodePlazaLibrarySkills = plazaLibraryItems;
+    workbench.ui.episodePlazaMineSkills = plazaMineItems;
+    workbench.ui.episodePlazaPrivateSkills = [...plazaLibraryItems, ...plazaMineItems];
+    workbench.ui.selectedEpisodePlazaSkillIds = currentPlazaIds;
+  } catch (error) {
+    workbench.ui.episodePlazaOfficialSkills = [];
+    workbench.ui.episodePlazaLibrarySkills = [];
+    workbench.ui.episodePlazaMineSkills = [];
+    workbench.ui.episodePlazaPrivateSkills = [];
+    workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "技能skill加载失败";
+  } finally {
+    workbench.ui.episodePromptSkillLoading = false;
+  }
+}
+
 async function syncEpisodePromptSkills(workbench) {
   if (
     typeof workbench.api?.getPromptSkills !== "function"
@@ -8512,6 +8588,7 @@ async function syncEpisodePromptSkills(workbench) {
   }
   workbench.ui.episodePromptSkillLoading = true;
   try {
+    await syncPlazaSkillCategories(workbench);
     const loadPromptCatalog = (source) => {
       if (typeof workbench.api?.getPromptSkills === "function") {
         return workbench.api.getPromptSkills({ source, category: "all", page: 1, pageSize: 100 });
@@ -8566,9 +8643,9 @@ async function syncEpisodePromptSkills(workbench) {
         return [category.id, selected?.id ?? fallback?.id ?? ""];
       })),
     };
-    const plazaOfficial = normalizePlazaEpisodeSkills(plazaCatalog?.items, "official");
-    const plazaLibraryItems = normalizePlazaEpisodeSkills(plazaLibrary?.items, "library");
-    const plazaMineItems = normalizePlazaEpisodeSkills(plazaMine?.items, "mine");
+    const plazaOfficial = normalizePlazaEpisodeSkills(plazaCatalog?.items, "official", workbench.ui.skillPlazaCategories);
+    const plazaLibraryItems = normalizePlazaEpisodeSkills(plazaLibrary?.items, "library", workbench.ui.skillPlazaCategories);
+    const plazaMineItems = normalizePlazaEpisodeSkills(plazaMine?.items, "mine", workbench.ui.skillPlazaCategories);
     const plazaAll = [...plazaOfficial, ...plazaLibraryItems, ...plazaMineItems];
     const currentPlazaIds = normalizePlazaSkillIds(workbench.ui.selectedEpisodePlazaSkillIds)
       .filter((id) => plazaAll.some((item) => item.id === id));
@@ -10649,6 +10726,7 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
           ...existing,
           ...project,
           title: project?.title ?? project?.name ?? existing.title,
+          ...(existing.settings ? { settings: existing.settings } : { settings: undefined }),
           ...(existing.parentId || project?.parentId
             ? { parentId: project?.parentId ?? existing.parentId }
             : {}),
@@ -20683,7 +20761,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-skill-plaza-category") {
-    workbench.ui.skillPlazaCategory = String(target.dataset.skillCategory ?? "recommended");
+    const category = String(target.dataset.skillCategory ?? "recommended");
+    const categories = resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories);
+    workbench.ui.skillPlazaCategory = categories.some((item) => item.id === category) ? category : (categories[0]?.id ?? "recommended");
     await syncSkillPlaza(workbench);
     render(workbench, { preserveNavigationShell: true });
     return;
@@ -20692,7 +20772,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-skill-plaza-section") {
     const section = String(target.dataset.section ?? "catalog");
     workbench.ui.skillPlazaSection = ["catalog", "library", "mine"].includes(section) ? section : "catalog";
-    workbench.ui.skillPlazaCategory = "recommended";
+    workbench.ui.skillPlazaCategory = resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories)[0]?.id ?? "recommended";
     workbench.ui.skillPlazaQuery = "";
     await syncSkillPlaza(workbench);
     render(workbench, { preserveNavigationShell: true });
@@ -20898,7 +20978,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       const payload = {
         name: String(data.get("name") ?? "").trim(),
-        category: EPISODE_PLAZA_SKILL_CATEGORIES.some((item) => item.id !== "recommended" && item.id === String(data.get("category") ?? ""))
+        category: plazaSkillCreateCategories(workbench.ui.skillPlazaCategories).some((item) => item.id === String(data.get("category") ?? ""))
           ? String(data.get("category"))
           : "general",
         summary: String(data.get("summary") ?? "").trim(),
@@ -21616,12 +21696,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-home-agent-model-tab") {
     const mediaType = String(target.dataset.modelKind ?? "");
-    if (["image", "video"].includes(mediaType)) {
+    if (["text", "image", "video"].includes(mediaType)) {
       workbench.ui.homeAgentModelTab = mediaType;
       try {
         await refreshActiveGenerationConfigForMedia(workbench, mediaType);
       } catch (error) {
-        workbench.ui.toast = `${mediaType === "video" ? "视频" : "图片"}模型加载失败：${friendlyError(error)}`;
+        workbench.ui.toast = `${mediaType === "video" ? "视频" : mediaType === "text" ? "文本" : "图片"}模型加载失败：${friendlyError(error)}`;
       }
     }
     render(workbench);
@@ -21641,14 +21721,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const configuredModelCode = String(model?.modelCode ?? model?.model_code ?? model?.id ?? "").trim();
       return model?.enabled !== false && configuredMediaType === mediaType && configuredModelCode === modelCode;
     });
-    if (["image", "video"].includes(mediaType) && modelCode && modelAvailable) {
-      workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
-        .filter((segment) => segment?.type !== "model" || segment.mediaType !== mediaType);
+    if (["text", "image", "video"].includes(mediaType) && modelCode && modelAvailable) {
       workbench.ui.homeAgentSelectedModels = {
         ...(workbench.ui.homeAgentSelectedModels ?? {}),
         [mediaType]: modelCode,
       };
-      insertHomeAgentComposerSegment(workbench, { type: "model", mediaType });
+      if (mediaType !== "text") {
+        workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+          .filter((segment) => segment?.type !== "model" || segment.mediaType !== mediaType);
+        insertHomeAgentComposerSegment(workbench, { type: "model", mediaType });
+      }
       workbench.ui.homeAgentModelMenuOpen = false;
     }
     render(workbench);
@@ -21658,13 +21740,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "remove-home-agent-model") {
     const mediaType = String(target.dataset.modelKind ?? "");
-    if (["image", "video"].includes(mediaType)) {
+    if (["text", "image", "video"].includes(mediaType)) {
       workbench.ui.homeAgentSelectedModels = {
         ...(workbench.ui.homeAgentSelectedModels ?? {}),
         [mediaType]: "",
       };
-      workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
-        .filter((segment) => segment?.type !== "model" || segment.mediaType !== mediaType);
+      if (mediaType !== "text") {
+        workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+          .filter((segment) => segment?.type !== "model" || segment.mediaType !== mediaType);
+      }
       render(workbench);
     }
     return;
@@ -21693,7 +21777,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!hasPlazaSkills && !workbench.ui.episodePromptSkillLoading) {
       workbench.ui.episodePromptSkillLoading = true;
       render(workbench);
-      await syncEpisodePromptSkills(workbench);
+      await syncEpisodePlazaSkills(workbench);
     }
     render(workbench);
     return;
@@ -21901,7 +21985,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         loadCanvasSettingsRecord(workbench),
         loadAppliedCanvasToolbar(workbench),
       ]);
-      const preferredModels = resolveHomeAgentPreferredModels(workbench);
+      const preferredModels = resolveHomeAgentPreferredModelsForWorkbench(workbench);
       const plazaSkillIds = homeAgentPlazaSkillIdsForSubmission(workbench);
       workbench.pendingHomeAgentPrompt = {
         text,
@@ -25990,7 +26074,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       : workbench.ui.episodePromptSkillSourceTab === "library"
         ? "library"
         : "catalog";
-    workbench.ui.skillPlazaCategory = "recommended";
+    workbench.ui.skillPlazaCategory = resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories)[0]?.id ?? "recommended";
     workbench.ui.skillPlazaQuery = String(workbench.ui.episodePlazaSkillQuery ?? "");
     await syncSkillPlaza(workbench);
     render(workbench);
@@ -26018,7 +26102,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-episode-prompt-skill-category") {
     const category = String(target.dataset.skillCategory ?? "");
-    if (EPISODE_PLAZA_SKILL_CATEGORIES.some((item) => item.id === category)) {
+    if (resolvePlazaSkillCategories(workbench.ui.skillPlazaCategories).some((item) => item.id === category)) {
       workbench.ui.episodePromptSkillCategory = category;
       if (target.dataset.skillSource === "private" || target.dataset.skillSource === "official") {
         workbench.ui.episodePromptSkillSourceTab = target.dataset.skillSource;
@@ -29950,11 +30034,24 @@ function normalizeCanvasProjects(ui = {}) {
 }
 
 function buildAiCanvasRuntimeProjectCatalog(workbench) {
-  return normalizeCanvasProjects(workbench?.ui).map((project) => ({
-    ...project,
-    name: project.title,
-    updatedAt: project.updatedAt ?? project.createdAt,
-  }));
+  const selectedId = String(workbench?.ui?.selectedCanvasProjectId ?? "").trim();
+  const settingsProjectId = String(workbench?.canvasSettingsLoadedProjectId ?? "").trim();
+  const selectedDefaultModels = selectedId && settingsProjectId === selectedId
+    ? normalizeAiCanvasRuntimeProjectDefaultModels(
+      workbench?.ui?.canvasSettingsRecord?.settings?.defaultModels,
+    )
+    : undefined;
+  return normalizeCanvasProjects(workbench?.ui).map((project) => {
+    const record = {
+      ...project,
+      name: project.title,
+      updatedAt: project.updatedAt ?? project.createdAt,
+    };
+    if (selectedId && project.id === selectedId && selectedDefaultModels) {
+      record.settings = { ...(project.settings ?? {}), defaultModels: selectedDefaultModels };
+    }
+    return record;
+  });
 }
 
 function touchRecentCanvasProject(ui, projectId) {
@@ -31604,7 +31701,7 @@ export function buildCanvasScriptWorkflowConfigurations(preview = {}) {
       kind,
       type: "ai-image",
       title,
-      prompt: buildSingleEpisodeAiComposedAssetPrompt(description, prompt) || `${title}参考图`,
+      prompt: prompt || `${title}参考图`,
     };
   };
   return [
@@ -37473,6 +37570,10 @@ export function homeAgentPlazaSkillIdsForSubmissionForTest(workbench) {
   return homeAgentPlazaSkillIdsForSubmission(workbench);
 }
 
+export function resolveHomeAgentPreferredModelsForTest(workbench) {
+  return resolveHomeAgentPreferredModelsForWorkbench(workbench);
+}
+
 export function setHomeWorkflowScriptFileForTest(workbench, file) {
   return setHomeWorkflowScriptFile(workbench, file);
 }
@@ -37643,6 +37744,10 @@ export function attachCanvasProjectMetaToDocumentForTest(workbench, canvasProjec
 
 export function applyCanvasProjectMetaFromDocumentForTest(workbench, canvasProjectId, document) {
   return applyCanvasProjectMetaFromDocument(workbench, canvasProjectId, document);
+}
+
+export function buildAiCanvasRuntimeProjectCatalogForTest(workbench) {
+  return buildAiCanvasRuntimeProjectCatalog(workbench);
 }
 
 export function materializeCanvasDocumentMediaForSaveForTest(workbench, document, canvasProjectId) {
@@ -38820,15 +38925,14 @@ function bindSingleEpisodeAiPreviewAssetPrompts(commitPayload, previewData) {
           || firstSingleEpisodeAiPreviewRowText(mergedRow, config.descriptionKeys);
         const prompt = firstSingleEpisodeAiPreviewRowText(previewRow, config.promptKeys)
           || firstSingleEpisodeAiPreviewRowText(mergedRow, config.promptKeys);
-        const composedPrompt = buildSingleEpisodeAiComposedAssetPrompt(description, prompt);
-        if (!composedPrompt) {
+        if (!description && !prompt) {
           return mergedRow;
         }
         return {
           ...mergedRow,
-          [config.descriptionField]: description || prompt,
-          [config.promptField]: composedPrompt,
-          imagePrompt: composedPrompt,
+          [config.descriptionField]: description,
+          [config.promptField]: prompt,
+          imagePrompt: prompt,
         };
       }),
     };
@@ -39314,7 +39418,7 @@ function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) 
 }
 
 function createSingleEpisodeAiLiveDisplayTables() {
-  const storyboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const storyboardColumns = ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
   return {
     script: {
       title: "剧本",
@@ -39323,17 +39427,17 @@ function createSingleEpisodeAiLiveDisplayTables() {
     },
     scenes: {
       title: "场景",
-      columns: ["场景名称", "场景描述"],
+      columns: ["场景名称", "场景描述", "场景图片提示词"],
       rows: [],
     },
     characters: {
       title: "角色",
-      columns: ["角色名称", "角色描述"],
+      columns: ["角色名称", "角色描述", "角色图片提示词"],
       rows: [],
     },
     props: {
       title: "道具",
-      columns: ["道具名称", "道具描述"],
+      columns: ["道具名称", "道具描述", "道具图片提示词"],
       rows: [],
     },
     storyboards: {
@@ -39387,19 +39491,19 @@ function finalizeSingleEpisodeAiPreviewData(preview, previewState) {
       fallbackCommitPayload?.scriptText ??
       "",
     ),
-    scenes: chooseSingleEpisodeAiPreviewRows(
+    scenes: preferSingleEpisodeAiCanonicalRows(
       finalizedCommitPayload?.scenes,
       fallbackCommitPayload?.scenes,
     ),
-    characters: chooseSingleEpisodeAiPreviewRows(
+    characters: preferSingleEpisodeAiCanonicalRows(
       finalizedCommitPayload?.characters,
       fallbackCommitPayload?.characters,
     ),
-    props: chooseSingleEpisodeAiPreviewRows(
+    props: preferSingleEpisodeAiCanonicalRows(
       finalizedCommitPayload?.props,
       fallbackCommitPayload?.props,
     ),
-    storyboards: chooseSingleEpisodeAiPreviewRows(
+    storyboards: preferSingleEpisodeAiCanonicalRows(
       finalizedCommitPayload?.storyboards,
       fallbackCommitPayload?.storyboards,
     ),
@@ -39558,6 +39662,16 @@ function resolveSingleEpisodeAiStreamStoryboardRows(previewState) {
   return rows;
 }
 
+function preferSingleEpisodeAiCanonicalRows(canonicalRows, fallbackRows) {
+  if (Array.isArray(canonicalRows) && canonicalRows.length > 0) {
+    return [...canonicalRows];
+  }
+  if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+    return [...fallbackRows];
+  }
+  return [];
+}
+
 function chooseSingleEpisodeAiPreviewRows(primaryRows, fallbackRows) {
   if (Array.isArray(primaryRows) && primaryRows.length > 0 && Array.isArray(fallbackRows) && fallbackRows.length > 0) {
     const merged = primaryRows.map((row, index) => {
@@ -39609,7 +39723,8 @@ function normalizeSingleEpisodeAiCommitPayloadRows(commitPayload, tableKey) {
 
 function buildSingleEpisodeAiPreviewTables(input = {}) {
   const defaults = createSingleEpisodeAiLiveDisplayTables();
-  const storyboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const liveStoryboardColumns = ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
   const mergedTables = mergeSingleEpisodeAiPreviewDisplayTables(
     input.previewTables,
     input.fallbackTables,
@@ -39645,22 +39760,22 @@ function buildSingleEpisodeAiPreviewTables(input = {}) {
     storyboards: mergedTables.storyboards?.rows,
   };
   const inferredSceneRows = inferSingleEpisodeAiSceneRowsFromStoryboards(
-    chooseSingleEpisodeAiPreviewRows(
-      rawRowsByTable.storyboards,
+    preferSingleEpisodeAiCanonicalRows(
       chooseSingleEpisodeAiPreviewRows(
-        commitRowsByTable.storyboards,
+        rawRowsByTable.storyboards,
         existingRowsByTable.storyboards,
       ),
+      commitRowsByTable.storyboards,
     ),
   );
-  const preferredStoryboardRows = chooseSingleEpisodeAiPreviewRows(
-    rawRowsByTable.storyboards,
+  const preferredStoryboardRows = preferSingleEpisodeAiCanonicalRows(
     chooseSingleEpisodeAiPreviewRows(
-      commitRowsByTable.storyboards,
+      rawRowsByTable.storyboards,
       input.streamStoryboardRows,
     ),
+    commitRowsByTable.storyboards,
   );
-  const storyboardsWithStreamFallback = chooseSingleEpisodeAiPreviewRows(
+  const storyboardsWithStreamFallback = preferSingleEpisodeAiCanonicalRows(
     preferredStoryboardRows,
     existingRowsByTable.storyboards,
   );
@@ -39678,34 +39793,35 @@ function buildSingleEpisodeAiPreviewTables(input = {}) {
     scenes: {
       ...defaults.scenes,
       ...(mergedTables.scenes ?? {}),
-      rows: chooseSingleEpisodeAiPreviewRows(
-        chooseSingleEpisodeAiPreviewRows(
-          chooseSingleEpisodeAiPreviewRows(rawRowsByTable.scenes, commitRowsByTable.scenes),
-          inferredSceneRows,
-        ),
-        existingRowsByTable.scenes,
+      rows: preferSingleEpisodeAiCanonicalRows(
+        chooseSingleEpisodeAiPreviewRows(rawRowsByTable.scenes, inferredSceneRows),
+        chooseSingleEpisodeAiPreviewRows(existingRowsByTable.scenes, commitRowsByTable.scenes),
       ),
     },
     characters: {
       ...defaults.characters,
       ...(mergedTables.characters ?? {}),
-      rows: chooseSingleEpisodeAiPreviewRows(
-        chooseSingleEpisodeAiPreviewRows(rawRowsByTable.characters, commitRowsByTable.characters),
-        existingRowsByTable.characters,
+      rows: preferSingleEpisodeAiCanonicalRows(
+        rawRowsByTable.characters,
+        chooseSingleEpisodeAiPreviewRows(existingRowsByTable.characters, commitRowsByTable.characters),
       ),
     },
     props: {
       ...defaults.props,
       ...(mergedTables.props ?? {}),
-      rows: chooseSingleEpisodeAiPreviewRows(
-        chooseSingleEpisodeAiPreviewRows(rawRowsByTable.props, commitRowsByTable.props),
-        existingRowsByTable.props,
+      rows: preferSingleEpisodeAiCanonicalRows(
+        rawRowsByTable.props,
+        chooseSingleEpisodeAiPreviewRows(existingRowsByTable.props, commitRowsByTable.props),
       ),
     },
     storyboards: {
       ...defaults.storyboards,
       ...(mergedTables.storyboards ?? {}),
-      columns: storyboardColumns,
+      columns: resolveSingleEpisodeAiPreviewStoryboardColumns(
+        mergedTables.storyboards?.columns,
+        liveStoryboardColumns,
+        chapterStoryboardColumns,
+      ),
       rows: storyboardsWithStreamFallback,
     },
   };
@@ -39778,9 +39894,21 @@ function resolveSingleEpisodeAiSceneDescriptionFromStoryboardText(sources = []) 
   return "";
 }
 
+function isChapterStoryboardColumnSet(columns = []) {
+  const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  return Array.isArray(columns)
+    && columns.length === chapterStoryboardColumns.length
+    && columns.every((column, index) => column === chapterStoryboardColumns[index]);
+}
+
+function resolveSingleEpisodeAiPreviewStoryboardColumns(sourceColumns, liveColumns, chapterColumns) {
+  return isChapterStoryboardColumnSet(sourceColumns) ? [...chapterColumns] : [...liveColumns];
+}
+
 function mergeSingleEpisodeAiPreviewDisplayTables(primaryTables, fallbackTables) {
   const defaults = createSingleEpisodeAiLiveDisplayTables();
-  const storyboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const liveStoryboardColumns = ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
   const result = {};
   for (const key of Object.keys(defaults)) {
     const defaultTable = defaults[key];
@@ -39791,7 +39919,11 @@ function mergeSingleEpisodeAiPreviewDisplayTables(primaryTables, fallbackTables)
     const candidates = [primaryColumns, fallbackColumns, defaultTable.columns]
       .filter((candidate) => Array.isArray(candidate) && candidate.length > 0);
     const columns = key === "storyboards"
-      ? storyboardColumns
+      ? resolveSingleEpisodeAiPreviewStoryboardColumns(
+          isChapterStoryboardColumnSet(primaryColumns) ? primaryColumns : fallbackColumns,
+          liveStoryboardColumns,
+          chapterStoryboardColumns,
+        )
       : candidates.sort((left, right) => right.length - left.length)[0];
     result[key] = {
       ...defaultTable,
@@ -39845,6 +39977,12 @@ function syncSingleEpisodeAiAssetTable(workbench, stage) {
   const rawMarkdown = rawMarkdownByStage[normalizedStage] ?? "";
   const raw = String(rawMarkdown || (step?.rawResponseText ?? step?.responseText ?? ""));
   let rows = parseSingleEpisodeAiStageRows(raw, tableKey);
+  if (!Array.isArray(rows) || rows.length === 0) {
+    const commitRows = normalizeSingleEpisodeAiCommitPayloadRows(previewData?.commitPayload, tableKey);
+    if (commitRows.length > 0) {
+      rows = commitRows;
+    }
+  }
   const hasStageRaw = String(raw).trim().length > 0;
   if ((!Array.isArray(rows) || rows.length === 0) && normalizedStage !== "shot" && !hasStageRaw) {
     const sharedShotRaw = String(
@@ -39872,9 +40010,15 @@ function syncSingleEpisodeAiAssetTable(workbench, stage) {
   }
   const tables = ensureSingleEpisodeAiLiveDisplayTables(workbench);
   if (normalizedStage === "shot") {
-    const chapterCharacters = parseSingleEpisodeAiStageRows(raw, "characters") ?? [];
-    const chapterScenes = parseSingleEpisodeAiStageRows(raw, "scenes") ?? [];
-    const chapterProps = parseSingleEpisodeAiStageRows(raw, "props") ?? [];
+    const chapterCharacters = normalizeSingleEpisodeAiCommitPayloadRows(previewData?.commitPayload, "characters").length
+      ? []
+      : (parseSingleEpisodeAiStageRows(raw, "characters") ?? []);
+    const chapterScenes = normalizeSingleEpisodeAiCommitPayloadRows(previewData?.commitPayload, "scenes").length
+      ? []
+      : (parseSingleEpisodeAiStageRows(raw, "scenes") ?? []);
+    const chapterProps = normalizeSingleEpisodeAiCommitPayloadRows(previewData?.commitPayload, "props").length
+      ? []
+      : (parseSingleEpisodeAiStageRows(raw, "props") ?? []);
     if (chapterCharacters.length > 0) {
       tables.characters = {
         ...(tables.characters ?? {}),
@@ -39901,7 +40045,13 @@ function syncSingleEpisodeAiAssetTable(workbench, stage) {
     ...(tables[tableKey] ?? {}),
     title: AI_LIVE_TABLE_TITLES[tableKey],
     ...(tableKey === "storyboards"
-      ? { columns: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"] }
+      ? {
+          columns: resolveSingleEpisodeAiPreviewStoryboardColumns(
+            tables[tableKey]?.columns,
+            ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+            ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+          ),
+        }
       : {}),
     rows: Array.isArray(rows) && rows.length === 0
       ? (Array.isArray(tables[tableKey]?.rows) ? tables[tableKey].rows : [])
@@ -40433,7 +40583,7 @@ function parseSingleEpisodeAiPlainCharacterRows(raw) {
 }
 
 function isSingleEpisodeAiCharacterFieldLabel(value) {
-  return /^(?:角色|人物|名称|描述|提示词|外貌|年龄|性别|服装|性格|场景|道具|画面|镜头|对白|动作|时间|地点|环境|背景)$/.test(
+  return /^(?:角色|人物|名称|描述|提示词|外貌|年龄|性别|服装|性格|场景|道具|画面|镜头|对白|动作|时间|地点|环境|背景|画幅|钩子类型|钩子|情绪曲线|情绪张力|情绪定位|情绪|核心问题|当前阶段|阶段说明|黄金三秒|起势场景|节拍)$/.test(
     String(value ?? "").replace(/\s+/g, ""),
   );
 }
@@ -40543,8 +40693,8 @@ function parseSingleEpisodeAiStandaloneAssetTableRows(raw, tableKey) {
         const prompt = String(cells[schema.promptIndex] ?? "").trim();
         return {
           characterName: name,
-          characterDescription: description || prompt,
-          characterImagePrompt: prompt || description,
+          characterDescription: description,
+          characterImagePrompt: prompt,
         };
       })
       .filter((row) => row.characterName || row.characterDescription || row.characterImagePrompt);
@@ -40557,8 +40707,8 @@ function parseSingleEpisodeAiStandaloneAssetTableRows(raw, tableKey) {
         const prompt = String(cells[schema.promptIndex] ?? "").trim();
         return {
           sceneName: name,
-          sceneDescription: description || prompt,
-          sceneImagePrompt: prompt || description,
+          sceneDescription: description,
+          sceneImagePrompt: prompt,
         };
       })
       .filter((row) => row.sceneName || row.sceneDescription || row.sceneImagePrompt);
@@ -40570,8 +40720,8 @@ function parseSingleEpisodeAiStandaloneAssetTableRows(raw, tableKey) {
       const prompt = String(cells[schema.promptIndex] ?? "").trim();
       return {
         propName: name,
-        propDescription: description || prompt,
-        propImagePrompt: prompt || description,
+        propDescription: description,
+        propImagePrompt: prompt,
       };
     })
     .filter((row) => row.propName || row.propDescription || row.propImagePrompt);
@@ -41316,6 +41466,10 @@ export function parseSingleEpisodeAiStageRowsForTest(raw, tableKey) {
   return parseSingleEpisodeAiStageRows(raw, tableKey);
 }
 
+export function buildSingleEpisodeAiPreviewTablesForTest(input = {}) {
+  return buildSingleEpisodeAiPreviewTables(input);
+}
+
 function compactSingleEpisodeAiMarkdownSection(lines) {
   return (Array.isArray(lines) ? lines : [])
     .map((line) => String(line ?? "").replace(/^\s*[-*•]\s*/, "").replace(/\*\*/g, "").trim())
@@ -41643,10 +41797,7 @@ function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
     return {
       sceneName: first("sceneName", "scene_name", "name", "locationName", "location_name", "scene"),
       sceneDescription,
-      sceneImagePrompt: buildSingleEpisodeAiComposedAssetPrompt(
-        sceneDescription,
-        first("sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"),
-      ),
+      sceneImagePrompt: first("sceneImagePrompt", "scene_image_prompt", "imagePrompt", "image_prompt", "prompt"),
     };
   }
   if (tableKey === "characters") {
@@ -41676,10 +41827,7 @@ function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
     return {
       characterName: first("characterName", "character_name", "name", "role", "character"),
       characterDescription,
-      characterImagePrompt: buildSingleEpisodeAiComposedAssetPrompt(
-        characterDescription,
-        first("characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"),
-      ),
+      characterImagePrompt: first("characterImagePrompt", "character_image_prompt", "imagePrompt", "image_prompt", "prompt"),
     };
   }
   if (tableKey === "props") {
@@ -41710,10 +41858,7 @@ function normalizeSingleEpisodeAiTableRecord(record, tableKey) {
     return {
       propName: first("propName", "prop_name", "name", "prop"),
       propDescription,
-      propImagePrompt: buildSingleEpisodeAiComposedAssetPrompt(
-        propDescription,
-        first("propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"),
-      ),
+      propImagePrompt: first("propImagePrompt", "prop_image_prompt", "imagePrompt", "image_prompt", "prompt"),
     };
   }
   const timeRange = normalizeSingleEpisodeAiPerShotTimeRange(
@@ -41808,18 +41953,6 @@ function buildSingleEpisodeAiAssetDescription(record, keys) {
     lines.push(text);
   }
   return lines.join("\n");
-}
-
-function buildSingleEpisodeAiComposedAssetPrompt(description, prompt) {
-  const normalizedDescription = String(description ?? "").trim();
-  const normalizedPrompt = String(prompt ?? "").trim();
-  if (normalizedDescription && normalizedPrompt) {
-    if (normalizedPrompt === normalizedDescription || normalizedPrompt.includes(normalizedDescription)) {
-      return normalizedPrompt;
-    }
-    return `${normalizedDescription}\n${normalizedPrompt}`;
-  }
-  return normalizedPrompt || normalizedDescription;
 }
 
 function buildSingleEpisodeAiLiveVideoPrompt(parts = {}) {
@@ -43033,11 +43166,14 @@ function mergeGenerationConfigForMedia(current = {}, next = {}, mediaType = "") 
       ...nextModels,
     ],
   };
-  if (expectedMediaType === "image" && current?.defaultVideoModelCode) {
+  if (expectedMediaType !== "image" && current?.defaultImageModelCode) {
+    merged.defaultImageModelCode = current.defaultImageModelCode;
+  }
+  if (expectedMediaType !== "video" && current?.defaultVideoModelCode) {
     merged.defaultVideoModelCode = current.defaultVideoModelCode;
   }
-  if (expectedMediaType === "video" && current?.defaultImageModelCode) {
-    merged.defaultImageModelCode = current.defaultImageModelCode;
+  if (expectedMediaType !== "text" && current?.defaultTextModelCode) {
+    merged.defaultTextModelCode = current.defaultTextModelCode;
   }
   return merged;
 }
@@ -43230,30 +43366,8 @@ function normalizeLegacyImageModelCode(value) {
     : modelCode;
 }
 
-function resolveHomeAgentPreferredModels(workbench) {
-  const configuredModels = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
-    ? workbench.ui.episodeGenerationConfig.models
-    : [];
-  const canvasDefaults = workbench.ui?.canvasSettingsRecord?.settings?.defaultModels ?? {};
-  const generationDefaults = workbench.ui?.episodeGenerationConfig ?? {};
-  return Object.fromEntries(
-    ["image", "video"].map((mediaType) => {
-      const selected = String(workbench.ui.homeAgentSelectedModels?.[mediaType] ?? "").trim();
-      const canvasDefault = String(canvasDefaults[mediaType] ?? "").trim();
-      const generationDefault = String(
-        mediaType === "image"
-          ? generationDefaults.defaultImageModelCode ?? ""
-          : generationDefaults.defaultVideoModelCode ?? "",
-      ).trim();
-      const firstAvailable = configuredModels.find((model) => (
-        model?.enabled !== false &&
-        normalizeHomeAgentModelMediaType(model?.mediaType ?? model?.media_type ?? model?.mediaKind) === mediaType &&
-        String(model?.modelCode ?? model?.model_code ?? model?.id ?? "").trim()
-      ));
-      const fallback = String(firstAvailable?.modelCode ?? firstAvailable?.model_code ?? firstAvailable?.id ?? "").trim();
-      return [mediaType, selected || canvasDefault || generationDefault || fallback];
-    }).filter(([, modelCode]) => modelCode),
-  );
+function resolveHomeAgentPreferredModelsForWorkbench(workbench) {
+  return resolveHomeAgentPreferredModels(workbench.ui ?? {});
 }
 
 function findConfiguredGenerationModel(workbench, modelCode) {
@@ -45102,9 +45216,11 @@ async function uploadLocalFile(workbench, file, category, options = {}) {
     projectId: Object.prototype.hasOwnProperty.call(options, "projectId")
       ? options.projectId
       : workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
-    canvasProjectId: Object.prototype.hasOwnProperty.call(options, "canvasProjectId")
-      ? options.canvasProjectId
-      : workbench.ui?.selectedCanvasProjectId ?? null,
+    canvasProjectId: firstUuidLikeValue(
+      Object.prototype.hasOwnProperty.call(options, "canvasProjectId")
+        ? options.canvasProjectId
+        : workbench.ui?.selectedCanvasProjectId ?? null,
+    ),
     onProgress: options.onProgress,
     signal: options.signal,
     uploadLimits: options.uploadLimits ?? getEpisodeUploadLimits(workbench),

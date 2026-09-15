@@ -363,6 +363,59 @@ async function resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, depe
   };
 }
 
+export function resolveAiCanvasRuntimeNodeMediaKind(type, data = {}) {
+  const nodeType = String(type ?? data?.type ?? "").trim();
+  if (nodeType === "ai-image" || nodeType === "ai-animation" || nodeType === "ai-panorama") return "image";
+  if (nodeType === "ai-video") return "video";
+  if (nodeType === "ai-audio") return "audio";
+  if (
+    nodeType === "ai-text"
+    || nodeType === "ai-markdown"
+    || nodeType === "ai-storyboard"
+    || nodeType === "ai-shotlist"
+    || nodeType === "ai-director"
+  ) return "text";
+  const mediaKind = String(data?.mediaKind ?? "").trim();
+  if (["image", "video", "audio", "text"].includes(mediaKind)) return mediaKind;
+  return "text";
+}
+
+export function toAiCanvasRuntimeSlashModelId(modelId, category = "text") {
+  const value = String(modelId ?? "").trim();
+  if (!value) return null;
+  const slash = value.indexOf("/");
+  if (slash > 0) {
+    return { model: value, provider: value.slice(0, slash) };
+  }
+  const kind = String(category ?? "text").trim() || "text";
+  return {
+    model: `general/comic-ai/${kind}/${value}`,
+    provider: "general",
+  };
+}
+
+export function applyAiCanvasRuntimeNodeModel(data = {}, type = "") {
+  const next = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  const nodeType = String(type || next.type || "").trim();
+  if (!nodeType.startsWith("ai-")) return next;
+  const raw = String(next.model ?? "").trim() || String(next.modelCode ?? "").trim();
+  const slash = toAiCanvasRuntimeSlashModelId(raw, resolveAiCanvasRuntimeNodeMediaKind(nodeType, next));
+  if (!slash) return next;
+  next.model = slash.model;
+  if (!String(next.provider ?? "").trim()) next.provider = slash.provider;
+  return next;
+}
+
+export function normalizeAiCanvasRuntimeProjectDefaultModels(defaultModels) {
+  if (!defaultModels || typeof defaultModels !== "object" || Array.isArray(defaultModels)) return undefined;
+  const next = {};
+  for (const [kind, value] of Object.entries(defaultModels)) {
+    const slash = toAiCanvasRuntimeSlashModelId(value, kind);
+    if (slash?.model) next[kind] = slash.model;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
 function normalizeRuntimeNodeType(node) {
   const type = String(node?.type ?? node?.data?.type ?? "").trim();
   if (AI_CANVAS_RUNTIME_NODE_TYPES.has(type)) return type;
@@ -429,7 +482,7 @@ function normalizeRuntimeNodeData(node, nextType) {
   } else if (rawStatus === "completed" || rawStatus === "succeeded") {
     next.status = "success";
   }
-  return next;
+  return applyAiCanvasRuntimeNodeModel(next, nextType);
 }
 
 function looksLikeCanvasVideoUrl(value) {

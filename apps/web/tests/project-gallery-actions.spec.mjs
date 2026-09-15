@@ -1886,10 +1886,22 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
   workbench.ui.homeAgentComposerSegments = [{ type: "text", text: "请按" }];
   workbench.homeAgentComposerCaret = { offset: 2 };
   workbench.api.getSkills = async (input) => {
-    calls.push(input);
+    calls.push(["getSkills", input]);
     return {
       items: [{ id: "official-style", title: "电影感画面", summary: "统一镜头语言", category: "general" }],
     };
+  };
+  workbench.api.getMySkills = async () => {
+    calls.push(["getMySkills"]);
+    return { items: [] };
+  };
+  workbench.api.getSkillFavorites = async () => {
+    calls.push(["getSkillFavorites"]);
+    return { items: [] };
+  };
+  workbench.api.getPromptSkills = async (input) => {
+    calls.push(["getPromptSkills", input]);
+    return { items: [] };
   };
 
   await handleWorkbenchActionForTest(workbench, {
@@ -1898,7 +1910,11 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
 
   assert.equal(workbench.ui.activeNavTab, "home");
   assert.equal(workbench.ui.homeAgentSkillPickerOpen, true);
-  assert.deepEqual(calls, [{ category: "all", page: 1, pageSize: 50 }]);
+  assert.deepEqual(calls, [
+    ["getSkills", { category: "all", page: 1, pageSize: 50 }],
+    ["getMySkills"],
+    ["getSkillFavorites"],
+  ]);
   assert.equal(workbench.ui.episodePlazaOfficialSkills.some((skill) => skill.id === "official-style"), true);
 
   await handleWorkbenchActionForTest(workbench, {
@@ -1946,6 +1962,35 @@ test("home Agent video model tab refreshes the video generation config", async (
     workbench.ui.episodeGenerationConfig.models.map((model) => model.modelCode),
     ["image-pro", "video-pro"],
   );
+  assert.equal(workbench.ui.episodeGenerationConfig.defaultImageModelCode, "image-pro");
+});
+
+test("home Agent text model tab refreshes the text generation config", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.episodeGenerationConfig = {
+    models: [{ mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro" }],
+    defaultImageModelCode: "image-pro",
+  };
+  workbench.ui.homeAgentModelTab = "image";
+  workbench.api.listGlobalGenerationConfig = async (input) => {
+    assert.deepEqual(input, { fresh: true, mediaType: "text" });
+    return {
+      models: [{ mediaType: "text", modelCode: "text-pro", modelLabel: "文本 Pro" }],
+      defaultTextModelCode: "text-pro",
+    };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-home-agent-model-tab", modelKind: "text" },
+  });
+
+  assert.equal(workbench.ui.homeAgentModelTab, "text");
+  assert.deepEqual(
+    workbench.ui.episodeGenerationConfig.models.map((model) => model.modelCode),
+    ["image-pro", "text-pro"],
+  );
+  assert.equal(workbench.ui.episodeGenerationConfig.defaultImageModelCode, "image-pro");
+  assert.equal(workbench.ui.episodeGenerationConfig.defaultTextModelCode, "text-pro");
 });
 
 test("home Agent video model can be inserted inline and removed independently", async () => {
@@ -1979,6 +2024,54 @@ test("home Agent video model can be inserted inline and removed independently", 
     { type: "text", text: "后文" },
   ]);
   assert.equal(workbench.ui.homeAgentSelectedModels.video, "");
+});
+
+test("home Agent text model is selected without inserting a composer chip", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.episodeGenerationConfig = {
+    models: [{ mediaType: "text", modelCode: "text-pro", modelLabel: "文本 Pro" }],
+  };
+  workbench.ui.homeAgentComposerSegments = [
+    { type: "text", text: "前文后文" },
+  ];
+  workbench.ui.homeAgentSelectedModels = { text: "", image: "", video: "" };
+  workbench.homeAgentComposerCaret = { offset: 2 };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "select-home-agent-model", modelKind: "text", modelCode: "text-pro" },
+  });
+
+  assert.deepEqual(workbench.ui.homeAgentComposerSegments, [
+    { type: "text", text: "前文后文" },
+  ]);
+  assert.equal(workbench.ui.homeAgentSelectedModels.text, "text-pro");
+});
+
+test("home Agent model menu loads text models with the generation config", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.homeAgentModelMenuOpen = false;
+  workbench.api.listGlobalGenerationConfig = async (input) => {
+    assert.equal(input.mediaType, undefined);
+    return {
+      models: [
+        { mediaType: "text", modelCode: "text-pro", modelLabel: "文本 Pro" },
+        { mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro" },
+      ],
+      defaultTextModelCode: "text-pro",
+      defaultImageModelCode: "image-pro",
+    };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "toggle-home-agent-model-menu" },
+  });
+
+  assert.equal(workbench.ui.homeAgentModelMenuOpen, true);
+  assert.deepEqual(
+    workbench.ui.episodeGenerationConfig.models.map((model) => model.modelCode),
+    ["text-pro", "image-pro"],
+  );
+  assert.equal(workbench.ui.episodeGenerationConfig.defaultTextModelCode, "text-pro");
 });
 
 test("home workflow submission uploads a script and opens the shared episode workflow", async () => {
@@ -2276,11 +2369,15 @@ test("home Agent creation uses the Canvas default model when none was selected",
   workbench.ui.membershipStatus = { status: "active" };
   workbench.api.createCanvasProject = async () => ({ project: { id: "agent-default-model" } });
   workbench.api.listGlobalGenerationConfig = async () => ({
-    models: [{ mediaType: "image", modelCode: "image-enabled", modelLabel: "图片模型" }],
+    models: [
+      { mediaType: "text", modelCode: "text-enabled", modelLabel: "文本模型" },
+      { mediaType: "image", modelCode: "image-enabled", modelLabel: "图片模型" },
+    ],
     defaultImageModelCode: "image-enabled",
+    defaultTextModelCode: "text-enabled",
   });
   workbench.api.getCanvasSettings = async () => ({
-    settings: { defaultModels: { image: "image-enabled" } },
+    settings: { defaultModels: { text: "text-enabled", image: "image-enabled" } },
   });
 
   try {
@@ -2299,7 +2396,10 @@ test("home Agent creation uses the Canvas default model when none was selected",
   assert.deepEqual(pushedRoutes, ["#new-canvas-canvas"]);
   assert.equal(workbench.pendingHomeAgentPrompt.text, "帮我生成一张大树图片");
   assert.equal(workbench.pendingHomeAgentPrompt.mode, "c");
-  assert.deepEqual(workbench.pendingHomeAgentPrompt.preferredModels, { image: "image-enabled" });
+  assert.deepEqual(workbench.pendingHomeAgentPrompt.preferredModels, {
+    text: "text-enabled",
+    image: "image-enabled",
+  });
 });
 
 test("home Agent prompt submission carries selected plaza skill ids", async () => {

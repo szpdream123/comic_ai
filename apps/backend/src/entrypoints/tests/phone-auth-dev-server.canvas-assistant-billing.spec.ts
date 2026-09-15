@@ -160,7 +160,7 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
     );
     assert.equal(reservation.rows[0]?.reason, "会话消息积分消耗");
     assert.equal(Number(reservation.rows[0]?.amount_consumed), 6);
-    assert.equal(Number(reservation.rows[0]?.amount_released), 27);
+    assert.equal(Number(reservation.rows[0]?.amount_released), 0);
     assert.equal(Number(user.rows[0]?.credit_balance_cached), 94);
   });
 
@@ -192,11 +192,12 @@ describe("canvas assistant completion billing", { concurrency: false }, () => {
 
     assert.equal(response.status, 200, payload);
     assert.equal(Number(reservation.rows[0]?.amount_consumed), 40);
-    assert.ok(Number(reservation.rows[0]?.amount_total) >= 40);
+    assert.equal(Number(reservation.rows[0]?.amount_released), 0);
+    assert.equal(Number(reservation.rows[0]?.amount_total), 40);
     assert.equal(await readBalance(), balanceBefore - 40);
   });
 
-  it("releases the reserved credits when the assistant stream fails", async () => {
+  it("does not debit credits when the assistant stream fails", async () => {
     nextCompletion = "stream_error";
     const balanceBefore = await readBalance();
     const response = await postAssistant("assistant-billing-stream-error");

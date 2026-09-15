@@ -2901,6 +2901,10 @@ export const creatorApi = {
     return fetchJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
   },
 
+  getSkillCategories() {
+    return fetchJson("/api/creator/skill-categories", { cache: "no-store", unwrapEnvelope: false });
+  },
+
   getSkills(input = {}) {
     const params = new URLSearchParams();
     if (input.category && input.category !== "all") params.set("category", input.category);

@@ -5566,6 +5566,7 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
     defaultImageModelCode: imageModels[0]?.modelCode ?? null,
     defaultVideoModelCode: defaultVideoModel?.modelCode ?? null,
     defaultAudioModelCode: audioModels[0]?.modelCode ?? null,
+    defaultTextModelCode: textModels[0]?.modelCode ?? null,
   };
 }
 
@@ -22156,6 +22157,85 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/skill-categories") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.listCategories({ includeHidden: true }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/skill-categories") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 201, body: { data: await service.createCategory({
+            code: body.code,
+            name: body.name,
+            shortName: body.shortName ?? body.short_name,
+            sortOrder: body.sortOrder ?? body.sort_order,
+            isVisible: body.isVisible ?? body.is_visible,
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/skill-categories") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.updateCategory({
+            categoryId: String(body.code ?? ""),
+            code: body.nextCode ?? body.code,
+            name: body.name,
+            shortName: body.shortName ?? body.short_name,
+            sortOrder: body.sortOrder ?? body.sort_order,
+            isVisible: body.isVisible ?? body.is_visible,
+          }) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+      if (request.method === "DELETE" && pathname === "/api/admin/skill-categories") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: { data: await service.deleteCategory(String(body.code ?? "")) } });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
       if (request.method === "POST" && pathname === "/api/admin/skills") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -26667,6 +26747,16 @@ export function createPhoneAuthDevServer(
         }
       }
 
+      if (request.method === "GET" && pathname === "/api/creator/skill-categories") {
+        const service = createSkillPlazaService({ db });
+        try {
+          return writeJson(response, { status: 200, body: await service.listCategories() });
+        } catch (error) {
+          if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
+          throw error;
+        }
+      }
+
       if (pathname === "/api/creator/skills" || pathname.startsWith("/api/creator/skills/")) {
         const authenticated = await findAuthenticatedUser(db, request.headers.cookie, new Date(), authSessionCache, { includeCredit: false });
         const service = createSkillPlazaService({ db, readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({ db, storageObjectId, adapter: storageRuntime.adapter }) });
@@ -28262,32 +28352,7 @@ export function createPhoneAuthDevServer(
           const billing = new CanvasAgentBillingService(db);
           const creditReason = promptReverseCreditReason(mode);
           const billingMetadata = promptReverseBillingMetadata(mode);
-          // Credit reservations use UUID source IDs. Derive one from the idempotency
-          // key so a retry reaches the same reservation without exposing the key.
           const billingStepId = uuidFromIdempotencyKey(`toolbox-prompt-reverse:${idempotencyKey}`);
-          let billingReceipt: Awaited<ReturnType<CanvasAgentBillingService["reserveRound"]>>;
-          try {
-            billingReceipt = await billing.reserveRound({
-              ownerUserId: authenticated.user.id,
-              actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
-              agentTaskId: billingStepId,
-              stepId: billingStepId,
-              amount: billing.estimateRound({
-                pricing: model.pricing,
-                maxTokens: requestMaxTokens,
-                contextWindow: promptReverseReservationTokenLimit(model, mode, video, requestMaxTokens),
-              }),
-              reason: creditReason,
-              metadata: billingMetadata,
-              now: new Date(),
-            });
-          } catch (error) {
-            const code = error instanceof Error ? error.message : "prompt_reverse_billing_failed";
-            if (code === "insufficient_credits") {
-              return writeJson(response, envelopedError(402, "prompt_reverse_credit_reserve_insufficient", "积分余额预留不足，请前往充值"));
-            }
-            return writeJson(response, envelopedError(400, "prompt_reverse_billing_failed", code));
-          }
           const messages: TextGatewayChatCompletionRequest["messages"] = [
             { role: "system", content: systemPrompt },
             {
@@ -28337,8 +28402,8 @@ export function createPhoneAuthDevServer(
               actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
               agentTaskId: billingStepId,
               stepId: billingStepId,
-              reservationId: billingReceipt.reservationId,
-              reservedAmount: billingReceipt.amount,
+              reservationId: null,
+              reservedAmount: 0,
               usage,
               pricing: model.pricing,
               providerRequestId: completion.providerRequestId,
@@ -28362,21 +28427,8 @@ export function createPhoneAuthDevServer(
             }));
           } catch (error) {
             const message = error instanceof Error ? error.message : "prompt_reverse_failed";
-            try {
-              await billing.releaseRound({
-                ownerUserId: authenticated.user.id,
-                actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
-                agentTaskId: billingStepId,
-                stepId: billingStepId,
-                reservationId: billingReceipt.reservationId,
-                reservedAmount: billingReceipt.amount,
-                failureCode: message,
-                reason: creditReason,
-                metadata: billingMetadata,
-                now: new Date(),
-              });
-            } catch {
-              // The model failure remains the actionable response. Release is idempotent for operational retry.
+            if (isInsufficientCreditsFailure(error) || message === "insufficient_credits") {
+              return writeJson(response, envelopedError(402, "prompt_reverse_credit_reserve_insufficient", "积分余额预留不足，请前往充值"));
             }
             if (error instanceof TextModelGatewayError && error.code === "provider_auth_missing") {
               return writeJson(response, envelopedError(
@@ -29065,30 +29117,6 @@ export function createPhoneAuthDevServer(
             content: CANVAS_AGENT_CREDIT_REASON,
           };
           const actorTeamMemberId = canvasScope.actorTeamMemberId ?? authenticated.user.teamMember?.id ?? null;
-          let billingReceipt: Awaited<ReturnType<CanvasAgentBillingService["reserveRound"]>>;
-          try {
-            billingReceipt = await billing.reserveRound({
-              ownerUserId: canvasScope.ownerUserId,
-              actorTeamMemberId,
-              canvasId: canvasProjectId,
-              agentTaskId: billingStepId,
-              stepId: billingStepId,
-              amount: billing.estimateRound({
-                pricing: model.pricing,
-                maxTokens: Number(body.max_tokens) || undefined,
-                contextWindow: canvasAssistantReservationTokenLimit(model, body, messages),
-              }),
-              reason: CANVAS_AGENT_CREDIT_REASON,
-              metadata: billingMetadata,
-              now: new Date(),
-            });
-          } catch (error) {
-            const code = error instanceof Error ? error.message : "assistant_billing_failed";
-            if (code === "insufficient_credits") {
-              return writeJson(response, envelopedError(402, "assistant_credit_reserve_insufficient", "积分余额预留不足，请前往充值"));
-            }
-            return writeJson(response, envelopedError(400, "assistant_billing_failed", code));
-          }
           const settleAssistantRound = async (
             usage: Record<string, unknown> | null,
             providerRequestId?: string | null,
@@ -29098,8 +29126,8 @@ export function createPhoneAuthDevServer(
             canvasId: canvasProjectId,
             agentTaskId: billingStepId,
             stepId: billingStepId,
-            reservationId: billingReceipt.reservationId,
-            reservedAmount: billingReceipt.amount,
+            reservationId: null,
+            reservedAmount: 0,
             usage: promptReverseUsageFromProviderUsage(usage),
             pricing: model.pricing,
             providerRequestId: providerRequestId ?? null,
@@ -29107,25 +29135,14 @@ export function createPhoneAuthDevServer(
             metadata: billingMetadata,
             now: new Date(),
           });
-          const releaseAssistantRound = async (failureCode: string) => {
-            try {
-              await billing.releaseRound({
-                ownerUserId: canvasScope.ownerUserId,
-                actorTeamMemberId,
-                canvasId: canvasProjectId,
-                agentTaskId: billingStepId,
-                stepId: billingStepId,
-                reservationId: billingReceipt.reservationId,
-                reservedAmount: billingReceipt.amount,
-                failureCode,
-                reason: CANVAS_AGENT_CREDIT_REASON,
-                metadata: billingMetadata,
-                now: new Date(),
-              });
-            } catch {
-              // The model failure remains the actionable response. Release is idempotent for operational retry.
-            }
+          const isAssistantInsufficientCredits = (error: unknown) => {
+            const message = error instanceof Error ? error.message : "";
+            return isInsufficientCreditsFailure(error) || message === "insufficient_credits";
           };
+          const writeAssistantInsufficientCredits = () => writeJson(
+            response,
+            envelopedError(402, "assistant_credit_reserve_insufficient", "积分余额预留不足，请前往充值"),
+          );
           const writeAssistantStreamFailure = (failureCode: string) => {
             if (response.destroyed || response.writableEnded) return;
             writeSseData(response, {
@@ -29139,7 +29156,7 @@ export function createPhoneAuthDevServer(
               streamResult = await canvasTextChatGateway.streamCompletions(gatewayInput);
             } catch (error) {
               const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
-              await releaseAssistantRound(failureCode);
+              if (isAssistantInsufficientCredits(error)) return writeAssistantInsufficientCredits();
               if (error instanceof TextModelGatewayError && error.code === "provider_auth_missing") {
                 return writeJson(response, envelopedError(
                   503,
@@ -29173,7 +29190,6 @@ export function createPhoneAuthDevServer(
                 }
                 const completed = await streamResult.completed;
                 if (completed.status !== "succeeded") {
-                  await releaseAssistantRound(completed.failureCode || "assistant_provider_error");
                   return writeJson(response, envelopedError(502, "assistant_provider_error", completed.failureCode));
                 }
                 await settleAssistantRound(completed.usage, streamResult.providerRequestId);
@@ -29196,7 +29212,7 @@ export function createPhoneAuthDevServer(
                 });
               } catch (error) {
                 const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
-                await releaseAssistantRound(failureCode);
+                if (isAssistantInsufficientCredits(error)) return writeAssistantInsufficientCredits();
                 return writeJson(response, envelopedError(502, "assistant_provider_error", failureCode));
               }
             }
@@ -29210,15 +29226,15 @@ export function createPhoneAuthDevServer(
                 for await (const chunk of streamResult.stream) writeSseData(response, chunk);
                 const completed = await streamResult.completed;
                 if (completed.status !== "succeeded") {
-                  await releaseAssistantRound(completed.failureCode || "assistant_provider_error");
                   writeAssistantStreamFailure(completed.failureCode || "assistant_provider_error");
                   return;
                 }
                 await settleAssistantRound(completed.usage, streamResult.providerRequestId);
                 response.write("data: [DONE]\n\n");
               } catch (error) {
-                const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
-                await releaseAssistantRound(failureCode);
+                const failureCode = isAssistantInsufficientCredits(error)
+                  ? "insufficient_credits"
+                  : error instanceof Error ? error.message : "assistant_provider_error";
                 writeAssistantStreamFailure(failureCode);
               }
             } finally {
@@ -29252,8 +29268,9 @@ export function createPhoneAuthDevServer(
               writeSseData(response, { id: `canvas-assistant-${Date.now().toString(36)}`, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
               response.write("data: [DONE]\n\n");
             } catch (error) {
-              const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
-              await releaseAssistantRound(failureCode);
+              const failureCode = isAssistantInsufficientCredits(error)
+                ? "insufficient_credits"
+                : error instanceof Error ? error.message : "assistant_provider_error";
               writeAssistantStreamFailure(failureCode);
             } finally {
               if (!response.writableEnded) response.end();
@@ -29261,7 +29278,7 @@ export function createPhoneAuthDevServer(
             return;
           } catch (error) {
             const failureCode = error instanceof Error ? error.message : "assistant_provider_error";
-            await releaseAssistantRound(failureCode);
+            if (isAssistantInsufficientCredits(error)) return writeAssistantInsufficientCredits();
             return writeJson(response, envelopedError(502, "assistant_provider_error", failureCode));
           }
         }

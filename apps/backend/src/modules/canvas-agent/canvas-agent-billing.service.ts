@@ -39,104 +39,25 @@ export class CanvasAgentBillingService {
     if (amount <= 0) {
       return { consumed: 0, totalTokens: 0 };
     }
-    const metadata = {
-      canvasId: input.canvasId ?? null,
-      agentTaskId: input.agentTaskId,
-      billingEvent: "actual_usage",
-      usage: input.usage,
-      actorTeamMemberId: input.actorTeamMemberId ?? null,
-    };
-    if (!input.actorTeamMemberId) {
-      const reservation = await reserveCredits(this.db, {
-        userId: input.ownerUserId,
-        amount,
-        sourceType: "canvas_agent_text_task",
-        sourceId: input.agentTaskId,
-        reason: CANVAS_AGENT_CREDIT_REASON,
-        canvasProjectId: input.canvasId ?? null,
-        workflowId: input.workflowId ?? null,
-        taskId: input.workflowTaskId ?? null,
-        metadata,
-        createdByUserId: input.ownerUserId,
-        now: input.now,
-      });
-      await settleReservationAllocation(this.db, {
-        reservationId: reservation.reservation.id,
-        allocationKey: `${input.agentTaskId}:consume`,
-        amount,
-        outcome: "consumed",
-        taskId: input.workflowTaskId ?? null,
-        metadata,
-        now: input.now,
-      });
-      return { consumed: amount, totalTokens: input.usage.totalTokens };
-    }
-
-    await this.db.query("BEGIN");
-    try {
-      const existing = await queryOne<{ amount: number | string }>(
-        this.db,
-        `
-          SELECT amount
-          FROM credit_ledger_entries
-          WHERE user_id = $1 AND team_member_id = $2
-            AND source_type = 'canvas_agent_text_task' AND source_id = $3
-            AND entry_type = 'transfer_out'
-          LIMIT 1
-        `,
-        [input.ownerUserId, input.actorTeamMemberId, input.agentTaskId],
-      );
-      if (existing) {
-        if (Number(existing.amount) !== amount) {
-          throw new Error("canvas_agent_credit_settlement_conflict");
-        }
-        await this.db.query("COMMIT");
-        return { consumed: amount, totalTokens: input.usage.totalTokens };
-      }
-
-      const member = await queryOne<{ member_credits: number | string }>(
-        this.db,
-        `
-          SELECT member_credits
-          FROM team_members
-          WHERE id = $1 AND user_id = $2 AND status = 'active' AND deleted_at IS NULL
-          FOR UPDATE
-        `,
-        [input.actorTeamMemberId, input.ownerUserId],
-      );
-      if (!member || Number(member.member_credits) < amount) throw new Error("insufficient_credits");
-
-      const updatedMember = await queryOne<{ member_credits: number | string }>(
-        this.db,
-        `
-          UPDATE team_members
-          SET member_credits = member_credits - $2::integer, updated_at = $3
-          WHERE id = $1 AND user_id = $4 AND status = 'active' AND deleted_at IS NULL
-          RETURNING member_credits
-        `,
-        [input.actorTeamMemberId, amount, input.now, input.ownerUserId],
-      );
-      if (!updatedMember) throw new Error("insufficient_credits");
-      await this.db.query(
-        `
-          INSERT INTO credit_ledger_entries (
-            id,user_id,team_member_id,entry_type,amount,available_delta,reserved_delta,
-            consumed_delta,balance_after,source_type,source_id,reason,metadata_json,
-            created_by_user_id,created_at
-          ) VALUES ($1,$2,$3,'transfer_out',$4::integer,-($4::integer),0,0,$5,'canvas_agent_text_task',$6,$7,$8::jsonb,$2,$9)
-        `,
-        [
-          randomUUID(), input.ownerUserId, input.actorTeamMemberId, amount,
-          Number(updatedMember.member_credits), input.agentTaskId, CANVAS_AGENT_CREDIT_REASON,
-          JSON.stringify(metadata), input.now,
-        ],
-      );
-      await this.db.query("COMMIT");
-      return { consumed: amount, totalTokens: input.usage.totalTokens };
-    } catch (error) {
-      await this.db.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
+    await this.debitActualUsage({
+      ownerUserId: input.ownerUserId,
+      actorTeamMemberId: input.actorTeamMemberId,
+      amount,
+      sourceType: "canvas_agent_text_task",
+      sourceId: input.agentTaskId,
+      canvasId: input.canvasId,
+      workflowId: input.workflowId,
+      workflowTaskId: input.workflowTaskId,
+      metadata: {
+        canvasId: input.canvasId ?? null,
+        agentTaskId: input.agentTaskId,
+        billingEvent: "actual_usage",
+        usage: input.usage,
+        actorTeamMemberId: input.actorTeamMemberId ?? null,
+      },
+      now: input.now,
+    });
+    return { consumed: amount, totalTokens: input.usage.totalTokens };
   }
 
   estimateRound(input: {
@@ -291,6 +212,33 @@ export class CanvasAgentBillingService {
     const actual = input.usage
       ? this.usageCost(input.pricing, input.usage)
       : input.reservedAmount;
+    if (!input.reservationId && input.reservedAmount <= 0) {
+      const consumed = actual > 0 ? actual : 0;
+      if (consumed > 0) {
+        await this.debitActualUsage({
+          ownerUserId: input.ownerUserId,
+          actorTeamMemberId: input.actorTeamMemberId,
+          amount: consumed,
+          sourceType: "canvas_agent_text_round",
+          sourceId: input.stepId,
+          canvasId: input.canvasId,
+          workflowTaskId: input.workflowTaskId,
+          reason: input.reason,
+          metadata: {
+            ...(input.metadata ?? {}),
+            canvasId: input.canvasId ?? null,
+            agentTaskId: input.agentTaskId,
+            agentStepId: input.stepId,
+            billingEvent: "actual_usage",
+            usage: input.usage,
+            actorTeamMemberId: input.actorTeamMemberId ?? null,
+            providerRequestId: input.providerRequestId ?? null,
+          },
+          now: input.now,
+        });
+      }
+      return { consumed, released: 0 };
+    }
     const consumed = Math.min(input.reservedAmount, Math.max(1, actual));
     if (input.reservationId) {
       await settleReservationAllocation(this.db, {
@@ -379,6 +327,115 @@ export class CanvasAgentBillingService {
       });
     }
     return { released: input.reservedAmount };
+  }
+
+  private async debitActualUsage(input: {
+    ownerUserId: string;
+    actorTeamMemberId?: string | null;
+    amount: number;
+    sourceType: "canvas_agent_text_task" | "canvas_agent_text_round";
+    sourceId: string;
+    canvasId?: string | null;
+    workflowId?: string | null;
+    workflowTaskId?: string | null;
+    reason?: string;
+    metadata: Record<string, unknown>;
+    now: Date;
+  }) {
+    const reason = input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON;
+    if (!input.actorTeamMemberId) {
+      const reservation = await reserveCredits(this.db, {
+        userId: input.ownerUserId,
+        amount: input.amount,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        reason,
+        canvasProjectId: input.canvasId ?? null,
+        workflowId: input.workflowId ?? null,
+        taskId: input.workflowTaskId ?? null,
+        metadata: input.metadata,
+        createdByUserId: input.ownerUserId,
+        now: input.now,
+      });
+      await settleReservationAllocation(this.db, {
+        reservationId: reservation.reservation.id,
+        allocationKey: `${input.sourceId}:consume`,
+        amount: input.amount,
+        outcome: "consumed",
+        taskId: input.workflowTaskId ?? null,
+        metadata: input.metadata,
+        now: input.now,
+      });
+      return;
+    }
+
+    const sourceId = input.sourceType === "canvas_agent_text_round"
+      ? uuidFromStableId(input.sourceId)
+      : input.sourceId;
+    await this.db.query("BEGIN");
+    try {
+      const existing = await queryOne<{ amount: number | string }>(
+        this.db,
+        `
+          SELECT amount
+          FROM credit_ledger_entries
+          WHERE user_id = $1 AND team_member_id = $2
+            AND source_type = $3 AND source_id = $4
+            AND entry_type = 'transfer_out'
+          LIMIT 1
+        `,
+        [input.ownerUserId, input.actorTeamMemberId, input.sourceType, sourceId],
+      );
+      if (existing) {
+        if (Number(existing.amount) !== input.amount) {
+          throw new Error("canvas_agent_credit_settlement_conflict");
+        }
+        await this.db.query("COMMIT");
+        return;
+      }
+
+      const member = await queryOne<{ member_credits: number | string }>(
+        this.db,
+        `
+          SELECT member_credits
+          FROM team_members
+          WHERE id = $1 AND user_id = $2 AND status = 'active' AND deleted_at IS NULL
+          FOR UPDATE
+        `,
+        [input.actorTeamMemberId, input.ownerUserId],
+      );
+      if (!member || Number(member.member_credits) < input.amount) throw new Error("insufficient_credits");
+
+      const updatedMember = await queryOne<{ member_credits: number | string }>(
+        this.db,
+        `
+          UPDATE team_members
+          SET member_credits = member_credits - $2::integer, updated_at = $3
+          WHERE id = $1 AND user_id = $4 AND status = 'active' AND deleted_at IS NULL
+          RETURNING member_credits
+        `,
+        [input.actorTeamMemberId, input.amount, input.now, input.ownerUserId],
+      );
+      if (!updatedMember) throw new Error("insufficient_credits");
+      await this.db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id,user_id,team_member_id,entry_type,amount,available_delta,reserved_delta,
+            consumed_delta,balance_after,source_type,source_id,reason,metadata_json,
+            created_by_user_id,created_at
+          ) VALUES ($1,$2,$3,'transfer_out',$4::integer,-($4::integer),0,0,$5,$6,$7,$8,$9::jsonb,$2,$10)
+        `,
+        [
+          randomUUID(), input.ownerUserId, input.actorTeamMemberId, input.amount,
+          Number(updatedMember.member_credits), input.sourceType, sourceId, reason,
+          JSON.stringify(input.metadata), input.now,
+        ],
+      );
+      await this.db.query("COMMIT");
+    } catch (error) {
+      await this.db.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
   }
 
   private usageCost(pricing: Record<string, unknown>, usage: CanvasAgentTextUsage) {

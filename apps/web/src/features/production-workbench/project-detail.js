@@ -9,7 +9,7 @@ import { renderCanvasScriptBatchModal } from "./canvas-script-batch-modal.js";
 import { renderCanvasScriptStartModal } from "./canvas-script-start-modal.js";
 import { renderExportPanel } from "./export-panel.js";
 import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
-import { normalizeHomeAgentGenerationModel, renderHomeAgentModelPicker } from "./home-agent-model-picker.js";
+import { normalizeHomeAgentGenerationModel, renderHomeAgentModelPicker, resolveHomeAgentPreferredModels } from "./home-agent-model-picker.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-login-onboarding.js";
@@ -18,9 +18,11 @@ import {
   EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
+  plazaSkillCreateCategories,
   renderEpisodePromptSkillControl,
   renderEpisodePromptSkillModal,
   resolvePlazaSelectedSkills,
+  resolvePlazaSkillCategories,
   sumEpisodePromptSkillCredits,
 } from "./episode-prompt-skill-modal.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
@@ -1366,6 +1368,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
       draftPlazaSkillIds: ui.episodePromptSkillDraftPlazaIds,
       query: ui.episodePlazaSkillQuery,
       loading: ui.episodePromptSkillLoading,
+      categories: ui.skillPlazaCategories,
     })}
     ${renderCanvasTextSkillModal({
       show: ui.canvasTextSkillModalOpen === true
@@ -5412,6 +5415,7 @@ function renderSingleEpisodeAiTable(table, key, options = {}) {
     "single-episode-ai-table-card",
     escapeAttr(key),
     key === "storyboards" && isChapterStoryboardTable(columns) ? "chapter-storyboards" : "",
+    key === "storyboards" && isLiveStoryboardTable(columns) ? "live-storyboards" : "",
     isGuideTarget ? "first-login-guide-target" : "",
   ].filter(Boolean).join(" ");
   if (key === "script") {
@@ -5453,15 +5457,21 @@ function isChapterStoryboardTable(columns = []) {
     && columns.every((column, index) => column === chapterStoryboardColumns[index]);
 }
 
+function isLiveStoryboardTable(columns = []) {
+  const liveStoryboardColumns = ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  return columns.length === liveStoryboardColumns.length
+    && columns.every((column, index) => column === liveStoryboardColumns[index]);
+}
+
 function resolveSingleEpisodeAiTableColumns(table, key) {
   if (key === "storyboards" && Array.isArray(table?.columns) && table.columns.length) {
     return table.columns;
   }
   const fixedColumns = {
-    characters: ["角色名称", "角色描述"],
-    scenes: ["场景名称", "场景描述"],
-    props: ["道具名称", "道具描述"],
-    storyboards: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+    characters: ["角色名称", "角色描述", "角色图片提示词"],
+    scenes: ["场景名称", "场景描述", "场景图片提示词"],
+    props: ["道具名称", "道具描述", "道具图片提示词"],
+    storyboards: ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
   };
   if (fixedColumns[key]) {
     return fixedColumns[key];
@@ -5688,12 +5698,12 @@ function renderSingleEpisodeAiTableRow(row, key, columns = [], options = {}) {
   const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
   const valuesByKey = {
     script: [row.beatNo, row.scriptContent, row.characters, row.sceneHint, row.propHints, row.dialogue],
-    scenes: [row.sceneName, row.sceneDescription],
-    characters: [row.characterName, row.characterDescription],
-    props: [row.propName, row.propDescription],
+    scenes: [row.sceneName, row.sceneDescription, row.sceneImagePrompt],
+    characters: [row.characterName, row.characterDescription, row.characterImagePrompt],
+    props: [row.propName, row.propDescription, row.propImagePrompt],
     storyboards: columns.length === chapterStoryboardColumns.length && columns.every((column, index) => column === chapterStoryboardColumns[index])
       ? [row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt]
-      : [row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt],
+      : [row.shotNo, row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt],
   };
   const values = valuesByKey[key] ?? Object.values(row ?? {});
   return `<tr>${values.map((value) => `<td>${renderSingleEpisodeAiSafeInlineMarkup(resolveSingleEpisodeAiTableCellText(value, options))}</td>`).join("")}</tr>`;
@@ -9179,7 +9189,7 @@ function renderSkillCreatePage(ui = {}) {
         </label>
         <label class="skill-create-field">
           <span>Skill 分类 <em>*</em></span>
-          ${renderSkillCreatePicker("category", EPISODE_PLAZA_SKILL_CATEGORIES.filter((item) => item.id !== "recommended").map((item) => ({ value: item.id, label: item.label })), draftCategory, "required")}
+          ${renderSkillCreatePicker("category", plazaSkillCreateCategories(ui.skillPlazaCategories).map((item) => ({ value: item.id, label: item.label })), draftCategory, "required")}
         </label>
         <label class="skill-create-field">
           <span>一句话介绍 <em>*</em></span>
@@ -9275,11 +9285,7 @@ function renderSkillCreatePage(ui = {}) {
 }
 
 function renderSkillPlazaPage(ui = {}) {
-  const categories = [
-    ["recommended", "推荐"], ["professional-film", "专业影视"], ["commercial-ad", "商业广告"],
-    ["short-drama", "短剧漫剧"], ["animation-game", "动漫游戏"], ["music-video", "音乐MV"],
-    ["creator", "自媒体创作"], ["general", "通用技能"],
-  ];
+  const categories = resolvePlazaSkillCategories(ui.skillPlazaCategories).map((item) => [item.id, item.label]);
   const activeSection = ["catalog", "library", "mine"].includes(ui.skillPlazaSection) ? ui.skillPlazaSection : "catalog";
   const sourceItems = activeSection === "library"
     ? (Array.isArray(ui.skillPlazaLibrary) ? ui.skillPlazaLibrary : [])
@@ -12788,6 +12794,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
   const homeAgentAttachments = Array.isArray(ui.homeAgentAttachments) ? ui.homeAgentAttachments : [];
   const homeWorkflowScriptFileName = String(ui.homeWorkflowScriptFileName ?? "").trim();
   const homeAgentModels = resolveHomeAgentModels(ui);
+  const homeAgentPreferredModels = resolveHomeAgentPreferredModels(ui);
   const homeAgentSelectedModels = ui.homeAgentSelectedModels && typeof ui.homeAgentSelectedModels === "object"
     ? ui.homeAgentSelectedModels
     : {};
@@ -12810,7 +12817,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
     b: "协作",
     c: "自主",
   };
-  const homeAgentModelTab = ["image", "video"].includes(ui.homeAgentModelTab) ? ui.homeAgentModelTab : "image";
+  const homeAgentModelTab = ["text", "image", "video"].includes(ui.homeAgentModelTab) ? ui.homeAgentModelTab : "image";
   const homeTvCategories = Array.isArray(ui.homeTvCategories) ? ui.homeTvCategories : [];
   const homeTvCategory = homeTvCategories.some((item) => item.code === ui.homeTvCategory)
     ? ui.homeTvCategory
@@ -12870,13 +12877,13 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
               ${renderHomeAgentModelPicker({
                 models: homeAgentModels,
                 mediaType: homeAgentModelTab,
-                selectedModelCodes: homeAgentSelectedModels,
+                selectedModelCodes: homeAgentPreferredModels,
                 open: ui.homeAgentModelMenuOpen === true,
                 disabled: isTeamMember,
                 triggerLabel: "模型",
                 ariaLabel: "选择生成模型",
                 tabAction: "set-home-agent-model-tab",
-                tabs: [["image", "图片"], ["video", "视频"]],
+                tabs: [["text", "文本"], ["image", "图片"], ["video", "视频"]],
               })}
               <button type="button" class="home-agent-skill-trigger" data-action="open-home-agent-skill-picker" aria-label="调用 Skill" title="调用 Skill" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("skill")}<span>Skill</span></button>
               ${homeCreationMode === "agent" ? `<div class="home-agent-mode-picker">
@@ -13100,9 +13107,9 @@ function renderHomeAgentComposerSegments(segments, selectedModels, attachments, 
 
 function resolveHomeAgentSkillCatalog(ui = {}) {
   return [
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official"),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library"),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine"),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library", ui.skillPlazaCategories),
+    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine", ui.skillPlazaCategories),
   ];
 }
 
@@ -13119,6 +13126,7 @@ function renderHomeAgentSkillPicker(ui = {}) {
     draftPlazaSkillIds: ui.homeAgentSkillDraftPlazaIds,
     query: ui.episodePlazaSkillQuery,
     loading: ui.episodePromptSkillLoading,
+    categories: ui.skillPlazaCategories,
     actions: {
       close: "close-home-agent-skill-picker",
       source: "set-home-agent-skill-source",
@@ -13132,7 +13140,7 @@ function resolveHomeAgentModels(ui = {}) {
   const models = Array.isArray(ui.episodeGenerationConfig?.models) ? ui.episodeGenerationConfig.models : [];
   return models
     .map(normalizeHomeAgentGenerationModel)
-    .filter((model) => model && ["image", "video"].includes(model.mediaType));
+    .filter((model) => model && ["text", "image", "video"].includes(model.mediaType));
 }
 
 function renderDirectorDeskSurface(ui = {}) {

@@ -609,6 +609,7 @@ describe("ai storyboard preview service", () => {
       assert.doesNotMatch(call.prompt ?? "", /分镜模板/);
       assert.doesNotMatch(call.prompt ?? "", /【输出顺序】/);
       assert.doesNotMatch(call.prompt ?? "", /\[\[DETAILS\]\]/);
+      assert.doesNotMatch(system, /结构化规范化器/);
     }
     assert.equal(gateway.calls[0]?.prompt ?? "", "小说原文。");
     assert.equal(gateway.calls[1]?.prompt ?? "", "Skill 改编后的剧本。");
@@ -617,6 +618,43 @@ describe("ai storyboard preview service", () => {
     assert.match(gateway.calls[4]?.prompt ?? "", /^Skill 改编后的剧本。/);
     assert.match(gateway.calls[0]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is script only/);
     assert.match(gateway.calls[4]?.messages?.find((message) => message.role === "system")?.content ?? "", /Current stage is storyboard generation only/);
+  });
+
+  it("keeps the skill-parsed plaza result without a canonicalizer rewrite", async () => {
+    const gateway = new FakeTextGateway([
+      "```markdown\n【剧本场景列表】\n| 场景名称 | 场景描述 | 场景图片提示词 |\n| --- | --- | --- |\n| 晚霞映照的城门口 | 秋季傍晚的废土城门入口。 | 不能出现其他人，无人，纯场景。末日前废土风格的大型城池入口。 |\n```",
+      "```markdown\n【剧本角色列表】\n| 角色名称 | 角色描述 | 角色图片提示词 |\n| --- | --- | --- |\n| 任小野 | 十七岁少年，清瘦警觉。 | 十七岁少年，黑色短发，旧布短衣。 |\n```",
+      "```markdown\n【剧本道具列表】\n| 道具名称 | 道具描述 | 道具图片提示词 |\n| --- | --- | --- |\n| 特制切割刀 | 磨损的短刃。 | 黑色短刀特写，刀刃磨损。 |\n```",
+      "```markdown\n【剧本分镜列表】\n| 镜号 | 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |\n| --- | --- | --- | --- | --- |\n| 1 | 任小野在城门口发现尸体异常。 |  | 黄昏城门口，任小野低头查看尸体。 | 中景固定镜头，任小野在城门口发现尸体异常。 |\n```",
+    ]);
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000025",
+      scriptText: "任小野在城门口发现尸体异常。",
+      skipScriptStage: true,
+      skillInstructions: "# SKILL.md\n按短剧节奏拆镜。",
+      packages: {},
+    });
+
+    assert.equal(gateway.calls.length, 4);
+    assert.equal(gateway.calls.some((call) => call.responseFormat === "json_object"), false);
+    assert.equal(gateway.calls.some((call) => /结构化规范化器/.test(call.messages?.find((message) => message.role === "system")?.content ?? "")), false);
+    assert.equal(result.commitPayload.scenes[0]?.sceneName, "晚霞映照的城门口");
+    assert.match(result.commitPayload.scenes[0]?.sceneDescription ?? "", /秋季傍晚的废土城门入口/);
+    assert.equal(result.commitPayload.scenes[0]?.sceneImagePrompt, "不能出现其他人，无人，纯场景。末日前废土风格的大型城池入口。");
+    assert.notEqual(result.commitPayload.scenes[0]?.sceneImagePrompt, "秋季傍晚的废土城门入口。");
+    assert.equal(result.commitPayload.characters[0]?.characterName, "任小野");
+    assert.match(result.commitPayload.characters[0]?.characterDescription ?? "", /十七岁少年，清瘦警觉/);
+    assert.equal(result.commitPayload.characters[0]?.characterImagePrompt, "十七岁少年，黑色短发，旧布短衣。");
+    assert.notEqual(result.commitPayload.characters[0]?.characterImagePrompt, "十七岁少年，清瘦警觉。");
+    assert.equal(result.commitPayload.props[0]?.propName, "特制切割刀");
+    assert.match(result.commitPayload.props[0]?.propDescription ?? "", /磨损的短刃/);
+    assert.equal(result.commitPayload.props[0]?.propImagePrompt, "黑色短刀特写，刀刃磨损。");
+    assert.notEqual(result.commitPayload.props[0]?.propImagePrompt, "磨损的短刃。");
+    assert.equal(result.commitPayload.storyboards[0]?.shotNo, 1);
+    assert.equal(result.commitPayload.storyboards[0]?.plot, "任小野在城门口发现尸体异常。");
+    assert.equal(result.commitPayload.storyboards[0]?.imagePrompt, "黄昏城门口，任小野低头查看尸体。");
   });
 
   it("feeds the selected script result into each later selected skill", async () => {

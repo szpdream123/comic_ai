@@ -56,6 +56,7 @@ describe("skill plaza admin review", { concurrency: false }, () => {
 
       const mine = await service.listMine(userId);
       assert.equal(mine.items[0]?.reviewComment, "内容完整，允许上架");
+      assert.equal("files" in (mine.items[0]?.detail ?? {}), false);
       const detail = await service.getDetail({ skillId: String(created.id), userId });
       assert.equal(detail.skill.reviewComment, "内容完整，允许上架");
       const adminDetail = await service.getAdminDetail(String(created.id));
@@ -245,6 +246,7 @@ describe("skill plaza admin review", { concurrency: false }, () => {
 
       const recommendedCatalog = await service.listCatalog({ category: "recommended" });
       assert.equal(recommendedCatalog.items[0]?.id, created.id);
+      assert.equal("files" in (recommendedCatalog.items[0]?.detail ?? {}), false);
       const originalCategory = await service.listCatalog({ category: "general" });
       assert.equal(originalCategory.items[0]?.id, created.id);
       const filmCategory = await service.listCatalog({ category: "professional-film" });
@@ -338,6 +340,10 @@ describe("skill plaza admin review", { concurrency: false }, () => {
         status: "published",
         reviewComment: "允许用于章节创作",
       });
+      const catalog = await service.listCatalog({ userId, category: "short-drama" });
+      assert.equal(catalog.items[0]?.id, String(created.id));
+      assert.equal(catalog.items[0]?.detail?.outputContent, "分镜表");
+      assert.equal("files" in (catalog.items[0]?.detail ?? {}), false);
       const resolved = await service.resolveWorkflowSkill({ userId, skillId: String(created.id) });
       assert.equal(resolved.id, String(created.id));
       assert.equal(resolved.title, "短剧一键转分镜");
@@ -347,6 +353,72 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       assert.equal(Number(usage.rows[0]?.usage_count ?? 0), 1);
       assert.equal(await service.findAccessibleSkillIdByName({ userId, name: "短剧一键转分镜" }), String(created.id));
       assert.equal(await service.findAccessibleSkillIdByName({ userId, name: "不存在的技能" }), null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("manages skill categories with fallback-safe listing and in-use delete protection", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "91000000-0000-4000-8000-000000000011";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+         VALUES ($1, '13800139011', 'Skill 分类作者', 'plain:test-password', 'active')`,
+        [userId],
+      );
+      const service = createSkillPlazaService({ db });
+      const listed = await service.listCategories();
+      assert.equal(listed.items.some((item) => item.code === "recommended" && item.isSkillCategory === false && item.isSystem === true), true);
+      assert.equal(listed.items.some((item) => item.code === "project-workflow"), true);
+
+      const created = await service.createCategory({
+        code: "custom-story",
+        name: "自定义故事",
+        shortName: "故事",
+        sortOrder: 120,
+        isVisible: true,
+      });
+      assert.equal(created.code, "custom-story");
+      await assert.rejects(
+        () => service.createCategory({ code: "custom-story", name: "重复编码" }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_code_conflict",
+      );
+      await assert.rejects(
+        () => service.createCategory({ code: "recommended", name: "推荐" }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_not_assignable",
+      );
+
+      const skill = await service.create({
+        userId,
+        name: "自定义故事技能",
+        summary: "分类占用",
+        category: "custom-story",
+        detail: { introduction: "# SKILL.md\n分类占用" },
+      });
+      assert.equal(skill.category, "custom-story");
+      await assert.rejects(
+        () => service.deleteCategory(created.code),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_in_use",
+      );
+
+      const hidden = await service.updateCategory({ categoryId: created.code, isVisible: false, name: "自定义故事" });
+      assert.equal(hidden.isVisible, false);
+      const visibleOnly = await service.listCategories();
+      assert.equal(visibleOnly.items.some((item) => item.code === "custom-story"), false);
+      const withHidden = await service.listCategories({ includeHidden: true });
+      assert.equal(withHidden.items.some((item) => item.code === "custom-story" && item.isVisible === false), true);
+
+      const recommended = listed.items.find((item) => item.code === "recommended");
+      assert.ok(recommended);
+      await assert.rejects(
+        () => service.deleteCategory(recommended.code),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_system",
+      );
+
+      await db.query("UPDATE skills SET category = 'general' WHERE id = $1", [skill.id]);
+      const deleted = await service.deleteCategory(created.code);
+      assert.equal(deleted.code, "custom-story");
     } finally {
       await db.close();
     }

@@ -23,6 +23,7 @@ import {
   unmountNewCanvas,
 } from "../src/features/new-canvas/index.js";
 import {
+  buildAiCanvasRuntimeProjectCatalogForTest,
   materializeCanvasDocumentMediaForSaveForTest,
   resolveNewCanvasHostUpdateOptionsForTest,
   saveProjectCanvasNowForTest,
@@ -1862,6 +1863,33 @@ test("new Canvas injects the outer project catalog and delegates runtime project
   assert.match(appSource, /\.new-canvas-root \.canvas-note-style-panel-anchor \{[\s\S]*?bottom: calc\(100% \+ 8px\) !important;[\s\S]*?transform: translateX\(-50%\) !important;/);
   assert.match(appSource, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)::after \{[\s\S]*?opacity: 0 !important;/);
   assert.match(appSource, /\.ai-canvas-standalone-mount \.app-shell--glass-frame::before,[\s\S]*?\.app-shell--glass-frame::after \{[\s\S]*?opacity: 0 !important;/);
+});
+
+test("new Canvas injects slash defaultModels into the runtime catalog and keeps applyCatalog sensitive to settings", () => {
+  const catalog = buildAiCanvasRuntimeProjectCatalogForTest({
+    canvasSettingsLoadedProjectId: "canvas-1",
+    ui: {
+      selectedCanvasProjectId: "canvas-1",
+      canvasProjects: [{ id: "canvas-1", title: "画布项目" }],
+      canvasSettingsRecord: {
+        settings: { defaultModels: { image: "seedream-5.0", video: "seedance-2.0" } },
+      },
+    },
+  });
+  assert.deepEqual(catalog[0].settings.defaultModels, {
+    image: "general/comic-ai/image/seedream-5.0",
+    video: "general/comic-ai/video/seedance-2.0",
+  });
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /normalizeAiCanvasRuntimeProjectDefaultModels\(/);
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /JSON\.stringify\(project\.settings\?\.defaultModels \?\? null\) === JSON\.stringify\(projects\[index\]\.settings\?\.defaultModels \?\? null\)/);
+  const chatPanelSource = readRuntimeAsset("ChatPanel-");
+  assert.match(chatPanelSource, /\[r,i\]=\(0,W\.useState\)\(\(\)=>false\)/);
+  assert.doesNotMatch(chatPanelSource, /useState\)\(\(\)=>Ke\.has\(e\.status\)\)/);
 });
 
 test("canvas startup reapplies the latest document after a pending shadow mount completes", () => {

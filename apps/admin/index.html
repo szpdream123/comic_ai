@@ -15392,6 +15392,17 @@
       window.logout = logout;
       window.closeDrawer = closeDrawer;
 
+      async function loadAdminSkillCategories() {
+        try {
+          const result = await api("/api/admin/skill-categories");
+          state.skillCategoryItems = Array.isArray(result.data?.items) ? result.data.items : [];
+          state.skillCategoryLoadError = "";
+        } catch (error) {
+          state.skillCategoryItems = [];
+          state.skillCategoryLoadError = error.payload?.error?.message || "Skill 分类加载失败";
+        }
+      }
+
       async function loadAdminSkills() {
         try {
           const params = new URLSearchParams();
@@ -15404,6 +15415,7 @@
           state.skillItems = [];
           state.skillLoadError = error.payload?.error?.message || "Skill 数据加载失败";
         }
+        await loadAdminSkillCategories();
       }
 
       function adminSkillStatusLabel(status) {
@@ -15418,16 +15430,26 @@
         "music-video": "音乐MV",
         creator: "自媒体创作",
         general: "通用技能",
+        "project-workflow": "项目工作流",
       };
 
+      function adminSkillCategoryItems() {
+        const items = Array.isArray(state.skillCategoryItems) ? state.skillCategoryItems : [];
+        const assignable = items.filter((item) => item && item.isSkillCategory !== false && item.code !== "recommended");
+        if (assignable.length) return assignable.map((item) => ({ value: String(item.code || ""), label: String(item.name || item.code || "") })).filter((item) => item.value);
+        return Object.entries(adminSkillCategoryLabels).map(([value, label]) => ({ value, label }));
+      }
+
       function adminSkillCategoryLabel(category) {
-        return adminSkillCategoryLabels[String(category || "")] || String(category || "通用技能");
+        const code = String(category || "");
+        const item = (state.skillCategoryItems || []).find((entry) => entry.code === code);
+        return item?.name || adminSkillCategoryLabels[code] || code || "通用技能";
       }
 
       function adminSkillCategoryOptions(selected) {
         const selectedCategory = String(selected || "general") === "recommended" ? "general" : String(selected || "general");
-        return Object.entries(adminSkillCategoryLabels)
-          .map(([value, label]) => `<option value="${value}" ${value === selectedCategory ? "selected" : ""}>${label}</option>`)
+        return adminSkillCategoryItems()
+          .map((item) => `<option value="${item.value}" ${item.value === selectedCategory ? "selected" : ""}>${item.label}</option>`)
           .join("");
       }
 
@@ -16023,6 +16045,7 @@
         state.skillLoadError = "";
         const previousRouteFromPath = routeFromPath;
         routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/skill-categories")) return previousRouteFromPath();
           if (location.pathname.includes("/skills")) return "skills";
           return previousRouteFromPath();
         };
@@ -16051,11 +16074,91 @@
         };
         ADMIN_PAGE_LOADERS.skills = loadAdminSkills;
       })();
+
+      function skillCategoryAdminPage() {
+        const rows = (state.skillCategoryItems || []).length
+          ? state.skillCategoryItems.map((item) => {
+            const actions = [`<button class="btn ghost" onclick="openAdminSkillCategoryDrawer('${escapeAttribute(item.code)}')">编辑</button>`];
+            if (item.isSystem !== true) actions.push(`<button class="btn ghost" onclick="deleteAdminSkillCategory('${escapeAttribute(item.code)}')">删除</button>`);
+            return `<tr><td>${escapeHtml(item.name || item.code)}<div class="metric-note">${escapeHtml(item.code)}${item.shortName && item.shortName !== item.name ? ` · ${escapeHtml(item.shortName)}` : ""}${item.isSystem === true ? " · 系统" : ""}${item.isSkillCategory === false ? " · 非可分配" : ""}</div></td><td><span class="tag ${item.isVisible === false ? "warn" : "green"}">${item.isVisible === false ? "隐藏" : "显示"}</span></td><td>${Number(item.sortOrder || 100)}</td><td class="actions"><div class="actions-row">${actions.join("")}</div></td></tr>`;
+          }).join("")
+          : `<tr><td colspan="4">${escapeHtml(state.skillCategoryLoadError || "暂无 Skill 分类")}</td></tr>`;
+        return `<section class="section"><div class="toolbar"><div><h3>Skill 分类</h3><div class="metric-note">维护广场、创建和后台共用的 Skill 分类，隐藏后前台不再展示。</div></div><div class="filters"><button class="btn ghost" onclick="loadAdminSkillCategories().then(renderShell)">刷新</button><button class="btn primary" onclick="openAdminSkillCategoryDrawer()">新增分类</button></div></div><div class="table-wrap dense skill-admin"><table><thead><tr><th>分类</th><th>状态</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+      }
+
+      function openAdminSkillCategoryDrawer(categoryCode = "") {
+        const category = (state.skillCategoryItems || []).find((item) => item.code === categoryCode) || null;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(640px,100%);"><div class="drawer-head"><h3>${category ? "编辑 Skill 分类" : "新增 Skill 分类"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="admin-skill-category-form">
+          <div class="form-grid"><label class="field"><span>分类名称</span><input name="name" value="${escapeAttribute(category?.name || "")}" maxlength="40" required /></label><label class="field"><span>分类编码</span><input name="code" value="${escapeAttribute(category?.code || "")}" pattern="[a-z0-9][a-z0-9_-]{0,39}" placeholder="例如 custom-story" ${category?.isSystem === true ? "readonly" : ""} required /></label></div>
+          <div class="form-grid"><label class="field"><span>简称</span><input name="shortName" value="${escapeAttribute(category?.shortName || "")}" maxlength="40" /></label><label class="field"><span>排序</span><input name="sortOrder" type="number" value="${Number(category?.sortOrder || 100)}" /></label></div>
+          <label class="field checkbox"><span>前台显示</span><input type="checkbox" name="isVisible" ${category?.isVisible === false ? "" : "checked"} /></label>
+          <div class="error-text" id="admin-skill-category-error"></div><div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存分类</button></div>
+        </form></aside>`;
+        document.getElementById("admin-skill-category-form").addEventListener("submit", async (event) => {
+          event.preventDefault(); const form = new FormData(event.currentTarget); const error = document.getElementById("admin-skill-category-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api("/api/admin/skill-categories", { method: category ? "PATCH" : "POST", headers: { "idempotency-key": adminIdempotencyKey("skill-category-save") }, body: JSON.stringify({ name: form.get("name"), code: category ? category.code : form.get("code"), nextCode: category ? form.get("code") : undefined, shortName: form.get("shortName"), sortOrder: Number(form.get("sortOrder") || 100), isVisible: form.get("isVisible") === "on" }) });
+            await loadAdminSkillCategories(); closeDrawer(); renderShell();
+          }, category ? "分类已更新" : "分类已新增");
+        });
+      }
+
+      async function deleteAdminSkillCategory(categoryCode) {
+        if (!confirm("确认删除该分类？仍有 Skill 使用时无法删除。")) return;
+        try {
+          await api("/api/admin/skill-categories", { method: "DELETE", headers: { "idempotency-key": adminIdempotencyKey("skill-category-delete") }, body: JSON.stringify({ code: categoryCode }) });
+          await loadAdminSkillCategories();
+          renderShell();
+          showToast("分类已删除");
+        } catch (error) {
+          showToast(error.payload?.error?.message || error.message || "分类删除失败");
+        }
+      }
+
+      (function installSkillCategoryAdminPage() {
+        pages.skillCategories = "Skill 分类";
+        state.skillCategoryItems = [];
+        state.skillCategoryLoadError = "";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/skill-categories")) return "skillCategories";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "skillCategories") return previousNavigate(page);
+          state.page = "skillCategories";
+          history.pushState(null, "", "/admin/skill-categories");
+          renderShell();
+          ensureAdminPageData(page).catch(() => undefined);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() { return state.page === "skillCategories" ? skillCategoryAdminPage() : previousRenderPage(); };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="skillCategories"]')) return;
+          const skillsButton = nav.querySelector('[data-page="skills"]');
+          const button = document.createElement("button");
+          button.dataset.page = "skillCategories";
+          button.innerHTML = "<span>Skill 分类</span>";
+          if (state.page === "skillCategories") button.classList.add("active");
+          button.addEventListener("click", () => navigate("skillCategories"));
+          nav.insertBefore(button, skillsButton?.nextSibling || null);
+        };
+        ADMIN_PAGE_LOADERS.skillCategories = loadAdminSkillCategories;
+      })();
       window.loadAdminSkills = loadAdminSkills;
+      window.loadAdminSkillCategories = loadAdminSkillCategories;
       window.updateAdminSkillStatus = updateAdminSkillStatus;
       window.updateAdminSkillRecommendation = updateAdminSkillRecommendation;
       window.openAdminSkillDrawer = openAdminSkillDrawer;
       window.openAdminSkillReviewDrawer = openAdminSkillReviewDrawer;
+      window.openAdminSkillCategoryDrawer = openAdminSkillCategoryDrawer;
+      window.deleteAdminSkillCategory = deleteAdminSkillCategory;
 
       bootstrap();
     </script>

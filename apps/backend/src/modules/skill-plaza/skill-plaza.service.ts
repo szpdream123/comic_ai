@@ -11,9 +11,22 @@ export const skillCategories = [
   "music-video",
   "creator",
   "general",
+  "project-workflow",
 ] as const;
 
 export type SkillCategory = (typeof skillCategories)[number];
+
+const fallbackSkillCategoryMeta: Record<string, { name: string; shortName: string }> = {
+  recommended: { name: "推荐", shortName: "推荐" },
+  "professional-film": { name: "专业影视", shortName: "影视" },
+  "commercial-ad": { name: "商业广告", shortName: "广告" },
+  "short-drama": { name: "短剧漫剧", shortName: "短剧" },
+  "animation-game": { name: "动漫游戏", shortName: "动漫" },
+  "music-video": { name: "音乐MV", shortName: "MV" },
+  creator: { name: "自媒体创作", shortName: "自媒体" },
+  general: { name: "通用技能", shortName: "通用" },
+  "project-workflow": { name: "项目工作流", shortName: "工作流" },
+};
 
 export const plazaWorkflowStages = ["script", "scene", "character", "prop", "shot"] as const;
 export type PlazaWorkflowStage = (typeof plazaWorkflowStages)[number];
@@ -129,10 +142,76 @@ export class SkillPlazaError extends Error {
   }
 }
 
-function normalizeCategory(value: unknown): SkillCategory | null {
-  const category = String(value ?? "").trim();
-  if (category === "recommended") return null;
-  return skillCategories.includes(category as SkillCategory) ? category as SkillCategory : null;
+function fallbackCategoryRows() {
+  return [
+    { id: "recommended", code: "recommended", name: fallbackSkillCategoryMeta.recommended.name, short_name: fallbackSkillCategoryMeta.recommended.shortName, sort_order: 10, is_visible: true, is_system: true, is_skill_category: false, created_at: null, updated_at: null },
+    ...skillCategories.map((code, index) => ({
+      id: code,
+      code,
+      name: fallbackSkillCategoryMeta[code]?.name ?? code,
+      short_name: fallbackSkillCategoryMeta[code]?.shortName ?? code,
+      sort_order: (index + 2) * 10,
+      is_visible: true,
+      is_system: false,
+      is_skill_category: true,
+      created_at: null,
+      updated_at: null,
+    })),
+  ];
+}
+
+function mapCategory(row: Record<string, unknown>) {
+  return {
+    id: String(row.id ?? ""),
+    code: String(row.code ?? ""),
+    name: String(row.name ?? ""),
+    shortName: String(row.short_name ?? row.name ?? ""),
+    sortOrder: Number(row.sort_order ?? 100),
+    isVisible: row.is_visible !== false,
+    isSystem: row.is_system === true,
+    isSkillCategory: row.is_skill_category !== false,
+    createdAt: row.created_at ?? null,
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
+function isUniqueViolation(value: unknown) {
+  return typeof value === "object" && value !== null && "code" in value && (value as { code?: unknown }).code === "23505";
+}
+
+function normalizeCategoryCode(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeBooleanFlag(value: unknown, fallback = true) {
+  if (value === undefined || value === null || value === "") return fallback;
+  return value === true || value === "true" || value === 1 || value === "1" || value === "on";
+}
+
+function normalizeSortOrder(value: unknown) {
+  const number = Number(value ?? 100);
+  return Number.isFinite(number) ? Math.max(-100000, Math.min(100000, Math.round(number))) : 100;
+}
+
+async function loadCategoryRows(db: SqlDatabase) {
+  try {
+    const result = await db.query<Record<string, unknown>>(
+      `SELECT id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at
+       FROM skill_categories
+       ORDER BY sort_order ASC, created_at ASC`,
+    );
+    return result.rows.length ? result.rows : fallbackCategoryRows();
+  } catch {
+    return fallbackCategoryRows();
+  }
+}
+
+async function normalizeCategory(db: SqlDatabase, value: unknown): Promise<string | null> {
+  const category = normalizeCategoryCode(value);
+  if (!category || category === "recommended") return null;
+  const rows = await loadCategoryRows(db);
+  const match = rows.find((row) => String(row.code) === category && row.is_skill_category !== false);
+  return match ? String(match.code) : null;
 }
 
 function normalizeRecommended(value: unknown) {
@@ -164,6 +243,8 @@ function normalizeSkillFileName(value: unknown) {
     .join("/");
   return normalized.slice(0, 240);
 }
+
+const SKILL_LIST_SELECT = `skill.id, skill.owner_user_id, skill.name, skill.summary, skill.category, skill.author_name, skill.author_avatar_url, skill.cover_storage_object_id, skill.preview_storage_object_id, skill.status, skill.visibility, skill.usage_count, skill.favorite_count, skill.created_at, skill.updated_at, skill.review_comment, skill.reviewed_at, skill.is_recommended, (skill.detail_json - 'files') AS detail_json`;
 
 function mapSkill(row: Record<string, unknown>) {
   const detail = row.detail_json && typeof row.detail_json === "object" && !Array.isArray(row.detail_json)
@@ -218,7 +299,7 @@ export function createSkillPlazaService(deps: {
   async function listCatalog(input: { userId?: string | null; category?: unknown; query?: unknown; page?: number; pageSize?: number }) {
     const requestedCategory = String(input.category ?? "").trim();
     const recommendedOnly = requestedCategory === "recommended";
-    const category = recommendedOnly ? null : normalizeCategory(input.category);
+    const category = recommendedOnly ? null : await normalizeCategory(deps.db, input.category);
     const query = String(input.query ?? "").trim();
     const pageSize = Math.min(50, Math.max(1, Number(input.pageSize) || 20));
     const page = Math.max(1, Number(input.page) || 1);
@@ -226,7 +307,7 @@ export function createSkillPlazaService(deps: {
     const userId = input.userId ?? null;
     const result = await deps.db.query<Record<string, unknown>>(
       `
-        SELECT skill.*, EXISTS (
+        SELECT ${SKILL_LIST_SELECT}, EXISTS (
           SELECT 1 FROM skill_library library WHERE library.skill_id = skill.id AND library.user_id = $1
         ) AS is_in_library,
         EXISTS (SELECT 1 FROM skill_favorites favorite WHERE favorite.skill_id = skill.id AND favorite.user_id = $1) AS is_favorite,
@@ -256,7 +337,7 @@ export function createSkillPlazaService(deps: {
 
   async function listLibrary(userId: string) {
     const result = await deps.db.query<Record<string, unknown>>(
-      `SELECT skill.*, true AS is_in_library, EXISTS (
+      `SELECT ${SKILL_LIST_SELECT}, true AS is_in_library, EXISTS (
          SELECT 1 FROM skill_favorites favorite WHERE favorite.skill_id = skill.id AND favorite.user_id = $1
        ) AS is_favorite
        FROM skill_library library JOIN skills skill ON skill.id = library.skill_id
@@ -269,7 +350,7 @@ export function createSkillPlazaService(deps: {
 
   async function listFavorites(userId: string) {
     const result = await deps.db.query<Record<string, unknown>>(
-      `SELECT skill.*, true AS is_favorite, EXISTS (
+      `SELECT ${SKILL_LIST_SELECT}, true AS is_favorite, EXISTS (
          SELECT 1 FROM skill_library library WHERE library.skill_id = skill.id AND library.user_id = $1
        ) AS is_in_library, false AS is_mine
        FROM skill_favorites favorite JOIN skills skill ON skill.id = favorite.skill_id
@@ -282,7 +363,7 @@ export function createSkillPlazaService(deps: {
 
   async function listMine(userId: string) {
     const result = await deps.db.query<Record<string, unknown>>(
-      `SELECT skill.*, EXISTS (
+      `SELECT ${SKILL_LIST_SELECT}, EXISTS (
        SELECT 1 FROM skill_library library WHERE library.skill_id = skill.id AND library.user_id = $1
        ) AS is_in_library, EXISTS (SELECT 1 FROM skill_favorites favorite WHERE favorite.skill_id = skill.id AND favorite.user_id = $1) AS is_favorite, true AS is_mine
        FROM skills skill
@@ -356,7 +437,7 @@ export function createSkillPlazaService(deps: {
     if (!current) throw new SkillPlazaError(404, "official_skill_not_found", "官方 Skill 不存在");
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = normalizeCategory(input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
+    const category = await normalizeCategory(deps.db, input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
     const isRecommended = input.isRecommended === undefined ? Boolean(current.is_recommended) : normalizeRecommended(input.isRecommended);
     const status = ["draft", "published", "disabled", "rejected"].includes(String(input.status ?? current.status)) ? String(input.status ?? current.status) : String(current.status ?? "draft");
     const previousDetail = current.detail_json && typeof current.detail_json === "object" && !Array.isArray(current.detail_json) ? current.detail_json as Record<string, unknown> : {};
@@ -383,7 +464,7 @@ export function createSkillPlazaService(deps: {
   async function createOfficial(input: { name: string; summary?: string; category?: unknown; detail?: unknown; status?: unknown; files?: unknown; isRecommended?: unknown }) {
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = normalizeCategory(input.category) ?? "general";
+    const category = await normalizeCategory(deps.db, input.category) ?? "general";
     const isRecommended = normalizeRecommended(input.isRecommended);
     const status = ["draft", "published", "disabled", "rejected"].includes(String(input.status ?? "draft"))
       ? String(input.status ?? "draft")
@@ -584,7 +665,7 @@ export function createSkillPlazaService(deps: {
   async function create(input: { userId: string; name: string; summary?: string; category?: unknown; detail?: unknown; coverStorageObjectId?: string | null; previewStorageObjectId?: string | null }) {
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = normalizeCategory(input.category) ?? "general";
+    const category = await normalizeCategory(deps.db, input.category) ?? "general";
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? input.detail : {};
     const requestedFileListPublic = (detail as Record<string, unknown>).fileListPublic;
     const fileListPublic = requestedFileListPublic === true || requestedFileListPublic === "true" || requestedFileListPublic === 1 || requestedFileListPublic === "1";
@@ -617,7 +698,7 @@ export function createSkillPlazaService(deps: {
     if (!current) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在或不可编辑");
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = normalizeCategory(input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
+    const category = await normalizeCategory(deps.db, input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
     const previousDetail = current.detail_json && typeof current.detail_json === "object" && !Array.isArray(current.detail_json) ? current.detail_json as Record<string, unknown> : {};
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? { ...previousDetail, ...(input.detail as Record<string, unknown>) } : { ...previousDetail };
     const requestedFileListPublic = detail.fileListPublic;
@@ -685,5 +766,99 @@ export function createSkillPlazaService(deps: {
     return { skillId: input.skillId, storageObjectId: input.storageObjectId, fileName, fileKind };
   }
 
-  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, findAccessibleSkillIdByName, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
+  async function listCategories(input: { includeHidden?: boolean } = {}) {
+    const rows = await loadCategoryRows(deps.db);
+    return {
+      items: rows
+        .filter((row) => input.includeHidden === true || row.is_visible !== false)
+        .map(mapCategory),
+    };
+  }
+
+  async function createCategory(input: { code?: unknown; name?: unknown; shortName?: unknown; sortOrder?: unknown; isVisible?: unknown }) {
+    const code = normalizeCategoryCode(input.code);
+    if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(code)) throw new SkillPlazaError(400, "skill_category_code_invalid", "分类编码仅支持小写字母、数字、下划线和连字符");
+    if (code === "recommended") throw new SkillPlazaError(400, "skill_category_not_assignable", "推荐不是可创建的 Skill 分类");
+    const name = String(input.name ?? "").trim();
+    if (!name || name.length > 40) throw new SkillPlazaError(400, "skill_category_name_invalid", "分类名称不能为空且不能超过 40 个字符");
+    const shortName = String(input.shortName ?? "").trim() || name;
+    if (shortName.length > 40) throw new SkillPlazaError(400, "skill_category_short_name_invalid", "分类简称不能超过 40 个字符");
+    try {
+      const row = await queryOne<Record<string, unknown>>(deps.db,
+        `INSERT INTO skill_categories (id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category)
+         VALUES ($1, $2, $3, $4, $5, $6, false, true)
+         RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at`,
+        [randomUUID(), code, name, shortName, normalizeSortOrder(input.sortOrder), normalizeBooleanFlag(input.isVisible, true)],
+      );
+      if (!row) throw new SkillPlazaError(500, "skill_category_create_failed", "Skill 分类创建失败");
+      return mapCategory(row);
+    } catch (error) {
+      if (error instanceof SkillPlazaError) throw error;
+      if (isUniqueViolation(error)) throw new SkillPlazaError(409, "skill_category_code_conflict", "分类编码已存在");
+      throw error;
+    }
+  }
+
+  async function updateCategory(input: { categoryId: string; code?: unknown; name?: unknown; shortName?: unknown; sortOrder?: unknown; isVisible?: unknown }) {
+    const current = await queryOne<Record<string, unknown>>(deps.db,
+      `SELECT id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at
+       FROM skill_categories WHERE id::text = $1 OR code = $1`,
+      [input.categoryId],
+    );
+    if (!current) throw new SkillPlazaError(404, "skill_category_not_found", "Skill 分类不存在");
+    const nextCode = input.code === undefined ? String(current.code) : normalizeCategoryCode(input.code);
+    if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(nextCode)) throw new SkillPlazaError(400, "skill_category_code_invalid", "分类编码仅支持小写字母、数字、下划线和连字符");
+    if (current.is_system === true && nextCode !== String(current.code)) throw new SkillPlazaError(409, "skill_category_system", "系统分类不能修改编码");
+    if (nextCode === "recommended" && current.is_skill_category !== false) throw new SkillPlazaError(400, "skill_category_not_assignable", "推荐不是可分配的 Skill 分类");
+    const name = input.name === undefined ? String(current.name ?? "") : String(input.name ?? "").trim();
+    if (!name || name.length > 40) throw new SkillPlazaError(400, "skill_category_name_invalid", "分类名称不能为空且不能超过 40 个字符");
+    const shortName = input.shortName === undefined ? String(current.short_name ?? name) : (String(input.shortName ?? "").trim() || name);
+    if (shortName.length > 40) throw new SkillPlazaError(400, "skill_category_short_name_invalid", "分类简称不能超过 40 个字符");
+    if (nextCode !== String(current.code)) {
+      const usage = await queryOne<{ count: string }>(deps.db, "SELECT COUNT(*)::text AS count FROM skills WHERE category = $1", [current.code]);
+      if (Number(usage?.count ?? 0) > 0) throw new SkillPlazaError(409, "skill_category_in_use", "该分类仍有 Skill 使用，不能修改编码");
+    }
+    try {
+      const row = await queryOne<Record<string, unknown>>(deps.db,
+        `UPDATE skill_categories
+         SET code = $2, name = $3, short_name = $4, sort_order = $5, is_visible = $6, updated_at = now()
+         WHERE id = $1
+         RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at`,
+        [
+          current.id,
+          nextCode,
+          name,
+          shortName,
+          input.sortOrder === undefined ? Number(current.sort_order ?? 100) : normalizeSortOrder(input.sortOrder),
+          input.isVisible === undefined ? current.is_visible !== false : normalizeBooleanFlag(input.isVisible, true),
+        ],
+      );
+      if (!row) throw new SkillPlazaError(404, "skill_category_not_found", "Skill 分类不存在");
+      return mapCategory(row);
+    } catch (error) {
+      if (error instanceof SkillPlazaError) throw error;
+      if (isUniqueViolation(error)) throw new SkillPlazaError(409, "skill_category_code_conflict", "分类编码已存在");
+      throw error;
+    }
+  }
+
+  async function deleteCategory(categoryId: string) {
+    const current = await queryOne<Record<string, unknown>>(deps.db,
+      `SELECT id, code, is_system FROM skill_categories WHERE id::text = $1 OR code = $1`,
+      [categoryId],
+    );
+    if (!current) throw new SkillPlazaError(404, "skill_category_not_found", "Skill 分类不存在");
+    if (current.is_system === true) throw new SkillPlazaError(409, "skill_category_system", "系统分类不能删除");
+    const usage = await queryOne<{ count: string }>(deps.db, "SELECT COUNT(*)::text AS count FROM skills WHERE category = $1", [current.code]);
+    if (Number(usage?.count ?? 0) > 0) throw new SkillPlazaError(409, "skill_category_in_use", "该分类仍有 Skill 使用，不能删除");
+    const row = await queryOne<Record<string, unknown>>(deps.db,
+      `DELETE FROM skill_categories WHERE id = $1
+       RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at`,
+      [current.id],
+    );
+    if (!row) throw new SkillPlazaError(404, "skill_category_not_found", "Skill 分类不存在");
+    return mapCategory(row);
+  }
+
+  return { listCatalog, listLibrary, listFavorites, listMine, listAdmin, listCategories, createCategory, updateCategory, deleteCategory, updateStatus, updateRecommendation, updateOfficial, createOfficial, getDetail, getAdminDetail, resolveWorkflowSkill, findAccessibleSkillIdByName, create, updateMine, addToLibrary, addToFavorites, removeFromFavorites, attachFile };
 }

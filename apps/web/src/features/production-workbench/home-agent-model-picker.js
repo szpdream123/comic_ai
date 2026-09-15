@@ -8,7 +8,7 @@ export function normalizeHomeAgentGenerationModel(model = {}) {
   const status = String(model?.status ?? "").trim().toLowerCase();
   if (
     !modelCode
-    || !["image", "video", "audio"].includes(mediaType)
+    || !["text", "image", "video", "audio"].includes(mediaType)
     || model?.enabled === false
     || model?.disabled === true
     || ["disabled", "inactive"].includes(status)
@@ -43,7 +43,13 @@ export function renderHomeAgentModelPicker({
   const activeMediaType = normalizeHomeAgentGenerationMediaType(mediaType) || "image";
   const visibleModels = models.filter((model) => model?.mediaType === activeMediaType && model?.modelCode);
   const selectedCode = String(selectedModelCodes?.[activeMediaType] ?? selectedModelCode ?? "").trim();
-  const mediaLabel = activeMediaType === "video" ? "视频" : activeMediaType === "audio" ? "音频" : "图片";
+  const mediaLabel = activeMediaType === "video"
+    ? "视频"
+    : activeMediaType === "audio"
+      ? "音频"
+      : activeMediaType === "text"
+        ? "文本"
+        : "图片";
   return `
     <div class="home-agent-model-picker">
       <button type="button" class="home-agent-model-trigger${open ? " active" : ""}" ${actionAttr}="${escapeAttr(toggleAction)}" data-field="${escapeAttr(menuField)}" aria-haspopup="dialog" aria-expanded="${open === true}" aria-label="${escapeAttr(ariaLabel)}" title="${escapeAttr(ariaLabel)}" ${disabled ? "disabled" : ""}>${renderHomeAgentModelIcon("model")}<span>${escapeHtml(triggerLabel)}</span></button>
@@ -53,7 +59,7 @@ export function renderHomeAgentModelPicker({
         </div>` : ""}
         <div class="home-agent-model-options" role="listbox" aria-label="${mediaLabel}模型">
           ${visibleModels.length ? visibleModels.map((model) => `<button type="button" role="option" aria-selected="${selectedCode === model.modelCode}" class="home-agent-model-option${selectedCode === model.modelCode ? " active" : ""}" ${actionAttr}="${escapeAttr(selectAction)}" data-model-kind="${escapeAttr(activeMediaType)}" data-model-code="${escapeAttr(model.modelCode)}" data-model-id="${escapeAttr(model.modelCode)}" data-model-name="${escapeAttr(model.modelLabel)}">
-            <span class="home-agent-model-option-icon" aria-hidden="true">${renderHomeAgentModelIcon(activeMediaType)}</span>
+            <span class="home-agent-model-option-icon" aria-hidden="true">${renderHomeAgentModelIcon(activeMediaType === "text" ? "model" : activeMediaType)}</span>
             <span><strong>${escapeHtml(model.modelLabel)}</strong>${model.description ? `<small>${escapeHtml(model.description)}</small>` : ""}</span>
             <i aria-hidden="true"></i>
           </button>`).join("") : `<p class="home-agent-model-empty">暂无可用${mediaLabel}模型</p>`}
@@ -63,11 +69,40 @@ export function renderHomeAgentModelPicker({
   `;
 }
 
+export function resolveHomeAgentPreferredModels(ui = {}) {
+  const configuredModels = Array.isArray(ui.episodeGenerationConfig?.models)
+    ? ui.episodeGenerationConfig.models
+    : [];
+  const canvasDefaults = ui.canvasSettingsRecord?.settings?.defaultModels ?? {};
+  const generationDefaults = ui.episodeGenerationConfig ?? {};
+  return Object.fromEntries(
+    ["text", "image", "video"].map((mediaType) => {
+      const selected = String(ui.homeAgentSelectedModels?.[mediaType] ?? "").trim();
+      const canvasDefault = String(canvasDefaults[mediaType] ?? "").trim();
+      const generationDefault = String(
+        mediaType === "image"
+          ? generationDefaults.defaultImageModelCode ?? ""
+          : mediaType === "video"
+            ? generationDefaults.defaultVideoModelCode ?? ""
+            : generationDefaults.defaultTextModelCode ?? "",
+      ).trim();
+      const firstAvailable = configuredModels.find((model) => (
+        model?.enabled !== false &&
+        normalizeHomeAgentGenerationMediaType(model?.mediaType ?? model?.media_type ?? model?.mediaKind) === mediaType &&
+        String(model?.modelCode ?? model?.model_code ?? model?.id ?? "").trim()
+      ));
+      const fallback = String(firstAvailable?.modelCode ?? firstAvailable?.model_code ?? firstAvailable?.id ?? "").trim();
+      return [mediaType, selected || canvasDefault || generationDefault || fallback];
+    }).filter(([, modelCode]) => modelCode),
+  );
+}
+
 function normalizeHomeAgentGenerationMediaType(value) {
   const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
   if (normalized.includes("video") || ["i2v", "t2v", "lip_sync"].includes(normalized)) return "video";
   if (normalized.includes("image") || ["i2i", "t2i", "multi_reference"].includes(normalized)) return "image";
   if (normalized.includes("audio") || normalized.includes("speech") || ["tts", "music"].includes(normalized)) return "audio";
+  if (normalized.includes("text") || ["llm", "chat"].includes(normalized)) return "text";
   return normalized;
 }
 

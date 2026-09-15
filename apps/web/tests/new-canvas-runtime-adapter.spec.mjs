@@ -12,18 +12,55 @@ import {
   AI_CANVAS_DOCUMENT_VERSION,
   AI_CANVAS_RUNTIME_ADAPTER_VERSION,
   AI_CANVAS_RUNTIME_KIND,
+  applyAiCanvasRuntimeNodeModel,
   createAiCanvasRuntimeAdapter,
   normalizeAiCanvasRuntimeModel,
   normalizeAiCanvasRuntimeSkill,
   deserializeAiCanvasDocument,
   normalizeAiCanvasRuntimeGrouping,
+  normalizeAiCanvasRuntimeProjectDefaultModels,
+  resolveAiCanvasRuntimeNodeMediaKind,
   serializeAiCanvasDocument,
+  toAiCanvasRuntimeSlashModelId,
 } from "../src/features/new-canvas/ai-canvas-runtime-adapter.js";
 import {
   addAiCanvasRuntimeEpisodesForWorkbenchForTest,
   applyCanvasProjectMetaFromDocumentForTest,
   attachCanvasProjectMetaToDocumentForTest,
 } from "../src/features/production-workbench/index.js";
+
+test("AI Canvas runtime node models convert bare codes into slash IDs", () => {
+  assert.equal(resolveAiCanvasRuntimeNodeMediaKind("ai-image"), "image");
+  assert.equal(resolveAiCanvasRuntimeNodeMediaKind("ai-animation"), "image");
+  assert.equal(resolveAiCanvasRuntimeNodeMediaKind("ai-video"), "video");
+  assert.equal(resolveAiCanvasRuntimeNodeMediaKind("ai-audio"), "audio");
+  assert.equal(resolveAiCanvasRuntimeNodeMediaKind("ai-text"), "text");
+  assert.deepEqual(toAiCanvasRuntimeSlashModelId("seedream-5.0", "image"), {
+    model: "general/comic-ai/image/seedream-5.0",
+    provider: "general",
+  });
+  assert.deepEqual(toAiCanvasRuntimeSlashModelId("general/comic-ai/image/seedream-5.0"), {
+    model: "general/comic-ai/image/seedream-5.0",
+    provider: "general",
+  });
+  assert.deepEqual(
+    applyAiCanvasRuntimeNodeModel({ modelCode: "seedream-5.0" }, "ai-image"),
+    { modelCode: "seedream-5.0", model: "general/comic-ai/image/seedream-5.0", provider: "general" },
+  );
+  assert.deepEqual(normalizeAiCanvasRuntimeProjectDefaultModels({
+    image: "seedream-5.0",
+    video: "general/comic-ai/video/seedance-2.0",
+  }), {
+    image: "general/comic-ai/image/seedream-5.0",
+    video: "general/comic-ai/video/seedance-2.0",
+  });
+  const alreadySlashed = applyAiCanvasRuntimeNodeModel({
+    model: "general/comic-ai/image/seedream-5.0",
+    provider: "general",
+  }, "ai-image");
+  assert.equal(alreadySlashed.model, "general/comic-ai/image/seedream-5.0");
+  assert.equal(alreadySlashed.provider, "general");
+});
 
 test("AI Canvas document hooks are versioned and round-trip without mutation", () => {
   const document = { nodes: [{ id: "node-1", data: { assetId: "asset-1" } }] };
@@ -79,7 +116,9 @@ test("AI Canvas document hooks normalize legacy X6 canvas data for React Flow ru
   assert.deepEqual(normalized.nodes.map((node) => node.type), ["source-text", "ai-image", "source-image"]);
   assert.equal(normalized.nodes[0].data.output, "第一幕");
   assert.equal(normalized.nodes[0].data.ports, undefined);
-  assert.equal(normalized.nodes[1].data.model, "gpt-image-2-cn");
+  assert.equal(normalized.nodes[1].data.model, "general/comic-ai/image/gpt-image-2-cn");
+  assert.equal(normalized.nodes[1].data.provider, "general");
+  assert.equal(normalized.nodes[1].data.modelCode, "gpt-image-2-cn");
   assert.equal(normalized.edges[0].source, "script-source");
   assert.equal(normalized.edges[0].target, "send-flow");
   assert.equal(normalized.edges[0].sourceHandle, "out_text");
@@ -1028,9 +1067,27 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /@skill\{\$\{id\}\|\$\{encodeURIComponent\(label\)\}\}/);
   assert.match(appSource, /function applyAiCanvasRuntimePlazaSkillTokens\(text, tokens = \[\]\)/);
   assert.match(appSource, /【Skill：\[\^】\]\*】/);
-  assert.match(appSource, /function applyAiCanvasRuntimePromptAttachments\(text, files = \[\]\)/);
-  assert.match(appSource, /typeof file\?\.text !== "function"/);
+  assert.match(appSource, /function applyAiCanvasRuntimePromptAttachmentMarkers\(text, files = \[\], references = \[\]\)/);
+  assert.match(appSource, /function authorizeAiCanvasRuntimePromptAttachments\(conversationId, files = \[\]\)/);
+  assert.doesNotMatch(appSource, /file\.text\(\)/);
   assert.match(appSource, /【附件：\$\{name\}】/);
+  assert.match(appSource, /import\("\/ai-canvas-runtime\/assets\/main-upstream-665b2cc\.js"\)/);
+  assert.match(appSource, /main\?\.Qi \?\? main\?\.ST/);
+  assert.match(appSource, /await authorizeAiCanvasRuntimePromptAttachments\(conversationId, prepared\.grantFiles\)/);
+  const mainUpstreamSource = readRuntimeAsset("main-upstream-");
+  const conversationControllerSource = readRuntimeAsset("conversationExecutionController-");
+  assert.match(mainUpstreamSource, /async function ST\(e,t\)/);
+  assert.match(mainUpstreamSource, /r\.length\?r\.filter\(Boolean\)\.map\(e=>\{/);
+  assert.match(mainUpstreamSource, /file:t\.file,displayName:t\.fileName/);
+  assert.match(mainUpstreamSource, /e&&typeof e==`object`&&typeof e\.arrayBuffer==`function`/);
+  assert.match(mainUpstreamSource, /e=await aT\(r\.file\?\?r\.path,hT,i\.signal\)/);
+  assert.match(mainUpstreamSource, /ST as Qi/);
+  assert.match(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`,/);
+  assert.match(conversationControllerSource, /id:`file_read_text`[\s\S]{0,520}isAvailable:\(\)=>typeof window<`u`,/);
+  assert.match(conversationControllerSource, /id:`file_write_text`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
+  assert.doesNotMatch(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
+  assert.doesNotMatch(conversationControllerSource, /id:`file_read_text`[\s\S]{0,520}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
+  assert.match(appSource, /if \(textModelId\) configPatch\.assistantModelId = textModelId/);
   assert.match(appSource, /assistantImageModelId/);
   assert.match(appSource, /assistantVideoModelId/);
   assert.match(appSource, /saveConfig\?\.\(\{ silent: true \}\)/);
@@ -1080,6 +1137,59 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(runtimeDialogSource, /config\.generalModels/);
   assert.match(runtimeDialogSource, /showImageSize:Q\.resolutions\.length>0/);
   assert.match(runtimeDialogSource, /showAspectRatio:Q\.ratios\.length>0/);
+});
+
+test("homepage Agent attachments auto-authorize web files without inlining text", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const projectDetailSource = readFileSync(new URL("../src/features/production-workbench/project-detail.js", import.meta.url), "utf8");
+  const mainUpstreamSource = readRuntimeAsset("main-upstream-");
+  const conversationControllerSource = readRuntimeAsset("conversationExecutionController-");
+  assert.match(appSource, /function applyAiCanvasRuntimePromptAttachmentMarkers\(text, files = \[\], references = \[\]\)/);
+  assert.match(appSource, /function authorizeAiCanvasRuntimePromptAttachments\(conversationId, files = \[\]\)/);
+  assert.match(appSource, /function prepareAiCanvasRuntimePromptAttachments\(runtimeStore, files = \[\]\)/);
+  assert.match(appSource, /function normalizeAiCanvasRuntimeGrantFile\(file, index = 0\)/);
+  assert.match(appSource, /function extractAiCanvasRuntimeDocxText\(file\)/);
+  assert.match(appSource, /function extractAiCanvasRuntimePdfText\(file\)/);
+  assert.match(appSource, /function truncateAiCanvasRuntimeGrantText\(text\)/);
+  assert.match(appSource, /function addAiCanvasRuntimeAttachmentSourceNode\(runtimeStore, file, kind, index\)/);
+  assert.match(appSource, /const AI_CANVAS_RUNTIME_FILE_READ_MAX_BYTES = 256 \* 1024/);
+  assert.match(appSource, /\/vendor\/jszip\/dist\/jszip\.min\.js/);
+  assert.match(appSource, /word\/document\.xml/);
+  assert.match(appSource, /import\("\/vendor\/pdfjs-dist\/legacy\/build\/pdf\.mjs"\)/);
+  assert.match(appSource, /pdfjs-dist\/legacy\/build\/pdf\.worker\.mjs/);
+  assert.match(appSource, /disableWorker: true/);
+  assert.match(appSource, /new TextDecoder\("utf-8", \{ fatal: true \}\)/);
+  assert.match(appSource, /new TextDecoder\("gbk", \{ fatal: true \}\)/);
+  assert.match(appSource, /utf-16le/);
+  assert.match(appSource, /@\{\$\{id\}:\$\{label\}\}/);
+  assert.match(appSource, /kind === "video" \? "ai-video" : "ai-image"/);
+  assert.match(appSource, /addNodeTransient/);
+  assert.match(appSource, /prepareAiCanvasRuntimePromptAttachments\(runtimeStore, input\.files\)/);
+  assert.match(appSource, /applyAiCanvasRuntimePromptAttachmentMarkers\(withSkills, input\.files, prepared\.references\)/);
+  assert.doesNotMatch(appSource, /file\.text\(\)/);
+  assert.doesNotMatch(appSource, /async function authorizeAiCanvasRuntimePromptAttachments[\s\S]{0,420}isAiCanvasRuntimeTextAttachment/);
+  assert.match(appSource, /【附件：\$\{name\}】/);
+  assert.match(appSource, /import\("\/ai-canvas-runtime\/assets\/main-upstream-665b2cc\.js"\)/);
+  assert.match(appSource, /main\?\.Qi \?\? main\?\.ST/);
+  assert.match(appSource, /await authorizeAiCanvasRuntimePromptAttachments\(conversationId, prepared\.grantFiles\)/);
+  assert.match(projectDetailSource, /accept="image\/\*,video\/\*,\.txt,\.md,\.markdown,\.csv,\.json,\.docx,\.pdf"/);
+  assert.match(workbenchSource, /files: Array\.from\(workbench\.homeAgentFiles \?\? \[\]\)/);
+  assert.ok(existsSync(new URL("../../../node_modules/jszip/dist/jszip.min.js", import.meta.url)));
+  assert.ok(existsSync(new URL("../../../node_modules/pdfjs-dist/legacy/build/pdf.mjs", import.meta.url)));
+  assert.ok(existsSync(new URL("../../../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url)));
+  assert.match(mainUpstreamSource, /async function ST\(e,t\)/);
+  assert.match(mainUpstreamSource, /r\.length\?r\.filter\(Boolean\)\.map\(e=>\{/);
+  assert.match(mainUpstreamSource, /file:t\.file,displayName:t\.fileName/);
+  assert.match(mainUpstreamSource, /e&&typeof e==`object`&&typeof e\.arrayBuffer==`function`/);
+  assert.match(mainUpstreamSource, /e=await aT\(r\.file\?\?r\.path,hT,i\.signal\)/);
+  assert.match(mainUpstreamSource, /ST as Qi/);
+  assert.match(mainUpstreamSource, /var pT=10,mT=2\*1024\*1024,hT=256\*1024/);
+  assert.match(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`,/);
+  assert.match(conversationControllerSource, /id:`file_read_text`[\s\S]{0,520}isAvailable:\(\)=>typeof window<`u`,/);
+  assert.match(conversationControllerSource, /id:`file_write_text`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
+  assert.doesNotMatch(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
+  assert.doesNotMatch(conversationControllerSource, /id:`file_read_text`[\s\S]{0,520}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
 });
 
 test("video param panel follows backend model capability instead of ComfyUI fallback", () => {

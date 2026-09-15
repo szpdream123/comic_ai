@@ -179,7 +179,7 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
       totalTokens: 12000,
     });
     assert.equal(envelope.data.credit.consumed, 12);
-    assert.equal(envelope.data.credit.released, 20);
+    assert.equal(envelope.data.credit.released, 0);
     const content = gatewayCalls.at(-1)?.messages?.[1]?.content;
     assert.ok(Array.isArray(content));
     assert.match(String(content[0]?.type === "text" ? content[0].text : ""), /完整时间线/);

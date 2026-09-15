@@ -330,13 +330,16 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       props = props.length ? props : resolveAssetStageRecords("", [shotRaw], "props");
     }
 
+    const parsedStoryboards = parseStoryboardPromptResult(shotRaw);
+    const promptResult = {
+      scenes,
+      characters,
+      props,
+      ...parsedStoryboards,
+    };
+
     yield { type: "complete", preview: {
-      ...normalizePreview(scriptText, {
-        scenes,
-        characters,
-        props,
-        ...parseStoryboardPromptResult(shotRaw),
-      }),
+      ...normalizePreview(scriptText, promptResult),
       rawMarkdown: {
         scene: sceneRaw,
         character: characterRaw,
@@ -658,20 +661,23 @@ async function* streamJsonText(input: {
   prompt: string;
   skillInstructions?: string | null;
   stage?: AiStoryboardPromptStage;
+  messages?: TextGatewayChatCompletionRequest["messages"];
   projectId?: string | null;
   canvasProjectId?: string | null;
   createdByUserId?: string | null;
   responseFormat?: "json_object" | "text";
   maxTokens?: number;
+  payloadSummary?: string;
+  requestKeyPrefix?: string;
   signal?: AbortSignal;
 }) {
   const skillInstructions = String(input.skillInstructions ?? "").trim();
-  const messages = skillInstructions
+  const messages = input.messages ?? (skillInstructions
     ? [
         { role: "system" as const, content: buildPlazaSkillSystemInstruction(skillInstructions, input.stage) },
         { role: "user" as const, content: input.prompt },
       ]
-    : undefined;
+    : undefined);
   if (input.gateway.streamJson) {
     for await (const delta of input.gateway.streamJson({
       model: input.model,
@@ -682,6 +688,8 @@ async function* streamJsonText(input: {
       createdByUserId: input.createdByUserId,
       responseFormat: input.responseFormat,
       maxTokens: input.maxTokens,
+      payloadSummary: input.payloadSummary,
+      requestKeyPrefix: input.requestKeyPrefix,
       signal: input.signal,
     })) {
       yield* splitTextForLiveEcho(delta);
@@ -697,6 +705,8 @@ async function* streamJsonText(input: {
     createdByUserId: input.createdByUserId,
     responseFormat: input.responseFormat,
     maxTokens: input.maxTokens,
+    payloadSummary: input.payloadSummary,
+    requestKeyPrefix: input.requestKeyPrefix,
     signal: input.signal,
   }));
 }
@@ -2005,12 +2015,12 @@ function parseStandaloneAssetMarkdownTableRecords(raw: string, tableKey: string)
   }
   return table.rows
     .map((cells) => {
-      const description = compactStoryboardTableCell(cells[descriptionIndex >= 0 ? descriptionIndex : promptIndex]);
-      const prompt = compactStoryboardTableCell(cells[promptIndex >= 0 ? promptIndex : descriptionIndex]);
+      const description = descriptionIndex >= 0 ? compactStoryboardTableCell(cells[descriptionIndex]) : "";
+      const prompt = promptIndex >= 0 ? compactStoryboardTableCell(cells[promptIndex]) : "";
       return {
         [config.nameKey]: compactStoryboardTableCell(cells[nameIndex]),
-        [config.descriptionKey]: description || prompt,
-        [config.promptKey]: prompt || description,
+        [config.descriptionKey]: description,
+        [config.promptKey]: prompt,
       };
     })
     .filter((row) => text(row[config.nameKey]).trim());

@@ -150,9 +150,11 @@ test("home renders the AI creation hub without changing the workbench navigation
       homeAgentSelectedModels: { image: "image-pro", video: "video-pro" },
       episodeGenerationConfig: {
         models: [
+          { mediaType: "text", modelCode: "text-pro", modelLabel: "文本 Pro", providerGroup: "文本服务" },
           { mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro", providerGroup: "图片服务" },
           { mediaType: "video", modelCode: "video-pro", modelLabel: "视频 Pro", providerGroup: "视频服务" },
         ],
+        defaultTextModelCode: "text-pro",
       },
       projectLibrary: projects,
       projectLibraryPagination: { page: 1, pageSize: 18, total: 10, totalPages: 1 },
@@ -186,6 +188,7 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.doesNotMatch(html, /data-agent-mode="expert"/);
   assert.doesNotMatch(html, />分析</);
   assert.match(html, /data-home-agent-attachment-input/);
+  assert.match(html, /accept="image\/\*,video\/\*,\.txt,\.md,\.markdown,\.csv,\.json,\.docx,\.pdf"/);
   assert.match(html, /data-home-agent-attachment-list/);
   assert.match(html, /home-agent-attachment image/);
   assert.match(html, /tabindex="0" aria-label="图片附件 角色参考图\.png，悬停或聚焦预览"/);
@@ -200,7 +203,9 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(html, /视频 Pro/);
   assert.match(html, /data-action="toggle-home-agent-model-menu"/);
   assert.match(html, /data-action="set-home-agent-model-tab"/);
+  assert.match(html, /data-model-kind="text">文本</);
   assert.match(html, /data-action="select-home-agent-model"/);
+  assert.match(html, /class="home-agent-model-option active"[^>]*data-model-code="image-pro"/);
   assert.match(html, /data-action="open-home-agent-skill-picker"/);
   assert.match(html, /home-agent-send-hint/);
   assert.doesNotMatch(html, /home-agent-disclaimer/);
@@ -236,6 +241,8 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(css, /\.home-agent-attachment-hover-preview\.video-preview > video\s*\{[\s\S]*?object-fit:\s*contain/);
   assert.match(css, /\.home-agent-rich-editor\s*\{[\s\S]*?white-space:\s*pre-wrap/);
   assert.match(css, /\.home-agent-model-menu\s*\{[\s\S]*?width:\s*min\(22rem, calc\(100vw - 3rem\)\)/);
+  assert.match(css, /\.home-agent-model-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\[data-workbench-theme="daylight"\] \.home-agent-model-option\.active > i\s*\{[\s\S]*?background:\s*#1f8a92/);
   assert.match(css, /\[data-workbench-theme="daylight"\] \.workbench-main\.home-mode \.home-hero\.has-background-video \.hero-title,[\s\S]*?color:\s*#f5f7f8/);
   assert.match(css, /\[data-workbench-theme="daylight"\] \.home-agent-mode-menu small\s*\{[\s\S]*?color:\s*#6c7e89/);
   assert.match(css, /\[data-workbench-theme="daylight"\] \.home-agent-rich-editor:empty::before,[\s\S]*?color:\s*#6c7e89/);
@@ -246,6 +253,31 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(css, /\.home-project-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(8, minmax\(0, 1fr\)\)[\s\S]*?width:\s*100%[\s\S]*?margin-right:\s*auto/);
   assert.match(css, /\.home-project-grid \.project-gallery-card\s*\{[\s\S]*?aspect-ratio:\s*16 \/ 10/);
   assert.match(css, /\.home-tv\s*\{[\s\S]*?width:\s*100%[\s\S]*?max-width:\s*100%[\s\S]*?margin:\s*3\.2rem auto 0 0/);
+});
+
+test("home Agent model picker checks the default generation model without inserting a chip", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      homeAgentModelMenuOpen: true,
+      homeAgentModelTab: "image",
+      homeAgentSelectedModels: { image: "", video: "" },
+      episodeGenerationConfig: {
+        models: [
+          { mediaType: "text", modelCode: "text-pro", modelLabel: "文本 Pro" },
+          { mediaType: "image", modelCode: "seedream-5.0", modelLabel: "即梦 5.0" },
+          { mediaType: "image", modelCode: "image-other", modelLabel: "其他图片" },
+        ],
+        defaultImageModelCode: "seedream-5.0",
+        defaultTextModelCode: "text-pro",
+      },
+    },
+  });
+  assert.match(html, /data-model-kind="text">文本</);
+  assert.match(html, /class="home-agent-model-option active"[^>]*data-model-code="seedream-5.0"/);
+  assert.doesNotMatch(html, /data-home-agent-inline-kind="model"/);
 });
 
 test("home Skill entry reuses the existing plaza Skill picker", () => {

@@ -62,6 +62,53 @@ test("owner task charges aggregated actual token usage once", async () => {
   }
 });
 
+test("owner round without reservation charges actual usage once", async () => {
+  const db = await createMigratedTestDb();
+  try {
+    const fixture = await createRunningModelRound(db, null);
+    await grantCredits(db, {
+      userId: fixture.ownerUserId,
+      amount: 100,
+      sourceType: "test_credit_seed",
+      sourceId: randomUUID(),
+      reason: "Canvas Agent actual usage no-reserve test",
+      now: startedAt,
+    });
+    const billing = new CanvasAgentBillingService(db);
+    const pricing = { canvasAgentTokenCreditsPerMillion: 1_000_000 };
+    const input = {
+      ownerUserId: fixture.ownerUserId,
+      canvasId: fixture.canvasId,
+      agentTaskId: fixture.task.id,
+      workflowTaskId: fixture.task.workflowTaskId,
+      stepId: fixture.stepId,
+      reservationId: null,
+      reservedAmount: 0,
+      usage: { promptTokens: 2, completionTokens: 3, cachedTokens: 4, totalTokens: 5 },
+      pricing,
+      now: repairedAt,
+    };
+
+    assert.deepEqual(await billing.settleRound(input), { consumed: 9, released: 0 });
+    assert.deepEqual(await billing.settleRound(input), { consumed: 9, released: 0 });
+
+    const user = await db.query<{ credit_balance_cached: number | string }>(
+      "SELECT credit_balance_cached FROM users WHERE id=$1",
+      [fixture.ownerUserId],
+    );
+    const reservation = await db.query<{ amount_consumed: number | string; amount_released: number | string }>(`
+      SELECT amount_consumed, amount_released
+      FROM credit_reservations
+      WHERE user_id=$1 AND source_type='canvas_agent_text_round' AND source_id=$2
+    `, [fixture.ownerUserId, fixture.stepId]);
+    assert.equal(Number(user.rows[0]?.credit_balance_cached), 91);
+    assert.equal(Number(reservation.rows[0]?.amount_consumed), 9);
+    assert.equal(Number(reservation.rows[0]?.amount_released), 0);
+  } finally {
+    await db.close();
+  }
+});
+
 test("owner round settles the reservation from actual token usage", async () => {
   const db = await createMigratedTestDb();
   try {

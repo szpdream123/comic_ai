@@ -599,13 +599,13 @@
 }
 
 .new-canvas-root .chat-panel-root .chat-panel-header button,
-.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not(.chat-skill-source-tab),
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not([role="tab"]):not(.chat-skill-source-tab),
 .new-canvas-root .chat-panel-root .chat-panel-send-btn {
   min-width: 38px;
   min-height: 38px;
 }
 
-.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not(.chat-skill-source-tab) {
+.new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not([role="tab"]):not(.chat-skill-source-tab) {
   width: 38px;
   height: 38px;
 }
@@ -2224,4 +2224,42 @@
   color: var(--theme-text-secondary, rgba(238, 241, 242, 0.72)) !important;
   font-size: 0.82rem !important;
   text-align: center !important;
+}
+
+.new-canvas-root .chat-panel-root .model-category-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 4px 6px 2px;
+  padding: 0.2rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.new-canvas-root .chat-panel-root .model-category-tabs > button {
+  width: auto !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0.4rem 0.5rem !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--theme-text-secondary, #5b6570) !important;
+  font-size: 0.74rem !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+  cursor: pointer;
+}
+
+.new-canvas-root .chat-panel-root .model-category-tabs > button.active,
+.new-canvas-root .chat-panel-root .model-category-tabs > button[aria-selected="true"] {
+  background: rgba(15, 23, 42, 0.08) !important;
+  color: var(--theme-text, #1f2937) !important;
+  font-weight: 600;
 }

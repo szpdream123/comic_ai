@@ -17,7 +17,29 @@ export const EPISODE_PLAZA_SKILL_CATEGORIES = [
   { id: "music-video", label: "音乐MV", shortLabel: "MV" },
   { id: "creator", label: "自媒体创作", shortLabel: "自媒体" },
   { id: "general", label: "通用技能", shortLabel: "通用" },
+  { id: "project-workflow", label: "项目工作流", shortLabel: "工作流" },
 ];
+
+export function resolvePlazaSkillCategories(items) {
+  const mapped = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const code = String(item?.code ?? item?.id ?? "").trim();
+      const label = String(item?.name ?? item?.label ?? "").trim();
+      const shortLabel = String(item?.shortName ?? item?.shortLabel ?? label).trim();
+      return {
+        id: code,
+        label,
+        shortLabel,
+        isVisible: item?.isVisible !== false,
+      };
+    })
+    .filter((item) => item.id && item.label && item.isVisible);
+  return mapped.length ? mapped : EPISODE_PLAZA_SKILL_CATEGORIES;
+}
+
+export function plazaSkillCreateCategories(items) {
+  return resolvePlazaSkillCategories(items).filter((item) => item.id !== "recommended");
+}
 
 export const PLAZA_WORKFLOW_STAGES = ["script", "scene", "character", "prop", "shot"];
 const PLAZA_WORKFLOW_STAGE_ALIASES = {
@@ -219,6 +241,7 @@ export function renderEpisodePromptSkillModal({
       query,
       loading,
       actions,
+      categories,
     });
   }
   const normalizedSource = sourceTab === "private" ? "private" : "official";
@@ -443,8 +466,8 @@ export function sumEpisodePromptSkillCredits(skills = [], selectedByCategory = {
     .reduce((sum, skill) => sum + skill.priceCredits, 0);
 }
 
-export function normalizePlazaEpisodeSkills(items = [], source = "") {
-  const validCategories = new Set(EPISODE_PLAZA_SKILL_CATEGORIES.map((item) => item.id));
+export function normalizePlazaEpisodeSkills(items = [], source = "", categories = EPISODE_PLAZA_SKILL_CATEGORIES) {
+  const validCategories = new Set(resolvePlazaSkillCategories(categories).map((item) => item.id));
   return (Array.isArray(items) ? items : [])
     .map((item) => {
       const category = String(item?.category ?? "").trim() || "general";
@@ -490,6 +513,7 @@ function renderPlazaSkillPickerModal({
   query = "",
   loading = false,
   actions = {},
+  categories = EPISODE_PLAZA_SKILL_CATEGORIES,
 } = {}) {
   const resolvedActions = {
     close: "close-episode-prompt-skill-modal",
@@ -504,9 +528,9 @@ function renderPlazaSkillPickerModal({
   const normalizedSource = sourceTab === "library" || sourceTab === "mine" || sourceTab === "private"
     ? (sourceTab === "private" ? "mine" : sourceTab)
     : "official";
-  const official = normalizePlazaEpisodeSkills(officialSkills, "official");
-  const library = normalizePlazaEpisodeSkills(librarySkills.length ? librarySkills : [], "library");
-  const mine = normalizePlazaEpisodeSkills(mineSkills.length ? mineSkills : privateSkills, "mine");
+  const official = normalizePlazaEpisodeSkills(officialSkills, "official", categories);
+  const library = normalizePlazaEpisodeSkills(librarySkills.length ? librarySkills : [], "library", categories);
+  const mine = normalizePlazaEpisodeSkills(mineSkills.length ? mineSkills : privateSkills, "mine", categories);
   const sourceSkills = normalizedSource === "library" ? library : normalizedSource === "mine" ? mine : official;
   const queryText = String(query ?? "").trim().toLowerCase();
   const visibleSkills = sourceSkills.filter((skill) =>
@@ -682,8 +706,8 @@ function renderSelectedSkillRow({ category, skill, sourceTab, categoryAction, cl
   `;
 }
 
-function renderSelectedPlazaSkillRow({ skill, clearAction, allowClear }) {
-  const category = EPISODE_PLAZA_SKILL_CATEGORIES.find((item) => item.id === skill.category);
+function renderSelectedPlazaSkillRow({ skill, clearAction, allowClear, categories = EPISODE_PLAZA_SKILL_CATEGORIES }) {
+  const category = resolvePlazaSkillCategories(categories).find((item) => item.id === skill.category);
   return `
     <article class="episode-selected-skill has-selection" data-episode-selected-plaza-id="${escapeAttr(skill.id)}">
       <button type="button" data-action="${escapeAttr(clearAction)}" data-episode-skill-id="${escapeAttr(skill.id)}">
@@ -717,8 +741,8 @@ function categoryLabel(category) {
   return EPISODE_PROMPT_SKILL_CATEGORIES.find((item) => item.id === category)?.label ?? "提示词技能";
 }
 
-function plazaCategoryLabel(category) {
-  return EPISODE_PLAZA_SKILL_CATEGORIES.find((item) => item.id === category)?.label ?? "Skill";
+function plazaCategoryLabel(category, categories = EPISODE_PLAZA_SKILL_CATEGORIES) {
+  return resolvePlazaSkillCategories(categories).find((item) => item.id === category)?.label ?? "Skill";
 }
 
 function formatSkillCredits(value) {

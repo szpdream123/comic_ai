@@ -37,6 +37,7 @@ import {
   loadCanvasGenerationAssetsForTest,
   loadStandaloneCanvasProjectForTest,
   parseSingleEpisodeAiStageRowsForTest,
+  buildSingleEpisodeAiPreviewTablesForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
   persistCanvasNodePositionsForTest,
@@ -200,6 +201,75 @@ it("splits plain character prompt paragraphs into the character prompt list", ()
   assert.deepEqual(rows.map((row) => row.characterName), ["伍小野", "迷雾鬼（类人型）"]);
   assert.match(rows[0].characterDescription, /能源收割手/);
   assert.match(rows[1].characterDescription, /皮肤灰白/);
+});
+
+it("does not treat director diagnosis labels as character names", () => {
+  const rows = parseSingleEpisodeAiStageRowsForTest([
+    "核心问题：谁能在城门口活下来。",
+    "",
+    "画幅：9:16 竖屏",
+    "",
+    "钩子类型：极端悬念钩 + 认知反差钩。",
+    "",
+    "任小野：清瘦少年，旧布短衣。",
+  ].join("\n"), "characters");
+
+  assert.deepEqual(rows.map((row) => row.characterName), ["任小野"]);
+});
+
+it("prefers skill-parsed original rows over rewritten commitPayload", () => {
+  const tables = buildSingleEpisodeAiPreviewTablesForTest({
+    scriptText: "任小野在城门口发现尸体异常。",
+    rawMarkdown: {
+      scene: [
+        "【剧本场景列表】",
+        "| 场景名称 | 场景描述 | 场景图片提示词 |",
+        "| --- | --- | --- |",
+        "| 城门口 | 黄昏城门 | 黄昏城门口，残阳 |",
+      ].join("\n"),
+      character: [
+        "【剧本角色列表】",
+        "| 角色名称 | 角色描述 | 角色图片提示词 |",
+        "| --- | --- | --- |",
+        "| 任小野 | 清瘦少年 | 清瘦东方少年，旧布短衣 |",
+      ].join("\n"),
+      prop: [
+        "【剧本道具列表】",
+        "| 道具名称 | 道具描述 | 道具图片提示词 |",
+        "| --- | --- | --- |",
+        "| 特制切割刀 | 磨损刀刃 | 磨损刀刃特写 |",
+      ].join("\n"),
+      shot: [
+        "【剧本分镜列表】",
+        "| 镜号 | 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |",
+        "| --- | --- | --- | --- | --- |",
+        "| 1 | 任小野在城门口发现尸体异常。 |  | 黄昏城门口，任小野低头查看尸体。 | 中景固定镜头 |",
+      ].join("\n"),
+    },
+    commitPayload: {
+      scenes: [{ sceneName: "城门口", sceneDescription: "黄昏城门口，残阳", sceneImagePrompt: "黄昏城门口，残阳" }],
+      characters: [{ characterName: "任小野", characterDescription: "清瘦少年", characterImagePrompt: "清瘦少年" }],
+      props: [{ propName: "特制切割刀", propDescription: "磨损刀刃特写", propImagePrompt: "磨损刀刃特写" }],
+      storyboards: [{ shotNo: 1, plot: "任小野在城门口发现尸体异常。", dialogue: "", imagePrompt: "城门口", videoPrompt: "中景固定镜头" }],
+    },
+  });
+
+  assert.deepEqual(tables.characters.columns, ["角色名称", "角色描述", "角色图片提示词"]);
+  assert.deepEqual(tables.scenes.columns, ["场景名称", "场景描述", "场景图片提示词"]);
+  assert.deepEqual(tables.props.columns, ["道具名称", "道具描述", "道具图片提示词"]);
+  assert.deepEqual(tables.storyboards.columns, ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"]);
+  assert.deepEqual(tables.characters.rows.map((row) => row.characterName), ["任小野"]);
+  assert.equal(tables.characters.rows[0]?.characterDescription, "清瘦少年");
+  assert.equal(tables.characters.rows[0]?.characterImagePrompt, "清瘦东方少年，旧布短衣");
+  assert.equal(tables.scenes.rows[0]?.sceneName, "城门口");
+  assert.equal(tables.scenes.rows[0]?.sceneDescription, "黄昏城门");
+  assert.equal(tables.scenes.rows[0]?.sceneImagePrompt, "黄昏城门口，残阳");
+  assert.equal(tables.props.rows[0]?.propName, "特制切割刀");
+  assert.equal(tables.props.rows[0]?.propDescription, "磨损刀刃");
+  assert.equal(tables.props.rows[0]?.propImagePrompt, "磨损刀刃特写");
+  assert.equal(tables.storyboards.rows[0]?.shotNo, "1");
+  assert.equal(tables.storyboards.rows[0]?.plot, "任小野在城门口发现尸体异常。");
+  assert.equal(tables.storyboards.rows[0]?.imagePrompt, "黄昏城门口，任小野低头查看尸体。");
 });
 
 describe("production workbench home shell", () => {
@@ -1342,6 +1412,49 @@ describe("production workbench home shell", () => {
       }),
       "数据已存在，请刷新后重试。",
     );
+  });
+
+  it("does not attach the placeholder canvas id when uploading a home workflow script", async () => {
+    const uploadCalls = [];
+    const workbench = {
+      state: {},
+      session: { user: { id: "user-1", phone: "+86 13800138000" } },
+      api: {
+        async uploadFile(file, options) {
+          uploadCalls.push(options);
+          return {
+            upload: {
+              uploadSessionId: "session-1",
+              storageObjectId: "storage-1",
+              mimeType: file.type,
+            },
+          };
+        },
+        async createProject() {
+          throw new Error("stop-after-upload");
+        },
+      },
+      ui: {
+        homeCreationMode: "workflow",
+        homeWorkflowScriptFile: { name: "斗破.txt", type: "text/plain", size: 12 },
+        selectedEpisodePlazaSkillIds: ["plaza-skill-1"],
+        canvasProjectView: "detail",
+        canvasProjects: [],
+        selectedCanvasProjectId: "canvas-project-main",
+        selectedProjectCardId: null,
+        membershipStatus: { status: "professional_active" },
+        toast: "",
+        busy: false,
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "submit-home-agent-prompt" } });
+
+    assert.equal(uploadCalls.length, 1);
+    assert.equal(uploadCalls[0].category, "script-documents");
+    assert.equal(uploadCalls[0].projectId, null);
+    assert.equal(uploadCalls[0].canvasProjectId, null);
   });
 });
 
@@ -17329,22 +17442,22 @@ describe("production workbench project tab", () => {
       },
       scenes: {
         title: "场景",
-        columns: ["场景名称", "场景描述"],
+        columns: ["场景名称", "场景描述", "场景图片提示词"],
         rows: [],
       },
       characters: {
         title: "角色",
-        columns: ["角色名称", "角色描述"],
+        columns: ["角色名称", "角色描述", "角色图片提示词"],
         rows: [],
       },
       props: {
         title: "道具",
-        columns: ["道具名称", "道具描述"],
+        columns: ["道具名称", "道具描述", "道具图片提示词"],
         rows: [],
       },
       storyboards: {
         title: "分镜",
-        columns: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+        columns: ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
         rows: [],
       },
     };
@@ -54300,8 +54413,12 @@ describe("production workbench project tab", () => {
     assert.match(html, /single-episode-ai-table-card props/);
     assert.match(html, /single-episode-ai-table-card storyboards/);
     assert.match(html, /角色名称/);
+    assert.match(html, /角色图片提示词/);
     assert.match(html, /场景名称/);
+    assert.match(html, /场景图片提示词/);
     assert.match(html, /道具名称/);
+    assert.match(html, /道具图片提示词/);
+    assert.match(html, /镜号/);
     assert.match(html, /分镜剧情/);
     assert.match(html, /对话\/旁白/);
     assert.match(html, /静态图片提示词/);
@@ -56299,16 +56416,16 @@ describe("production workbench project tab", () => {
       {
         sceneName: "闵婶家门前",
         sceneDescription: "旧木屋门前，傍晚微光",
-        sceneImagePrompt: "旧木屋门前，傍晚微光\n场景概念图",
-        imagePrompt: "旧木屋门前，傍晚微光\n场景概念图",
+        sceneImagePrompt: "场景概念图",
+        imagePrompt: "场景概念图",
       },
     ]);
     assert.deepEqual(commitCalls[0].payload.commitPayload.props, [
       {
         propName: "饭食",
         propDescription: "旧布包裹的朴素饭食",
-        propImagePrompt: "旧布包裹的朴素饭食\n道具设定图",
-        imagePrompt: "旧布包裹的朴素饭食\n道具设定图",
+        propImagePrompt: "道具设定图",
+        imagePrompt: "道具设定图",
       },
     ]);
   });
@@ -56392,8 +56509,8 @@ describe("production workbench project tab", () => {
       {
         sceneName: "黄昏城门口/晚霞如血",
         sceneDescription: "天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。",
-        sceneImagePrompt: "天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。\n黄昏城门口，天边火红晚霞如血，人群熙攘。",
-        imagePrompt: "天边火红晚霞如血，人群熙攘，远景构图，暖色调，光影柔和。\n黄昏城门口，天边火红晚霞如血，人群熙攘。",
+        sceneImagePrompt: "黄昏城门口，天边火红晚霞如血，人群熙攘。",
+        imagePrompt: "黄昏城门口，天边火红晚霞如血，人群熙攘。",
       },
     ]);
   });
@@ -56500,7 +56617,7 @@ describe("production workbench project tab", () => {
     assert.deepEqual(commitCalls[0].payload.commitPayload.scenes, [
       {
         sceneName: "黄昏城门口",
-        sceneDescription: "天边火红晚霞如血，人群熙攘。",
+        sceneDescription: "",
         sceneImagePrompt: "天边火红晚霞如血，人群熙攘。",
         imagePrompt: "天边火红晚霞如血，人群熙攘。",
       },
@@ -56508,7 +56625,7 @@ describe("production workbench project tab", () => {
     assert.deepEqual(commitCalls[0].payload.commitPayload.props, [
       {
         propName: "特制切割刀",
-        propDescription: "一把金属质感的特制切割刀，刀身暗灰色。",
+        propDescription: "",
         propImagePrompt: "一把金属质感的特制切割刀，刀身暗灰色。",
         imagePrompt: "一把金属质感的特制切割刀，刀身暗灰色。",
       },
@@ -56619,8 +56736,8 @@ describe("production workbench project tab", () => {
       {
         sceneName: "黄昏城门口",
         sceneDescription: "天边火红晚霞如血，人群熙攘。\n建立世界氛围",
-        sceneImagePrompt: "天边火红晚霞如血，人群熙攘。\n建立世界氛围\n黄昏城门口=【@黄昏城门口】",
-        imagePrompt: "天边火红晚霞如血，人群熙攘。\n建立世界氛围\n黄昏城门口=【@黄昏城门口】",
+        sceneImagePrompt: "黄昏城门口=【@黄昏城门口】",
+        imagePrompt: "黄昏城门口=【@黄昏城门口】",
       },
     ]);
   });
@@ -57516,8 +57633,72 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /single-episode-ai-table-card scenes/);
     assert.match(html, /场景名称/);
+    assert.match(html, /场景图片提示词/);
     assert.match(html, /闵婶家门前/);
     assert.match(html, /傍晚微光，旧木门与土墙/);
+  });
+
+  it("renders live preview image prompts and storyboard shot numbers", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "detail",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+        }),
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            displayTables: {
+              scenes: {
+                title: "场景",
+                columns: ["场景名称", "场景描述", "场景图片提示词"],
+                rows: [{ sceneName: "城门口", sceneDescription: "黄昏城门", sceneImagePrompt: "黄昏城门口，残阳" }],
+              },
+              characters: {
+                title: "角色",
+                columns: ["角色名称", "角色描述", "角色图片提示词"],
+                rows: [{ characterName: "任小野", characterDescription: "清瘦少年", characterImagePrompt: "清瘦东方少年，旧布短衣" }],
+              },
+              props: {
+                title: "道具",
+                columns: ["道具名称", "道具描述", "道具图片提示词"],
+                rows: [{ propName: "特制切割刀", propDescription: "磨损刀刃", propImagePrompt: "磨损刀刃特写" }],
+              },
+              storyboards: {
+                title: "分镜",
+                columns: ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+                rows: [{
+                  shotNo: 1,
+                  plot: "任小野在城门口发现尸体异常。",
+                  dialogue: "",
+                  imagePrompt: "黄昏城门口，任小野低头查看尸体。",
+                  videoPrompt: "中景固定镜头",
+                }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    assert.match(html, /single-episode-ai-table-card storyboards live-storyboards/);
+    assert.match(html, /角色图片提示词/);
+    assert.match(html, /清瘦东方少年，旧布短衣/);
+    assert.match(html, /场景图片提示词/);
+    assert.match(html, /黄昏城门口，残阳/);
+    assert.match(html, /道具图片提示词/);
+    assert.match(html, /磨损刀刃特写/);
+    assert.match(html, /镜号/);
+    assert.match(html, />1<\/td>/);
+    assert.match(html, /任小野在城门口发现尸体异常。/);
+    assert.match(html, /黄昏城门口，任小野低头查看尸体。/);
+    assert.match(html, /中景固定镜头/);
   });
 
   it("renders inferred ready preview scene rows when explicit scene rows are missing", () => {

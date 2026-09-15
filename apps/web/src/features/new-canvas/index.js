@@ -2276,7 +2276,11 @@ export {
   AI_CANVAS_DOCUMENT_VERSION,
   AI_CANVAS_RUNTIME_ADAPTER_VERSION,
   AI_CANVAS_RUNTIME_KIND,
+  applyAiCanvasRuntimeNodeModel,
   createAiCanvasRuntimeAdapter,
   deserializeAiCanvasDocument,
+  normalizeAiCanvasRuntimeProjectDefaultModels,
+  resolveAiCanvasRuntimeNodeMediaKind,
   serializeAiCanvasDocument,
+  toAiCanvasRuntimeSlashModelId,
 } from "./ai-canvas-runtime-adapter.js";
