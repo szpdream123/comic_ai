@@ -61,6 +61,37 @@ import {
 } from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
 import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
 import {
+  createOrReuseProductionAgentExecution,
+  createProductionManifest,
+  finalizeProductionAgentTask,
+  type ProductionAgentExecution,
+} from "../modules/project/production-agent.adapter.ts";
+import {
+  cancelProductionAgentTask,
+  ProductionAgentRecoveryError,
+  resumeProductionAgentTask,
+  retryProductionAgentTask,
+} from "../modules/project/production-agent.recovery.ts";
+import { validateProductionManifest } from "../modules/project/production-agent.validator.ts";
+import { productionAgentType, productionAgentWorkflowType } from "../modules/project/production-agent.types.ts";
+import {
+  createProductionAgentConversation,
+  createProductionAgentSessionTask,
+  decideProductionAgentApproval,
+  getProductionAgentConversation,
+  readProductionAgentSourceSlice,
+  listProductionAgentEvents,
+  listProductionAgentMessages,
+  stopProductionAgentSessionTask,
+} from "../modules/project/production-agent-session.service.ts";
+import {
+  createProductionAgentSessionRuntime,
+  createProductionAgentSkillCatalogResolver,
+} from "../modules/project/production-agent-session.runtime.ts";
+import { productionAgentSessionModes } from "../modules/project/production-agent-session.types.ts";
+import type { ProductionAgentSessionActor, ProductionAgentSessionMode } from "../modules/project/production-agent-session.types.ts";
+import { registerProductionManifestRevision } from "../modules/project/production-agent.manifest-version.ts";
+import {
   createAdminSystemSettingsService,
   ensureToolboxPromptReverseConfigEntry,
 } from "../modules/admin-system-settings/admin-system-settings.service.ts";
@@ -2631,6 +2662,12 @@ function isTerminalCanvasAgentEvent(eventType: string) {
     "task.result_unknown",
     "task.manual_review_required",
   ].includes(eventType);
+}
+
+function isTerminalProductionAgentSessionEvent(event: { eventType: string; event?: Record<string, unknown> }) {
+  if (isTerminalCanvasAgentEvent(event.eventType)) return true;
+  if (event.eventType !== "task.status") return false;
+  return ["succeeded", "failed", "canceled"].includes(String(event.event?.status ?? ""));
 }
 
 function writeSseEvent(response: ServerResponse, event: string, data: unknown) {
@@ -7357,10 +7394,73 @@ async function listTaskCenterTasks(
           AND request.payload_redacted_json ? 'assetId'
           AND request.payload_redacted_json ? 'category'
       ),
+      production_agent_items AS (
+        SELECT
+          task.id AS task_id,
+          task.task_type,
+          'production_agent'::text AS media_kind,
+          CASE
+            WHEN task.status = 'succeeded' THEN 'completed'
+            ELSE task.status
+          END AS status,
+          CASE task.status
+            WHEN 'succeeded' THEN 'completed'
+            WHEN 'failed' THEN 'failed'
+            WHEN 'canceled' THEN 'canceled'
+            WHEN 'queued' THEN 'task_created'
+            ELSE 'agent_processing'
+          END AS progress_stage,
+          CASE
+            WHEN task.status IN ('succeeded', 'failed', 'canceled') THEN 100
+            WHEN task.status = 'queued' THEN 10
+            ELSE 50
+          END AS progress_percent,
+          task.project_id,
+          project.name AS project_name,
+          false AS is_free_generation_workspace,
+          NULL::uuid AS episode_id,
+          NULL::text AS episode_title,
+          task.target_entity_type AS target_type,
+          task.target_entity_id::text AS target_id,
+          NULL::text AS model_code,
+          NULL::text AS model_name,
+          jsonb_build_object(
+            'selectedAssetName', '项目生产 Agent',
+            'agentType', task.input_snapshot_json->>'agentType',
+            'stages', COALESCE(task.input_snapshot_json->'stages', '[]'::jsonb)
+          ) AS request_summary_json,
+          '[]'::jsonb AS result_assets_json,
+          CASE
+            WHEN task.status IN ('failed', 'canceled') THEN jsonb_build_object(
+              'failureCode', COALESCE(task.failure_code, CASE WHEN task.status = 'canceled' THEN 'user_canceled' ELSE 'production_agent_execution_failed' END),
+              'displayMessage', CASE WHEN task.status = 'canceled' THEN '项目生产任务已取消。' ELSE '项目生产任务失败，请稍后重试。' END
+            )
+            ELSE NULL::jsonb
+          END AS failure_json,
+          NULL::jsonb AS provider_response_json,
+          NULL::jsonb AS artifact_recovery_json,
+          false AS provider_succeeded,
+          task.created_at AS submitted_at,
+          workflow.started_at,
+          CASE WHEN task.status IN ('succeeded', 'failed', 'canceled') THEN COALESCE(workflow.finished_at, task.updated_at) ELSE NULL END AS returned_at,
+          task.updated_at,
+          task.updated_at::text AS updated_at_cursor
+        FROM tasks task
+        JOIN workflows workflow ON workflow.id = task.workflow_id
+        LEFT JOIN projects project ON project.id = task.project_id
+        WHERE workflow.created_by_user_id = $1
+          AND workflow.workflow_type = 'production_agent'
+          AND task.task_type = 'production_agent.execute'
+          AND task.queue_name = 'task-center'
+          AND task.target_entity_type = 'project'
+          AND ($2::uuid IS NULL OR task.input_snapshot_json->>'teamMemberId' = $2::text)
+      ),
       task_center_items AS (
         SELECT * FROM generation_items
         UNION ALL
         SELECT * FROM team_asset_items
+        UNION ALL
+        SELECT * FROM production_agent_items
       ),
       filtered_items AS (
         SELECT *
@@ -28256,6 +28356,7 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/episodes/") ||
         pathname.startsWith("/api/canvas/") ||
         pathname.startsWith("/api/free-generation/") ||
+        pathname.startsWith("/api/production-agent/") ||
         pathname === "/api/director-desks" ||
         pathname.startsWith("/api/director-desks/") ||
         pathname === "/api/creator/canvases" ||
@@ -28945,6 +29046,404 @@ export function createPhoneAuthDevServer(
             return writeJson(response, enveloped(200, { result }));
           }
           return writeJson(response, envelopedError(404, "free_generation_route_not_found", "free generation route not found"));
+        }
+
+        if (pathname.startsWith("/api/production-agent/")) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "production_agent_owner_required", "production agent is only available to the account owner"));
+          }
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            capability: capabilities.productionRun,
+            now,
+          });
+          const sessionActor: ProductionAgentSessionActor = {
+            ownerUserId: authenticated.user.id,
+            actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+            capabilities: new Set(actor.capabilities),
+          };
+          const productionAgentSessionRuntime = createProductionAgentSessionRuntime({
+            db,
+            gateway: aiStoryboardTextChatGateway,
+            resolveSkillCatalog: createProductionAgentSkillCatalogResolver(db),
+            commitProject: async (input) => {
+              const created = await creatorApplication.createProject({
+                user: {
+                  id: input.ownerUserId,
+                  sessionToken: authenticated.sessionToken,
+                },
+                body: {
+                  name: input.title,
+                  scriptInput: input.scriptText || " ",
+                  aspectRatio: "9:16",
+                  resolution: "1080p",
+                  projectType: "animation",
+                },
+                now: input.now,
+                idempotencyKey: `production-agent-create:${input.conversationId}`,
+              });
+              if (created.status !== 200 || !("project" in created.body)) {
+                throw new Error(String((created.body as { error?: string }).error ?? "production_agent_create_project_failed"));
+              }
+              const projectId = String((created.body as { project: { id: string } }).project.id);
+              const manifest = createProductionManifest({ projectId }, {
+                commitPayload: {
+                  scriptText: input.manifest.scriptText,
+                  scenes: input.manifest.scenes,
+                  characters: input.manifest.characters,
+                  props: input.manifest.props,
+                  storyboards: input.manifest.storyboards,
+                },
+              });
+              const commit = await creatorApplication.commitAiStoryboardPreview({
+                user: {
+                  id: input.ownerUserId,
+                  sessionToken: authenticated.sessionToken,
+                },
+                projectId,
+                body: {
+                  episodeTitle: input.title || "第一集",
+                  commitPayload: {
+                    scriptText: manifest.scriptText,
+                    scenes: manifest.scenes,
+                    characters: manifest.characters,
+                    props: manifest.props,
+                    storyboards: manifest.storyboards,
+                  },
+                },
+                now: input.now,
+              });
+              if (commit.status >= 400) {
+                throw new Error(String((commit.body as { error?: string }).error ?? "production_agent_commit_failed"));
+              }
+              return {
+                projectId,
+                episodeId: String((commit.body as { episode?: { id?: string } }).episode?.id ?? "") || null,
+              };
+            },
+          });
+          const kickProductionAgentSession = (taskId: string) => {
+            void productionAgentSessionRuntime.executor.execute(taskId).catch((error) => {
+              console.error("[production-agent] session execute failed", error);
+            });
+          };
+          const conversationMatch = pathname.match(/^\/api\/production-agent\/conversations(?:\/([^/]+))?$/);
+          const conversationMessagesMatch = pathname.match(/^\/api\/production-agent\/conversations\/([^/]+)\/messages$/);
+          const conversationSourceMatch = pathname.match(/^\/api\/production-agent\/conversations\/([^/]+)\/source$/);
+          const conversationSkillFileMatch = pathname.match(/^\/api\/production-agent\/conversations\/([^/]+)\/skill-files$/);
+          const taskEventsMatch = pathname.match(/^\/api\/production-agent\/agent-tasks\/([^/]+)\/events$/);
+          const taskStopMatch = pathname.match(/^\/api\/production-agent\/agent-tasks\/([^/]+)\/stop$/);
+          const taskApproveMatch = pathname.match(/^\/api\/production-agent\/agent-tasks\/([^/]+)\/approve$/);
+          const mapProductionAgentSessionError = (error: unknown) => {
+            if (error instanceof ScriptDocumentUploadError) {
+              return writeJson(response, envelopedError(error.status, error.code, error.message));
+            }
+            if (error instanceof SkillPlazaError) {
+              return writeJson(response, envelopedError(error.status, error.code, error.message));
+            }
+            if (error instanceof AuthorizationError) {
+              const status = error.code === "unauthenticated" ? 401 : error.code === "project_not_found" ? 404 : 403;
+              return writeJson(response, envelopedError(status, error.code, error.message));
+            }
+            const code = error instanceof Error ? error.message : "production_agent_error";
+            if (code === "production_agent_conversation_not_found" || code === "production_agent_task_not_found") {
+              return writeJson(response, envelopedError(404, code, code));
+            }
+            if (code === "capability_missing") {
+              return writeJson(response, envelopedError(403, code, code));
+            }
+            if (code === "production_agent_tool_not_allowed" || code === "production_agent_canvas_tool_forbidden" || code.startsWith("production_agent_")) {
+              return writeJson(response, envelopedError(400, code, code));
+            }
+            throw error;
+          };
+          try {
+            if (request.method === "POST" && pathname === "/api/production-agent/conversations") {
+              const body = (await readJsonBody(request)) as {
+                title?: string | null;
+                mode?: string | null;
+                modelCode?: string | null;
+                plazaSkillIds?: string[] | null;
+                sourceText?: string | null;
+                scriptUploadSessionId?: string | null;
+                scriptStorageObjectId?: string | null;
+                scriptFileName?: string | null;
+                scriptContentType?: string | null;
+              };
+              const mode = "auto";
+              const modelCode = String(body.modelCode ?? "deepseek-noval").trim() || "deepseek-noval";
+              const plazaSkillIds = Array.isArray(body.plazaSkillIds)
+                ? [...new Set(body.plazaSkillIds.map((item) => String(item ?? "").trim()).filter(Boolean))]
+                : [];
+              if (!plazaSkillIds.length) {
+                return writeJson(response, envelopedError(400, "workflow_plaza_skill_required", "at least one plaza skill is required"));
+              }
+              if (plazaSkillIds.some((itemId) => !isUuid(itemId))) {
+                return writeJson(response, envelopedError(400, "workflow_plaza_skill_invalid", "plaza skill id is invalid"));
+              }
+              let sourceText = String(body.sourceText ?? "").trim();
+              if (body.scriptUploadSessionId || body.scriptStorageObjectId) {
+                sourceText = await extractScriptInputFromUploadedDocument(db, {
+                  sessionToken: authenticated.sessionToken,
+                  userId: authenticated.user.id,
+                  body,
+                  runtime: storageRuntime,
+                  signedUrlExpiresInSeconds,
+                  now,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                });
+              }
+              if (!sourceText) {
+                return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
+              }
+              const skillPlaza = createSkillPlazaService({
+                db,
+                readSkillFileContent: (storageObjectId) => readSkillStorageObjectText({
+                  db,
+                  storageObjectId,
+                  adapter: storageRuntime.adapter,
+                }),
+              });
+              const plazaSkills = await Promise.all(plazaSkillIds.map((itemId) => skillPlaza.resolveWorkflowSkill({
+                userId: authenticated.user.id,
+                skillId: itemId,
+                now,
+              })));
+              const skillCatalog = plazaSkills.map((skill) => ({
+                id: skill.id,
+                name: skill.title,
+                description: skill.summary,
+                files: skill.files.map((file) => ({ path: file.name, kind: file.kind })),
+              }));
+              const model = await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(modelCode);
+              const conversation = await createProductionAgentConversation(db, {
+                actor: sessionActor,
+                title: typeof body.title === "string" ? body.title : undefined,
+                mode: mode as ProductionAgentSessionMode,
+                modelCode: model.id,
+                source: {
+                  text: sourceText,
+                  fileName: body.scriptFileName ?? null,
+                  contentType: body.scriptContentType ?? null,
+                  uploadSessionId: body.scriptUploadSessionId ?? null,
+                  storageObjectId: body.scriptStorageObjectId ?? null,
+                },
+                skillCatalog,
+                now,
+              });
+              const task = await createProductionAgentSessionTask(db, {
+                conversationId: conversation.id,
+                actor: sessionActor,
+                mode: mode as ProductionAgentSessionMode,
+                modelCode: model.id,
+                modelConfigSnapshot: model.snapshot,
+                userMessage: {
+                  text: "请根据所选 Skill 和源文本开始分析。",
+                  plazaSkillIds,
+                },
+                now,
+              });
+              kickProductionAgentSession(task.id);
+              return writeJson(response, enveloped(201, { conversation, task }));
+            }
+            if (conversationMessagesMatch) {
+              const conversationId = decodeURIComponent(conversationMessagesMatch[1] ?? "");
+              if (!isUuid(conversationId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_conversation_id", "conversation id is invalid"));
+              }
+              if (request.method === "GET") {
+                return writeJson(response, enveloped(200, {
+                  messages: await listProductionAgentMessages(db, {
+                    conversationId,
+                    actor: sessionActor,
+                    limit: Number(url.searchParams.get("limit") ?? 200),
+                  }),
+                }));
+              }
+              if (request.method !== "POST") {
+                return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+              }
+              const conversation = await getProductionAgentConversation(db, { conversationId, actor: sessionActor });
+              const body = (await readJsonBody(request)) as { text?: string | null; mode?: string | null };
+              const mode = "auto";
+              const text = String(body.text ?? "").trim();
+              const model = await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(conversation.modelCode);
+              const task = await createProductionAgentSessionTask(db, {
+                conversationId,
+                actor: sessionActor,
+                mode: mode as ProductionAgentSessionMode,
+                modelCode: model.id,
+                modelConfigSnapshot: model.snapshot,
+                userMessage: { text },
+                now,
+              });
+              kickProductionAgentSession(task.id);
+              return writeJson(response, enveloped(202, { task }));
+            }
+            if (request.method === "GET" && conversationMatch?.[1]) {
+              const conversationId = decodeURIComponent(conversationMatch[1] ?? "");
+              if (!isUuid(conversationId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_conversation_id", "conversation id is invalid"));
+              }
+              return writeJson(response, enveloped(200, {
+                conversation: await getProductionAgentConversation(db, {
+                  conversationId,
+                  actor: sessionActor,
+                  includeSourceText: false,
+                }),
+              }));
+            }
+            if (request.method === "GET" && conversationSourceMatch) {
+              const conversationId = decodeURIComponent(conversationSourceMatch[1] ?? "");
+              if (!isUuid(conversationId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_conversation_id", "conversation id is invalid"));
+              }
+              const offset = Number(url.searchParams.get("offset") ?? 0);
+              const limit = Number(url.searchParams.get("limit") ?? 8000);
+              return writeJson(response, enveloped(200, {
+                source: await readProductionAgentSourceSlice(db, {
+                  conversationId,
+                  actor: sessionActor,
+                  offset: Number.isFinite(offset) ? offset : 0,
+                  limit: Number.isFinite(limit) ? limit : 8000,
+                }),
+              }));
+            }
+            if (request.method === "GET" && conversationSkillFileMatch) {
+              const conversationId = decodeURIComponent(conversationSkillFileMatch[1] ?? "");
+              if (!isUuid(conversationId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_conversation_id", "conversation id is invalid"));
+              }
+              const conversation = await getProductionAgentConversation(db, {
+                conversationId,
+                actor: sessionActor,
+                includeSourceText: false,
+              });
+              const skillId = String(url.searchParams.get("skillId") ?? "").trim();
+              const path = String(url.searchParams.get("path") ?? "SKILL.md").trim() || "SKILL.md";
+              const skill = conversation.skillCatalog.find((item) => item.id === skillId);
+              if (!skill) {
+                return writeJson(response, envelopedError(404, "production_agent_skill_not_found", "skill not found"));
+              }
+              const resolved = await createProductionAgentSkillCatalogResolver(db)({
+                userId: authenticated.user.id,
+                skillId,
+              });
+              const file = (resolved?.files ?? []).find((item) => item.path === path)
+                ?? (path.toLowerCase().endsWith("skill.md") ? resolved?.files.find((item) => item.path.split("/").pop()?.toLowerCase() === "skill.md") : undefined);
+              if (!file) {
+                return writeJson(response, envelopedError(404, "production_agent_skill_file_not_found", "skill file not found"));
+              }
+              const content = String(file.content ?? "");
+              return writeJson(response, enveloped(200, {
+                file: {
+                  skillId,
+                  path: file.path,
+                  content: content.slice(0, 20_000),
+                  totalChars: content.length,
+                },
+              }));
+            }
+            if (request.method === "GET" && taskEventsMatch) {
+              const taskId = decodeURIComponent(taskEventsMatch[1] ?? "");
+              if (!isUuid(taskId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_task_id", "task id is invalid"));
+              }
+              const headerCursor = Array.isArray(request.headers["last-event-id"])
+                ? request.headers["last-event-id"]?.[0]
+                : request.headers["last-event-id"];
+              const after = Number(headerCursor ?? url.searchParams.get("after") ?? 0);
+              const afterSequence = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+              const events = await listProductionAgentEvents(db, {
+                taskId,
+                actor: sessionActor,
+                afterSequence,
+              });
+              const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("live") === "1";
+              if (!wantsStream) {
+                return writeJson(response, enveloped(200, { events }));
+              }
+              response.statusCode = 200;
+              response.setHeader("content-type", "text/event-stream; charset=utf-8");
+              response.setHeader("cache-control", "no-cache, no-transform");
+              response.setHeader("connection", "keep-alive");
+              response.setHeader("x-accel-buffering", "no");
+              response.flushHeaders?.();
+              response.write("retry: 1000\n\n");
+              let cursor = afterSequence;
+              for (const event of events) {
+                response.write(formatCanvasAgentSseChunk(event));
+                cursor = Math.max(cursor, event.sequence);
+              }
+              let closed = false;
+              const markClosed = () => { closed = true; };
+              request.on("aborted", markClosed);
+              response.on("close", markClosed);
+              const stopHeartbeat = startSseHeartbeat(response, 10_000);
+              try {
+                const expiresAt = Date.now() + 25_000;
+                let pollDelayMs = 250;
+                while (!closed && !response.writableEnded && Date.now() < expiresAt) {
+                  await delay(pollDelayMs);
+                  if (closed || response.writableEnded) break;
+                  const nextEvents = await listProductionAgentEvents(db, {
+                    taskId,
+                    actor: sessionActor,
+                    afterSequence: cursor,
+                  });
+                  for (const event of nextEvents) {
+                    response.write(formatCanvasAgentSseChunk(event));
+                    cursor = Math.max(cursor, event.sequence);
+                  }
+                  pollDelayMs = nextEvents.length ? 250 : Math.min(pollDelayMs * 2, 2_000);
+                  if (nextEvents.some((event) => isTerminalProductionAgentSessionEvent(event))) break;
+                }
+              } finally {
+                stopHeartbeat();
+                request.off("aborted", markClosed);
+                response.off("close", markClosed);
+              }
+              response.end();
+              return;
+            }
+            if (request.method === "POST" && taskStopMatch) {
+              const taskId = decodeURIComponent(taskStopMatch[1] ?? "");
+              if (!isUuid(taskId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_task_id", "task id is invalid"));
+              }
+              return writeJson(response, enveloped(200, {
+                result: await stopProductionAgentSessionTask(db, { taskId, actor: sessionActor, now }),
+              }));
+            }
+            if (request.method === "POST" && taskApproveMatch) {
+              const taskId = decodeURIComponent(taskApproveMatch[1] ?? "");
+              if (!isUuid(taskId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_task_id", "task id is invalid"));
+              }
+              const body = (await readJsonBody(request)) as { approvalId?: string | null; decision?: string | null };
+              const approvalId = String(body.approvalId ?? "").trim();
+              const decision = String(body.decision ?? "").trim();
+              if (!isUuid(approvalId)) {
+                return writeJson(response, envelopedError(400, "invalid_production_agent_approval_id", "approval id is invalid"));
+              }
+              if (decision !== "approved" && decision !== "rejected") {
+                return writeJson(response, envelopedError(400, "production_agent_approval_decision_invalid", "decision must be approved or rejected"));
+              }
+              const result = await decideProductionAgentApproval(db, {
+                taskId,
+                actor: sessionActor,
+                approvalId,
+                decision,
+                now,
+              });
+              if (decision === "approved") kickProductionAgentSession(taskId);
+              return writeJson(response, enveloped(200, { result }));
+            }
+            return writeJson(response, envelopedError(404, "production_agent_route_not_found", "production agent route not found"));
+          } catch (error) {
+            return mapProductionAgentSessionError(error);
+          }
         }
 
         const canvasAgentConversationMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/conversations$/);
@@ -34001,6 +34500,53 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const productionAgentControlMatch = pathname.match(
+          /^\/api\/creator\/projects\/([^/]+)\/production-agent\/tasks\/([^/]+)\/(cancel|retry|resume)$/,
+        );
+        if (request.method === "POST" && productionAgentControlMatch) {
+          const projectId = decodeURIComponent(productionAgentControlMatch[1] ?? "");
+          const taskId = decodeURIComponent(productionAgentControlMatch[2] ?? "");
+          const action = productionAgentControlMatch[3] ?? "";
+          if (!isUuid(projectId) || !isUuid(taskId)) {
+            return writeJson(response, envelopedError(400, "invalid_production_agent_task_scope", "project id or task id is invalid"));
+          }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId,
+            capability: capabilities.productionRun,
+            now: new Date(),
+          });
+          try {
+            const now = new Date();
+            const result = action === "cancel"
+              ? await cancelProductionAgentTask(db, { projectId, taskId, now })
+              : action === "retry"
+                ? await retryProductionAgentTask(db, {
+                    projectId,
+                    taskId,
+                    workerId: "production-agent-http-retry",
+                    leaseMs: AI_STORYBOARD_STREAM_IDLE_TIMEOUT_MS + 60_000,
+                    deferClaim: true,
+                    now,
+                  })
+                : await resumeProductionAgentTask(db, {
+                    projectId,
+                    taskId,
+                    workerId: "production-agent-http-resume",
+                    leaseMs: AI_STORYBOARD_STREAM_IDLE_TIMEOUT_MS + 60_000,
+                    deferClaim: true,
+                    now,
+                  });
+            return writeJson(response, enveloped(200, { result }));
+          } catch (error) {
+            if (error instanceof ProductionAgentRecoveryError) {
+              const status = error.code === "production_agent_task_route_mismatch" ? 404 : 409;
+              return writeJson(response, envelopedError(status, error.code, error.message));
+            }
+            throw error;
+          }
+        }
+
         const aiStoryboardPreviewCommitMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-storyboard-preview\/commit$/);
         if (request.method === "POST" && aiStoryboardPreviewCommitMatch) {
           const projectId = decodeURIComponent(aiStoryboardPreviewCommitMatch[1]);
@@ -34009,6 +34555,11 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             episodeTitle?: string | null;
+            productionManifest?: Record<string, unknown> | null;
+            productionWorkflowId?: string | null;
+            productionTaskId?: string | null;
+            expectedManifestVersion?: number | null;
+            expectedManifestHash?: string | null;
             commitPayload?: {
               scriptText?: string | null;
               scenes?: Array<Record<string, unknown>> | null;
@@ -34321,6 +34872,7 @@ export function createPhoneAuthDevServer(
             actor = await resolveActorContext(db, {
               sessionToken: authenticated.sessionToken,
               projectId,
+              capability: capabilities.productionRun,
               now: new Date(),
             });
           } catch (error) {
@@ -34645,6 +35197,58 @@ export function createPhoneAuthDevServer(
             throw error;
           }
 
+          let productionExecution: ProductionAgentExecution | null = null;
+          if (billingProjectId) {
+            try {
+              productionExecution = await createOrReuseProductionAgentExecution(db, {
+                userId: authenticated.user.id,
+                projectId: billingProjectId,
+                teamMemberId: actor.teamMember?.id ?? null,
+                idempotencyKey,
+                requestFingerprint: hashJson({
+                  scriptText,
+                  instruction,
+                  resolveInstructionIntent,
+                  modelCode: resolvedModelCode,
+                  stages: workflowResolvedIntent?.stages ?? requestedStages,
+                  skills: body.skills ?? null,
+                  plazaSkillId: body.plazaSkillId ?? null,
+                  plazaSkillIds: body.plazaSkillIds ?? null,
+                  packages: body.packages ?? null,
+                }),
+                stages: workflowResolvedIntent?.stages ?? requestedStages,
+                leaseMs: AI_STORYBOARD_STREAM_IDLE_TIMEOUT_MS + 60_000,
+                now: new Date(),
+              });
+            } catch (error) {
+              if (error instanceof IdempotencyConflictError) {
+                return writeJson(response, envelopedError(409, error.code, "幂等键已用于其他项目制作请求。"));
+              }
+              throw error;
+            }
+          }
+          const finishProductionExecution = async (
+            status: "succeeded" | "failed" | "canceled",
+            failureCode?: string,
+            suppressError = false,
+          ) => {
+            if (!productionExecution || productionExecution.finished || !productionExecution.attemptId) return;
+            try {
+              await finalizeProductionAgentTask(db, {
+                taskId: productionExecution.taskId,
+                attemptId: productionExecution.attemptId,
+                projectId: productionExecution.projectId,
+                status,
+                failureCode,
+                now: new Date(),
+              });
+              productionExecution.finished = true;
+              await aggregateWorkflowStatus(db, productionExecution.workflowId);
+            } catch (error) {
+              if (!suppressError) throw error;
+            }
+          };
+
           const previewInput = {
             projectId,
             canvasProjectId: billingProjectId ? null : projectId,
@@ -34741,9 +35345,36 @@ export function createPhoneAuthDevServer(
                 }
                 if (event.type === "complete") {
                   generationCompleted = true;
+                  let productionAgent;
+                  if (productionExecution) {
+                    const productionManifest = createProductionManifest({ projectId }, event.preview);
+                    const manifestValidation = validateProductionManifest(productionManifest);
+                    if (!manifestValidation.valid) {
+                      const validationError = new Error("production_agent_manifest_invalid");
+                      Object.assign(validationError, { validationErrors: manifestValidation.errors });
+                      throw validationError;
+                    }
+                    await registerProductionManifestRevision(db, {
+                      workflowId: productionExecution.workflowId,
+                      taskId: productionExecution.taskId,
+                      projectId,
+                      manifest: productionManifest,
+                      now: new Date(),
+                    });
+                    await finishProductionExecution("succeeded");
+                    productionAgent = {
+                      type: productionAgentType,
+                      workflowType: productionAgentWorkflowType,
+                      workflowId: productionExecution.workflowId,
+                      taskId: productionExecution.taskId,
+                      manifest: productionManifest,
+                      validation: manifestValidation,
+                    };
+                  }
                   writeSseData(response, {
                     type: "complete",
                     ...event.preview,
+                    ...(productionAgent ? { productionAgent } : {}),
                     creditBalance: creditBalance.creditBalance,
                     displayCreditBalance: creditBalance.displayCreditBalance,
                     creditCost,
@@ -34765,6 +35396,9 @@ export function createPhoneAuthDevServer(
               if (!generationCompleted && !abortController.signal.aborted) {
                 throw new Error("ai_storyboard_stream_incomplete");
               }
+              if (!generationCompleted && productionExecution && !productionExecution.finished) {
+                await finishProductionExecution("canceled", "production_agent_request_aborted", true);
+              }
               if (generationCompleted) {
                 await grantPromptSkillAuthorCredits(db, {
                   payerUserId: authenticated.user.id,
@@ -34782,6 +35416,13 @@ export function createPhoneAuthDevServer(
               clearInterval(modelStreamIdleTimer);
               stopHeartbeat();
               abortController.cleanup();
+              if (productionExecution && !productionExecution.finished) {
+                await finishProductionExecution(
+                  abortController.signal.aborted && !modelStreamTimedOut ? "canceled" : "failed",
+                  modelStreamTimedOut ? "ai_storyboard_stream_idle_timeout" : "production_agent_execution_failed",
+                  true,
+                );
+              }
               if (modelStreamTimedOut && !response.destroyed && !response.writableEnded) {
                 writeSseData(response, {
                   type: "error",
@@ -34820,6 +35461,32 @@ export function createPhoneAuthDevServer(
 
           try {
             const preview = await previewService.generatePreview(previewInput);
+            let productionAgent;
+            if (productionExecution) {
+              const productionManifest = createProductionManifest({ projectId }, preview);
+              const manifestValidation = validateProductionManifest(productionManifest);
+              if (!manifestValidation.valid) {
+                const validationError = new Error("production_agent_manifest_invalid");
+                Object.assign(validationError, { validationErrors: manifestValidation.errors });
+                throw validationError;
+              }
+              await registerProductionManifestRevision(db, {
+                workflowId: productionExecution.workflowId,
+                taskId: productionExecution.taskId,
+                projectId,
+                manifest: productionManifest,
+                now: new Date(),
+              });
+              await finishProductionExecution("succeeded");
+              productionAgent = {
+                type: productionAgentType,
+                workflowType: productionAgentWorkflowType,
+                workflowId: productionExecution.workflowId,
+                taskId: productionExecution.taskId,
+                manifest: productionManifest,
+                validation: manifestValidation,
+              };
+            }
             await grantPromptSkillAuthorCredits(db, {
               payerUserId: authenticated.user.id,
               skillAuthorGrants,
@@ -34831,6 +35498,7 @@ export function createPhoneAuthDevServer(
             });
             return writeJson(response, enveloped(200, {
               ...preview,
+              ...(productionAgent ? { productionAgent } : {}),
               creditBalance: creditBalance.creditBalance,
               displayCreditBalance: creditBalance.displayCreditBalance,
               creditCost,
@@ -34846,6 +35514,9 @@ export function createPhoneAuthDevServer(
               } : null,
             }));
           } catch (error) {
+            if (productionExecution && !productionExecution.finished) {
+              await finishProductionExecution("failed", "production_agent_execution_failed", true);
+            }
             if (actor.teamMember) {
               await releaseSimpleTeamMemberCredits(db, {
                 teamMemberId: actor.teamMember.id,

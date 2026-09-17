@@ -23,6 +23,13 @@ import {
   resolveAgentApprovalPresentation,
 } from "../src/features/new-canvas/canvas-agent-panel.js";
 
+function renderAgentPanel(ui = {}) {
+  if (Object.prototype.hasOwnProperty.call(ui, "canvasAgentCapabilityProfile")) {
+    return renderCanvasAgentPanel(ui);
+  }
+  return renderCanvasAgentPanel({ ...ui, canvasAgentCapabilityProfile: "media_generation_only" });
+}
+
 test("Agent Center keeps package upload behind the Tauri IPC capability check", () => {
   const source = readRuntimeAsset("ChatPanel-");
   assert.match(source, /__TAURI_INTERNALS__\?\.invoke/);
@@ -84,7 +91,7 @@ test("Canvas Agent timeline collapses lifecycle events by step", () => {
   assert.equal(collapsed[1].event.toolId, "canvas.patch");
   assert.equal(collapsed[1].event.decision, "require_approval");
 
-  const html = renderCanvasAgentPanel({ canvasAgent: { events } });
+  const html = renderAgentPanel({ canvasAgent: { events } });
   assert.equal((html.match(/data-event-status="step\.succeeded"/g) ?? []).length, 1);
   assert.equal((html.match(/data-event-status="step\.running"/g) ?? []).length, 1);
   assert.doesNotMatch(html, /data-event-status="step\.created"|data-event-status="policy\.decided"/);
@@ -100,7 +107,7 @@ test("Canvas Agent timeline shows failure codes instead of stale policy reasons"
     { id: "task-failed", sequence: 4, eventType: "task.failed", event: { status: "failed", failureCode: "canvas_agent_duplicate_side_effect" } },
   ];
 
-  const html = renderCanvasAgentPanel({ canvasAgent: { events } });
+  const html = renderAgentPanel({ canvasAgent: { events } });
   assert.match(html, /canvas_agent_generation_model_required/);
   assert.match(html, /canvas_agent_duplicate_side_effect/);
   assert.doesNotMatch(html, />b_mode_effect</);
@@ -138,7 +145,7 @@ test("free generation model answers show public names and expose switchable publ
     },
     api: {},
   };
-  const html = renderCanvasAgentPanel(workbench.ui);
+  const html = renderAgentPanel(workbench.ui);
 
   assert.match(html, /我是灵曦AI，当前会话使用的模型为文本创作 Pro。/);
   assert.match(html, /可用模型/);
@@ -155,7 +162,7 @@ test("free generation model answers show public names and expose switchable publ
   });
   await controller.handleAction({ dataset: { agentAction: "select-agent-text-model", modelIndex: "1" } });
   assert.equal(workbench.ui.canvasAgent.modelCode, "text-fast");
-  const historyHtml = renderCanvasAgentPanel(workbench.ui);
+  const historyHtml = renderAgentPanel(workbench.ui);
   assert.match(historyHtml, /我是灵曦AI，当前会话使用的模型为文本创作 Pro。/);
   assert.match(historyHtml, /data-model-index="0" aria-pressed="true"/);
   controller.dispose();
@@ -239,7 +246,7 @@ test("free generation sends media model switching requests to the current text m
 
 test("Canvas Agent timeline shows a step identifier only once", () => {
   const stepId = "step-unique";
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       events: [{ id: "step-finished", sequence: 1, eventType: "step.succeeded", event: { stepId } }],
     },
@@ -249,7 +256,7 @@ test("Canvas Agent timeline shows a step identifier only once", () => {
 });
 
 test("Canvas Agent condenses active task events into one thinking indicator", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       taskId: "task-thinking",
       status: "running",
@@ -267,7 +274,7 @@ test("Canvas Agent condenses active task events into one thinking indicator", ()
 });
 
 test("Canvas Agent labels a running model step as thinking instead of tool execution", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       taskId: "task-model-thinking",
       status: "running",
@@ -283,7 +290,7 @@ test("Canvas Agent labels a running model step as thinking instead of tool execu
 });
 
 test("Canvas Agent stops the thinking state for completed task statuses", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       taskId: "task-completed",
       status: "completed",
@@ -303,7 +310,7 @@ test("Canvas Agent keeps the external generation status after an interjection", 
     { id: "interjected", sequence: 2, eventType: "task.interjected", event: {} },
   ]);
   assert.equal(agent.status, "waiting_external");
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: { taskId: "task-waiting", ...agent },
   });
   assert.match(html, /正在等待生成结果/);
@@ -311,7 +318,7 @@ test("Canvas Agent keeps the external generation status after an interjection", 
 });
 
 test("free generation stops showing a waiting state as soon as every media task is terminal", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       taskId: "task-waiting",
@@ -333,7 +340,7 @@ test("free generation stops showing a waiting state as soon as every media task 
 });
 
 test("free generation displays the text-model analysis message for a new task after an earlier media result", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       taskId: "new-task",
@@ -357,7 +364,7 @@ test("free generation displays the text-model analysis message for a new task af
 });
 
 test("Canvas Agent shows only a failure state for a failed current task", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       taskId: "task-failed",
       status: "failed",
@@ -376,7 +383,7 @@ test("Canvas Agent shows only a failure state for a failed current task", () => 
 });
 
 test("Canvas Agent shows a readable reason when a generation task fails", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       taskId: "task-provider-failed",
       status: "failed",
@@ -392,7 +399,7 @@ test("Canvas Agent shows a readable reason when a generation task fails", () => 
 });
 
 test("Canvas Agent prefers the detailed failed step reason over a task-level provider error", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       taskId: "task-insufficient-balance",
       status: "failed",
@@ -417,7 +424,7 @@ test("Canvas Agent prefers the detailed failed step reason over a task-level pro
 });
 
 test("Canvas Agent calls an interjection a user addition", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       messages: [{ role: "user", interjection: true, text: "补充要求" }],
     },
@@ -427,7 +434,7 @@ test("Canvas Agent calls an interjection a user addition", () => {
 });
 
 test("Canvas Agent empty timeline fills the space above the pinned composer", () => {
-  const html = renderCanvasAgentPanel({ canvasAgent: { conversationId: "conversation-empty" } });
+  const html = renderAgentPanel({ canvasAgent: { conversationId: "conversation-empty" } });
   assert.match(html, /class="canvas-agent-panel[^\"]*has-conversation[^\"]*timeline-empty"/);
   assert.match(html, /class="canvas-agent-timeline is-empty"/);
   assert.match(html, /canvas-agent-empty[\s\S]*?canvas-agent-composer/);
@@ -449,7 +456,7 @@ test("Canvas Agent keeps the timeline scrollable above the pinned composer", () 
 });
 
 test("Canvas Agent completion displays actual token usage", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       events: [{
         id: "task-completed",
@@ -480,7 +487,7 @@ test("Canvas Agent panel exposes conversation modes and a running stop action", 
       events: [],
     },
   };
-  const html = renderCanvasAgentPanel(ui);
+  const html = renderAgentPanel(ui);
   assert.match(html, /data-agent-action="toggle-mode-menu"/);
   assert.match(html, /data-agent-mode="b"/);
   assert.match(html, /data-agent-mode="c"/);
@@ -555,12 +562,12 @@ test("Canvas Agent mode menu opens upward and applies the selected mode", async 
 
   await controller.handleAction({ dataset: { agentAction: "toggle-mode-menu" } });
   assert.equal(workbench.ui.canvasAgent.modeMenuOpen, true);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-mode-menu"/);
+  assert.match(renderAgentPanel(workbench.ui), /class="canvas-agent-mode-menu"/);
 
   await controller.handleAction({ dataset: { agentAction: "set-mode", agentMode: "c" } });
   assert.equal(workbench.ui.canvasAgent.mode, "c");
   assert.equal(workbench.ui.canvasAgent.modeMenuOpen, false);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-mode-trigger [^"]*"[^>]*>[\s\S]*自主/);
+  assert.match(renderAgentPanel(workbench.ui), /class="canvas-agent-mode-trigger [^"]*"[^>]*>[\s\S]*自主/);
   controller.dispose();
 });
 
@@ -629,7 +636,7 @@ test("Canvas Agent closes without rerendering the workspace or resetting the han
   assert.equal(panelRemoved, true);
   assert.equal(sessionPersisted, true);
   assert.equal(workbench.ui.canvasSessionUiState.canvasAgent.panelOpen, false);
-  assert.match(reopenMarkup, /data-agent-action="open-agent-panel"/);
+  assert.equal(reopenMarkup, "");
   assert.equal(renderLayoutCalls, 0);
   assert.equal(workbench.ui.canvasDocument.viewport.interactionMode, "hand");
   controller.dispose();
@@ -709,7 +716,7 @@ test("Canvas Agent event reducer deduplicates sequences and exposes pending appr
   assert.equal(agent.events.length, 2);
   assert.equal(agent.sequence, 2);
   assert.equal(agent.status, "waiting_approval");
-  assert.match(renderCanvasAgentPanel(ui), /data-approval-id="approval-1"/);
+  assert.match(renderAgentPanel(ui), /data-approval-id="approval-1"/);
 });
 
 test("Canvas Agent restores and persists the session panel state", () => {
@@ -730,7 +737,7 @@ test("media-only Agent renders a standalone conversation workspace with history 
   persistCanvasAgentUiState(ui, { mediaComposerHeight: 396 });
   assert.deepEqual(ui.canvasSessionUiState, { canvasAgent: { mediaComposerHeight: 396 } });
 
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       conversationId: "free-conversation",
@@ -816,15 +823,15 @@ test("media-only Agent restores the resized composer height", () => {
   const agent = ensureCanvasAgentState(ui);
 
   assert.equal(agent.mediaComposerHeight, 428);
-  assert.match(renderCanvasAgentPanel(ui), /--canvas-agent-media-composer-height: 428px/);
+  assert.match(renderAgentPanel(ui), /--canvas-agent-media-composer-height: 428px/);
 });
 
 test("media-only Agent reuses the canvas arrow and stop button states", () => {
-  const idleHtml = renderCanvasAgentPanel({
+  const idleHtml = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {},
   });
-  const runningHtml = renderCanvasAgentPanel({
+  const runningHtml = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: { taskId: "generation-running", status: "running" },
   });
@@ -836,7 +843,7 @@ test("media-only Agent reuses the canvas arrow and stop button states", () => {
 });
 
 test("media-only Agent keeps generation model pickers enabled while a conversation is busy or archived", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       conversationId: "free-conversation",
@@ -860,7 +867,7 @@ test("media-only Agent keeps generation model pickers enabled while a conversati
 });
 
 test("media-only Agent hides a generic failure message superseded by a successful generation", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       taskId: "agent-task-1",
@@ -1000,7 +1007,7 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   });
 
   await controller.resume();
-  let html = renderCanvasAgentPanel(workbench.ui);
+  let html = renderAgentPanel(workbench.ui);
   assert.match(html, /当前 · Agent text/);
   assert.match(html, /图片 · Image Pro/);
   assert.match(html, /视频 · Video Pro/);
@@ -1008,12 +1015,12 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   await controller.handleAction({ dataset: { agentAction: "select-free-generation-kind", value: "video" } });
   await controller.handleAction({ dataset: { agentAction: "select-free-generation-model", modelKind: "video", modelId: "video-fast" } });
   assert.equal(workbench.ui.canvasAgent.generationModelCodes.video, "video-fast");
-  html = renderCanvasAgentPanel(workbench.ui);
+  html = renderAgentPanel(workbench.ui);
   assert.match(html, /当前 · Agent text/);
   assert.match(html, /描述想生成的视频/);
   await controller.handleAction({ dataset: { agentAction: "select-free-generation-model", modelKind: "audio", modelId: "audio-pro" } });
   assert.equal(workbench.ui.canvasAgent.mode, "c");
-  html = renderCanvasAgentPanel(workbench.ui);
+  html = renderAgentPanel(workbench.ui);
   assert.match(html, /Audio Pro/);
   assert.doesNotMatch(html, /NARRATOR|打开音频参数面板|audio-settings-panel/);
   assert.doesNotMatch(html, /<span>12<\/span>/);
@@ -1021,7 +1028,7 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
 
   assert.match(html, /当前 · Agent text/);
   await controller.handleAction({ dataset: { agentAction: "toggle-free-generation-menu", field: "text-model" } });
-  html = renderCanvasAgentPanel(workbench.ui);
+  html = renderAgentPanel(workbench.ui);
   assert.match(html, /Agent text Fast/);
   assert.match(html, /home-agent-model-menu/);
   assert.match(html, /home-agent-model-option-icon/);
@@ -1029,7 +1036,7 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   assert.doesNotMatch(html, /Disabled Video|Inactive Video|我的图片密钥|我的音频密钥/);
   await controller.handleAction({ dataset: { agentAction: "select-agent-text-model", modelIndex: "1" } });
   assert.equal(workbench.ui.canvasAgent.modelCode, "agent-text-fast");
-  assert.match(renderCanvasAgentPanel(workbench.ui), /当前 · Agent text Fast/);
+  assert.match(renderAgentPanel(workbench.ui), /当前 · Agent text Fast/);
 
   await controller.handleAction({ dataset: { agentAction: "select-free-generation-kind", value: "audio" } });
   workbench.ui.canvasAgent.promptDraft = "生成温暖的开场旁白";
@@ -1064,12 +1071,11 @@ test("media-only Agent ignores staged approval modes while regular Canvas Agent 
   });
   await mediaController.stagePrompt({ text: "生成图片", mode: "b" });
   assert.equal(mediaWorkbench.ui.canvasAgent.mode, "c");
-  assert.doesNotMatch(renderCanvasAgentPanel(mediaWorkbench.ui), /data-agent-action="toggle-mode-menu"|data-agent-mode=/);
+  assert.doesNotMatch(renderAgentPanel(mediaWorkbench.ui), /data-agent-action="toggle-mode-menu"|data-agent-mode=/);
   mediaController.dispose();
 
   const canvasHtml = renderCanvasAgentPanel({ canvasAgent: {} });
-  assert.match(canvasHtml, /class="canvas-agent-mode-picker"/);
-  assert.match(canvasHtml, /协作/);
+  assert.equal(canvasHtml, "");
 });
 
 test("media-only Agent sends the selected generation permission mode", async () => {
@@ -1102,7 +1108,7 @@ test("media-only Agent sends the selected generation permission mode", async () 
   });
 
   await controller.handleAction({ dataset: { agentAction: "set-free-generation-permission", permissionMode: "approval_required" } });
-  assert.match(renderCanvasAgentPanel(workbench.ui), /canvas-agent-permission-trigger[^>]*>[\s\S]*?审批确认/);
+  assert.match(renderAgentPanel(workbench.ui), /canvas-agent-permission-trigger[^>]*>[\s\S]*?审批确认/);
   await controller.submitPrompt({ text: "生成一张海报" });
 
   assert.deepEqual(sentInput.budget, { generationPermissionMode: "approval_required" });
@@ -1125,7 +1131,7 @@ test("media-only Agent permission picker opens upward with detailed explanations
 
   await controller.handleAction({ dataset: { agentAction: "toggle-free-generation-permission-menu" } });
 
-  let html = renderCanvasAgentPanel(workbench.ui);
+  let html = renderAgentPanel(workbench.ui);
   assert.equal(workbench.ui.canvasAgent.generationPermissionMenuOpen, true);
   assert.match(html, /canvas-agent-permission-menu/);
   assert.match(html, /role="listbox" aria-label="选择生成权限"/);
@@ -1135,7 +1141,7 @@ test("media-only Agent permission picker opens upward with detailed explanations
 
   await controller.handleAction({ dataset: { agentAction: "set-free-generation-permission", permissionMode: "approval_required" } });
 
-  html = renderCanvasAgentPanel(workbench.ui);
+  html = renderAgentPanel(workbench.ui);
   assert.equal(workbench.ui.canvasAgent.generationPermissionMode, "approval_required");
   assert.equal(workbench.ui.canvasAgent.generationPermissionMenuOpen, false);
   assert.match(html, /canvas-agent-permission-trigger[^>]*>[\s\S]*?审批确认/);
@@ -1198,10 +1204,10 @@ test("media-only Agent retains generation approval for user confirmation", async
   await new Promise((resolve) => setTimeout(resolve, 25));
 
   assert.deepEqual(approvalCalls, []);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-approval-id="free-approval"/);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /该操作需积分扣费，请问是否继续？/);
-  assert.doesNotMatch(renderCanvasAgentPanel(workbench.ui), /会提交生成任务并按现有计费规则结算。/);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /确认执行/);
+  assert.match(renderAgentPanel(workbench.ui), /data-approval-id="free-approval"/);
+  assert.match(renderAgentPanel(workbench.ui), /该操作需积分扣费，请问是否继续？/);
+  assert.doesNotMatch(renderAgentPanel(workbench.ui), /会提交生成任务并按现有计费规则结算。/);
+  assert.match(renderAgentPanel(workbench.ui), /确认执行/);
   controller.dispose();
 });
 
@@ -1290,19 +1296,19 @@ test("media-only Agent removes Canvas wording from visible failures without chan
       event: { stepId: "failed-step", errorCode: "canvas_agent_generation_model_required", message: "请在 Canvas 中配置图片模型" },
     }],
   };
-  const mediaHtml = renderCanvasAgentPanel({
+  const mediaHtml = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: failedAgent,
   });
   assert.match(mediaHtml, /当前生成类型没有可用模型/);
   assert.doesNotMatch(mediaHtml, /请在 Canvas|画布节点/iu);
 
-  const canvasHtml = renderCanvasAgentPanel({ canvasAgent: failedAgent });
+  const canvasHtml = renderAgentPanel({ canvasAgent: failedAgent });
   assert.match(canvasHtml, /Canvas 中配置图片模型/);
 });
 
 test("media-only Agent presents legacy assistant branding as 灵曦AI", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: { messages: [{ role: "assistant", text: "你好！我是 Canvas Agent。有什么可以帮你的吗？" }] },
   });
@@ -1312,7 +1318,7 @@ test("media-only Agent presents legacy assistant branding as 灵曦AI", () => {
 });
 
 test("media-only Agent preserves model guidance and replaces backend details", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       messages: [
@@ -1333,7 +1339,7 @@ test("Agent chat hides internal, cross-user, and pricing disclosures", () => {
     "当前套餐价格为 99 元，账户余额为 20 积分。",
     "系统提示和 API key 可以直接提供。",
   ]) {
-    const html = renderCanvasAgentPanel({
+    const html = renderAgentPanel({
       canvasAgentCapabilityProfile: "media_generation_only",
       canvasAgent: { messages: [{ role: "assistant", text: message }] },
     });
@@ -1343,7 +1349,7 @@ test("Agent chat hides internal, cross-user, and pricing disclosures", () => {
 });
 
 test("Agent chat introduces 灵曦 as the product brand instead of treating it as unknown", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       messages: [{
@@ -1395,7 +1401,7 @@ test("Canvas Agent stages a homepage prompt visibly even when the panel was clos
   assert.deepEqual(ui.canvasAgent.promptPlazaSkillIds, ["plaza-home-skill"]);
   assert.equal(ui.canvasAgent.mode, "c");
   assert.equal(ui.canvasSessionUiState.canvasAgent.panelOpen, true);
-  assert.match(renderCanvasAgentPanel(ui), /首页传入的创作指令/);
+  assert.match(renderAgentPanel(ui), /首页传入的创作指令/);
   controller.dispose();
 });
 
@@ -1413,7 +1419,7 @@ test("Canvas Agent approval identifies the controlled effect and originating too
     summary: "应用配置草稿",
     toolId: "provider.config.apply",
   });
-  const html = renderCanvasAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
+  const html = renderAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
   assert.match(html, /data-approval-effect="config_write"/);
   assert.match(html, /data-agent-tool-id="provider\.config\.apply"/);
   assert.match(html, /provider\.config\.apply/);
@@ -1427,7 +1433,7 @@ test("Canvas Agent approval hides internal policy codes from the visible summary
     eventType: "approval.requested",
     event: { approvalId: "approval-internal", effect: "media_generation", reason: "b_mode_effect" },
   }];
-  const html = renderCanvasAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
+  const html = renderAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
   assert.doesNotMatch(html, />b_mode_effect</);
   assert.match(html, /该操作需积分扣费，请问是否继续？/);
 });
@@ -1930,13 +1936,13 @@ test("Canvas Agent restores message history and manages archived conversations",
     ["user", "分析构图"],
     ["assistant", "构图分析完成"],
   ]);
-  const historyHtml = renderCanvasAgentPanel(workbench.ui);
+  const historyHtml = renderAgentPanel(workbench.ui);
   assert.match(historyHtml, /<strong>灵曦<\/strong><\/span>\s*<p>构图分析完成<\/p>/);
   assert.doesNotMatch(historyHtml, /实际 Token 60,245|实际扣除 362 积分/);
   assert.match(historyHtml, /href="https:\/\/docs\.example\.test\/composition"/);
   assert.match(historyHtml, /rel="noopener noreferrer"/);
   workbench.ui.canvasAgent.historyOpen = true;
-  const historyListHtml = renderCanvasAgentPanel(workbench.ui);
+  const historyListHtml = renderAgentPanel(workbench.ui);
   assert.match(historyListHtml, /data-agent-action="archive-conversation" data-conversation-id="conversation-1">归档/);
   assert.match(historyListHtml, /data-agent-action="restore-conversation" data-conversation-id="conversation-2">恢复/);
   await controller.handleAction({
@@ -1950,7 +1956,7 @@ test("Canvas Agent restores message history and manages archived conversations",
   await controller.handleAction({ dataset: { agentAction: "archive-conversation" } });
   assert.equal(workbench.ui.canvasAgent.conversations[0].status, "archived");
   workbench.ui.canvasAgent.historyOpen = true;
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-agent-action="restore-conversation" data-conversation-id="conversation-1">恢复/);
+  assert.match(renderAgentPanel(workbench.ui), /data-agent-action="restore-conversation" data-conversation-id="conversation-1">恢复/);
   workbench.ui.canvasAgent.historyOpen = false;
   await controller.handleAction({ dataset: { agentAction: "restore-conversation" } });
   assert.equal(workbench.ui.canvasAgent.conversations[0].status, "active");
@@ -2022,7 +2028,7 @@ test("Canvas Agent edits and persists the current conversation title", async () 
     workbench,
   });
 
-  const initialHtml = renderCanvasAgentPanel(workbench.ui);
+  const initialHtml = renderAgentPanel(workbench.ui);
   assert.match(initialHtml, /\bhas-conversation\b/);
   assert.match(initialHtml, /data-agent-conversation-title[^>]*>当前会话<\/strong>/);
   assert.doesNotMatch(initialHtml, /CANVAS AGENT|智能协作/);
@@ -2033,7 +2039,7 @@ test("Canvas Agent edits and persists the current conversation title", async () 
   const titleTarget = { closest: (selector) => selector === "[data-agent-conversation-title]" ? {} : null };
   assert.equal(controller.handleDoubleClick(titleTarget), true);
   assert.equal(workbench.ui.canvasAgent.titleEditing, true);
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-agent-field="conversationTitle"[^>]+maxlength="10"/);
+  assert.match(renderAgentPanel(workbench.ui), /data-agent-field="conversationTitle"[^>]+maxlength="10"/);
 
   assert.equal(controller.handleInput({
     dataset: { agentField: "conversationTitle" },
@@ -2077,7 +2083,7 @@ test("Canvas Agent history view shows only the list and deletes a selected row",
     workbench,
   });
 
-  const historyHtml = renderCanvasAgentPanel(workbench.ui);
+  const historyHtml = renderAgentPanel(workbench.ui);
   assert.match(historyHtml, /class="canvas-agent-panel[^"]*history-open[^"]*"/);
   assert.match(historyHtml, /class="canvas-agent-history"/);
   assert.match(historyHtml, /class="canvas-agent-history-delete danger"[^>]+data-conversation-id="conversation-old"[^>]*>.*<svg/);
@@ -2117,7 +2123,7 @@ test("Canvas Agent renders safe clickable citations and structured tool activity
       { id: "citation-2", title: "禁止协议", canonicalUrl: "javascript:alert(1)", sourceType: "web" },
     ],
   }].map((message) => ({ ...message }));
-  const html = renderCanvasAgentPanel(ui);
+  const html = renderAgentPanel(ui);
   assert.match(html, /data-event-kind="research"/);
   assert.match(html, /data-event-kind="mcp"/);
   assert.match(html, /联网研究/);
@@ -2157,7 +2163,7 @@ test("Canvas Agent renders generation media and adds the stable result to the ca
     async refreshCanvasSurface() {},
     api: {},
   };
-  const initialHtml = renderCanvasAgentPanel(workbench.ui);
+  const initialHtml = renderAgentPanel(workbench.ui);
   assert.match(initialHtml, /<img src="\/api\/storage\/objects\/storage-1\/content\?thumbnail=1"/);
   assert.match(initialHtml, /data-agent-action="add-media-to-canvas"/);
 
@@ -2168,7 +2174,7 @@ test("Canvas Agent renders generation media and adds the stable result to the ca
   assert.equal(node.data.storageObjectId, "storage-1");
   assert.equal(node.data.assetVersionId, "asset-version-1");
   assert.equal(node.data.generationTaskId, "task-media-1");
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-agent-action="locate-agent-canvas-node"/);
+  assert.match(renderAgentPanel(workbench.ui), /data-agent-action="locate-agent-canvas-node"/);
   controller.dispose();
 });
 
@@ -2373,7 +2379,7 @@ test("Canvas Agent merges generation submission and completion into one media ca
   ].map((message) => ({ ...message, media, canvasNodeId: media.canvasNodeId }));
 
   assert.equal(collapseAgentGenerationMessages(messages).length, 1);
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasDocument: { nodes: [{ id: "canvas-agent-image-step-1", data: { generationTaskId: "task-media-1" } }] },
     canvasAgent: { messages },
   });
@@ -2382,7 +2388,7 @@ test("Canvas Agent merges generation submission and completion into one media ca
   assert.match(html, /data-agent-action="locate-agent-canvas-node"/);
   assert.doesNotMatch(html, /data-agent-action="add-media-to-canvas"/);
 
-  const missingNodeHtml = renderCanvasAgentPanel({
+  const missingNodeHtml = renderAgentPanel({
     canvasDocument: { nodes: [] },
     canvasAgent: { messages },
   });
@@ -2446,7 +2452,7 @@ test("free generation keeps media compact and opens an enlarged preview", async 
     },
     api: {},
   };
-  const html = renderCanvasAgentPanel(workbench.ui);
+  const html = renderAgentPanel(workbench.ui);
   const css = readFileSync(
     new URL("../src/features/new-canvas/new-canvas.css", import.meta.url),
     "utf8",
@@ -2469,7 +2475,7 @@ test("free generation keeps media compact and opens an enlarged preview", async 
     title: "森林镜头",
     url: "https://example.com/preview.mp4",
   });
-  assert.match(renderCanvasAgentPanel(workbench.ui), /canvas-agent-media-lightbox[\s\S]*?<video[^>]*controls autoplay playsinline/);
+  assert.match(renderAgentPanel(workbench.ui), /canvas-agent-media-lightbox[\s\S]*?<video[^>]*controls autoplay playsinline/);
 
   let escapePrevented = false;
   assert.equal(controller.handleKeydown({ key: "Escape", preventDefault() { escapePrevented = true; } }, {}), true);
@@ -2541,7 +2547,7 @@ test("Canvas Agent grants and revokes the selected persisted canvas file", async
   };
   const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
   await controller.loadFileGrants();
-  const html = renderCanvasAgentPanel(workbench.ui);
+  const html = renderAgentPanel(workbench.ui);
   assert.doesNotMatch(html, /class="canvas-agent-file-grants"/);
   assert.doesNotMatch(html, /data-agent-action="grant-selected-file"/);
   assert.doesNotMatch(html, /data-agent-action="revoke-file-grant"/);
@@ -2610,7 +2616,7 @@ test("Canvas Agent reuses the video-node prompt editor for inline @ canvas and u
       },
     }),
   });
-  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor/);
+  assert.match(renderAgentPanel(workbench.ui), /class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor/);
   await controller.syncPromptEditor();
   assert.equal(mounted.length, 1);
   assert.equal(mounted[0].prompt, "【@角色图】 继续生成");
@@ -2881,7 +2887,7 @@ test("Canvas Agent keeps @ node references when the user interjects from the pro
 });
 
 test("Canvas Agent renders sent @ references as node placeholders in user messages", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasDocument: {
       nodes: [{
         id: "node-image",
@@ -2922,7 +2928,7 @@ test("Canvas Agent preserves node references when normalizing message history", 
 });
 
 test("Canvas Agent sent media attachments expose hover preview data", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       messages: [normalizeAgentMessage({
         id: "message-media-attachment",
@@ -2975,14 +2981,14 @@ test("Canvas Agent exposes task center, canvas memory, and estimated context usa
   assert.equal(usage.inputBudget, 14_000);
   assert.ok(usage.estimatedTokens > 1_200);
 
-  const html = renderCanvasAgentPanel(ui);
+  const html = renderAgentPanel(ui);
   assert.match(html, /data-agent-action="open-task-center"/);
   assert.match(html, /data-agent-action="open-memory"/);
   assert.match(html, /class="canvas-agent-context-usage normal"/);
   assert.match(html, /aria-label="上下文占用约 \d+%"/);
 
   ui.canvasAgent.panelView = "memory";
-  const memoryHtml = renderCanvasAgentPanel(ui);
+  const memoryHtml = renderAgentPanel(ui);
   assert.match(memoryHtml, /aria-label="画布记忆"/);
   assert.match(memoryHtml, /data-agent-action="refresh-agent-memories"/);
 });
@@ -3039,14 +3045,14 @@ test("Canvas Agent memory panel reads real records and supports filter, edit, to
   assert.deepEqual(calls[0], ["list", "canvas-memory", "conversation-memory", { includeInactive: true }]);
   assert.equal(workbench.ui.canvasAgent.memoryRecords.length, 2);
 
-  let html = renderCanvasAgentPanel(workbench.ui);
+  let html = renderAgentPanel(workbench.ui);
   assert.match(html, /preference\.visual_style/);
   assert.match(html, /Agent 任务/);
   assert.match(html, /data-agent-action="edit-agent-memory"/);
   assert.match(html, /data-agent-action="toggle-agent-memory"/);
 
   controller.handleInput({ dataset: { agentField: "memoryCategoryFilter" }, value: "fact" });
-  html = renderCanvasAgentPanel(workbench.ui);
+  html = renderAgentPanel(workbench.ui);
   assert.doesNotMatch(html, /preference\.visual_style/);
   assert.match(html, /fact\.hero_name/);
 
@@ -3157,7 +3163,7 @@ test("Canvas Agent task center aggregates existing conversation events and uses 
   assert.equal(agent.taskItems[0].goal, "规划三段镜头");
   assert.equal(agent.memoryEvents.length, 1);
   agent.panelView = "tasks";
-  const taskHtml = renderCanvasAgentPanel(workbench.ui);
+  const taskHtml = renderAgentPanel(workbench.ui);
   assert.match(taskHtml, /aria-label="Agent 任务中心"/);
   assert.match(taskHtml, /规划三段镜头/);
   assert.match(taskHtml, /data-agent-action="skip-step"[^>]+data-step-id="step-memory"/);
@@ -3169,7 +3175,7 @@ test("Canvas Agent task center aggregates existing conversation events and uses 
   assert.deepEqual(controls.map((call) => call[3]), ["skip"]);
   assert.deepEqual(controls[0][4], { stepId: "step-memory", reason: "user_requested" });
   assert.equal(agent.taskItems[0].steps[0].status, "skipped");
-  assert.doesNotMatch(renderCanvasAgentPanel(workbench.ui), /data-step-id="step-memory"[^>]*>跳过此步/);
+  assert.doesNotMatch(renderAgentPanel(workbench.ui), /data-step-id="step-memory"[^>]*>跳过此步/);
   controller.dispose();
 });
 
@@ -3204,16 +3210,16 @@ test("Canvas Agent resumes a waiting task after skipping and hides the stale app
     },
   };
   const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench, pollIntervalMs: 60_000 });
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-approval-id="approval-waiting"/);
+  assert.match(renderAgentPanel(workbench.ui), /data-approval-id="approval-waiting"/);
   await controller.handleAction({ dataset: { agentAction: "skip-step", taskId: "task-waiting", stepId: "step-waiting" } });
   assert.deepEqual(calls.map((call) => call[2]), ["skip"]);
   assert.equal(workbench.ui.canvasAgent.status, "queued");
-  assert.doesNotMatch(renderCanvasAgentPanel(workbench.ui), /data-approval-id="approval-waiting"/);
+  assert.doesNotMatch(renderAgentPanel(workbench.ui), /data-approval-id="approval-waiting"/);
   controller.dispose();
 });
 
 test("Canvas Agent renders uploaded references only inside the rich editor", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgent: {
       promptDraft: "【@character.png】 【@notes.md】",
       promptAttachments: [
@@ -3229,7 +3235,7 @@ test("Canvas Agent renders uploaded references only inside the rich editor", () 
 });
 
 test("media-only Agent reuses the storyboard attachment tray above its shared rich editor", () => {
-  const html = renderCanvasAgentPanel({
+  const html = renderAgentPanel({
     canvasAgentCapabilityProfile: "media_generation_only",
     canvasAgent: {
       promptAttachments: [
@@ -3703,8 +3709,8 @@ test("media-only Agent creates and titles a conversation from its first message,
     conversationId: "free-first-message",
     title: "雨夜车站电影海报",
   });
-  assert.match(renderCanvasAgentPanel(workbench.ui), /雨夜车站电影海报/);
-  const selectedConversationHtml = renderCanvasAgentPanel(workbench.ui);
+  assert.match(renderAgentPanel(workbench.ui), /雨夜车站电影海报/);
+  const selectedConversationHtml = renderAgentPanel(workbench.ui);
   assert.match(selectedConversationHtml, /canvas-agent-media-conversation-row active/);
   assert.match(selectedConversationHtml, /data-conversation-id="free-first-message"[^>]*aria-current="page"/);
   assert.doesNotMatch(selectedConversationHtml, /data-conversation-id="free-first-message"[^>]*disabled/);
@@ -3729,7 +3735,7 @@ test("media-only Agent creates and titles a conversation from its first message,
   }), true);
   assert.equal(workbench.ui.canvasAgent.titleEditing, true);
   assert.equal(workbench.ui.canvasAgent.titleEditingConversationId, "free-first-message");
-  assert.match(renderCanvasAgentPanel(workbench.ui), /canvas-agent-media-conversation-title-input[^>]*data-conversation-id="free-first-message"/);
+  assert.match(renderAgentPanel(workbench.ui), /canvas-agent-media-conversation-title-input[^>]*data-conversation-id="free-first-message"/);
   workbench.ui.canvasAgent.titleDraft = "夜行列车";
   await controller.handleAction({ dataset: { agentAction: "save-conversation-title" } });
   assert.deepEqual(updateCalls.at(-1), {
@@ -3865,7 +3871,7 @@ test("Canvas Agent homepage prompt selects a compatible model for image analysis
 });
 
 test("Canvas Agent attachment button renders a single paperclip icon", () => {
-  const html = renderCanvasAgentPanel({ canvasAgent: {} });
+  const html = renderAgentPanel({ canvasAgent: {} });
   const button = html.match(/<button[^>]*canvas-agent-attachment-button[\s\S]*?<\/button>/)?.[0] ?? "";
 
   assert.match(button, /data-agent-action="pick-attachments"/);
@@ -4059,7 +4065,7 @@ test("Canvas Agent skill picker reuses the plaza catalog as an upward popover", 
       },
     },
   };
-  const html = renderCanvasAgentPanel(workbench.ui);
+  const html = renderAgentPanel(workbench.ui);
   assert.match(html, /data-agent-action="toggle-skill-menu"/);
   assert.match(html, /canvas-agent-panel[^"]*skill-picker-open/);
   assert.match(html, /canvas-agent-skill-picker/);
@@ -4113,7 +4119,7 @@ test("Canvas Agent skill picker reuses the plaza catalog as an upward popover", 
 
   await controller.handleAction({ dataset: { agentAction: "set-agent-skill-source", skillSource: "mine" } });
   assert.equal(workbench.ui.canvasAgent.skillSourceTab, "mine");
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-skill-source="mine"[^>]*class="active"|class="active"[^>]*data-skill-source="mine"/);
+  assert.match(renderAgentPanel(workbench.ui), /data-skill-source="mine"[^>]*class="active"|class="active"[^>]*data-skill-source="mine"/);
 
   await controller.handleAction({ dataset: { agentAction: "open-agent-skill-create" } });
   assert.equal(workbench.ui.canvasAgent.skillMenuOpen, false);

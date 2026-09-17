@@ -122,6 +122,10 @@ import {
 } from "./sql-project.command.ts";
 import type { ProjectBundle, ProjectRecord, ScriptRecord } from "./project.service.ts";
 import type { ShotRecord } from "./shot.service.ts";
+import type { ProductionManifest } from "./production-agent.types.ts";
+import { validateProductionManifest } from "./production-agent.validator.ts";
+import { createProductionManifest } from "./production-agent.adapter.ts";
+import { advanceProductionManifestRevision } from "./production-agent.manifest-version.ts";
 
 const DEFAULT_CREATOR_PROJECT_PAGE_SIZE = 18;
 const MAX_CREATOR_PROJECT_PAGE_SIZE = 100;
@@ -2316,6 +2320,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       body: {
         episodeTitle?: string | null;
+        productionManifest?: Record<string, unknown> | null;
+        productionWorkflowId?: string | null;
+        productionTaskId?: string | null;
+        expectedManifestVersion?: number | null;
+        expectedManifestHash?: string | null;
         commitPayload?: {
           scriptText?: string | null;
           scenes?: Array<Record<string, unknown>> | null;
@@ -2332,20 +2341,97 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const payload = input.body.commitPayload;
-      if (!payload || typeof payload !== "object") {
+      const legacyPayload = input.body.commitPayload;
+      if ((!legacyPayload || typeof legacyPayload !== "object") && input.body.productionManifest == null) {
         return { status: 400, body: { error: "ai_storyboard_commit_payload_required" } };
       }
+      let manifest: ProductionManifest;
+      if (input.body.productionManifest != null) {
+        manifest = input.body.productionManifest as unknown as ProductionManifest;
+      } else {
+        manifest = createProductionManifest(
+          { projectId },
+          { commitPayload: legacyPayload ?? {} },
+        );
+      }
+      const validation = validateProductionManifest(manifest);
+      if (!validation.valid || manifest.project?.projectId !== projectId) {
+        const stale = validation.errors.includes("manifest_hash_mismatch");
+        return {
+          status: stale ? 409 : 400,
+          body: {
+            error: stale ? "production_manifest_stale" : "production_manifest_invalid",
+            validationErrors: validation.errors,
+          },
+        };
+      }
+      const payload = {
+        scriptText: manifest.scriptText,
+        scenes: manifest.scenes,
+        characters: manifest.characters,
+        props: manifest.props,
+        storyboards: manifest.storyboards,
+      };
       const storyboards = Array.isArray(payload.storyboards) ? payload.storyboards : [];
       const title = input.body.episodeTitle?.trim() || "AI 分镜章节";
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
-        capability: capabilities.projectEdit,
+        capability: capabilities.productionCommit,
         now: input.now,
       });
-      const episode = await createEpisodeForProject(deps.db, {
+      const hasConcurrencyToken = [
+        input.body.productionWorkflowId,
+        input.body.productionTaskId,
+        input.body.expectedManifestVersion,
+        input.body.expectedManifestHash,
+      ].some((value) => value != null);
+      if (
+        hasConcurrencyToken
+        && input.body.productionWorkflowId
+        && input.body.productionTaskId
+        && input.body.expectedManifestVersion != null
+        && input.body.expectedManifestHash
+        && manifest.revision
+      ) {
+        const revisionResult = await advanceProductionManifestRevision(deps.db, {
+          workflowId: input.body.productionWorkflowId,
+          taskId: input.body.productionTaskId,
+          projectId,
+          expectedVersion: input.body.expectedManifestVersion,
+          expectedHash: input.body.expectedManifestHash,
+          manifest,
+          now: input.now,
+        });
+        if (revisionResult === "route_mismatch") {
+          return { status: 400, body: { error: "production_manifest_workflow_invalid" } };
+        }
+        if (revisionResult === "stale") {
+          return { status: 409, body: { error: "production_manifest_stale" } };
+        }
+      }
+      const manifestCommitId = hashJson(manifest);
+      const stableEpisodeId = stableEpisodeUuid(projectId, `production-manifest:${manifestCommitId}:${title}`);
+      if (stableEpisodeId) {
+        const existingEpisode = (await listEpisodesForProject(deps.db, { projectId }))
+          .find((item) => item.id === stableEpisodeId);
+        if (existingEpisode) {
+          return {
+            status: 200,
+            body: {
+              episode: existingEpisode,
+              assets: { characters: [], scenes: [], props: [] },
+              storyboards: (await listShotsForProject(deps.db, { projectId }))
+                .filter((shot) => shot.episodeId === stableEpisodeId),
+              ...(manifest.revision ? { manifestRevision: manifest.revision } : {}),
+              replayed: true,
+            },
+          };
+        }
+      }
+      const episode = await createEpisodeForProjectWithId(deps.db, {
         projectId,
+        episodeId: stableEpisodeId,
         title,
         createdByUserId: actor.userId,
         now: input.now,
@@ -2358,6 +2444,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           episodeId: episode.id,
           kind: "character",
           records: Array.isArray(payload.characters) ? payload.characters : [],
+          stableKeysRequired: true,
           createdByUserId: actor.userId,
           now: input.now,
         }),
@@ -2366,6 +2453,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           episodeId: episode.id,
           kind: "scene",
           records: Array.isArray(payload.scenes) ? payload.scenes : [],
+          stableKeysRequired: true,
           createdByUserId: actor.userId,
           now: input.now,
         }),
@@ -2374,6 +2462,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           episodeId: episode.id,
           kind: "prop",
           records: Array.isArray(payload.props) ? payload.props : [],
+          stableKeysRequired: true,
           createdByUserId: actor.userId,
           now: input.now,
         }),
@@ -2384,6 +2473,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           episodeId: episode.id,
           storyboard,
           index,
+          id: stableEpisodeUuid(episode.id, `production-shot:${index}`),
           createdByUserId: actor.userId,
           now: input.now,
         }),
@@ -2429,6 +2519,19 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             now: input.now,
           });
         }
+        await replaceShotReferencesForShot(deps.db, {
+          projectId,
+          shotId: shot.id,
+          createdByUserId: actor.userId,
+          items: await resolveProductionShotReferences({
+            db: deps.db,
+            projectId,
+            storyboard,
+            manifest,
+            createdAssets,
+          }),
+          now: input.now,
+        });
       }
       await updateProjectPhase(deps.db, projectId, "shot_generation");
       await creatorApp.seedShotRecords(
@@ -2443,6 +2546,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           episode,
           assets: createdAssets,
           storyboards: shots,
+          ...(manifest.revision ? { manifestRevision: manifest.revision } : {}),
         },
       };
     },
@@ -7200,11 +7304,13 @@ async function createAiPreviewEpisodeAssets(
     episodeId: string;
     kind: "character" | "scene" | "prop";
     records: Array<Record<string, unknown>>;
+    stableKeysRequired?: boolean;
     createdByUserId: string;
     now: Date;
   },
 ) {
   const created: Array<Awaited<ReturnType<typeof createAssetVersionSnapshot>>> = [];
+  const assetType = assetTypeForKind(input.kind);
   for (let index = 0; index < input.records.length; index += 1) {
     const record = input.records[index]!;
     const name = resolveAiPreviewAssetName(input.kind, record, index);
@@ -7213,8 +7319,25 @@ async function createAiPreviewEpisodeAssets(
     }
     const description = resolveAiPreviewAssetDescription(input.kind, record);
     const prompt = resolveAiPreviewAssetPrompt(input.kind, record);
-    const assetKey = `episode-${input.kind}-${slugForAssetKey(name)}-${randomUUID().slice(0, 8)}`;
+    const manifestKey = String(record.key ?? "").trim();
+    if (input.stableKeysRequired && !manifestKey) {
+      throw new Error("production_manifest_asset_key_required");
+    }
+    const assetKey = manifestKey || `episode-${input.kind}-${slugForAssetKey(name)}-${randomUUID().slice(0, 8)}`;
+    const requestedAssetId = String(record.assetId ?? record.asset_id ?? "").trim();
+    const existing = await findProductionAssetSnapshot(db, {
+      projectId: input.projectId,
+      assetType,
+      assetId: requestedAssetId || undefined,
+      assetKey,
+      name,
+    });
+    if (existing) {
+      created.push(existing);
+      continue;
+    }
     created.push(await createAssetVersionSnapshot(db, {
+      userId: input.createdByUserId,
       projectId: input.projectId,
       assetType: assetTypeForKind(input.kind),
       assetKey,
@@ -7240,11 +7363,187 @@ async function createAiPreviewEpisodeAssets(
   return created;
 }
 
+type ProductionAssetSnapshot = Awaited<ReturnType<typeof createAssetVersionSnapshot>>;
+
+async function findProductionAssetSnapshot(
+  db: SqlDatabase,
+  input: {
+    projectId: string;
+    assetType: AssetType;
+    assetId?: string;
+    assetKey?: string;
+    name?: string;
+  },
+): Promise<ProductionAssetSnapshot | null> {
+  const result = await db.query<{
+    id: string;
+    user_id: string;
+    project_id: string;
+    asset_type: string;
+    asset_key: string;
+    created_by_user_id: string;
+    created_at: Date | string;
+    updated_at: Date | string;
+    version_id: string | null;
+    version_number: number | string | null;
+    storage_object_id: string | null;
+    storage_object_key: string | null;
+    metadata_json: Record<string, unknown> | null;
+    source_task_id: string | null;
+    source_attempt_id: string | null;
+    version_created_at: Date | string | null;
+  }>(
+    `
+      SELECT
+        a.id, a.created_by_user_id AS user_id, a.project_id, a.asset_type, a.asset_key,
+        a.created_by_user_id, a.created_at, a.updated_at,
+        v.id AS version_id, v.version_number, v.storage_object_id,
+        v.storage_object_key, v.metadata_json, v.source_task_id,
+        v.source_attempt_id, v.created_at AS version_created_at
+      FROM assets a
+      LEFT JOIN LATERAL (
+        SELECT *
+        FROM asset_versions
+        WHERE asset_id = a.id
+        ORDER BY version_number DESC
+        LIMIT 1
+      ) v ON true
+      WHERE a.project_id = $1 AND a.asset_type = $2
+        AND ($3::text IS NULL OR a.id::text = $3)
+      ORDER BY a.updated_at DESC, a.id DESC
+    `,
+    [input.projectId, input.assetType, input.assetId ?? null],
+  );
+  const normalizedName = normalizeProductionAssetName(input.name);
+  const row = result.rows.find((candidate) => {
+    if (input.assetId) return candidate.id === input.assetId;
+    if (input.assetKey && candidate.asset_key === input.assetKey) return true;
+    if (!normalizedName) return false;
+    const metadata = candidate.metadata_json ?? {};
+    return [metadata.label, metadata.name].some((value) => normalizeProductionAssetName(value) === normalizedName);
+  });
+  if (!row) {
+    if (input.assetId) throw new Error(`production_manifest_asset_reference_invalid:${input.assetId}`);
+    return null;
+  }
+  if (!row.version_id || !row.version_created_at || !row.storage_object_key) {
+    return null;
+  }
+  return {
+    asset: {
+      id: row.id,
+      userId: row.user_id,
+      projectId: row.project_id,
+      assetType: row.asset_type as AssetType,
+      assetKey: row.asset_key,
+      createdByUserId: row.created_by_user_id,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    },
+    version: {
+      id: row.version_id,
+      userId: row.user_id,
+      assetId: row.id,
+      versionNumber: Number(row.version_number ?? 1),
+      storageObjectId: row.storage_object_id,
+      storageObjectKey: row.storage_object_key,
+      metadata: row.metadata_json ?? { mimeType: "application/json", width: 1, height: 1 },
+      sourceTaskId: row.source_task_id,
+      sourceAttemptId: row.source_attempt_id,
+      createdByUserId: row.created_by_user_id,
+      createdAt: new Date(row.version_created_at),
+    },
+    now: new Date(row.version_created_at),
+  };
+}
+
+function normalizeProductionAssetName(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+async function resolveProductionShotReferences(input: {
+  db: SqlDatabase;
+  projectId: string;
+  storyboard: Record<string, unknown>;
+  manifest: ProductionManifest;
+  createdAssets: {
+    characters: Array<Awaited<ReturnType<typeof createAssetVersionSnapshot>>>;
+    scenes: Array<Awaited<ReturnType<typeof createAssetVersionSnapshot>>>;
+    props: Array<Awaited<ReturnType<typeof createAssetVersionSnapshot>>>;
+  };
+}) {
+  const indexed = new Map<string, {
+    role: "character" | "scene" | "prop";
+    assetId: string;
+    assetVersionId: string;
+  }>();
+  const add = (
+    role: "character" | "scene" | "prop",
+    records: Array<Record<string, unknown>>,
+    assets: Array<Awaited<ReturnType<typeof createAssetVersionSnapshot>>>,
+  ) => {
+    records.forEach((record, index) => {
+      const key = String(record.key ?? "").trim();
+      const created = assets[index];
+      if (key && created) {
+        indexed.set(key, {
+          role,
+          assetId: created.asset.id,
+          assetVersionId: created.version.id,
+        });
+      }
+    });
+  };
+  add("character", input.manifest.characters, input.createdAssets.characters);
+  add("scene", input.manifest.scenes, input.createdAssets.scenes);
+  add("prop", input.manifest.props, input.createdAssets.props);
+
+  const refs: Array<{
+    key: string;
+    role: "character" | "scene" | "prop";
+    assetType: AssetType;
+  }> = [
+    ...(Array.isArray(input.storyboard.characterKeys) ? input.storyboard.characterKeys : [])
+      .map((key) => ({ key: String(key ?? "").trim(), role: "character" as const, assetType: "character_sheet" as const })),
+    ...(input.storyboard.sceneKey == null
+      ? []
+      : [{ key: String(input.storyboard.sceneKey).trim(), role: "scene" as const, assetType: "scene_reference" as const }]),
+    ...(Array.isArray(input.storyboard.propKeys) ? input.storyboard.propKeys : [])
+      .map((key) => ({ key: String(key ?? "").trim(), role: "prop" as const, assetType: "prop_reference" as const })),
+  ].filter((item) => item.key);
+  for (const ref of refs) {
+    if (indexed.has(ref.key)) continue;
+    const existing = await findProductionAssetSnapshot(input.db, {
+      projectId: input.projectId,
+      assetType: ref.assetType,
+      assetId: /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(ref.key) ? ref.key : undefined,
+      assetKey: ref.key,
+      name: ref.key,
+    });
+    if (existing) {
+      indexed.set(ref.key, {
+        role: ref.role,
+        assetId: existing.asset.id,
+        assetVersionId: existing.version.id,
+      });
+    }
+  }
+  return refs.map((ref, index) => {
+    const key = ref.key;
+    const reference = indexed.get(key);
+    if (!reference) {
+      throw new Error(`production_manifest_asset_reference_invalid:${key}`);
+    }
+    return { ...reference, sortOrder: index };
+  });
+}
+
 function aiPreviewStoryboardToShot(input: {
   projectId: string;
   episodeId: string;
   storyboard: Record<string, unknown>;
   index: number;
+  id?: string;
   createdByUserId: string;
   now: Date;
 }): ShotRecord {
@@ -7259,7 +7558,7 @@ function aiPreviewStoryboardToShot(input: {
   const storyboardDescription = buildAiPreviewStoryboardDescription(input.storyboard);
   const description = fallbackDescription || storyboardDescription || imagePrompt || videoPrompt || `AI 分镜 ${input.index + 1}`;
   return {
-    id: randomUUID(),
+    id: input.id ?? randomUUID(),
     projectId: input.projectId,
     episodeId: input.episodeId,
     title: `分镜 ${Number.isFinite(shotNo) && shotNo > 0 ? shotNo : input.index + 1}`,

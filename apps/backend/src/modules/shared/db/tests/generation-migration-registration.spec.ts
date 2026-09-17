@@ -28,13 +28,22 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20260904-create-skill-favorites\.sql"[\s\S]*\]\);/,
     );
     assert.ok(names.includes("20261106-skill-categories.sql"));
+    assert.ok(names.includes("20261107-create-production-agent-session.sql"));
     assert.match(
       productionMigrationScript,
       /\["20261106-skill-categories\.sql", "packages\/db\/migrations\/20261106-skill-categories\.sql"\]/,
     );
     assert.match(
       productionMigrationScript,
+      /\["20261107-create-production-agent-session\.sql", "packages\/db\/migrations\/20261107-create-production-agent-session\.sql"\]/,
+    );
+    assert.match(
+      productionMigrationScript,
       /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20261106-skill-categories\.sql"[\s\S]*\]\);/,
+    );
+    assert.match(
+      productionMigrationScript,
+      /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20261107-create-production-agent-session\.sql"[\s\S]*\]\);/,
     );
   });
 

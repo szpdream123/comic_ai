@@ -23,7 +23,6 @@ import { describeGenerationProgress } from "./free-conversation-progress.js";
 import {
   normalizePlazaEpisodeSkills,
   normalizePlazaSkillIds,
-  renderEpisodePromptSkillModal,
   resolvePlazaSelectedSkills,
   togglePlazaSkillId,
 } from "../production-workbench/episode-prompt-skill-modal.js";
@@ -360,118 +359,36 @@ export function renderCanvasAgentPanel(ui = {}) {
   const agent = ensureCanvasAgentState(ui);
   const mediaOnly = ui.canvasAgentCapabilityProfile === "media_generation_only";
   if (agent.panelOpen === false) return "";
+  if (!mediaOnly) return "";
   const pendingApproval = findPendingApproval(agent.events, agent.skippedStepIds);
   const approvalPresentation = pendingApproval ? resolveAgentApprovalPresentation(agent.events, pendingApproval) : null;
   const active = Boolean(agent.taskId)
     && !TERMINAL_STATUSES.has(agent.status)
-    && !(mediaOnly && (
+    && !(
       hasPendingCreativeQuestion(agent.messages)
       || (normalizeFreeGenerationKind(agent.generationKind) !== "agent" && hasSettledMediaGeneration(agent))
-    ));
+    );
   const busy = Boolean(agent.busyAction);
-  const models = Array.isArray(agent.models) ? agent.models : [];
   const selectedConversation = (agent.conversations ?? []).find((conversation) => conversation.id === agent.conversationId);
   const conversationArchived = selectedConversation?.status === "archived";
   const modelSelectDisabled = false;
-  const modelSubmissionUnavailable = agent.modelsStatus !== "ready" || !models.length;
-  const selectedMode = AGENT_MODES.find((mode) => mode.id === agent.mode) ?? AGENT_MODES[0];
   const timelineEmpty = !active
     && !collapseAgentTimelineEvents(agent.events).length
     && !collapseAgentGenerationMessages(agent.messages).length;
-  const panelView = ["timeline", "tasks", "memory", "agents", "sub-agents"].includes(agent.panelView)
-    ? agent.panelView
-    : "timeline";
   const conversationTitle = selectedConversation?.title || "新会话";
-  const titleMarkup = agent.titleEditing && (!mediaOnly || !agent.titleEditingConversationId)
+  const titleMarkup = agent.titleEditing && !agent.titleEditingConversationId
     ? `<input class="canvas-agent-title-input" type="text" data-agent-field="conversationTitle" value="${escapeAttr(agent.titleDraft || conversationTitle)}" maxlength="10" aria-label="当前会话名称" />`
     : `<strong class="canvas-agent-title" data-agent-conversation-title title="双击修改会话名称">${escapeHtml(conversationTitle)}</strong>`;
-  if (mediaOnly) {
-    return renderMediaOnlyAgentPanel({
-      agent,
-      active,
-      busy,
-      conversationArchived,
-      modelSelectDisabled,
-      models,
-      pendingApproval: approvalPresentation,
-      selectedMode,
-      timelineEmpty,
-      titleMarkup,
-    });
-  }
-  return `
-    <aside class="canvas-agent-panel ${agent.historyOpen ? "history-open" : panelView === "timeline" ? "" : "has-special-view"}${agent.conversationId ? " has-conversation" : ""}${timelineEmpty ? " timeline-empty" : ""}${agent.skillMenuOpen ? " skill-picker-open" : ""}" data-canvas-agent-panel aria-label="Canvas Agent">
-      <div class="canvas-agent-resize-handle" data-canvas-agent-resize role="separator" aria-orientation="vertical" aria-label="调整 Agent 面板宽度"></div>
-      <header class="canvas-agent-head">
-        ${titleMarkup}
-        <div class="canvas-agent-head-actions">
-          <button type="button" class="canvas-agent-icon-button" data-agent-action="new-conversation" aria-label="新建对话" title="新建对话">${renderAgentHeaderIcon("new")}</button>
-          <button type="button" class="canvas-agent-icon-button ${agent.historyOpen ? "active" : ""}" data-agent-action="open-agent-history" aria-label="历史对话" title="历史对话" aria-expanded="${agent.historyOpen}">${renderAgentHeaderIcon("history")}</button>
-          ${mediaOnly ? "" : `<button type="button" class="canvas-agent-icon-button ${panelView === "agents" ? "active" : ""}" data-agent-action="open-agent-center" aria-label="智能体中心" title="智能体中心">${renderAgentHeaderIcon("agents")}</button>
-          <button type="button" class="canvas-agent-icon-button ${panelView === "tasks" ? "active" : ""}" data-agent-action="open-task-center" aria-label="任务中心" title="任务中心">${renderAgentHeaderIcon("tasks")}${countActiveAgentTasks(agent) ? '<i class="canvas-agent-head-badge" aria-hidden="true"></i>' : ""}</button>
-          <button type="button" class="canvas-agent-icon-button ${panelView === "memory" ? "active" : ""}" data-agent-action="open-memory" aria-label="项目记忆" title="项目记忆">${renderAgentHeaderIcon("memory")}</button>
-          <button type="button" class="canvas-agent-icon-button ${panelView === "sub-agents" ? "active" : ""}" data-agent-action="open-sub-agents" aria-label="子智能体" title="子智能体">${renderAgentHeaderIcon("subAgents")}</button>`}
-          ${mediaOnly ? "" : `<button type="button" class="canvas-agent-icon-button" data-agent-action="collapse-agent-panel" aria-label="收起 AI 助手" title="收起 AI 助手">${renderAgentHeaderIcon("collapse")}</button>`}
-        </div>
-      </header>
-
-      ${agent.historyOpen ? renderAgentHistoryPopover(agent) : ""}
-
-      ${agent.historyOpen ? "" : (panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : panelView === "agents" ? renderAgentCenterPanel(agent, busy) : panelView === "sub-agents" ? renderSubAgentPanel(agent, busy) : `
-      <section class="canvas-agent-timeline${timelineEmpty ? " is-empty" : ""}" aria-label="Agent 事件" aria-live="polite">
-        ${renderAgentTimeline(agent, mediaOnly ? null : ui.canvasDocument, active, { mediaOnly, fileGrants: agent.fileGrants })}
-      </section>
-
-      ${approvalPresentation ? renderAgentApprovalCard(approvalPresentation, busy) : ""}
-
-      ${agent.taskId && !mediaOnly ? `<div class="canvas-agent-rewind-control">
-        <button type="button" data-agent-action="rewind" ${busy ? "disabled" : ""} title="恢复最近一次 Agent 检查点">回退最近检查点</button>
-      </div>` : ""}
-
-      <footer class="canvas-agent-composer">
-        <div class="canvas-agent-prompt-surface">
-          <div class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor>
-            <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : mediaOnly ? "描述要生成的图片或视频，可添加参考素材" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
-          </div>
-        </div>
-        ${!mediaOnly && agent.skillMenuOpen ? renderAgentSkillPicker(agent, busy) : ""}
-        <div class="canvas-agent-composer-footer">
-          <div class="canvas-agent-composer-left">
-            <div class="canvas-agent-mode-picker">
-              ${agent.modeMenuOpen ? `<div class="canvas-agent-mode-menu" role="listbox" aria-label="Agent 模式">
-                ${AGENT_MODES.map((mode) => `<button type="button" role="option" aria-selected="${agent.mode === mode.id}" class="canvas-agent-mode-option ${agent.mode === mode.id ? "active" : ""}" data-agent-action="set-mode" data-agent-mode="${mode.id}">
-                  <span><strong>${escapeHtml(mode.label)}</strong><small>${escapeHtml(mode.description)}</small></span>
-                  ${agent.mode === mode.id ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>' : ""}
-                </button>`).join("")}
-              </div>` : ""}
-              <button type="button" class="canvas-agent-mode-trigger ${agent.modeMenuOpen ? "active" : ""}" data-agent-action="toggle-mode-menu" aria-haspopup="listbox" aria-expanded="${agent.modeMenuOpen}" title="选择 Agent 模式">
-                <span>${escapeHtml(selectedMode.label)}</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 14 5-5 5 5" /></svg>
-              </button>
-            </div>
-            <span class="canvas-agent-status ${escapeAttr(agent.status)}">${escapeHtml(agentStatusLabel(agent))}</span>
-          </div>
-          <span class="canvas-agent-composer-actions">
-            <button type="button" class="canvas-agent-attachment-button" data-agent-action="pick-attachments" aria-label="添加图片、视频或文件" title="添加图片、视频或文件" ${busy || conversationArchived || agent.attachmentUploading ? "disabled" : ""}>${renderAgentAttachmentIcon("add")}</button>
-            ${mediaOnly ? "" : `<button type="button" class="canvas-agent-attachment-button ${agent.skillMenuOpen ? "active" : ""}" data-agent-action="toggle-skill-menu" aria-label="调用 Skill" title="调用 Skill">/</button>`}
-            <input type="file" data-agent-attachment-input accept="image/*,video/*,audio/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" multiple hidden />
-            <label class="canvas-agent-model-picker">
-              <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="文本模型">
-                ${models.length
-                  ? models.map((model) => `<option value="${escapeAttr(model.modelCode)}" ${model.modelCode === agent.modelCode ? "selected" : ""}>${escapeHtml(model.modelLabel || model.modelCode)}</option>`).join("")
-                  : `<option value="">${agent.modelsStatus === "loading" ? "正在加载模型" : "暂无可用文本模型"}</option>`}
-              </select>
-              ${agent.modelsError ? `<small>${escapeHtml(agent.modelsError)}</small>` : ""}
-            </label>
-            ${renderAgentContextUsage(agent)}
-            <button type="button" class="canvas-agent-send-button${active ? " is-running" : ""}" data-agent-action="send" aria-label="${active ? "停止 Agent 任务" : "发送 Agent 指令"}" title="${active ? "停止 Agent 任务" : "发送 Agent 指令"}" aria-busy="${active}" ${busy || conversationArchived || (!active && modelSubmissionUnavailable) ? "disabled" : ""}>${renderAgentComposerActionIcon(active)}</button>
-          </span>
-        </div>
-        ${agent.error ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.error)}</p>` : ""}
-      </footer>
-      `)}
-    </aside>
-  `;
+  return renderMediaOnlyAgentPanel({
+    agent,
+    active,
+    busy,
+    conversationArchived,
+    modelSelectDisabled,
+    pendingApproval: approvalPresentation,
+    timelineEmpty,
+    titleMarkup,
+  });
 }
 
 function renderMediaOnlyAgentPanel({
@@ -480,9 +397,7 @@ function renderMediaOnlyAgentPanel({
   busy,
   conversationArchived,
   modelSelectDisabled,
-  models,
   pendingApproval,
-  selectedMode,
   timelineEmpty,
   titleMarkup,
 }) {
@@ -810,25 +725,6 @@ function renderAgentMediaConversationList(agent) {
   </section>`;
 }
 
-function renderAgentHistoryPopover(agent) {
-  const conversations = Array.isArray(agent.conversations) ? agent.conversations : [];
-  return `<section class="canvas-agent-history" aria-label="历史对话">
-    <header><strong>历史对话</strong><span>${conversations.length} 条</span></header>
-    <div class="canvas-agent-history-list">
-      ${conversations.length
-        ? conversations.map((conversation) => `<div class="canvas-agent-history-row">
-         <button type="button" class="canvas-agent-history-item ${String(conversation.id) === String(agent.conversationId) ? "active" : ""}" data-agent-action="select-agent-conversation" data-conversation-id="${escapeAttr(conversation.id)}">
-           <strong>${escapeHtml(conversation.title || "未命名会话")}</strong>
-           <small>${escapeHtml(conversation.status === "archived" ? "已归档" : "最近使用")}</small>
-         </button>
-          <button type="button" class="canvas-agent-history-status" data-agent-action="${conversation.status === "archived" ? "restore-conversation" : "archive-conversation"}" data-conversation-id="${escapeAttr(conversation.id)}">${conversation.status === "archived" ? "恢复" : "归档"}</button>
-         <button type="button" class="canvas-agent-history-delete danger" data-agent-action="delete-conversation" data-conversation-id="${escapeAttr(conversation.id)}" aria-label="删除会话 ${escapeAttr(conversation.title || "未命名会话")}" title="删除会话">${renderAgentHeaderIcon("trash")}</button>
-        </div>`).join("")
-        : `<p>暂无历史对话</p>`}
-    </div>
-  </section>`;
-}
-
 export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "", minimapMarkup = "", options = {}) {
   const sessionReady = ui.canvasSessionUiStateReady !== false;
   const agentOnly = options.agentOnly === true || ui.canvasAgentOnly === true;
@@ -845,7 +741,7 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
   return `
     <div class="new-canvas-layout ${agentOnly ? "is-agent-only" : ""} ${agentPanelClosed ? "is-agent-collapsed" : ""}" style="--canvas-agent-panel-width:${agentPanelWidth}px">
       ${agentOnly ? "" : `
-      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${renderNewCanvasUtilityMenu(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
+      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${renderNewCanvasUtilityMenu(ui)}</div>
       `}
       ${sessionReady && !agentOnly ? renderCanvasStyleGuide(ui) : ""}
       ${sessionReady ? renderCanvasAgentPanel(agentUi) : ""}
@@ -880,10 +776,6 @@ function renderCanvasOperationHistory(ui = {}) {
   const controls = `<div class="new-canvas-operation-actions" role="toolbar" aria-label="操作历史控制"><button type="button" data-canvas-utility-action="undo" ${canUndo ? "" : "disabled"}>撤销</button><button type="button" data-canvas-utility-action="redo" ${canRedo ? "" : "disabled"}>还原</button></div>`;
   if (!items.length) return `${controls}<div class="new-canvas-operation-empty">暂无操作记录</div>`;
   return `${controls}<div class="new-canvas-operation-list" aria-label="操作记录列表">${items.slice(0, 80).reverse().map((item, index) => `<article class="new-canvas-operation-item${item?.undone === true ? " is-undone" : ""}"><span class="new-canvas-operation-mark" aria-hidden="true">${item?.undone === true ? "-" : "+"}</span><div><strong>${escapeHtml(item?.label || "画布修改")}</strong><small>${item?.undone === true ? "已撤销" : index === 0 ? "当前" : "已完成"}</small></div></article>`).join("")}</div>`;
-}
-
-function renderCanvasAgentReopenButton() {
-  return `<button type="button" class="canvas-agent-reopen" data-agent-action="open-agent-panel" aria-label="展开 AI 助手" title="展开 AI 助手">${renderAgentHeaderIcon("open")}<span>AI 助手</span></button>`;
 }
 
 function renderCanvasAgentRewindConfirmModal(ui = {}) {
@@ -1323,10 +1215,7 @@ export function createCanvasAgentController({
       }
     } else {
       currentPanel?.remove?.();
-      if (!reopenButton) {
-        if (typeof workspace.insertAdjacentHTML !== "function") return false;
-        workspace.insertAdjacentHTML("beforeend", renderCanvasAgentReopenButton());
-      }
+      reopenButton?.remove?.();
     }
     return true;
   };
@@ -3865,41 +3754,6 @@ function renderAgentTaskCenter(agent, busy, options = {}) {
   </section>`;
 }
 
-function renderAgentCenterPanel(agent, busy) {
-  const skills = Array.isArray(agent.skillItems) ? agent.skillItems : [];
-  const loading = agent.skillStatus === "loading" || agent.busyAction === "load-agent-skills";
-  return `<section class="canvas-agent-special-view canvas-agent-center" aria-label="智能体中心">
-    <header class="canvas-agent-special-head">
-      <span><strong>智能体中心</strong><small>Skill 与智能体包</small></span>
-      <button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭智能体中心" title="关闭">×</button>
-    </header>
-    <div class="canvas-agent-special-content">
-      <section class="canvas-agent-center-section">
-        <div class="canvas-agent-center-section-head"><strong>已启用 Skill</strong><button type="button" data-agent-action="refresh-agent-skills" ${busy ? "disabled" : ""}>刷新</button></div>
-        ${loading && !skills.length ? renderAgentSpecialEmpty("正在同步 Skill", "读取官方和个人 Skill 目录。") : ""}
-        ${!loading && !skills.length ? renderAgentSpecialEmpty("暂无可用 Skill", "可在平台 Skill 广场添加后，在输入框使用 / 调用。") : ""}
-        <div class="canvas-agent-skill-list">${skills.map((skill) => `<article class="canvas-agent-skill-item"><span class="canvas-agent-skill-mark">/</span><div><strong>${escapeHtml(skill.name)}</strong><small>${escapeHtml(skill.summary || skill.category)}</small></div><em>${escapeHtml(skill.source === "mine" ? "我的" : "官方")}</em></article>`).join("")}</div>
-      </section>
-      <section class="canvas-agent-center-section">
-        <div class="canvas-agent-center-section-head"><strong>智能体包</strong><button type="button" data-agent-action="pick-agent-package" ${busy ? "disabled" : ""}>上传包</button></div>
-        ${(agent.agentPackages ?? []).length ? (agent.agentPackages ?? []).map((item) => `<article class="canvas-agent-package-item"><div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.detail || "浏览器上传")}</small></div><span>${item.id === agent.agentDefaultPackageId ? "默认 · " : ""}${item.enabled === false ? "已停用" : "已启用"}</span><footer><button type="button" data-agent-action="toggle-agent-package" data-package-id="${escapeAttr(item.id)}" ${busy ? "disabled" : ""}>${item.enabled === false ? "启用" : "停用"}</button><button type="button" data-agent-action="set-default-agent-package" data-package-id="${escapeAttr(item.id)}" ${busy || item.enabled === false ? "disabled" : ""}>设为默认</button><button type="button" class="danger" data-agent-action="remove-agent-package" data-package-id="${escapeAttr(item.id)}" ${busy ? "disabled" : ""}>删除</button></footer></article>`).join("") : renderAgentSpecialEmpty("暂无智能体包", "上传 ZIP 后可在当前项目会话中管理。")}
-        <input type="file" data-agent-package-input accept=".zip,.json" hidden />
-      </section>
-    </div>
-  </section>`;
-}
-
-function renderSubAgentPanel(agent, busy) {
-  const items = Array.isArray(agent.subAgents) ? agent.subAgents : [];
-  return `<section class="canvas-agent-special-view canvas-agent-sub-agents" aria-label="子智能体">
-    <header class="canvas-agent-special-head"><span><strong>子智能体</strong><small>${items.length} 个配置</small></span><button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭子智能体" title="关闭">×</button></header>
-    <div class="canvas-agent-special-content">
-      ${items.length ? items.map((item) => `<article class="canvas-agent-sub-agent-item"><div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.description || "协作任务代理")}</small></div><button type="button" data-agent-action="toggle-sub-agent" data-sub-agent-id="${escapeAttr(item.id)}" ${busy ? "disabled" : ""}>${item.enabled === false ? "启用" : "停用"}</button></article>`).join("") : renderAgentSpecialEmpty("还没有子智能体", "子任务会沿用当前项目权限、模型和审批策略。")}
-    </div>
-    <footer class="canvas-agent-special-footer"><button type="button" data-agent-action="add-sub-agent" ${busy ? "disabled" : ""}>添加子智能体</button></footer>
-  </section>`;
-}
-
 function renderAgentTaskCenterItem(task, busy) {
   const steps = Array.isArray(task.steps) ? task.steps : [];
   const activeStep = [...steps].reverse().find((step) => isSkippableAgentStep(step));
@@ -3921,117 +3775,8 @@ function renderAgentTaskCenterItem(task, busy) {
   </article>`;
 }
 
-function renderAgentMemoryPanel(agent, busy) {
-  const records = Array.isArray(agent.memoryRecords) ? agent.memoryRecords : [];
-  const categoryFilter = String(agent.memoryCategoryFilter ?? "");
-  const sourceFilter = String(agent.memorySourceFilter ?? "");
-  const visibleRecords = records.filter((record) =>
-    (!categoryFilter || record.category === categoryFilter)
-    && (!sourceFilter || record.source === sourceFilter),
-  );
-  const categories = [...new Set(records.map((record) => record.category).filter(Boolean))].sort();
-  const sources = [...new Set(records.map((record) => record.source).filter(Boolean))].sort();
-  const loading = agent.memoryRecordsStatus === "loading" || agent.busyAction === "load-agent-memories";
-  return `<section class="canvas-agent-special-view canvas-agent-memory" aria-label="画布记忆">
-    <header class="canvas-agent-special-head">
-      <span><strong>画布记忆</strong><small>${visibleRecords.length === records.length ? `${records.length} 条记录` : `${visibleRecords.length}/${records.length} 条记录`}</small></span>
-      <button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭画布记忆" title="关闭">×</button>
-    </header>
-    <div class="canvas-agent-memory-filters" aria-label="记忆筛选">
-      <label><span>分类</span><select data-agent-field="memoryCategoryFilter">
-        <option value="">全部分类</option>
-        ${categories.map((category) => `<option value="${escapeAttr(category)}" ${category === categoryFilter ? "selected" : ""}>${escapeHtml(agentMemoryCategoryLabel(category))}</option>`).join("")}
-      </select></label>
-      <label><span>来源</span><select data-agent-field="memorySourceFilter">
-        <option value="">全部来源</option>
-        ${sources.map((source) => `<option value="${escapeAttr(source)}" ${source === sourceFilter ? "selected" : ""}>${escapeHtml(agentMemorySourceLabel(source))}</option>`).join("")}
-      </select></label>
-    </div>
-    <div class="canvas-agent-special-content">
-      ${loading && !records.length ? renderAgentSpecialEmpty("正在同步记忆", "读取当前会话已持久化的画布记忆。") : ""}
-      ${!loading && agent.memoryRecordsStatus === "ready" && !records.length ? renderAgentSpecialEmpty("还没有画布记忆", "经确认保存的记忆会出现在这里。") : ""}
-      ${!loading && records.length && !visibleRecords.length ? renderAgentSpecialEmpty("没有匹配的记忆", "调整分类或来源筛选条件。") : ""}
-      ${visibleRecords.map((record) => renderAgentMemoryRecord(record, agent, busy)).join("")}
-      ${agent.memoryRecordsError ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.memoryRecordsError)}</p>` : ""}
-    </div>
-    <footer class="canvas-agent-special-footer">
-      <button type="button" data-agent-action="refresh-agent-memories" ${busy ? "disabled" : ""}>刷新</button>
-    </footer>
-  </section>`;
-}
-
-function renderAgentMemoryRecord(record, agent, busy) {
-  const editing = agent.memoryEditingId === record.id;
-  if (editing) {
-    return `<article class="canvas-agent-memory-item is-editing" data-memory-id="${escapeAttr(record.id)}">
-      <label><span>记忆键</span><input type="text" data-agent-field="memoryDraftKey" value="${escapeAttr(agent.memoryDraftKey)}" maxlength="120" /></label>
-      <label><span>分类</span><select data-agent-field="memoryDraftCategory">${renderAgentMemoryCategoryOptions(agent.memoryDraftCategory)}</select></label>
-      <label><span>内容 JSON</span><textarea data-agent-field="memoryDraftValue" rows="7">${escapeHtml(agent.memoryDraftValue)}</textarea></label>
-      <small>来源 ${escapeHtml(agentMemorySourceLabel(record.source))} · ${escapeHtml(formatAgentActivityTime(record.updatedAt))}</small>
-      <footer>
-        <button type="button" data-agent-action="cancel-agent-memory-edit" ${busy ? "disabled" : ""}>取消</button>
-        <button type="button" data-agent-action="save-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>保存</button>
-      </footer>
-    </article>`;
-  }
-  return `<article class="canvas-agent-memory-item ${record.status === "active" ? "" : "is-inactive"}" data-memory-id="${escapeAttr(record.id)}">
-    <header>
-      <div><strong>${escapeHtml(record.key)}</strong><span>${escapeHtml(agentMemoryCategoryLabel(record.category))}</span></div>
-      <span>${record.status === "active" ? "已启用" : "已停用"}</span>
-    </header>
-    <pre>${escapeHtml(formatAgentMemoryValue(record.value))}</pre>
-    <small>${escapeHtml(agentMemorySourceLabel(record.source))} · ${escapeHtml(formatAgentActivityTime(record.updatedAt))}</small>
-    <footer>
-      <button type="button" data-agent-action="edit-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>编辑</button>
-      <button type="button" data-agent-action="toggle-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>${record.status === "active" ? "停用" : "启用"}</button>
-      <button type="button" class="danger" data-agent-action="delete-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>删除</button>
-    </footer>
-  </article>`;
-}
-
-function renderAgentMemoryCategoryOptions(selected) {
-  const options = ["general", "constraint", "decision", "preference", "fact", "other"];
-  if (selected && !options.includes(selected)) options.push(selected);
-  return options.map((category) => `<option value="${escapeAttr(category)}" ${category === selected ? "selected" : ""}>${escapeHtml(agentMemoryCategoryLabel(category))}</option>`).join("");
-}
-
 function renderAgentSpecialEmpty(title, detail) {
   return `<div class="canvas-agent-special-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
-}
-
-function renderAgentSkillPicker(agent, busy) {
-  const markup = renderEpisodePromptSkillModal({
-    show: true,
-    variant: "plaza",
-    sourceTab: agent.skillSourceTab === "library" || agent.skillSourceTab === "mine" ? agent.skillSourceTab : "official",
-    officialSkills: agent.skillOfficialItems,
-    librarySkills: agent.skillLibraryItems,
-    mineSkills: agent.skillMineItems,
-    draftPlazaSkillIds: agent.skillDraftIds,
-    query: agent.skillQuery,
-    loading: agent.skillStatus === "loading" || busy === true,
-    actions: {
-      close: "close-agent-skill-menu",
-      source: "set-agent-skill-source",
-      select: "select-agent-skill-draft",
-      confirm: "confirm-agent-skills",
-      create: "open-agent-skill-create",
-      browse: "open-agent-skill-plaza",
-      detail: "open-agent-skill-detail",
-    },
-  });
-  return markup
-    .replace(
-      'class="episode-skill-picker-layer plaza-skill-picker-layer"',
-      'class="episode-skill-picker-layer plaza-skill-picker-layer canvas-agent-skill-picker"',
-    )
-    .replaceAll("data-action=", "data-agent-action=");
-}
-
-function renderAgentSkipStepButton(agent, busy) {
-  const step = resolveCurrentAgentStep(agent.events, agent.skippedStepIds);
-  if (!step) return "";
-  return `<button type="button" data-agent-action="skip-step" data-task-id="${escapeAttr(agent.taskId)}" data-step-id="${escapeAttr(step.stepId)}" ${busy ? "disabled" : ""}>跳过此步</button>`;
 }
 
 export function resolveAgentContextUsage(agent = {}) {
@@ -4155,11 +3900,6 @@ function normalizeAgentSteps(events = []) {
   return [...steps.values()].sort((left, right) => left.sequence - right.sequence);
 }
 
-function resolveCurrentAgentStep(events = [], skippedStepIds = []) {
-  const skipped = new Set(Array.isArray(skippedStepIds) ? skippedStepIds : []);
-  return [...normalizeAgentSteps(events)].reverse().find((step) => isSkippableAgentStep(step) && !skipped.has(step.stepId)) ?? null;
-}
-
 function isSkippableAgentStep(step) {
   return ["created", "waiting_approval"].includes(String(step?.status ?? ""));
 }
@@ -4252,27 +3992,6 @@ function inferAgentMemoryCategory(key) {
   }[prefix] ?? "";
 }
 
-function agentMemoryCategoryLabel(category) {
-  return {
-    general: "通用", constraint: "约束", decision: "决定", preference: "偏好", fact: "事实", other: "其他",
-  }[category] ?? (category || "其他");
-}
-
-function agentMemorySourceLabel(source) {
-  return {
-    agent_step: "Agent 步骤", agent_task: "Agent 任务", task: "Agent 任务", user: "用户确认", manual: "手动记录",
-    import: "导入", provider: "Provider", tool: "工具",
-  }[source] ?? (source || "未知来源");
-}
-
-function formatAgentMemoryValue(value) {
-  try {
-    return JSON.stringify(value ?? {}, null, 2);
-  } catch {
-    return "{}";
-  }
-}
-
 function agentStatusText(status) {
   return {
     idle: "未开始", queued: "排队中", running: "执行中", waiting_approval: "等待审批",
@@ -4285,28 +4004,13 @@ function agentStatusText(status) {
 function agentStepStatusText(status) {
   return {
     created: "等待", running: "执行中", waiting_approval: "待确认", waiting_external: "等待外部结果",
-    succeeded: "完成", failed: "失败", canceled: "已停止", skipped: "已跳过",
+    succeeded: "完成", failed: "失败", canceled: "已停止",     skipped: "已跳过",
   }[status] ?? String(status ?? "未知");
-}
-
-function agentMemoryStatusText(eventType) {
-  if (eventType === "approval.requested") return "待确认";
-  if (eventType === "approval.approved") return "已确认";
-  if (eventType === "approval.rejected") return "已拒绝";
-  if (eventType === "step.succeeded") return "已保存";
-  if (eventType === "step.failed") return "失败";
-  return "记忆活动";
 }
 
 function parseAgentActivityTime(value) {
   const timestamp = Date.parse(String(value ?? ""));
   return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function formatAgentActivityTime(value) {
-  const timestamp = parseAgentActivityTime(value);
-  if (!timestamp) return "时间未知";
-  return new Date(timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function renderAgentFileGrants(agent, selectedFile, busy) {

@@ -196,11 +196,17 @@ async function authorizeUserActor(
     capabilities: member
       ? input.projectId
         ? projectRole === "viewer"
-          ? [capabilities.accountRead, capabilities.projectView]
+          ? [capabilities.accountRead, capabilities.projectView, capabilities.productionView]
           : [
               capabilities.accountRead,
               capabilities.projectView,
               capabilities.projectEdit,
+              capabilities.productionView,
+              capabilities.productionRun,
+              capabilities.productionPlan,
+              capabilities.productionAssetWrite,
+              capabilities.productionShotWrite,
+              capabilities.productionCommit,
               capabilities.generationStart,
               capabilities.exportCreate,
             ]

@@ -1293,6 +1293,156 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("includes project production Agent tasks in the unified task center", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const user = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+        [normalizeCnPhone("13800138000")],
+      );
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      const projectId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, workflow_type, status, input_snapshot_json, created_by_user_id,
+            started_at, finished_at, created_at, updated_at
+          ) VALUES (
+            $1, 'production_agent', 'succeeded', '{"agentType":"production"}'::jsonb, $2,
+            '2026-09-16T08:00:01.000Z', '2026-09-16T08:00:05.000Z',
+            '2026-09-16T08:00:00.000Z', '2026-09-16T08:00:05.000Z'
+          )
+        `,
+        [workflowId, user.rows[0]!.id],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+            target_entity_type, target_entity_id, created_at, updated_at
+          ) VALUES (
+            $1, $2, 'production_agent.execute', 'succeeded', 'task-center',
+            '{"agentType":"production","stages":["script","shot"]}'::jsonb,
+            'project', $3, '2026-09-16T08:00:00.000Z', '2026-09-16T08:00:05.000Z'
+          )
+        `,
+        [taskId, workflowId, projectId],
+      );
+
+      const response = await fetch(
+        `${server.origin}/api/task-center/tasks?taskIds=${taskId}`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3_000) },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(envelope.data.items.length, 1);
+      assert.equal(envelope.data.items[0].taskId, taskId);
+      assert.equal(envelope.data.items[0].taskType, "production_agent.execute");
+      assert.equal(envelope.data.items[0].kind, "production_agent");
+      assert.equal(envelope.data.items[0].targetType, "project");
+      assert.equal(envelope.data.items[0].status, "completed");
+      assert.equal(envelope.data.items[0].requestSummary.selectedAssetName, "项目生产 Agent");
+      assert.deepEqual(envelope.data.items[0].requestSummary.stages, ["script", "shot"]);
+      assert.equal(envelope.data.items[0].startedAt, "2026-09-16T08:00:01.000Z");
+      assert.equal(envelope.data.items[0].returnedAt, "2026-09-16T08:00:05.000Z");
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
+  it("controls Production Agent recovery through the project-scoped HTTP route", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+    const phone = "13800138095";
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 1000);
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "recovery-control");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      const projectId = created.project.id as string;
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      const failedAttemptId = randomUUID();
+      const routeSnapshot = JSON.stringify({
+        agentType: "production",
+        scopeType: "project",
+        scopeId: projectId,
+        stages: ["script", "shot"],
+      });
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, project_id, workflow_type, status, input_snapshot_json,
+            created_by_user_id, started_at, finished_at
+          ) VALUES ($1, $2, 'production_agent', 'failed', $3::jsonb, $4, $5, $5)
+        `,
+        [workflowId, projectId, routeSnapshot, userId, new Date("2026-09-16T08:10:00.000Z")],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, project_id, workflow_id, task_type, status, queue_name,
+            input_snapshot_json, target_entity_type,
+            target_entity_id, max_attempts, attempt_count, failure_code
+          ) VALUES (
+            $1, $2, $3, 'production_agent.execute', 'failed', 'task-center',
+            $4::jsonb, 'project', $2, 1, 1, 'test_failure'
+          )
+        `,
+        [taskId, projectId, workflowId, routeSnapshot],
+      );
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            started_at, finished_at, failure_code
+          ) VALUES ($1, $2, $3, $4, 1, 'failed', $5, $5, 'test_failure')
+        `,
+        [failedAttemptId, projectId, workflowId, taskId, new Date("2026-09-16T08:10:00.000Z")],
+      );
+      await db.query("UPDATE tasks SET current_attempt_id = $2 WHERE id = $1", [taskId, failedAttemptId]);
+
+      const control = async (action: "cancel" | "retry" | "resume") => {
+        const response = await fetch(
+          `${server.origin}/api/creator/projects/${projectId}/production-agent/tasks/${taskId}/${action}`,
+          { method: "POST", headers: { cookie } },
+        );
+        return { response, envelope: await response.json() };
+      };
+      const retry = await control("retry");
+      const canceled = await control("cancel");
+      const resumed = await control("resume");
+
+      assert.equal(retry.response.status, 200, JSON.stringify(retry.envelope));
+      assert.equal(retry.envelope.data.result.status, "queued");
+      assert.equal(retry.envelope.data.result.attemptId, null);
+      assert.equal(canceled.response.status, 200, JSON.stringify(canceled.envelope));
+      assert.equal(canceled.envelope.data.result.status, "canceled");
+      assert.equal(resumed.response.status, 200, JSON.stringify(resumed.envelope));
+      assert.equal(resumed.envelope.data.result.status, "queued");
+      assert.equal(resumed.envelope.data.result.attemptId, null);
+      const attempts = await db.query<{ attempt_number: number; status: string }>(
+        "SELECT attempt_number, status FROM task_attempts WHERE task_id = $1 ORDER BY attempt_number",
+        [taskId],
+      );
+      assert.deepEqual(attempts.rows, [
+        { attempt_number: 1, status: "failed" },
+      ]);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("keeps the task center readable while provider diagnostics columns are pending migration", async () => {
     const db = await createMigratedTestDb();
     let schemaProbeCount = 0;
@@ -4566,6 +4716,24 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       });
       const videoReplay = await videoReplayResponse.json();
+      const generationDb = loginDbByOrigin.get(server.origin);
+      assert.ok(generationDb);
+      const generationSideEffects = await generationDb.query<{
+        workflow_count: number | string;
+        task_count: number | string;
+        provider_request_count: number | string;
+      }>(
+        `
+          SELECT COUNT(DISTINCT workflow.id) AS workflow_count,
+                 COUNT(DISTINCT task.id) AS task_count,
+                 COUNT(DISTINCT request.id) AS provider_request_count
+          FROM workflows workflow
+          LEFT JOIN tasks task ON task.workflow_id = workflow.id
+          LEFT JOIN provider_requests request ON request.task_id = task.id
+          WHERE workflow.id = ANY($1::uuid[])
+        `,
+        [[image.platform.workflowId, video.platform.workflowId]],
+      );
 
       const exportResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
         method: "POST",
@@ -4597,6 +4765,18 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(videoResponse.status, 200);
       assert.equal(videoReplayResponse.status, 200);
       assert.equal(video.platform.workflowId, videoReplay.platform.workflowId);
+      assert.deepEqual(
+        generationSideEffects.rows.map((row) => ({
+          workflows: Number(row.workflow_count),
+          tasks: Number(row.task_count),
+          providerRequests: Number(row.provider_request_count),
+        })),
+        [{
+          workflows: 2,
+          tasks: image.platform.tasks.length + video.platform.tasks.length,
+          providerRequests: image.platform.tasks.length + video.platform.tasks.length,
+        }],
+      );
       assert.equal(exportResponse.status, 200);
       assert.equal(exportReplayResponse.status, 200);
       assert.equal(exportPreview.exportRecord.id, exportReplay.exportRecord.id);
@@ -6605,6 +6785,23 @@ describe("phone auth dev server", { concurrency: false }, () => {
         scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
       }),
       JSON.stringify({
+        title: "第一章",
+        logline: "少年托付妹妹。",
+        scriptBeats: [
+          {
+            beatNo: 1,
+            plot: "任小野把小草托付给闵婶子。",
+            characters: ["任小野", "闵婶子"],
+            locationHint: "闵婶家门前",
+            props: ["饭食"],
+            dialogue: "今天又得麻烦您照看小草了。",
+          },
+        ],
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
         characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
       }),
       JSON.stringify({
@@ -6646,6 +6843,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
+      const previewRequestBody = {
+        scriptText: "任小野把小草托付给闵婶子。",
+        stages: ["script", "scene"],
+        skills: { script: skillId, scene_extract: sceneSkillId },
+        modelCode: "preview-script-model",
+      };
       const previewResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
@@ -6655,12 +6858,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
             "idempotency-key": "http-ai-storyboard-preview-request",
             cookie,
           },
-          body: JSON.stringify({
-            scriptText: "任小野把小草托付给闵婶子。",
-            stages: ["script", "scene"],
-            skills: { script: skillId, scene_extract: sceneSkillId },
-            modelCode: "preview-script-model",
-          }),
+          body: JSON.stringify(previewRequestBody),
         },
       );
       const previewEnvelope = await previewResponse.json();
@@ -6682,6 +6880,93 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(previewEnvelope.data.modelRunCount, 2);
       assert.equal(previewEnvelope.data.skillCreditCost, 10);
       assert.equal(previewEnvelope.data.creditCost, 20);
+      assert.equal(previewEnvelope.data.productionAgent.type, "production");
+      assert.equal(previewEnvelope.data.productionAgent.workflowType, "production_agent");
+      assert.equal(previewEnvelope.data.productionAgent.validation.valid, true);
+      assert.equal(previewEnvelope.data.productionAgent.manifest.schemaVersion, "creator-production.v1");
+      assert.equal(previewEnvelope.data.productionAgent.manifest.project.projectId, created.project.id);
+      const productionLifecycle = await db.query<{
+        workflow_id: string;
+        workflow_status: string;
+        task_id: string;
+        task_status: string;
+        task_type: string;
+        queue_name: string;
+        attempt_id: string;
+        attempt_status: string;
+      }>(
+        `
+          SELECT workflow.id AS workflow_id,
+                 workflow.status AS workflow_status,
+                 task.id AS task_id,
+                 task.status AS task_status,
+                 task.task_type,
+                 task.queue_name,
+                 attempt.id AS attempt_id,
+                 attempt.status AS attempt_status
+          FROM workflows workflow
+          JOIN tasks task ON task.workflow_id = workflow.id
+          JOIN task_attempts attempt ON attempt.task_id = task.id
+          WHERE workflow.id = $1
+        `,
+        [previewEnvelope.data.productionAgent.workflowId],
+      );
+      assert.deepEqual(productionLifecycle.rows, [{
+        workflow_id: previewEnvelope.data.productionAgent.workflowId,
+        workflow_status: "succeeded",
+        task_id: previewEnvelope.data.productionAgent.taskId,
+        task_status: "succeeded",
+        task_type: "production_agent.execute",
+        queue_name: "task-center",
+        attempt_id: productionLifecycle.rows[0]?.attempt_id,
+        attempt_status: "succeeded",
+      }]);
+      assert.ok(productionLifecycle.rows[0]?.attempt_id);
+
+      const replayResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-request",
+            cookie,
+          },
+          body: JSON.stringify(previewRequestBody),
+        },
+      );
+      const replayEnvelope = await replayResponse.json();
+      const productionReplayCounts = await db.query<{
+        workflow_count: number | string;
+        task_count: number | string;
+        attempt_count: number | string;
+      }>(
+        `
+          SELECT COUNT(DISTINCT workflow.id) AS workflow_count,
+                 COUNT(DISTINCT task.id) AS task_count,
+                 COUNT(DISTINCT attempt.id) AS attempt_count
+          FROM workflows workflow
+          JOIN tasks task ON task.workflow_id = workflow.id
+          LEFT JOIN task_attempts attempt ON attempt.task_id = task.id
+          WHERE workflow.created_by_user_id = $1
+            AND workflow.project_id = $2
+            AND workflow.workflow_type = 'production_agent'
+            AND workflow.idempotency_key = 'http-ai-storyboard-preview-request'
+        `,
+        [userId, created.project.id],
+      );
+      assert.equal(replayResponse.status, 200, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.data.productionAgent.workflowId, previewEnvelope.data.productionAgent.workflowId);
+      assert.equal(replayEnvelope.data.productionAgent.taskId, previewEnvelope.data.productionAgent.taskId);
+      assert.deepEqual(
+        productionReplayCounts.rows.map((row) => ({
+          workflows: Number(row.workflow_count),
+          tasks: Number(row.task_count),
+          attempts: Number(row.attempt_count),
+        })),
+        [{ workflows: 1, tasks: 1, attempts: 1 }],
+      );
+      assert.equal(textChatGateway.calls.length, 4);
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景抽取专用/);
       const balanceAfter = await db.query<{ balance: number | string }>(
         "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
@@ -6711,6 +6996,142 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
     } finally {
       await server.close();
+    }
+  });
+
+  it("keeps Canvas preview isolated from project Production Agent state", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 5);
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({
+        scenes: [{ sceneName: "旧城区街口", sceneDescription: "雨后的旧城区。", sceneImagePrompt: "旧城区街口，雨后夜景。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138244";
+      const cookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-production-agent-isolation-project",
+          cookie,
+        },
+        body: JSON.stringify({ title: "Production Agent 隔离画布" }),
+      });
+      const created = await createResponse.json();
+      const canvasProjectId = created.data.project.id;
+      const saveResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${canvasProjectId}/canvas`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          clientRevision: 1,
+          document: {
+            version: 2,
+            canvasProjectId,
+            viewport: { x: 0, y: 0, zoom: 1 },
+            nodes: [{ id: "isolation-node", type: "text", data: { title: "不可改动画布节点", text: "原始内容" } }],
+            edges: [],
+          },
+          events: [],
+        }),
+      });
+      const conversationId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO canvas_agent_conversations (id, canvas_id, owner_user_id, title)
+          VALUES ($1, $2, $3, '隔离校验会话')
+        `,
+        [conversationId, canvasProjectId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO canvas_agent_messages (
+            id, conversation_id, sequence, role, content_json, created_by_user_id
+          ) VALUES ($1, $2, 1, 'user', '{"text":"保留这条消息"}'::jsonb, $3)
+        `,
+        [randomUUID(), conversationId, userId],
+      );
+      const readCanvasIsolationSnapshot = () => db.query<{
+        revision_count: number;
+        revision_digest: string;
+        node_count: number;
+        node_digest: string;
+        message_count: number;
+        message_digest: string;
+      }>(
+        `
+          SELECT
+            (SELECT COUNT(*)::int FROM creator_canvas_revisions WHERE canvas_project_id = $1) AS revision_count,
+            (SELECT COALESCE(md5(string_agg(server_revision::text || ':' || document_json::text, '|' ORDER BY server_revision)), '')
+             FROM creator_canvas_revisions WHERE canvas_project_id = $1) AS revision_digest,
+            (SELECT COUNT(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $1) AS node_count,
+            (SELECT COALESCE(md5(string_agg(node_key || ':' || title, '|' ORDER BY node_key)), '')
+             FROM creator_canvas_nodes WHERE canvas_project_id = $1) AS node_digest,
+            (SELECT COUNT(*)::int FROM canvas_agent_messages message
+             JOIN canvas_agent_conversations conversation ON conversation.id = message.conversation_id
+             WHERE conversation.canvas_id = $1) AS message_count,
+            (SELECT COALESCE(md5(string_agg(message.sequence::text || ':' || message.content_json::text, '|' ORDER BY message.sequence)), '')
+             FROM canvas_agent_messages message
+             JOIN canvas_agent_conversations conversation ON conversation.id = message.conversation_id
+             WHERE conversation.canvas_id = $1) AS message_digest
+        `,
+        [canvasProjectId],
+      );
+      const beforeCanvasState = await readCanvasIsolationSnapshot();
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${canvasProjectId}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-canvas-production-agent-isolation-preview",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野走过雨后的旧城区街口。",
+            skipScriptStage: true,
+            useDefaultWorkflowStages: true,
+            stages: ["scene"],
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+      const afterCanvasState = await readCanvasIsolationSnapshot();
+      const productionRows = await db.query<{ workflow_count: number; task_count: number }>(
+        `
+          SELECT COUNT(DISTINCT workflow.id)::int AS workflow_count,
+                 COUNT(DISTINCT task.id)::int AS task_count
+          FROM workflows workflow
+          LEFT JOIN tasks task ON task.workflow_id = workflow.id
+          WHERE workflow.created_by_user_id = $1
+            AND workflow.workflow_type = 'production_agent'
+        `,
+        [userId],
+      );
+
+      assert.equal(createResponse.status, 201, JSON.stringify(created));
+      assert.equal(saveResponse.status, 200);
+      assert.equal(previewResponse.status, 200, JSON.stringify(previewEnvelope));
+      assert.equal(Object.hasOwn(previewEnvelope.data, "productionAgent"), false);
+      assert.deepEqual(productionRows.rows, [{ workflow_count: 0, task_count: 0 }]);
+      assert.deepEqual(afterCanvasState.rows, beforeCanvasState.rows);
+      assert.deepEqual(beforeCanvasState.rows.map((row) => ({
+        revisions: row.revision_count,
+        nodes: row.node_count,
+        messages: row.message_count,
+      })), [{ revisions: 1, nodes: 1, messages: 1 }]);
+      assert.equal(textChatGateway.calls.length, 1);
+    } finally {
+      await server.close();
+      await db.close();
     }
   });
 

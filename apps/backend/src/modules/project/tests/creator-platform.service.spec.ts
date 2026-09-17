@@ -63,6 +63,25 @@ describe("creator platform service", { concurrency: false }, () => {
         `,
         [projectId],
       );
+      const routeRows = await db.query<{
+        workflow_snapshot: Record<string, unknown>;
+        workflow_canvas_project_id: string | null;
+        task_snapshot: Record<string, unknown>;
+        task_canvas_project_id: string | null;
+      }>(
+        `
+          SELECT
+            workflow.input_snapshot_json AS workflow_snapshot,
+            workflow.canvas_project_id AS workflow_canvas_project_id,
+            task.input_snapshot_json AS task_snapshot,
+            task.canvas_project_id AS task_canvas_project_id
+          FROM workflows workflow
+          JOIN tasks task ON task.workflow_id = workflow.id
+          WHERE workflow.id = $1
+          ORDER BY task.id
+        `,
+        [result.workflowId],
+      );
 
       assert.equal(result.workflowStatus, "succeeded");
       assert.equal(result.tasks.length, 2);
@@ -79,6 +98,39 @@ describe("creator platform service", { concurrency: false }, () => {
         provider_request_count: 2,
         storage_object_count: 2,
       });
+      assert.equal(routeRows.rows.length, 2);
+      for (const row of routeRows.rows) {
+        assert.deepEqual(
+          {
+            agentType: row.workflow_snapshot.agentType,
+            scopeType: row.workflow_snapshot.scopeType,
+            scopeId: row.workflow_snapshot.scopeId,
+            placement: row.workflow_snapshot.placement,
+          },
+          {
+            agentType: "production",
+            scopeType: "project",
+            scopeId: projectId,
+            placement: "detached",
+          },
+        );
+        assert.deepEqual(
+          {
+            agentType: row.task_snapshot.agentType,
+            scopeType: row.task_snapshot.scopeType,
+            scopeId: row.task_snapshot.scopeId,
+            placement: row.task_snapshot.placement,
+          },
+          {
+            agentType: "production",
+            scopeType: "project",
+            scopeId: projectId,
+            placement: "detached",
+          },
+        );
+        assert.equal(row.workflow_canvas_project_id, null);
+        assert.equal(row.task_canvas_project_id, null);
+      }
     } finally {
       await db.close();
     }
@@ -121,6 +173,24 @@ describe("creator platform service", { concurrency: false }, () => {
             (SELECT count(*)::int FROM provider_requests WHERE provider_operation = 'shot.video.generate') AS provider_request_count
         `,
       );
+      const routeRows = await db.query<{
+        workflow_snapshot: Record<string, unknown>;
+        workflow_canvas_project_id: string | null;
+        task_snapshot: Record<string, unknown>;
+        task_canvas_project_id: string | null;
+      }>(
+        `
+          SELECT
+            workflow.input_snapshot_json AS workflow_snapshot,
+            workflow.canvas_project_id AS workflow_canvas_project_id,
+            task.input_snapshot_json AS task_snapshot,
+            task.canvas_project_id AS task_canvas_project_id
+          FROM workflows workflow
+          JOIN tasks task ON task.workflow_id = workflow.id
+          WHERE workflow.id = $1
+        `,
+        [result.workflowId],
+      );
 
       assert.equal(result.workflowStatus, "succeeded");
       assert.equal(result.tasks.length, 1);
@@ -129,6 +199,29 @@ describe("creator platform service", { concurrency: false }, () => {
         task_count: 1,
         provider_request_count: 1,
       });
+      assert.deepEqual(routeRows.rows, [
+        {
+          workflow_snapshot: {
+            agentType: "production",
+            scopeType: "project",
+            scopeId: projectId,
+            placement: "detached",
+            shotIds: ["50000000-0000-4000-8000-000000000011"],
+            requestedAt: "2026-05-18T10:05:00.000Z",
+            options: {},
+          },
+          workflow_canvas_project_id: null,
+          task_snapshot: {
+            agentType: "production",
+            scopeType: "project",
+            scopeId: projectId,
+            placement: "detached",
+            shotId: "50000000-0000-4000-8000-000000000011",
+            imageAssetVersionId: "image-version-011",
+          },
+          task_canvas_project_id: null,
+        },
+      ]);
     } finally {
       await db.close();
     }

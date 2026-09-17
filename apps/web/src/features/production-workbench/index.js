@@ -79,6 +79,22 @@ import {
 } from "./result-image-annotation.js";
 import { syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
 import {
+  applyProductionAgentLiveEvent,
+  captureProductionAgentTimelineScroll,
+  emptyProductionAgentSession,
+  isProductionAgentSessionPolling,
+  mergeProductionAgentSessionPoll,
+  productionAgentContinuePrompt,
+  productionAgentConversationId,
+  productionAgentSessionActions,
+  productionAgentSessionMode,
+  productionAgentTaskId,
+  resolveProductionAgentCreatedProject,
+  restoreProductionAgentTimelineScroll,
+  unwrapProductionAgentList,
+  unwrapProductionAgentRecord,
+} from "./production-agent-session.js";
+import {
   EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
   filterProjectWorkflowPlazaSkills,
@@ -161,7 +177,6 @@ import {
   resolveScriptLibraryPagination,
 } from "./script-page.js";
 import {
-  mountCanvasWorkflowIfPresent,
   playCanvasNodeExitMotion,
   refreshCanvasWorkflowGraph,
   refreshCanvasWorkflowNode,
@@ -3082,6 +3097,8 @@ export async function initProductionWorkbench({
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
     homeRecommendationRefreshTimer: null,
+    productionAgentSessionPollTimer: null,
+    productionAgentSessionPollToken: 0,
     homeRecommendationRefreshInFlight: null,
     homeRecommendationsPersistedSignature: cachedHomeRecommendations
       ? homeRecommendationsPayloadSignature(cachedHomeRecommendations)
@@ -3147,6 +3164,8 @@ export async function initProductionWorkbench({
       homeCreationMode: "agent",
       homeWorkflowScriptFile: null,
       homeWorkflowScriptFileName: "",
+      productionAgentSession: null,
+      productionAgentSessionMode: "auto",
       homeAgentPromptDraft: "",
       homeAgentMode: "c",
       homeAgentModeMenuOpen: false,
@@ -3585,6 +3604,8 @@ export async function initProductionWorkbench({
       taskCenterTasksById: {},
       taskCenterTaskOrder: [],
       taskCenterSelectedTaskId: null,
+      taskCenterTaskActionPending: null,
+      taskCenterTaskActionFeedback: null,
       taskCenterStatusFilter: "all",
       taskCenterKindFilter: "all",
       taskCenterSearchDraft: "",
@@ -4392,6 +4413,16 @@ export async function initProductionWorkbench({
     if (searchTarget?.matches?.("[data-home-agent-prompt]") && event.key === "Enter" && !event.isComposing) {
       event.preventDefault();
       void handleAction(workbench, { dataset: { action: "submit-home-agent-prompt" } });
+      return;
+    }
+    if (
+      searchTarget?.matches?.("[data-production-agent-draft]")
+      && event.key === "Enter"
+      && !event.shiftKey
+      && !event.isComposing
+    ) {
+      event.preventDefault();
+      void handleAction(workbench, { dataset: { action: "send-production-agent-message" } });
       return;
     }
     if (workbench.ui.assetInspector?.viewerOnly === true && event.key === "Tab") {
@@ -5475,6 +5506,20 @@ export async function initProductionWorkbench({
 
     if (target?.matches?.("[data-home-agent-prompt]")) {
       syncHomeAgentComposerFromDom(workbench, target);
+      return;
+    }
+
+    if (target?.matches?.("[data-production-agent-draft]") && workbench.ui.productionAgentSession) {
+      workbench.ui.productionAgentSession = {
+        ...workbench.ui.productionAgentSession,
+        draft: target.value ?? "",
+        keepComposerFocus: true,
+      };
+      const sendButton = workbench.root?.querySelector?.('[data-action="send-production-agent-message"]');
+      if (sendButton) {
+        sendButton.disabled = isProductionAgentSessionPolling(workbench.ui.productionAgentSession)
+          || !String(target.value ?? "").trim();
+      }
       return;
     }
 
@@ -11256,6 +11301,7 @@ function render(workbench, options = {}) {
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   const singleEpisodeAiScrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
+  const productionAgentScrollState = captureProductionAgentSessionScrollState(workbench.root);
   const modalScrollState = captureLibraryTeamModalScrollState(workbench.root);
   disposeEpisodePromptEditor(workbench);
   disposeCanvasPromptEditor(workbench);
@@ -11292,6 +11338,8 @@ function render(workbench, options = {}) {
   restoreEpisodeWorkbenchScrollState(workbench.root, episodeScrollState);
   restoreWorkbenchSurfaceScrollState(workbench.root, surfaceScrollState);
   restoreSingleEpisodeAiPreviewScrollState(workbench.root, singleEpisodeAiScrollState);
+  restoreProductionAgentSessionScrollState(workbench, productionAgentScrollState);
+  restoreProductionAgentComposerState(workbench);
   restoreLibraryTeamModalScrollState(workbench.root, modalScrollState);
   restoreLibraryScrollState(workbench.root, workbench.ui.libraryScrollState);
   if (options.focusLibrarySearch) {
@@ -11330,11 +11378,9 @@ function render(workbench, options = {}) {
   syncDeferredMediaLoading(workbench);
   scheduleProjectGalleryMeasurement(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, singleEpisodeAiScrollState);
+  keepProductionAgentTimelinePinnedToLatest(workbench, productionAgentScrollState);
   if (shouldMountNewCanvas(workbench) && !restoredNewCanvasMount) {
     void syncNewCanvasMount(workbench);
-  } else {
-    mountCanvasWorkflowIfPresent(workbench);
-    void syncCanvasPromptEditor(workbench);
   }
   syncCanvasAssetIncrementalLoading(workbench);
   syncHomeTvIncrementalLoading(workbench);
@@ -11993,6 +12039,47 @@ function restoreSingleEpisodeAiPreviewScrollState(root, scrollState) {
     if (detail) {
       detail.open = Boolean(state.open);
     }
+  }
+}
+
+function captureProductionAgentSessionScrollState(root) {
+  return {
+    timeline: captureProductionAgentTimelineScroll(root?.querySelector?.(".production-agent-session-timeline")),
+    workspaceNav: captureSingleEpisodeAiScrollTargetState(root?.querySelector?.(".production-agent-session-workspace-nav")),
+    workspacePreview: captureSingleEpisodeAiScrollTargetState(root?.querySelector?.(".production-agent-session-artifact")),
+  };
+}
+
+function restoreProductionAgentSessionScrollState(workbench, scrollState) {
+  const root = workbench?.root;
+  if (!root?.querySelector) return;
+  restoreSingleEpisodeAiScrollTargetState(root.querySelector(".production-agent-session-workspace-nav"), scrollState?.workspaceNav);
+  restoreSingleEpisodeAiScrollTargetState(root.querySelector(".production-agent-session-artifact"), scrollState?.workspacePreview);
+  restoreProductionAgentTimelineScroll(
+    root.querySelector(".production-agent-session-timeline"),
+    scrollState?.timeline,
+  );
+}
+
+function keepProductionAgentTimelinePinnedToLatest(workbench, scrollState = null) {
+  const session = workbench?.ui?.productionAgentSession;
+  if (!session?.open) return;
+  restoreProductionAgentTimelineScroll(
+    workbench.root?.querySelector?.(".production-agent-session-timeline"),
+    scrollState?.timeline,
+  );
+}
+
+function restoreProductionAgentComposerState(workbench) {
+  const input = workbench.root?.querySelector?.("[data-production-agent-draft]");
+  if (!input || !workbench.ui.productionAgentSession?.open) return;
+  const draft = String(workbench.ui.productionAgentSession.draft ?? "");
+  if (input.value !== draft) input.value = draft;
+  if (workbench.ui.productionAgentSession.keepComposerFocus === true) {
+    input.focus?.();
+    const cursor = draft.length;
+    input.setSelectionRange?.(cursor, cursor);
+    workbench.ui.productionAgentSession.keepComposerFocus = false;
   }
 }
 
@@ -14542,7 +14629,7 @@ function calculateGenerationPromptCompletenessScore(value) {
 const WORKBENCH_CHROME_ACTIONS = new Set([
   "open-task-center", "close-task-center", "refresh-task-center", "set-task-center-status",
   "set-task-center-kind", "search-task-center", "change-task-center-page", "select-task-center-task",
-  "copy-task-center-id", "toggle-workbench-theme-menu", "select-workbench-theme",
+  "copy-task-center-id", "control-production-agent-task", "toggle-workbench-theme-menu", "select-workbench-theme",
   "open-credit-ledger", "close-credit-ledger", "refresh-credit-ledger", "change-credit-ledger-page",
   "open-toolbox-prompt-reverse", "close-toolbox-prompt-reverse", "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide",
   "open-toolbox-video-to-director", "close-toolbox-video-to-director", "install-toolbox-video-to-director-plugin", "uninstall-toolbox-video-to-director-plugin", "clear-toolbox-video-to-director-file", "run-toolbox-video-to-director", "create-toolbox-video-director-desk",
@@ -14658,6 +14745,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "select-storyboard-prompt-skill-draft",
     "confirm-storyboard-prompt-skill",
     "close-ai-storyboard-preview",
+    ...productionAgentSessionActions,
     "regenerate-ai-storyboard-stage",
     "toggle-single-episode-script-picker",
     "toggle-single-episode-import-menu",
@@ -14784,6 +14872,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "change-task-center-page",
     "select-task-center-task",
     "copy-task-center-id",
+    "control-production-agent-task",
     "toggle-workbench-theme-menu",
     "select-workbench-theme",
     "toggle-skill-create-upload-menu",
@@ -14814,6 +14903,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "dismiss-first-login-guide",
     "first-login-use-sample-script",
     "first-login-use-own-script",
+    ...productionAgentSessionActions,
   ]);
 
   const videoSubmissionPreparationActions = new Set([
@@ -15451,6 +15541,182 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.toast = "任务 ID 已复制。";
       renderWorkbenchChrome(workbench);
     }
+    return;
+  }
+
+  if (action === "control-production-agent-task") {
+    await controlProductionAgentTask(workbench, target);
+    return;
+  }
+
+  if (action === "close-production-agent-session") {
+    stopProductionAgentSessionPolling(workbench);
+    if (workbench.ui.productionAgentSession) {
+      workbench.ui.productionAgentSession = {
+        ...workbench.ui.productionAgentSession,
+        open: false,
+      };
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "stop-production-agent-session") {
+    const taskId = productionAgentTaskId(workbench.ui.productionAgentSession);
+    if (!taskId || typeof workbench.api.stopProductionAgentSessionTask !== "function") return;
+    await runAction(workbench, "正在停止项目制作...", async () => {
+      const stopped = await workbench.api.stopProductionAgentSessionTask(taskId);
+      const task = unwrapProductionAgentRecord(stopped?.result ?? stopped, "task");
+      workbench.ui.productionAgentSession = mergeProductionAgentSessionPoll(workbench.ui.productionAgentSession, { task });
+      if (!isProductionAgentSessionPolling(workbench.ui.productionAgentSession)) {
+        stopProductionAgentSessionPolling(workbench);
+      }
+    }, { successToast: "已停止项目制作。" });
+    return;
+  }
+
+  if (action === "approve-production-agent-session" || action === "reject-production-agent-session") {
+    const taskId = productionAgentTaskId(workbench.ui.productionAgentSession);
+    const approvalId = String(target.dataset.approvalId ?? "").trim();
+    if (!taskId || !approvalId || typeof workbench.api.approveProductionAgentSessionTask !== "function") return;
+    const decision = action === "approve-production-agent-session" ? "approved" : "rejected";
+    await runAction(workbench, decision === "approved" ? "正在继续项目制作..." : "正在停止项目制作...", async () => {
+      const decided = await workbench.api.approveProductionAgentSessionTask(taskId, { approvalId, decision });
+      const task = unwrapProductionAgentRecord(decided?.result ?? decided, "task");
+      workbench.ui.productionAgentSession = mergeProductionAgentSessionPoll(workbench.ui.productionAgentSession, { task });
+      if (decision === "approved") startProductionAgentSessionPolling(workbench);
+      else stopProductionAgentSessionPolling(workbench);
+    }, { successToast: decision === "approved" ? "已继续。" : "已停止。" });
+    return;
+  }
+
+  if (action === "continue-production-agent-session") {
+    const session = workbench.ui.productionAgentSession;
+    const conversationId = productionAgentConversationId(session);
+    if (!conversationId || typeof workbench.api.sendProductionAgentMessage !== "function") return;
+    if (isProductionAgentSessionPolling(session)) {
+      workbench.ui.toast = "Agent 正在处理，请稍候再发送。";
+      render(workbench);
+      return;
+    }
+    const step = String(target.dataset.step ?? "all").trim() || "all";
+    const text = productionAgentContinuePrompt(step);
+    await runAction(workbench, "正在继续项目制作...", async () => {
+      const sent = await workbench.api.sendProductionAgentMessage(conversationId, {
+        text,
+        mode: productionAgentSessionMode(session, workbench.ui.productionAgentSessionMode),
+      });
+      const task = unwrapProductionAgentRecord(sent?.task ?? sent, "task");
+      workbench.ui.productionAgentSession = mergeProductionAgentSessionPoll(session, {
+        task,
+        messages: [
+          ...(Array.isArray(session?.messages) ? session.messages : []),
+          { role: "user", content: { text } },
+        ],
+      });
+      startProductionAgentSessionPolling(workbench);
+    }, { successToast: null });
+    return;
+  }
+
+  if (action === "send-production-agent-message") {
+    const session = workbench.ui.productionAgentSession;
+    const conversationId = productionAgentConversationId(session);
+    const draftInput = workbench.root?.querySelector?.("[data-production-agent-draft]");
+    const text = String(draftInput?.value ?? session?.draft ?? "").trim();
+    if (!conversationId || !text || typeof workbench.api.sendProductionAgentMessage !== "function") return;
+    if (isProductionAgentSessionPolling(session)) {
+      workbench.ui.toast = "Agent 正在处理，请稍候再发送。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在发送…", async () => {
+      const sent = await workbench.api.sendProductionAgentMessage(conversationId, {
+        text,
+        mode: productionAgentSessionMode(session, workbench.ui.productionAgentSessionMode),
+      });
+      const task = unwrapProductionAgentRecord(sent?.task ?? sent, "task");
+      workbench.ui.productionAgentSession = mergeProductionAgentSessionPoll(session, {
+        task,
+        messages: [
+          ...(Array.isArray(session?.messages) ? session.messages : []),
+          { role: "user", content: { text } },
+        ],
+      });
+      workbench.ui.productionAgentSession.draft = "";
+      startProductionAgentSessionPolling(workbench);
+    }, { successToast: null });
+    return;
+  }
+
+  if (action === "load-more-production-agent-source") {
+    const session = workbench.ui.productionAgentSession;
+    const conversationId = productionAgentConversationId(session);
+    if (!conversationId || typeof workbench.api.getProductionAgentSource !== "function") return;
+    const loaded = String(session?.sourcePreview?.text ?? session?.conversation?.source?.previewText ?? "");
+    await runAction(workbench, "正在加载源文本...", async () => {
+      const payload = await workbench.api.getProductionAgentSource(conversationId, {
+        offset: loaded.length,
+        limit: 8000,
+      });
+      const slice = payload?.source ?? payload ?? {};
+      const nextText = `${loaded}${String(slice.text ?? "")}`;
+      workbench.ui.productionAgentSession = {
+        ...session,
+        sourcePreview: {
+          text: nextText,
+          totalChars: Number(slice.totalChars ?? session?.sourcePreview?.totalChars ?? nextText.length),
+        },
+      };
+    }, { successToast: null });
+    return;
+  }
+
+  if (action === "select-production-agent-artifact") {
+    const path = String(target.dataset.path ?? "").trim();
+    if (!workbench.ui.productionAgentSession) return;
+    if (path.startsWith("skill/")) {
+      return;
+    }
+    workbench.ui.productionAgentSession = {
+      ...workbench.ui.productionAgentSession,
+      selectedArtifact: path || null,
+      selectedArtifactLocked: Boolean(path),
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-production-agent-project") {
+    const created = resolveProductionAgentCreatedProject(workbench.ui.productionAgentSession);
+    const projectId = created.projectId;
+    if (!projectId) return;
+    stopProductionAgentSessionPolling(workbench);
+    if (workbench.ui.productionAgentSession) {
+      workbench.ui.productionAgentSession = {
+        ...workbench.ui.productionAgentSession,
+        open: false,
+      };
+    }
+    await runAction(workbench, "正在进入工作台...", async () => {
+      applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, projectId));
+      workbench.ui.selectedProjectCardId = projectId;
+      workbench.ui.activeNavTab = "project";
+      workbench.ui.homeWorkflowOrigin = true;
+      workbench.ui.episodeWorkbenchLayout = "workflow";
+      workbench.ui.workflowGenerationWorkbenchOpen = false;
+      const episodeId = created.episodeId || getDefaultEpisodeWorkbenchId(workbench);
+      if (episodeId && episodeId !== "episode-primary") {
+        await enterEpisodeWorkbench(workbench, episodeId, {
+          preserveRoute: true,
+          toast: "",
+        });
+      } else {
+        workbench.ui.projectPanelMode = "detail";
+        workbench.ui.projectInteriorSection = "overview";
+        syncProjectDetailHash(workbench, projectId);
+      }
+    }, { successToast: "已进入工作台。" });
     return;
   }
 
@@ -21981,9 +22247,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     if (creationMode === "workflow") {
-      let shouldStartAiWorkflow = false;
-      await runAction(workbench, "正在解析剧本并创建工作流...", async () => {
+      await runAction(workbench, "正在创建项目制作会话...", async () => {
         const scriptFile = workflowScriptFile;
+        const plazaSkillIds = normalizeProjectWorkflowPlazaSkillIds(workbench.ui, workbench.ui.selectedEpisodePlazaSkillIds);
         const showWorkflowProgress = (message) => {
           workbench.ui.toast = message;
           render(workbench);
@@ -21993,49 +22259,49 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           projectId: null,
           uploadLimits: SCRIPT_DOCUMENT_UPLOAD_LIMITS,
         });
-        const projectName = (stripScriptDocumentExtension(scriptFile.name) || "工作流项目").slice(0, 60);
-        showWorkflowProgress("正在创建项目...");
-        const created = await workbench.api.createProject(buildProjectCreateRequest({
-          name: projectName,
-          aspectRatio: "9:16",
-          projectType: resolveDefaultProjectStyleCode(workbench),
-          scriptInput: "",
+        const modelCode = "deepseek-noval";
+        workbench.ui.productionAgentSessionMode = "auto";
+        showWorkflowProgress("正在创建项目制作会话...");
+        const created = await workbench.api.createProductionAgentConversation({
+          title: stripScriptDocumentExtension(scriptFile.name) || "项目制作会话",
+          mode: "auto",
+          modelCode,
+          plazaSkillIds,
           scriptUploadSessionId: scriptUpload.uploadSessionId ?? null,
           scriptStorageObjectId: scriptUpload.storageObjectId ?? null,
           scriptFileName: scriptFile.name,
           scriptContentType: scriptUpload.mimeType ?? scriptFile.type ?? null,
-        }));
-        const createdProject = created?.project ?? created?.body?.project ?? null;
-        const projectId = String(createdProject?.id ?? createdProject?.projectId ?? "").trim();
-        if (!projectId) {
-          throw new Error("project_create_result_missing");
+        });
+        const conversation = unwrapProductionAgentRecord(created?.conversation ?? created, "conversation");
+        const task = unwrapProductionAgentRecord(created?.task, "task")
+          ?? (conversation?.taskId
+            ? { id: conversation.taskId, status: conversation.taskStatus ?? "running" }
+            : null);
+        workbench.ui.productionAgentSession = {
+          ...emptyProductionAgentSession(),
+          open: true,
+          status: String(task?.status ?? conversation?.taskStatus ?? "running"),
+          conversation,
+          task,
+          messages: unwrapProductionAgentList(created?.messages, "messages"),
+          events: unwrapProductionAgentList(created?.events, "events"),
+          selectedArtifact: null,
+          sourcePreview: {
+            text: String(conversation?.source?.previewText ?? ""),
+            totalChars: Number(conversation?.source?.totalChars ?? 0),
+          },
+          error: "",
+        };
+        if (typeof workbench.api.getProductionAgentSource === "function" && conversation?.id) {
+          const source = await workbench.api.getProductionAgentSource(conversation.id, { offset: 0, limit: 8000 });
+          const slice = source?.source ?? source ?? {};
+          workbench.ui.productionAgentSession.sourcePreview = {
+            text: String(slice.text ?? conversation?.source?.previewText ?? ""),
+            totalChars: Number(slice.totalChars ?? conversation?.source?.totalChars ?? 0),
+          };
         }
-        workbench.ui.selectedProjectCardId = projectId;
-        showWorkflowProgress("正在加载项目工作区...");
-        applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, projectId));
-        const createdState = created?.state ?? created?.body?.state ?? {};
-        const sourceScript = String(
-          createdState?.script?.inputText ??
-          workbench.state?.script?.inputText,
-        ).trim();
-        if (!sourceScript) throw new Error("script_text_required");
-        workbench.ui.selectedEpisodePlazaSkillIds = normalizeProjectWorkflowPlazaSkillIds(workbench.ui, workbench.ui.selectedEpisodePlazaSkillIds);
-        workbench.ui.singleEpisodeTextModelCode =
-          resolveSingleEpisodeTextModelCode(workbench.ui) || "deepseek-noval";
-        workbench.ui.singleEpisodeName = buildSingleEpisodeTitle(sourceScript, getDetailEpisodes(workbench.state));
-        workbench.ui.singleEpisodeScript = sourceScript;
-        workbench.ui.singleEpisodeNotice = "";
-        workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
-        workbench.ui.homeWorkflowInstruction = sourceScript;
-        workbench.ui.episodeWorkbenchLayout = "workflow";
-        workbench.ui.homeWorkflowOrigin = true;
-        workbench.ui.workflowGenerationWorkbenchOpen = false;
-        shouldStartAiWorkflow = true;
-        showWorkflowProgress("正在启动剧本解析...");
+        startProductionAgentSessionPolling(workbench);
       }, { successToast: null });
-      if (shouldStartAiWorkflow) {
-        await handleAction(workbench, { dataset: { action: "confirm-single-episode", workflowOrigin: "home" } });
-      }
       return;
     }
     await runAction(workbench, creationMode === "free" ? "正在打开自由生成..." : "正在创建 Agent 画布...", async () => {
@@ -37801,6 +38067,10 @@ export function reconcileSelectedStoryboardPendingGenerationForTest(workbench, s
 
 export function resolveTaskCenterPollDelayForTest(startedAt, immediate = false, now = Date.now(), tasks = []) {
   return resolveTaskCenterPollDelay(startedAt, immediate, now, tasks);
+}
+
+export async function controlProductionAgentTaskForTest(workbench, target = {}) {
+  return controlProductionAgentTask(workbench, target);
 }
 
 export function isTaskCenterPollDeadlineExceededForTest(task, now = Date.now()) {
@@ -55316,6 +55586,46 @@ async function loadTaskCenterPage(workbench) {
   }
 }
 
+async function controlProductionAgentTask(workbench, target = {}) {
+  const taskId = String(target.dataset?.taskId ?? "").trim();
+  const action = String(target.dataset?.taskAction ?? "").trim().toLowerCase();
+  const task = workbench.ui.taskCenterTasksById?.[taskId] ?? null;
+  const projectId = String(task?.projectId ?? "").trim();
+  const methodName = {
+    cancel: "cancelProductionAgentTask",
+    retry: "retryProductionAgentTask",
+    resume: "resumeProductionAgentTask",
+  }[action];
+  if (!taskId || !projectId || !methodName || typeof workbench.api?.[methodName] !== "function") {
+    workbench.ui.taskCenterTaskActionFeedback = { taskId, tone: "error", message: "当前任务暂不支持此操作。" };
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  workbench.ui.taskCenterTaskActionPending = { taskId, action };
+  workbench.ui.taskCenterTaskActionFeedback = null;
+  renderWorkbenchChrome(workbench);
+  try {
+    const response = await workbench.api[methodName](projectId, taskId);
+    const result = response?.result ?? response ?? {};
+    const nextStatus = String(result.status ?? (action === "cancel" ? "canceled" : "queued")).trim().toLowerCase();
+    workbench.ui.taskCenterTasksById = {
+      ...(workbench.ui.taskCenterTasksById ?? {}),
+      [taskId]: { ...task, status: nextStatus, workflowStatus: nextStatus, failure: null, failureCode: null },
+    };
+    workbench.ui.taskCenterTaskActionFeedback = {
+      taskId,
+      tone: "success",
+      message: action === "cancel" ? "任务已取消。" : action === "retry" ? "任务已重新排队。" : "任务已恢复并重新排队。",
+    };
+  } catch (error) {
+    workbench.ui.taskCenterTaskActionFeedback = { taskId, tone: "error", message: friendlyError(error) };
+  } finally {
+    workbench.ui.taskCenterTaskActionPending = null;
+    renderWorkbenchChrome(workbench);
+  }
+  if (workbench.ui.taskCenterTaskActionFeedback?.tone === "success") await loadTaskCenterPage(workbench);
+}
+
 function resolveGenerationPollDelayMs(mediaKind, startedAt, immediate = false) {
   if (immediate) {
     return 0;
@@ -62543,6 +62853,9 @@ export function friendlyError(error) {
   }
   const message =
     error instanceof Error ? error.message : (typeof error?.message === "string" ? error.message : String(error));
+  if (/402\s*Insufficient Balance|Insufficient Balance|insufficient[_\s-]?balance|余额不足/i.test(`${errorCode} ${message}`)) {
+    return "模型渠道余额不足，请充值或更换模型后再试。";
+  }
   if (/network error|networkerror|failed to fetch/i.test(message)) {
     return "网络连接异常，生成服务未能建立连接，请重试。";
   }
@@ -64281,6 +64594,81 @@ async function syncProjectLibraryFromApi(workbench, options = {}) {
   } finally {
     finishSurfaceRequest(workbench, "project-library", controller);
   }
+}
+
+function stopProductionAgentSessionPolling(workbench) {
+  workbench.productionAgentSessionPollToken = Number(workbench.productionAgentSessionPollToken ?? 0) + 1;
+  workbench.productionAgentSessionStreamAbort?.abort?.();
+  workbench.productionAgentSessionStreamAbort = null;
+}
+
+function startProductionAgentSessionPolling(workbench) {
+  stopProductionAgentSessionPolling(workbench);
+  const token = Number(workbench.productionAgentSessionPollToken ?? 0);
+  const abortController = typeof AbortController === "function" ? new AbortController() : null;
+  workbench.productionAgentSessionStreamAbort = abortController;
+  void (async () => {
+    while (token === workbench.productionAgentSessionPollToken) {
+      const session = workbench.ui.productionAgentSession;
+      if (!session?.open || !isProductionAgentSessionPolling(session)) {
+        stopProductionAgentSessionPolling(workbench);
+        return;
+      }
+      const conversationId = productionAgentConversationId(session);
+      const taskId = productionAgentTaskId(session);
+      if (!taskId || typeof workbench.api.streamProductionAgentEvents !== "function") return;
+      try {
+        for await (const message of workbench.api.streamProductionAgentEvents(taskId, {
+          after: Number(session.eventCursor ?? 0),
+          signal: abortController?.signal,
+        })) {
+          if (token !== workbench.productionAgentSessionPollToken) return;
+          if (message?.event === "ping") continue;
+          const event = message?.data;
+          if (!event || typeof event !== "object" || !event.eventType) continue;
+          workbench.ui.productionAgentSession = applyProductionAgentLiveEvent(workbench.ui.productionAgentSession, event);
+          if (["tool.succeeded", "task.status"].includes(String(event.eventType))) {
+            await refreshProductionAgentSessionSnapshot(workbench, conversationId);
+          }
+          render(workbench);
+          if (!isProductionAgentSessionPolling(workbench.ui.productionAgentSession)) {
+            stopProductionAgentSessionPolling(workbench);
+            return;
+          }
+        }
+      } catch (error) {
+        if (abortController?.signal?.aborted || token !== workbench.productionAgentSessionPollToken) return;
+        workbench.ui.productionAgentSession = {
+          ...workbench.ui.productionAgentSession,
+          error: friendlyError(error),
+        };
+        render(workbench);
+        return;
+      }
+      if (token === workbench.productionAgentSessionPollToken && isProductionAgentSessionPolling(workbench.ui.productionAgentSession)) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 1000));
+      }
+    }
+  })();
+}
+
+async function refreshProductionAgentSessionSnapshot(workbench, conversationId) {
+  if (!conversationId) return;
+  const [conversationPayload, messagesPayload] = await Promise.all([
+    typeof workbench.api.getProductionAgentConversation === "function"
+      ? workbench.api.getProductionAgentConversation(conversationId)
+      : workbench.ui.productionAgentSession?.conversation,
+    typeof workbench.api.listProductionAgentMessages === "function"
+      ? workbench.api.listProductionAgentMessages(conversationId)
+      : workbench.ui.productionAgentSession?.messages,
+  ]);
+  workbench.ui.productionAgentSession = mergeProductionAgentSessionPoll(workbench.ui.productionAgentSession, {
+    conversation: conversationPayload,
+    messages: messagesPayload,
+    events: workbench.ui.productionAgentSession?.events,
+    streamText: workbench.ui.productionAgentSession?.streamText,
+    streamToolId: workbench.ui.productionAgentSession?.streamToolId,
+  });
 }
 
 async function syncHomeProjectLibraryFromApi(workbench) {

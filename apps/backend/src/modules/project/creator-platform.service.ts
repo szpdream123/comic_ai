@@ -88,6 +88,10 @@ export async function requestCreatorImageGenerationPlatformBatch(
     projectId: input.projectId,
     workflowType: operationNames.shotImageGenerate,
     inputSnapshot: {
+      agentType: "production",
+      scopeType: "project",
+      scopeId: input.projectId,
+      placement: "detached",
       shotIds: input.shots.map((shot) => shot.id),
       requestedAt: input.now.toISOString(),
       options: input.options ?? {},
@@ -99,6 +103,10 @@ export async function requestCreatorImageGenerationPlatformBatch(
       targetEntityType: "shot",
       targetEntityId: shot.id,
       inputSnapshot: {
+        agentType: "production",
+        scopeType: "project",
+        scopeId: input.projectId,
+        placement: "detached",
         shotId: shot.id,
         title: shot.title,
         contentRevision: shot.contentRevision,
@@ -224,6 +232,10 @@ export async function requestCreatorVideoGenerationPlatformBatch(
     projectId: input.projectId,
     workflowType: operationNames.shotVideoGenerate,
     inputSnapshot: {
+      agentType: "production",
+      scopeType: "project",
+      scopeId: input.projectId,
+      placement: "detached",
       shotIds: readyShots.map((shot) => shot.id),
       requestedAt: input.now.toISOString(),
       options: input.options ?? {},
@@ -235,6 +247,10 @@ export async function requestCreatorVideoGenerationPlatformBatch(
       targetEntityType: "shot",
       targetEntityId: shot.id,
       inputSnapshot: {
+        agentType: "production",
+        scopeType: "project",
+        scopeId: input.projectId,
+        placement: "detached",
         shotId: shot.id,
         imageAssetVersionId: shot.currentImageAssetVersionId,
       },

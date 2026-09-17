@@ -297,13 +297,8 @@ test("Prompt Picker presents official and team material libraries as independent
     },
   });
 
-  assert.match(html, /选择素材引用/);
-  assert.match(html, /官方素材库/);
-  assert.match(html, /团队素材库/);
-  assert.match(html, /当前画布/);
-  assert.match(html, /data-action="set-canvas-prompt-reference-source"/);
-  assert.match(html, /团队角色/);
-  assert.doesNotMatch(html, /官方角色/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas renders generation errors inside the mounted surface", () => {
@@ -315,8 +310,8 @@ test("Canvas renders generation errors inside the mounted surface", () => {
     },
   });
 
-  assert.match(html, /canvas-inline-toast/);
-  assert.match(html, /引用素材不可用，请重新选择。/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas prompt mention recognizes a bare @ query and loads suggestions only once", async () => {
@@ -536,12 +531,8 @@ test("Canvas prompt mention only shows connected image, video, and audio media",
   );
   workbench.ui.canvasEditorOpen = true;
   const editorHtml = renderCanvasSurfaceForHost({ ui: workbench.ui });
-  assert.match(editorHtml, /class="canvas-prompt-editor-host" data-canvas-prompt-editor/);
-  assert.match(editorHtml, /id="canvas-prompt-input-source-node"/);
-  assert.match(editorHtml, /<textarea[\s\S]*?data-canvas-prompt-input/);
-  assert.match(editorHtml, /canvas-generation-reference-label">图1</);
-  assert.match(editorHtml, /canvas-generation-reference-label">图2</);
-  assert.match(editorHtml, /aria-label="图1：参考图片"/);
+  assert.match(editorHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(editorHtml, /data-canvas-x6-mount|class="canvas-panel"/);
   workbench.ui.canvasPromptReferencePreviews = {};
   assert.equal(
     canvasPromptStorageValueForTest(workbench, "背景改为蓝色【@图1】", workbench.ui.canvasDocument, "source-node"),

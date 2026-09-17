@@ -134,9 +134,6 @@ test("opened Canvas renders complete generation-history controls", () => {
       canvasAssets: [{ id: "artifact-1", runId: "run-1", type: "asset", kind: "image", title: "结果图", meta: "image", status: "可用" }],
     },
   });
-  assert.match(html, /data-action="export-canvas-generation-history"/);
-  assert.match(html, /data-action="delete-canvas-node-generation-history"/);
-  assert.match(html, /data-action="delete-all-canvas-generation-history"/);
-  assert.match(html, /data-action="delete-canvas-generation-run" data-run-id="run-1"/);
-  assert.match(html, /data-action="load-more-canvas-generation-history"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });

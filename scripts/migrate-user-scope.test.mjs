@@ -30,6 +30,15 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     );
   });
 
+  it("allows current production agent workspace_json schema objects", async () => {
+    const runnerSource = await readFile(new URL("migrate-user-scope.mjs", import.meta.url), "utf8");
+    assert.match(runnerSource, /\('column', 'production_agent_conversations\.workspace_json'\)/);
+    assert.match(
+      runnerSource,
+      /\('constraint', 'production_agent_conversations_workspace_json_not_null'\)/,
+    );
+  });
+
   it("fails closed before runtime-safe startup can mutate an uninitialized database", async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");

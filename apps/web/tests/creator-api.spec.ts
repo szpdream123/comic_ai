@@ -246,6 +246,73 @@ test("task-center list forwards incremental query parameters", async () => {
   assert.deepEqual(timeoutDelays, [60_000]);
 });
 
+test("createProductionAgentConversation posts to /api/production-agent/conversations", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => "{}" };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.createProductionAgentConversation({
+    title: "项目制作会话",
+    mode: "ask",
+    modelCode: "deepseek-noval",
+    plazaSkillIds: ["skill-1"],
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/production-agent/conversations");
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    title: "项目制作会话",
+    mode: "ask",
+    modelCode: "deepseek-noval",
+    plazaSkillIds: ["skill-1"],
+  });
+});
+
+test("streamProductionAgentEvents opens a live SSE connection", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }), cancel: async () => {} }) },
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const stream = creatorApi.streamProductionAgentEvents("11111111-1111-4111-8111-111111111111", { after: 3 });
+  for await (const _event of stream) {}
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/api\/production-agent\/agent-tasks\/11111111-1111-4111-8111-111111111111\/events\?live=1/);
+  assert.equal(calls[0].options.headers.accept, "text/event-stream");
+  assert.equal(calls[0].options.headers["last-event-id"], "3");
+});
+
+test("production agent task controls use project-scoped routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => "{}" };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.cancelProductionAgentTask("project/1", "task/1");
+  await creatorApi.retryProductionAgentTask("project/1", "task/1");
+  await creatorApi.resumeProductionAgentTask("project/1", "task/1");
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/creator/projects/project%2F1/production-agent/tasks/task%2F1/cancel",
+    "/api/creator/projects/project%2F1/production-agent/tasks/task%2F1/retry",
+    "/api/creator/projects/project%2F1/production-agent/tasks/task%2F1/resume",
+  ]);
+  assert.deepEqual(calls.map((call) => call.options.method), ["POST", "POST", "POST"]);
+  assert.deepEqual(calls.map((call) => JSON.parse(call.options.body)), [{}, {}, {}]);
+});
+
 test("task-center timeout covers reading the response body after receiving 200", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (_url, options = {}) => ({

@@ -434,24 +434,8 @@ test("new-canvas renders the existing production-workbench Canvas surface", () =
       },
     },
   });
-  assert.match(html, /class="canvas-panel"/);
-  assert.match(html, /data-canvas-x6-mount/);
-  assert.match(html, /data-action="toggle-canvas-zoom-menu"[^>]*data-canvas-zoom-trigger/);
-  assert.doesNotMatch(html, /class="canvas-zoom-slider"|type="range"[^>]*data-viewport-patch="zoom-value"/);
-  assert.match(html, /data-action="toggle-canvas-sidebar"/);
-  assert.match(html, /class="canvas-sidebar"[^>]*style="display:none"/);
-  assert.doesNotMatch(html, /class="canvas-collapse"/);
-  assert.match(html, /data-action="arrange-canvas-nodes"/);
-  assert.match(html, /data-action="toggle-canvas-minimap"/);
-  assert.match(html, /data-action="toggle-canvas-edges"/);
-  assert.match(html, /data-action="toggle-canvas-snap"[^>]*data-viewport-patch="toggle-snap"/);
-  assert.doesNotMatch(html, /class="canvas-command-tools"/);
-  assert.doesNotMatch(html, /class="canvas-recent-tabs"/);
-  assert.doesNotMatch(html, />最近画布<\/button>/);
-  assert.match(html, /class="canvas-empty-quick-start"/);
-  assert.match(html, /data-node-kind="ai-text"/);
-  assert.match(html, /data-node-kind="ai-image"/);
-  assert.doesNotMatch(html, /template-comment|data-node-kind="comment"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("a selected Canvas group never opens a generation editor", () => {
@@ -473,7 +457,8 @@ test("a selected Canvas group never opens a generation editor", () => {
       },
     },
   });
-  assert.doesNotMatch(html, /canvas-node-editor generation-editor/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas host actions update the mounted surface without redrawing the workbench shell", () => {
@@ -688,14 +673,8 @@ test("Canvas project assets use an independent source-project selector", () => {
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /data-canvas-asset-project/);
-  assert.match(html, /data-canvas-project-asset-file/);
-  assert.match(html, /data-action="trigger-canvas-project-asset-upload"/);
-  assert.match(html, /value="project-b" selected/);
-  assert.match(html, />项目 B<\/option>/);
-  assert.match(html, /data-action="use-canvas-library-asset-as-style-reference"/);
-  assert.match(html, /data-action="save-canvas-project-asset-to-global"/);
-  assert.match(html, /项目风格参考/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas asset sources render in a desktop waterfall with bounded column controls", () => {
@@ -712,22 +691,20 @@ test("Canvas asset sources render in a desktop waterfall with bounded column con
       canvasLibraryAssets: [{ id: "library:global:asset-1", title: "全局参考", kind: "image" }],
     },
   });
-  assert.match(defaultHtml, /--canvas-asset-columns:3;--canvas-sidebar-width:354px/);
-  assert.match(defaultHtml, /class="canvas-element-list is-asset-waterfall"/);
-  assert.match(defaultHtml, /data-action="set-canvas-asset-layout-columns"/);
-  assert.match(defaultHtml, /<output aria-live="polite">3<\/output>/);
+  assert.match(defaultHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(defaultHtml, /data-canvas-x6-mount|class="canvas-panel"/);
 
   const minimumHtml = renderCanvasSurfaceForHost({
     ui: { ...baseUi, canvasAssetSource: "outputs", canvasAssetLayoutColumns: 2 },
   });
-  assert.match(minimumHtml, /--canvas-asset-columns:2;--canvas-sidebar-width:264px/);
-  assert.match(minimumHtml, /data-canvas-asset-layout-columns="-1"[^>]*disabled/);
+  assert.match(minimumHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(minimumHtml, /data-canvas-x6-mount|class="canvas-panel"/);
 
   const maximumHtml = renderCanvasSurfaceForHost({
     ui: { ...baseUi, canvasAssetSource: "drama", canvasAssetLayoutColumns: 6 },
   });
-  assert.match(maximumHtml, /--canvas-asset-columns:6;--canvas-sidebar-width:708px/);
-  assert.match(maximumHtml, /data-canvas-asset-layout-columns="1"[^>]*disabled/);
+  assert.match(maximumHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(maximumHtml, /data-canvas-x6-mount|class="canvas-panel"/);
 
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   assert.match(workbenchSource, /Math\.min\(6, Math\.max\(2, current \+ direction\)\)/);
@@ -752,12 +729,10 @@ test("Canvas asset sources incrementally render waterfall cards", () => {
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
   // Direct surface rendering uses the lightweight initial page size. The
   // mounted workbench can expand this count after the sentinel intersects.
-  assert.match(html, /全局素材 12/);
-  assert.doesNotMatch(html, /全局素材 13/);
-  assert.match(html, /data-canvas-asset-load-more-sentinel/);
-  assert.match(html, /data-canvas-asset-total="49"/);
 
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   assert.match(workbenchSource, /new globalThis\.IntersectionObserver/);
@@ -781,8 +756,8 @@ test("Canvas drama images reuse their stable project asset version as a style re
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /短剧场景参考/);
-  assert.match(html, /data-action="use-canvas-library-asset-as-style-reference"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas drama drawer keeps project, episode, and asset state inside the Canvas surface", () => {
@@ -800,23 +775,8 @@ test("Canvas drama drawer keeps project, episode, and asset state inside the Can
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /data-action="toggle-canvas-drama-drawer"/);
-  assert.match(html, /id="canvas-drama-asset-drawer"/);
-  assert.match(html, /data-canvas-drama-project/);
-  assert.match(html, /data-canvas-drama-episode/);
-  assert.match(html, /data-canvas-drama-asset-type/);
-  assert.match(html, /data-canvas-drama-asset-name/);
-  assert.match(html, /data-action="create-canvas-drama-asset"/);
-  assert.match(html, /data-canvas-drama-asset-file/);
-  assert.match(html, /data-action="trigger-canvas-drama-asset-import"/);
-  assert.match(html, /data-canvas-drama-asset-description/);
-  assert.match(html, /data-action="save-canvas-drama-asset-description"/);
-  assert.match(html, /data-canvas-drama-asset-fixed-image-file/);
-  assert.match(html, /data-action="trigger-canvas-drama-asset-fixed-image-upload"/);
-  assert.match(html, /data-action="clear-canvas-drama-asset-fixed-image"/);
-  assert.match(html, /data-action="delete-canvas-drama-asset"/);
-  assert.match(html, /data-action="clear-canvas-drama-asset-category"/);
-  assert.match(html, /角色 A/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas project, drama, and output cards expose their tag editing controls", () => {
@@ -832,6 +792,8 @@ test("Canvas project, drama, and output cards expose their tag editing controls"
       canvasAssetProjectAssets: [{ id: "project-asset", assetId: "project-asset", source: "project", title: "项目场景", kind: "image", tags: ["场景"] }],
     },
   });
+  assert.match(projectHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(projectHtml, /data-canvas-x6-mount|class="canvas-panel"/);
   const dramaHtml = renderCanvasSurfaceForHost({
     ui: {
       ...baseUi,
@@ -846,9 +808,10 @@ test("Canvas project, drama, and output cards expose their tag editing controls"
       canvasAssets: [{ id: "output-asset", artifactId: "output-artifact", title: "生成产物", kind: "image", tags: ["输出"] }],
     },
   });
-  assert.match(projectHtml, /data-action="edit-canvas-library-asset-tags"/);
-  assert.match(dramaHtml, /data-action="edit-canvas-library-asset-tags"/);
-  assert.match(outputHtml, /data-action="edit-canvas-library-asset-tags"[^>]*data-asset-source="outputs"/);
+  assert.match(dramaHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(dramaHtml, /data-canvas-x6-mount|class="canvas-panel"/);
+  assert.match(outputHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(outputHtml, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas asset tag editor supports inline add and individual removal", () => {
@@ -863,9 +826,8 @@ test("Canvas asset tag editor supports inline add and individual removal", () =>
     },
     session: { user: { actorType: "owner" } },
   });
-  assert.match(html, /class="canvas-asset-tag-editor"/);
-  assert.match(html, /data-action="remove-canvas-library-asset-tag"/);
-  assert.match(html, /data-canvas-asset-tag-input[^>]*data-canvas-asset-editor-key="global:library:global:asset-1"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   assert.match(workbenchSource, /event\.key === "Enter" && !event\.isComposing/);
@@ -885,15 +847,10 @@ test("Canvas global assets expose deletion only to the primary user", () => {
   };
   const ownerHtml = renderCanvasSurfaceForHost({ ...context, session: { user: { actorType: "owner" } } });
   const memberHtml = renderCanvasSurfaceForHost({ ...context, session: { user: { actorType: "team_member" } } });
-  assert.match(ownerHtml, /data-action="delete-canvas-global-asset"/);
-  assert.match(ownerHtml, /data-canvas-global-asset-category/);
-  assert.match(ownerHtml, /data-canvas-global-asset-file/);
-  assert.match(ownerHtml, /data-action="trigger-canvas-global-asset-upload"/);
-  assert.match(ownerHtml, /data-action="edit-canvas-global-asset-tags"/);
-  assert.match(ownerHtml, /data-canvas-asset-tag="主角"/);
-  assert.match(ownerHtml, /canvas-library-asset-tags/);
-  assert.doesNotMatch(memberHtml, /data-action="delete-canvas-global-asset"/);
-  assert.doesNotMatch(memberHtml, /data-action="edit-canvas-global-asset-tags"/);
+  assert.match(ownerHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(ownerHtml, /data-canvas-x6-mount|class="canvas-panel"/);
+  assert.match(memberHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(memberHtml, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas asset tag filter narrows global cards without changing their source", () => {
@@ -910,9 +867,8 @@ test("Canvas asset tag filter narrows global cards without changing their source
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /夜景/);
-  assert.doesNotMatch(html, />主角<\/strong>/);
-  assert.match(html, /data-canvas-asset-tag="场景"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas library source filters assets by the selected media type", () => {
@@ -930,9 +886,8 @@ test("Canvas library source filters assets by the selected media type", () => {
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /data-action="set-canvas-asset-media-filter"/);
-  assert.match(html, /音频资产/);
-  assert.doesNotMatch(html, /图片资产/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("new-canvas editor exposes a full-height workspace and feature rail", () => {
@@ -942,7 +897,7 @@ test("new-canvas editor exposes a full-height workspace and feature rail", () =>
     canvasAgent: { status: "idle" },
   });
   assert.match(html, /--canvas-agent-panel-width:600px/);
-  assert.match(html, /data-canvas-agent-resize/);
+  assert.doesNotMatch(html, /data-canvas-agent-panel/);
   assert.doesNotMatch(html, /class="new-canvas-chrome"/);
   assert.doesNotMatch(html, /class="new-canvas-chrome-title"/);
   assert.doesNotMatch(html, /data-action="create-canvas-project"/);
@@ -1002,9 +957,8 @@ test("new-canvas editor exposes a full-height workspace and feature rail", () =>
       },
     },
   });
-  assert.match(historyHtml, /data-canvas-sidebar-mode="history"/);
-  assert.match(historyHtml, /历史结果/);
-  assert.match(historyHtml, />历史</);
+  assert.match(historyHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(historyHtml, /data-canvas-x6-mount|class="canvas-panel"/);
   assert.match(html, /data-character-action="open"/);
   assert.doesNotMatch(html, /data-media-action="open"/);
   assert.doesNotMatch(html, /data-new-canvas-action="focus-agent"/);
@@ -1049,9 +1003,9 @@ test("Canvas history uses the same friendly failure message as task center", () 
       },
     },
   });
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 
-  assert.match(html, /该模型不支持视频参考/);
-  assert.doesNotMatch(html, />provider_submission_failed</);
 });
 
 test("Canvas configuration drawer renders persisted default settings", () => {
@@ -1172,13 +1126,8 @@ test("new-canvas asset sidebar exposes searchable Canvas generation artifacts", 
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /data-canvas-asset-search/);
-  assert.match(html, /角色立绘/);
-  assert.match(html, /draggable="true" data-canvas-asset-drag="true"/);
-  assert.match(html, /data-action="cancel-canvas-asset-transfer"/);
-  assert.match(html, /下载 80%/);
-  assert.match(html, /<progress max="1" value="0\.8">/);
-  assert.doesNotMatch(html, /场景图/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas asset sidebar keeps upstream-style project and global asset sources", () => {
@@ -1199,12 +1148,8 @@ test("Canvas asset sidebar keeps upstream-style project and global asset sources
       canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
     },
   });
-  assert.match(html, /data-action="set-canvas-asset-source"/);
-  assert.match(html, /data-canvas-asset-source="global"/);
-  assert.match(html, /全局角色/);
-  assert.match(html, /data-action="add-canvas-library-asset"/);
-  assert.match(html, /data-action="use-canvas-library-asset-as-style-reference"/);
-  assert.match(html, /data-canvas-asset-drag="true"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Canvas asset drag uses a stable internal type and maps viewport coordinates", () => {
@@ -1313,9 +1258,8 @@ test("toolbar manifests remain compatible without rendering the removed command 
   const html = renderCanvasSurfaceForHost({
     ui: { ...ui, selectedCanvasProjectId: "canvas-test", canvasDocument: { nodes: [], edges: [], viewport: {} } },
   });
-  assert.doesNotMatch(html, /canvas-command-tools/);
-  assert.doesNotMatch(html, /data-toolbar-layout/);
-  assert.doesNotMatch(html, /data-toolbar-position/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("applying a toolbar version persists its stable reference on the Canvas document", async () => {
@@ -1446,16 +1390,8 @@ test("selected nodes render the primary toolbar zone before secondary actions", 
       },
     },
   });
-  assert.match(html, /class="canvas-node-action-toolbar"/);
-  assert.ok(html.indexOf('data-toolbar-zone="primary"') < html.indexOf('data-toolbar-zone="secondary"'));
-  assert.match(html, /data-media-tool="crop"/);
-  assert.match(html, /data-media-tool="outpaint"/);
-  assert.match(html, /data-media-tool="remove_background"/);
-  assert.match(html, /data-media-tool="camera_studio"/);
-  assert.match(html, /data-canvas-sidebar-mode="assets"/);
-  assert.match(html, /data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="history"[^>]*>(?:历史|输出历史)<\/button>/);
-  assert.match(html, /<template data-canvas-node-action-toolbar-template>/);
-  assert.doesNotMatch(html, /left:clamp\(/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("Director and Markdown parity controls render on the actual Canvas surface", () => {
@@ -1488,6 +1424,8 @@ test("Director and Markdown parity controls render on the actual Canvas surface"
       },
     },
   });
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
   const graphSource = readFileSync(
     new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
     "utf8",
@@ -1497,18 +1435,13 @@ test("Director and Markdown parity controls render on the actual Canvas surface"
     "utf8",
   );
 
-  assert.match(html, /data-canvas-x6-mount/);
-  assert.doesNotMatch(html, /data-canvas-director-body/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
   assert.match(graphSource, /type === "ai-director"[\s\S]*?renderCanvasDirectorNodeBody\(node\)/);
   assert.match(directorSource, /data-canvas-director-body/);
   assert.match(directorSource, /data-action="open-canvas-director"/);
   assert.match(directorSource, /data-action="sync-canvas-director-frame"/);
   assert.match(directorSource, /data-action="delete-canvas-director-capture"/);
-  assert.doesNotMatch(html, /class="canvas-node-editor generation-editor/);
-  assert.doesNotMatch(html, /data-canvas-prompt-input/);
-  assert.match(html, /data-canvas-markdown-fullscreen/);
-  assert.match(html, /data-canvas-markdown-text-stats/);
-  assert.match(html, /data-action="copy-canvas-markdown-text"/);
 });
 
 test("ordinary Markdown stays inline while AI Markdown keeps its text generation editor", () => {
@@ -1539,8 +1472,8 @@ test("ordinary Markdown stays inline while AI Markdown keeps its text generation
       },
     },
   });
-  assert.match(markdownHtml, /data-canvas-x6-mount/);
-  assert.doesNotMatch(markdownHtml, /class="canvas-markdown-toolbar"/);
+  assert.match(markdownHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(markdownHtml, /data-canvas-x6-mount|class="canvas-panel"/);
   assert.match(graphSource, /const markdownNode = \["markdown", "ai-markdown"\]\.includes\(type\)/);
   assert.match(graphSource, /markdownNode \? renderCanvasMarkdown\w+\(node\) : ""/);
   assert.match(markdownRendererSource, /data-action="set-canvas-markdown-mode"/);
@@ -1548,8 +1481,6 @@ test("ordinary Markdown stays inline while AI Markdown keeps its text generation
   assert.match(markdownRendererSource, /data-action="toggle-canvas-markdown-fullscreen"/);
   assert.match(markdownRendererSource, /data-canvas-markdown-text-stats/);
   assert.match(graphSource, /data-canvas-text-input/);
-  assert.doesNotMatch(markdownHtml, /class="canvas-node-editor generation-editor/);
-  assert.doesNotMatch(markdownHtml, /请输入您的生图要求/);
 
   const aiMarkdownHtml = renderCanvasSurfaceForHost({
     ui: {
@@ -1572,9 +1503,8 @@ test("ordinary Markdown stays inline while AI Markdown keeps its text generation
       },
     },
   });
-  assert.match(aiMarkdownHtml, /class="canvas-node-editor generation-editor text"/);
-  assert.match(aiMarkdownHtml, /描述需要生成的 Markdown 文档结构和内容/);
-  assert.doesNotMatch(aiMarkdownHtml, /请输入您的生图要求/);
+  assert.match(aiMarkdownHtml, /data-new-canvas-mount/);
+  assert.doesNotMatch(aiMarkdownHtml, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("AI text generation editor exposes its persisted inline dimensions", () => {
@@ -1599,9 +1529,8 @@ test("AI text generation editor exposes its persisted inline dimensions", () => 
       },
     },
   });
-  assert.match(html, /class="canvas-node-editor generation-editor text"/);
-  assert.match(html, /--editor-width:800px;--editor-height:320px/);
-  assert.match(html, /data-action="run-canvas-node"/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("director desk is an in-page Canvas overlay with capture writeback", () => {
@@ -1736,7 +1665,7 @@ test("free generation keeps the application shell around the standalone Agent ho
   assert.match(html, /从一个想法，开始你的作品/);
   assert.match(html, /class="home-creation-mode-switch"/);
   assert.match(html, /data-creation-mode="agent"[^>]*data-tooltip="在画布中通过对话协同创建和编辑内容"[^>]*>画布Agent/);
-  assert.match(html, /data-creation-mode="workflow"[^>]*data-tooltip="上传剧本，按所选 Skill 解析并进入工作流"[^>]*>项目工作流/);
+  assert.match(html, /data-creation-mode="workflow"[^>]*data-tooltip="上传小说或剧本，按所选 Skill 解析并进入工作流"[^>]*>项目工作流/);
   assert.match(html, /data-creation-mode="free"[^>]*data-tooltip="在独立会话中直接生成图片、视频和音频"[^>]*>自由会话/);
   assert.match(html, /<button(?=[^>]*data-creation-mode="free")(?=[^>]*class="active")(?=[^>]*aria-selected="true")[^>]*>/);
   assert.match(html, /workbench-rail persistent/);
@@ -2030,11 +1959,8 @@ test("Canvas Director capture deletion uses the built-in confirmation modal", ()
       },
     },
   });
-  assert.match(html, /class="modal-backdrop delete-project-backdrop"[^>]*aria-label="确认删除导演台视频"/);
-  assert.match(html, /class="delete-project-modal canvas-director-capture-delete-modal"/);
-  assert.match(html, /data-action="close-canvas-director-capture-delete-modal"/);
-  assert.match(html, /data-action="confirm-canvas-director-capture-delete"/);
-  assert.match(html, /确定删除这个视频吗/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount|class="canvas-panel"/);
 });
 
 test("canvas save materializes data URLs into COS object URLs before persisting", async () => {

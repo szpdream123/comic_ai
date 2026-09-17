@@ -278,6 +278,12 @@ const modelErrorRules: readonly ModelErrorRule[] = [
     pattern: /AuthenticationError|\bUnauthorized\b|API key.*(?:incorrect|invalid)|invalid.*API key/i,
   },
   {
+    code: "model_provider_balance_insufficient",
+    displayMessage: "模型渠道余额不足，请充值或更换模型后再试。",
+    retryable: false,
+    pattern: /402\s*Insufficient Balance|Insufficient Balance|insufficient[_\s-]?balance|余额不足/i,
+  },
+  {
     code: "model_response_truncated",
     displayMessage: "模型服务响应为空或被截断，后端没有拿到完整结果。",
     retryable: true,

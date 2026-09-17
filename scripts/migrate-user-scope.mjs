@@ -174,6 +174,7 @@ const migrations = [
   ["20261104-skill-plaza-review.sql", "packages/db/migrations/20261104-skill-plaza-review.sql"],
   ["20261105-skill-plaza-recommendation.sql", "packages/db/migrations/20261105-skill-plaza-recommendation.sql"],
   ["20261106-skill-categories.sql", "packages/db/migrations/20261106-skill-categories.sql"],
+  ["20261107-create-production-agent-session.sql", "packages/db/migrations/20261107-create-production-agent-session.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -253,6 +254,7 @@ const runtimeSafeMigrationNames = new Set([
   "20261104-skill-plaza-review.sql",
   "20261105-skill-plaza-recommendation.sql",
   "20261106-skill-categories.sql",
+  "20261107-create-production-agent-session.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
@@ -952,7 +954,9 @@ async function assertCleanSchema(db) {
     WHERE (object_type, object_name) NOT IN (
       ('column', 'creator_canvas_projects.is_free_generation_workspace'),
       ('constraint', 'creator_canvas_projects_is_free_generation_workspace_not_null'),
-      ('index', 'creator_canvas_projects_free_generation_workspace_owner_idx')
+      ('index', 'creator_canvas_projects_free_generation_workspace_owner_idx'),
+      ('column', 'production_agent_conversations.workspace_json'),
+      ('constraint', 'production_agent_conversations_workspace_json_not_null')
     )
     ORDER BY object_type, object_name
   `, [first, second]);

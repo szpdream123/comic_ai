@@ -6,12 +6,443 @@ import { createAuthSession } from "../../identity/session.service.ts";
 import type { SqlDatabase } from "../../shared/db/sql.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createCreatorApplication } from "../creator-application.service.ts";
+import { createProductionManifest } from "../production-agent.adapter.ts";
+import {
+  registerProductionManifestRevision,
+  versionProductionManifest,
+} from "../production-agent.manifest-version.ts";
 import { saveCanvasByCanvasProjectId } from "../creator-canvas-record.service.ts";
 import { listShotsForProject, upsertShotsForProject } from "../shot-record.service.ts";
 
 process.env.AUTH_SECRET_PEPPER ??= "creator-application-user-test-pepper";
 
 describe("creator application user ownership", { concurrency: false }, () => {
+  it("returns 400 for a malformed production manifest without writing an episode", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000090",
+        phone: "13800138090",
+        token: "creator-production-manifest-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: {
+          name: "Production manifest",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+          projectType: "animation",
+        },
+        idempotencyKey: "creator-production-manifest-project",
+        now: new Date("2026-09-16T00:00:00.000Z"),
+      });
+      assert.equal(created.status, 200, JSON.stringify(created.body));
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+
+      const result = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: {
+          productionManifest: {},
+          commitPayload: { scriptText: "Episode 1", scenes: [], characters: [], props: [], storyboards: [] },
+        },
+        now: new Date("2026-09-16T00:01:00.000Z"),
+      });
+      const episodes = await db.query<{ count: number }>("SELECT count(*)::int AS count FROM episodes WHERE project_id = $1", [projectId]);
+
+      assert.equal(result.status, 400);
+      assert.equal(result.body.error, "production_manifest_invalid");
+      assert.equal(episodes.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("commits a versioned production manifest without a concurrency token", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000090",
+        phone: "13800138090",
+        token: "creator-production-manifest-no-token-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: {
+          name: "Production manifest no token",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+          projectType: "animation",
+        },
+        idempotencyKey: "creator-production-manifest-no-token-project",
+        now: new Date("2026-09-16T00:10:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const manifest = createProductionManifest(
+        { projectId },
+        { commitPayload: { scriptText: "无需并发令牌", scenes: [], characters: [], props: [], storyboards: [{ plot: "第一镜" }] } },
+      );
+
+      const result = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: { productionManifest: manifest },
+        now: new Date("2026-09-16T00:11:00.000Z"),
+      });
+      const episodes = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM episodes WHERE project_id = $1",
+        [projectId],
+      );
+
+      assert.equal(result.status, 200, JSON.stringify(result.body));
+      assert.equal(episodes.rows[0]?.count, 1);
+      assert.equal("error" in result.body && result.body.error === "production_manifest_concurrency_token_required", false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("uses the validated Production Manifest as the commit source and persists stable shot references", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000091",
+        phone: "13800138091",
+        token: "creator-production-manifest-commit-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: {
+          name: "Production manifest commit",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+          projectType: "animation",
+        },
+        idempotencyKey: "creator-production-manifest-commit-project",
+        now: new Date("2026-09-16T01:00:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+
+      const commitBody = {
+          productionManifest: {
+            schemaVersion: "creator-production.v1",
+            source: { kind: "script", contentHash: "sha256:manifest-commit" },
+            project: { projectId },
+            scriptText: "Manifest 剧本",
+            characters: [{ key: "char_hero", name: "Manifest 角色" }],
+            scenes: [{ key: "scene_home", name: "Manifest 场景" }],
+            props: [{ key: "prop_food", name: "Manifest 道具" }],
+            storyboards: [{
+              shotNo: 1,
+              plot: "Manifest 分镜剧情",
+              characterKeys: ["char_hero"],
+              sceneKey: "scene_home",
+              propKeys: ["prop_food"],
+            }],
+          },
+          commitPayload: {
+            scriptText: "不得写入的旧 payload",
+            characters: [{ name: "Payload 角色" }],
+            scenes: [],
+            props: [],
+            storyboards: [{ plot: "Payload 分镜剧情" }],
+          },
+        };
+      const result = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: commitBody,
+        now: new Date("2026-09-16T01:01:00.000Z"),
+      });
+      const replay = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: commitBody,
+        now: new Date("2026-09-16T01:02:00.000Z"),
+      });
+      const assets = await db.query<{ asset_key: string; label: string }>(
+        `
+          SELECT asset.asset_key, version.metadata_json->>'label' AS label
+          FROM assets asset
+          JOIN LATERAL (
+            SELECT metadata_json
+            FROM asset_versions
+            WHERE asset_id = asset.id
+            ORDER BY version_number DESC
+            LIMIT 1
+          ) version ON true
+          WHERE asset.project_id = $1
+          ORDER BY asset.asset_key
+        `,
+        [projectId],
+      );
+      const shots = await db.query<{ id: string; description: string }>(
+        "SELECT id, description FROM shots WHERE project_id = $1",
+        [projectId],
+      );
+      const references = await db.query<{ asset_key: string; reference_role: string }>(
+        `
+          SELECT asset.asset_key, reference.reference_role
+          FROM shot_reference_assets reference
+          JOIN assets asset ON asset.id = reference.asset_id
+          WHERE reference.project_id = $1
+          ORDER BY reference.sort_order
+        `,
+        [projectId],
+      );
+      const counts = await db.query<{ episodes: number; asset_versions: number; shots: number }>(
+        `SELECT
+          (SELECT count(*)::int FROM episodes WHERE project_id = $1) AS episodes,
+          (SELECT count(*)::int FROM asset_versions version JOIN assets asset ON asset.id = version.asset_id WHERE asset.project_id = $1) AS asset_versions,
+          (SELECT count(*)::int FROM shots WHERE project_id = $1) AS shots`,
+        [projectId],
+      );
+
+      assert.equal(result.status, 200, JSON.stringify(result.body));
+      assert.equal(replay.status, 200, JSON.stringify(replay.body));
+      assert.equal(replay.body.replayed, true);
+      assert.deepEqual(counts.rows[0], { episodes: 1, asset_versions: 3, shots: 1 });
+      assert.deepEqual(assets.rows, [
+        { asset_key: "char_hero", label: "Manifest 角色" },
+        { asset_key: "prop_food", label: "Manifest 道具" },
+        { asset_key: "scene_home", label: "Manifest 场景" },
+      ]);
+      assert.equal(shots.rows.length, 1);
+      assert.match(shots.rows[0]!.description, /Manifest 分镜剧情/);
+      assert.doesNotMatch(shots.rows[0]!.description, /Payload/);
+      assert.deepEqual(references.rows, [
+        { asset_key: "char_hero", reference_role: "character" },
+        { asset_key: "scene_home", reference_role: "scene" },
+        { asset_key: "prop_food", reference_role: "prop" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects stale concurrent Production Manifest edits without writing another episode", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000092",
+        phone: "13800138092",
+        token: "creator-production-manifest-version-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: {
+          name: "Production manifest version",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+          projectType: "animation",
+        },
+        idempotencyKey: "creator-production-manifest-version-project",
+        now: new Date("2026-09-16T01:30:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      const routeSnapshot = {
+        agentType: "production",
+        scopeType: "project",
+        scopeId: projectId,
+      };
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id
+          ) VALUES ($1, $2, 'production_agent', 'succeeded', $3::jsonb, $4)
+        `,
+        [workflowId, projectId, JSON.stringify(routeSnapshot), owner.id],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, project_id, workflow_id, task_type, status, queue_name,
+            input_snapshot_json, target_entity_type, target_entity_id
+          ) VALUES (
+            $1, $2, $3, 'production_agent.execute', 'succeeded', 'task-center',
+            $4::jsonb, 'project', $2
+          )
+        `,
+        [taskId, projectId, workflowId, JSON.stringify(routeSnapshot)],
+      );
+      const initialManifest = createProductionManifest(
+        { projectId },
+        {
+          commitPayload: {
+            scriptText: "初始剧本",
+            characters: [],
+            scenes: [],
+            props: [],
+            storyboards: [{ plot: "初始分镜" }],
+          },
+        },
+      );
+      await registerProductionManifestRevision(db, {
+        workflowId,
+        taskId,
+        projectId,
+        manifest: initialManifest,
+        now: new Date("2026-09-16T01:31:00.000Z"),
+      });
+      const firstEdit = versionProductionManifest(
+        { ...initialManifest, scriptText: "编辑版本 A" },
+        { version: 2, parentHash: initialManifest.revision!.hash },
+      );
+      const staleEdit = versionProductionManifest(
+        { ...initialManifest, scriptText: "编辑版本 B" },
+        { version: 2, parentHash: initialManifest.revision!.hash },
+      );
+
+      const first = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: {
+          productionManifest: firstEdit,
+          productionWorkflowId: workflowId,
+          productionTaskId: taskId,
+          expectedManifestVersion: initialManifest.revision!.version,
+          expectedManifestHash: initialManifest.revision!.hash,
+        },
+        now: new Date("2026-09-16T01:32:00.000Z"),
+      });
+      const stale = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: {
+          productionManifest: staleEdit,
+          productionWorkflowId: workflowId,
+          productionTaskId: taskId,
+          expectedManifestVersion: initialManifest.revision!.version,
+          expectedManifestHash: initialManifest.revision!.hash,
+        },
+        now: new Date("2026-09-16T01:33:00.000Z"),
+      });
+      const counts = await db.query<{ episodes: number; shots: number }>(
+        `SELECT
+          (SELECT count(*)::int FROM episodes WHERE project_id = $1) AS episodes,
+          (SELECT count(*)::int FROM shots WHERE project_id = $1) AS shots`,
+        [projectId],
+      );
+
+      assert.equal(first.status, 200, JSON.stringify(first.body));
+      assert.equal(stale.status, 409);
+      assert.equal(stale.body.error, "production_manifest_stale");
+      assert.deepEqual(counts.rows[0], { episodes: 1, shots: 1 });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("returns 409 when a versioned Production Manifest content hash is stale", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000094",
+        phone: "13800138094",
+        token: "creator-production-manifest-hash-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: {
+          name: "Production hash",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+          projectType: "animation",
+        },
+        idempotencyKey: "creator-production-manifest-hash-project",
+        now: new Date("2026-09-16T01:40:00.000Z"),
+      });
+      assert.equal(created.status, 200, JSON.stringify(created.body));
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const manifest = createProductionManifest(
+        { projectId },
+        { commitPayload: { scriptText: "原始内容", scenes: [], characters: [], props: [], storyboards: [] } },
+      );
+
+      const result = await creator.commitAiStoryboardPreview({
+        user: owner,
+        projectId,
+        body: { productionManifest: { ...manifest, scriptText: "过期页面内容" } },
+        now: new Date("2026-09-16T01:41:00.000Z"),
+      });
+      const episodes = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM episodes WHERE project_id = $1",
+        [projectId],
+      );
+
+      assert.equal(result.status, 409);
+      assert.equal(result.body.error, "production_manifest_stale");
+      assert.equal(episodes.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not grant Production Manifest commit permission to a project viewer", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000093",
+        phone: "13800138093",
+        token: "creator-production-viewer-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: { name: "Production viewer", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p", projectType: "animation" },
+        idempotencyKey: "creator-production-viewer-project",
+        now: new Date("2026-09-16T02:00:00.000Z"),
+      });
+      assert.equal(created.status, 200, JSON.stringify(created.body));
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const viewer = await seedTeamMemberSession(db, {
+        ownerUserId: owner.id,
+        projectId,
+        memberId: "00000000-0000-4000-8000-000000000193",
+        token: "creator-production-viewer-member",
+        role: "viewer",
+      });
+
+      await assert.rejects(
+        creator.commitAiStoryboardPreview({
+          user: viewer,
+          projectId,
+          body: {
+            productionManifest: {
+              schemaVersion: "creator-production.v1",
+              source: { kind: "script" },
+              project: { projectId },
+              scriptText: "Viewer must not commit",
+              characters: [], scenes: [], props: [],
+              storyboards: [{ plot: "Viewer shot" }],
+            },
+          },
+          now: new Date("2026-07-12T08:07:00.000Z"),
+        }),
+        (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "capability_missing"),
+      );
+      const episodes = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM episodes WHERE project_id = $1",
+        [projectId],
+      );
+      assert.equal(episodes.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("lists only projects owned by the authenticated user", async () => {
     const db = await createMigratedTestDb();
     try {

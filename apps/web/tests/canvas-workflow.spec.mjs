@@ -1916,11 +1916,8 @@ describe("canvas workflow document", () => {
     assert.match(workbenchSource.slice(applyStart, applyEnd), /refreshCanvasWorkflowNode\(workbench, nodeId\)/);
 
     const projectDetailSource = readFileSync(new URL("../src/features/production-workbench/project-detail.js", import.meta.url), "utf8");
-    assert.match(projectDetailSource, /return renderLiblibGenerationEditor\(\{/);
-    assert.match(projectDetailSource, /data-canvas-prompt-input/);
-    assert.match(projectDetailSource, /submitAction: "run-canvas-script-workflow-start"/);
     assert.match(projectDetailSource, /renderCanvasGenerationSkillTrigger\(node\)/);
-    assert.doesNotMatch(projectDetailSource, /canvas-script-generation-editor|data-canvas-script-workflow-instruction/);
+    assert.doesNotMatch(projectDetailSource, /canvas-script-generation-editor|data-canvas-script-workflow-instruction|return renderLiblibGenerationEditor\(/);
     const styles = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
     assert.match(styles, /\.canvas-x6-special-node\.is-script-workflow\s*\{/);
     assert.match(styles, /\.canvas-stage\.is-x6-ready \.canvas-x6-special-node :is\(input, textarea, select, \[contenteditable="true"\]\)\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);

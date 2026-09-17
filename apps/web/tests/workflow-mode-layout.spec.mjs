@@ -108,9 +108,9 @@ test("home workflow accepts only an uploaded script for parsing", () => {
   assert.match(html, /class="home-agent-composer home-workflow-script-upload"/);
   assert.match(html, /data-dropzone="home-workflow-script-upload"/);
   assert.match(html, /data-home-workflow-script-input[^>]*accept="\.docx,\.txt"/);
-  assert.match(html, /已选择剧本/);
+  assert.match(html, /已选择文件/);
   assert.match(html, /雨夜车站\.docx/);
-  assert.match(html, /data-action="submit-home-agent-prompt"[^>]*>解析剧本/);
+  assert.match(html, /data-action="submit-home-agent-prompt"[^>]*>开始解析/);
   assert.match(html, /data-action="open-episode-prompt-skill-modal"/);
   assert.match(html, /home-workflow-script-skill/);
   assert.doesNotMatch(html, /仅支持上传剧本文件进行解析/);

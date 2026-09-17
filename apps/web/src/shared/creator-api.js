@@ -3450,6 +3450,103 @@ export const creatorApi = {
     return fetchJson(`/api/task-center/tasks${suffix}`, options);
   },
 
+  cancelProductionAgentTask(projectId, taskId) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/production-agent/tasks/${encodeURIComponent(taskId)}/cancel`,
+      {},
+    );
+  },
+
+  retryProductionAgentTask(projectId, taskId) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/production-agent/tasks/${encodeURIComponent(taskId)}/retry`,
+      {},
+    );
+  },
+
+  resumeProductionAgentTask(projectId, taskId) {
+    return postJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/production-agent/tasks/${encodeURIComponent(taskId)}/resume`,
+      {},
+    );
+  },
+
+  createProductionAgentConversation(input = {}) {
+    return postJson("/api/production-agent/conversations", input);
+  },
+
+  getProductionAgentConversation(id) {
+    return fetchJson(`/api/production-agent/conversations/${encodeURIComponent(id)}`, { cache: "no-store" });
+  },
+
+  getProductionAgentSkillFile(id, input = {}) {
+    const params = new URLSearchParams({
+      skillId: String(input.skillId ?? ""),
+      path: String(input.path ?? "SKILL.md"),
+    });
+    return fetchJson(
+      `/api/production-agent/conversations/${encodeURIComponent(id)}/skill-files?${params}`,
+      { cache: "no-store" },
+    );
+  },
+
+  getProductionAgentSource(id, input = {}) {
+    const offset = Number(input.offset ?? 0);
+    const limit = Number(input.limit ?? 8000);
+    const params = new URLSearchParams({
+      offset: String(Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0),
+      limit: String(Number.isFinite(limit) ? Math.min(20000, Math.max(1, Math.trunc(limit))) : 8000),
+    });
+    return fetchJson(
+      `/api/production-agent/conversations/${encodeURIComponent(id)}/source?${params}`,
+      { cache: "no-store" },
+    );
+  },
+
+  listProductionAgentMessages(id, input = {}) {
+    const limit = Number(input.limit ?? 200);
+    const params = new URLSearchParams({
+      limit: String(Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return fetchJson(
+      `/api/production-agent/conversations/${encodeURIComponent(id)}/messages?${params}`,
+      { cache: "no-store" },
+    );
+  },
+
+  listProductionAgentEvents(taskId, { after } = {}) {
+    const cursor = Number(after ?? 0);
+    const params = new URLSearchParams({
+      after: String(Number.isFinite(cursor) ? Math.max(0, Math.trunc(cursor)) : 0),
+    });
+    return fetchJson(
+      `/api/production-agent/agent-tasks/${encodeURIComponent(taskId)}/events?${params}`,
+      { cache: "no-store" },
+    );
+  },
+
+  streamProductionAgentEvents(taskId, input = {}) {
+    const after = Number(input.after ?? 0);
+    const cursor = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+    const params = new URLSearchParams({ live: "1" });
+    return getSse(`/api/production-agent/agent-tasks/${encodeURIComponent(taskId)}/events?${params}`, {
+      signal: input.signal,
+      headers: cursor > 0 ? { "last-event-id": String(cursor) } : {},
+    });
+  },
+
+  sendProductionAgentMessage(id, input = {}) {
+    return postJson(`/api/production-agent/conversations/${encodeURIComponent(id)}/messages`, input);
+  },
+
+  stopProductionAgentSessionTask(taskId) {
+    return postJson(`/api/production-agent/agent-tasks/${encodeURIComponent(taskId)}/stop`, {});
+  },
+
+  approveProductionAgentSessionTask(taskId, input = {}) {
+    return postJson(`/api/production-agent/agent-tasks/${encodeURIComponent(taskId)}/approve`, input);
+  },
+
   bindFileResource(episodeId, input) {
     return postJson(`/api/episodes/${encodeURIComponent(episodeId)}/file-resources/bind`, input);
   },
