@@ -97,7 +97,7 @@ import {
 import {
   EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
-  filterProjectWorkflowPlazaSkills,
+  filterOfficialProjectWorkflowPlazaSkills,
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
   normalizePlazaSkillIds,
@@ -2755,12 +2755,7 @@ function collectHomeAgentPlazaSkills(ui = {}) {
 }
 
 function collectProjectWorkflowPlazaSkills(ui = {}) {
-  return [
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories),
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaLibrarySkills, "library", ui.skillPlazaCategories),
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaMineSkills, "mine", ui.skillPlazaCategories),
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaPrivateSkills, "private", ui.skillPlazaCategories),
-  ];
+  return filterOfficialProjectWorkflowPlazaSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories);
 }
 
 function normalizeProjectWorkflowPlazaSkillIds(ui = {}, ids = []) {
@@ -4133,7 +4128,7 @@ export async function initProductionWorkbench({
     }
     if (
       workbench.ui.episodePromptSkillModalOpen &&
-      !eventTarget?.closest?.('.plaza-skill-picker-layer, [data-action="open-episode-prompt-skill-modal"]')
+      !eventTarget?.closest?.('.plaza-skill-picker-layer, .project-workflow-skill-picker-layer, [data-action="open-episode-prompt-skill-modal"]')
     ) {
       workbench.ui.episodePromptSkillModalOpen = false;
       workbench.ui.episodePromptSkillDraftIds = {};
@@ -14724,6 +14719,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "set-episode-prompt-skill-source",
     "set-episode-prompt-skill-category",
     "select-episode-prompt-skill-draft",
+    "select-official-project-workflow-skill",
     "clear-episode-prompt-skill-draft",
     "confirm-episode-prompt-skills",
     "open-canvas-text-skill-modal",
@@ -21331,9 +21327,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       const payload = {
         name: String(data.get("name") ?? "").trim(),
-        category: plazaSkillCreateCategories(workbench.ui.skillPlazaCategories).some((item) => item.id === String(data.get("category") ?? ""))
-          ? String(data.get("category"))
-          : "general",
+        category: (() => {
+          const createCategories = plazaSkillCreateCategories(workbench.ui.skillPlazaCategories);
+          const requested = String(data.get("category") ?? "");
+          return createCategories.some((item) => item.id === requested)
+            ? requested
+            : (createCategories[0]?.id || "general");
+        })(),
         summary: String(data.get("summary") ?? "").trim(),
         detail: {
           introduction,
@@ -21968,6 +21968,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.homeAgentModelMenuOpen = false;
       workbench.ui.homeAgentSkillPickerOpen = false;
       workbench.ui.homeAgentSkillDraftPlazaIds = [];
+      if (mode === "workflow") {
+        workbench.ui.episodePromptSkillModalOpen = false;
+        workbench.ui.episodePromptSkillDraftPlazaIds = [];
+      }
       if (mode === "free") {
         prepareFreeGenerationSurface(workbench);
         if (typeof window !== "undefined") {
@@ -26282,29 +26286,37 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    resetCanvasTextSkillModal(workbench.ui);
-    workbench.ui.episodePromptSkillDraftIds = {
-      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
-    };
-    workbench.ui.episodePromptSkillDraftPlazaIds = normalizeProjectWorkflowPlazaSkillIds(workbench.ui, workbench.ui.selectedEpisodePlazaSkillIds);
+    workbench.ui.episodePromptSkillDraftIds = {};
+    workbench.ui.episodePromptSkillDraftPlazaIds = normalizeProjectWorkflowPlazaSkillIds(
+      workbench.ui,
+      workbench.ui.selectedEpisodePlazaSkillIds,
+    );
     workbench.ui.episodePromptSkillSourceTab = "official";
-    workbench.ui.episodePromptSkillCategory = "recommended";
-    workbench.ui.episodePlazaSkillQuery = "";
     workbench.ui.episodePromptSkillModalOpen = true;
     workbench.ui.singleEpisodeScriptImportMenu = "";
-    const hasEpisodePromptSkills = Boolean(
-      workbench.ui.episodePlazaOfficialSkills?.length
-      || workbench.ui.episodePlazaLibrarySkills?.length
-      || workbench.ui.episodePlazaMineSkills?.length
-      || workbench.ui.episodePromptOfficialSkills?.length
-      || workbench.ui.episodePromptPrivateSkills?.length,
-    );
-    if (!hasEpisodePromptSkills && !workbench.ui.episodePromptSkillLoading) {
+    const hasOfficialWorkflowSkills = collectProjectWorkflowPlazaSkills(workbench.ui).length > 0;
+    if (!hasOfficialWorkflowSkills && !workbench.ui.episodePromptSkillLoading) {
       workbench.ui.episodePromptSkillLoading = true;
       render(workbench);
-      await syncEpisodePromptSkills(workbench);
-      workbench.ui.episodePromptSkillDraftPlazaIds = normalizeProjectWorkflowPlazaSkillIds(workbench.ui, workbench.ui.selectedEpisodePlazaSkillIds);
+      await syncEpisodePlazaSkills(workbench);
+      workbench.ui.episodePromptSkillDraftPlazaIds = normalizeProjectWorkflowPlazaSkillIds(
+        workbench.ui,
+        workbench.ui.selectedEpisodePlazaSkillIds,
+      );
     }
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-official-project-workflow-skill") {
+    const skillId = String(target.dataset.episodeSkillId ?? target.dataset.skillId ?? "").trim();
+    const skills = collectProjectWorkflowPlazaSkills(workbench.ui);
+    if (!skills.some((item) => item.id === skillId)) {
+      return;
+    }
+    workbench.ui.selectedEpisodePlazaSkillIds = [skillId];
+    workbench.ui.episodePromptSkillDraftPlazaIds = [skillId];
+    workbench.ui.episodePromptSkillModalOpen = false;
     render(workbench);
     return;
   }
@@ -38551,6 +38563,7 @@ async function openSingleEpisodeFlow(workbench, options = {}) {
   await Promise.all([
     ensureProjectEpisodesLoaded(workbench),
     syncSingleEpisodeGenerationConfig(workbench),
+    syncEpisodePlazaSkills(workbench),
   ]);
   workbench.ui.singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
   render(workbench);
@@ -57554,13 +57567,14 @@ function removePromptMentionPreviewDom(workbench) {
 
 function positionPlazaSkillPicker(workbench) {
   const root = workbench?.root ?? null;
-  const layer = root?.querySelector?.(".plaza-skill-picker-layer");
+  const layer = root?.querySelector?.(".project-workflow-skill-picker-layer")
+    ?? root?.querySelector?.(".plaza-skill-picker-layer");
   if (!layer) {
     return;
   }
   const trigger = root.querySelector(".plaza-skill-chip-control.is-open")
-    ?? root.querySelector(".plaza-skill-chip-control")
     ?? root.querySelector('[data-action="open-episode-prompt-skill-modal"]')
+    ?? root.querySelector(".plaza-skill-chip-control")
     ?? root.querySelector(".home-agent-skill-trigger")
     ?? root.querySelector('[data-action="open-home-agent-skill-picker"]');
   if (!trigger) {

@@ -1332,7 +1332,7 @@
       .admin-skill-mode-toggle { display: flex; gap: 4px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #f6f9fd; }
       .admin-skill-mode-toggle button { min-width: 48px; min-height: 28px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
       .admin-skill-mode-toggle button.active { background: #fff; font-weight: 700; }
-      .admin-skill-editor { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 22rem; border: 1px solid var(--line); border-radius: 12px; overflow: visible; background: #fff; }
+       .admin-skill-editor { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); grid-template-rows: 22rem; height: 22rem; min-height: 22rem; max-height: 22rem; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
       .admin-skill-upload-menu-wrap { position: relative; }
       .admin-skill-upload-menu-wrap > button { min-width: 48px; min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
       .admin-skill-upload-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 6; display: none; min-width: 120px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(18, 36, 61, .12); }
@@ -1341,13 +1341,13 @@
       .admin-skill-upload-menu label { position: relative; display: block; padding: 8px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
       .admin-skill-upload-menu label:hover { background: #f6f9fd; }
       .admin-skill-upload-menu input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-      .admin-skill-tree { position: relative; overflow: visible; border-right: 1px solid var(--line); background: #f8fbff; }
-      .admin-skill-tree header { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 10px 12px; color: var(--muted); font-size: 12px; }
+       .admin-skill-tree { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; border-right: 1px solid var(--line); background: #f8fbff; }
+       .admin-skill-tree header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 6px; padding: 10px 12px; color: var(--muted); font-size: 12px; }
       .admin-skill-tree-actions { display: flex; gap: 2px; }
       .admin-skill-icon-button { display: grid; width: 26px; min-width: 26px; min-height: 26px; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
       .admin-skill-icon-button:hover { background: #e8f0ff; color: var(--text); }
       .admin-skill-icon-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-      .admin-skill-tree-list { display: grid; align-content: start; gap: 4px; min-height: 0; overflow: auto; padding: 0 8px 10px; }
+       .admin-skill-tree-list { display: grid; align-content: start; gap: 4px; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 8px 10px; }
       .admin-skill-tree-row { display: flex; align-items: center; min-height: 30px; padding-right: 2px; border-radius: 8px; }
       .admin-skill-tree-row.is-active, .admin-skill-tree-row.is-draft { background: #e8f0ff; }
       .admin-skill-tree-row > button[data-admin-skill-file], .admin-skill-tree-row > button[data-admin-skill-folder] { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; overflow: hidden; padding: 6px 8px; border: 0; background: transparent; text-align: left; cursor: pointer; color: var(--text); }
@@ -1365,11 +1365,12 @@
       .admin-skill-tree-menu { position: absolute; z-index: 6; display: none; min-width: 96px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(18, 36, 61, .12); }
       .admin-skill-tree-menu button { padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
       .admin-skill-tree-menu button:hover { background: #f6f9fd; }
-      .admin-skill-editor-main { position: relative; min-width: 0; }
-      .admin-skill-markdown-item { display: none; height: 22rem; }
-      .admin-skill-markdown-item.is-active { display: block; }
-      .admin-skill-markdown-item textarea { width: 100%; height: 100%; box-sizing: border-box; border: 0; resize: none; padding: 12px; font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
-      .admin-skill-preview { display: none; height: 22rem; overflow: auto; padding: 12px; }
+       .admin-skill-editor-main { position: relative; display: grid; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+       .admin-skill-markdown-files, .admin-skill-markdown-item.is-active, .admin-skill-preview { min-width: 0; min-height: 0; height: 100%; }
+       .admin-skill-markdown-item { display: none; height: 100%; }
+       .admin-skill-markdown-item.is-active { display: block; }
+       .admin-skill-markdown-item textarea { width: 100%; height: 100%; box-sizing: border-box; border: 0; resize: none; padding: 12px; font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
+       .admin-skill-preview { display: none; overflow: auto; padding: 12px; }
       .admin-skill-editor[data-mode="preview"] .admin-skill-markdown-files { display: none; }
       .admin-skill-editor[data-mode="preview"] .admin-skill-preview { display: block; }
       .admin-skill-cover { display: grid; gap: 8px; }
@@ -15527,7 +15528,7 @@
         return Array.from(form?.querySelectorAll?.("[data-admin-skill-folder]") ?? []).find((el) => String(el.dataset.folderName || el.value) === folderName) ?? null;
       }
 
-      function ensureAdminSkillCreateFolder(form, folderName, collapsed = false) {
+      function ensureAdminSkillCreateFolder(form, folderName, collapsed = true) {
         const host = form?.querySelector?.("[data-admin-skill-folders]");
         const name = normalizeAdminSkillFileName(folderName);
         if (!host || !name) return null;
@@ -15545,8 +15546,9 @@
         const fromFiles = listAdminSkillCreateFiles(form).map((name) => name.includes("/") ? name.split("/")[0] : "").filter(Boolean);
         const collapsed = new Map(stored.map((item) => [item.name, item.collapsed]));
         return [...new Set([...stored.map((item) => item.name), ...fromFiles])].map((name) => {
-          ensureAdminSkillCreateFolder(form, name, collapsed.get(name) === true);
-          return { name, collapsed: collapsed.get(name) === true };
+          const isCollapsed = collapsed.get(name) !== false;
+          ensureAdminSkillCreateFolder(form, name, isCollapsed);
+          return { name, collapsed: isCollapsed };
         });
       }
 
@@ -15865,7 +15867,8 @@
             const folder = findAdminSkillCreateFolder(form, String(folderButton.dataset.adminSkillFolder ?? ""));
             if (!folder) return;
             folder.dataset.collapsed = folder.dataset.collapsed === "true" ? "false" : "true";
-            selectAdminSkillCreateFolder(form, folder.dataset.folderName);
+            hideAdminSkillCreateMenus(form);
+            refreshAdminSkillCreateTree(form);
             return;
           }
           const fileButton = target.closest?.("[data-admin-skill-file]");
@@ -16080,10 +16083,10 @@
           ? state.skillCategoryItems.map((item) => {
             const actions = [`<button class="btn ghost" onclick="openAdminSkillCategoryDrawer('${escapeAttribute(item.code)}')">编辑</button>`];
             if (item.isSystem !== true) actions.push(`<button class="btn ghost" onclick="deleteAdminSkillCategory('${escapeAttribute(item.code)}')">删除</button>`);
-            return `<tr><td>${escapeHtml(item.name || item.code)}<div class="metric-note">${escapeHtml(item.code)}${item.shortName && item.shortName !== item.name ? ` · ${escapeHtml(item.shortName)}` : ""}${item.isSystem === true ? " · 系统" : ""}${item.isSkillCategory === false ? " · 非可分配" : ""}</div></td><td><span class="tag ${item.isVisible === false ? "warn" : "green"}">${item.isVisible === false ? "隐藏" : "显示"}</span></td><td>${Number(item.sortOrder || 100)}</td><td class="actions"><div class="actions-row">${actions.join("")}</div></td></tr>`;
+            return `<tr><td>${escapeHtml(item.name || item.code)}<div class="metric-note">${escapeHtml(item.code)}${item.shortName && item.shortName !== item.name ? ` · ${escapeHtml(item.shortName)}` : ""}${item.isSystem === true ? " · 系统" : ""}${item.isSkillCategory === false ? " · 非可分配" : ""}</div></td><td><span class="tag ${item.isVisible === false ? "warn" : "green"}">${item.isVisible === false ? "隐藏" : "显示"}</span></td><td><span class="tag ${item.allowUserCreate === false ? "warn" : "green"}">${item.allowUserCreate === false ? "不可创建" : "可创建"}</span></td><td>${Number(item.sortOrder || 100)}</td><td class="actions"><div class="actions-row">${actions.join("")}</div></td></tr>`;
           }).join("")
-          : `<tr><td colspan="4">${escapeHtml(state.skillCategoryLoadError || "暂无 Skill 分类")}</td></tr>`;
-        return `<section class="section"><div class="toolbar"><div><h3>Skill 分类</h3><div class="metric-note">维护广场、创建和后台共用的 Skill 分类，隐藏后前台不再展示。</div></div><div class="filters"><button class="btn ghost" onclick="loadAdminSkillCategories().then(renderShell)">刷新</button><button class="btn primary" onclick="openAdminSkillCategoryDrawer()">新增分类</button></div></div><div class="table-wrap dense skill-admin"><table><thead><tr><th>分类</th><th>状态</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+          : `<tr><td colspan="5">${escapeHtml(state.skillCategoryLoadError || "暂无 Skill 分类")}</td></tr>`;
+        return `<section class="section"><div class="toolbar"><div><h3>Skill 分类</h3><div class="metric-note">维护广场、创建和后台共用的 Skill 分类，隐藏后前台不再展示。取消“用户可创建”后，用户创建 Skill 不能选该分类，后台 Skill 管理不受影响。</div></div><div class="filters"><button class="btn ghost" onclick="loadAdminSkillCategories().then(renderShell)">刷新</button><button class="btn primary" onclick="openAdminSkillCategoryDrawer()">新增分类</button></div></div><div class="table-wrap dense skill-admin"><table><thead><tr><th>分类</th><th>状态</th><th>用户可创建</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
       }
 
       function openAdminSkillCategoryDrawer(categoryCode = "") {
@@ -16094,12 +16097,13 @@
           <div class="form-grid"><label class="field"><span>分类名称</span><input name="name" value="${escapeAttribute(category?.name || "")}" maxlength="40" required /></label><label class="field"><span>分类编码</span><input name="code" value="${escapeAttribute(category?.code || "")}" pattern="[a-z0-9][a-z0-9_-]{0,39}" placeholder="例如 custom-story" ${category?.isSystem === true ? "readonly" : ""} required /></label></div>
           <div class="form-grid"><label class="field"><span>简称</span><input name="shortName" value="${escapeAttribute(category?.shortName || "")}" maxlength="40" /></label><label class="field"><span>排序</span><input name="sortOrder" type="number" value="${Number(category?.sortOrder || 100)}" /></label></div>
           <label class="field checkbox"><span>前台显示</span><input type="checkbox" name="isVisible" ${category?.isVisible === false ? "" : "checked"} /></label>
+          <label class="field checkbox"><span>用户可创建</span><input type="checkbox" name="allowUserCreate" ${category?.allowUserCreate === false ? "" : "checked"} /><small class="metric-note">勾选后用户创建 Skill 可选该分类；不勾选时仅后台 Skill 管理可创建到该分类。</small></label>
           <div class="error-text" id="admin-skill-category-error"></div><div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存分类</button></div>
         </form></aside>`;
         document.getElementById("admin-skill-category-form").addEventListener("submit", async (event) => {
           event.preventDefault(); const form = new FormData(event.currentTarget); const error = document.getElementById("admin-skill-category-error");
           await runAdminMutation(event.currentTarget, error, async () => {
-            await api("/api/admin/skill-categories", { method: category ? "PATCH" : "POST", headers: { "idempotency-key": adminIdempotencyKey("skill-category-save") }, body: JSON.stringify({ name: form.get("name"), code: category ? category.code : form.get("code"), nextCode: category ? form.get("code") : undefined, shortName: form.get("shortName"), sortOrder: Number(form.get("sortOrder") || 100), isVisible: form.get("isVisible") === "on" }) });
+            await api("/api/admin/skill-categories", { method: category ? "PATCH" : "POST", headers: { "idempotency-key": adminIdempotencyKey("skill-category-save") }, body: JSON.stringify({ name: form.get("name"), code: category ? category.code : form.get("code"), nextCode: category ? form.get("code") : undefined, shortName: form.get("shortName"), sortOrder: Number(form.get("sortOrder") || 100), isVisible: form.get("isVisible") === "on", allowUserCreate: form.get("allowUserCreate") === "on" }) });
             await loadAdminSkillCategories(); closeDrawer(); renderShell();
           }, category ? "分类已更新" : "分类已新增");
         });

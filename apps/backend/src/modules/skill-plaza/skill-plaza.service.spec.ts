@@ -433,7 +433,7 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       const service = createSkillPlazaService({ db });
       const listed = await service.listCategories();
       assert.equal(listed.items.some((item) => item.code === "recommended" && item.isSkillCategory === false && item.isSystem === true), true);
-      assert.equal(listed.items.some((item) => item.code === "project-workflow"), true);
+      assert.equal(listed.items.some((item) => item.code === "project-workflow" && item.allowUserCreate === false), true);
 
       const created = await service.createCategory({
         code: "custom-story",
@@ -441,8 +441,34 @@ describe("skill plaza admin review", { concurrency: false }, () => {
         shortName: "故事",
         sortOrder: 120,
         isVisible: true,
+        allowUserCreate: true,
       });
       assert.equal(created.code, "custom-story");
+      assert.equal(created.allowUserCreate, true);
+      await assert.rejects(
+        () => service.create({
+          userId,
+          name: "工作流用户技能",
+          summary: "不应创建",
+          category: "project-workflow",
+          detail: { introduction: "# SKILL.md\n不可创建" },
+        }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_not_user_creatable",
+      );
+      const blocked = await service.updateCategory({ categoryId: created.code, allowUserCreate: false, name: "自定义故事" });
+      assert.equal(blocked.allowUserCreate, false);
+      await assert.rejects(
+        () => service.create({
+          userId,
+          name: "被禁分类技能",
+          summary: "不应创建",
+          category: "custom-story",
+          detail: { introduction: "# SKILL.md\n不可创建" },
+        }),
+        (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_not_user_creatable",
+      );
+      const reopened = await service.updateCategory({ categoryId: created.code, allowUserCreate: true, name: "自定义故事" });
+      assert.equal(reopened.allowUserCreate, true);
       await assert.rejects(
         () => service.createCategory({ code: "custom-story", name: "重复编码" }),
         (error: unknown) => error instanceof SkillPlazaError && error.code === "skill_category_code_conflict",

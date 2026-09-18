@@ -839,6 +839,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20261107-create-production-agent-session.sql",
       sql: await readFile(join(rootDir, "packages/db/migrations/20261107-create-production-agent-session.sql"), "utf8"),
     },
+    {
+      name: "20261108-skill-category-user-create.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261108-skill-category-user-create.sql"), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

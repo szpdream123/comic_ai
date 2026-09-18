@@ -207,9 +207,14 @@ export class SkillPlazaError extends Error {
   }
 }
 
+function defaultAllowUserCreate(code: unknown) {
+  const category = String(code ?? "");
+  return category !== "recommended" && category !== "project-workflow";
+}
+
 function fallbackCategoryRows() {
   return [
-    { id: "recommended", code: "recommended", name: fallbackSkillCategoryMeta.recommended.name, short_name: fallbackSkillCategoryMeta.recommended.shortName, sort_order: 10, is_visible: true, is_system: true, is_skill_category: false, created_at: null, updated_at: null },
+    { id: "recommended", code: "recommended", name: fallbackSkillCategoryMeta.recommended.name, short_name: fallbackSkillCategoryMeta.recommended.shortName, sort_order: 10, is_visible: true, is_system: true, is_skill_category: false, allow_user_create: false, created_at: null, updated_at: null },
     ...skillCategories.map((code, index) => ({
       id: code,
       code,
@@ -219,6 +224,7 @@ function fallbackCategoryRows() {
       is_visible: true,
       is_system: false,
       is_skill_category: true,
+      allow_user_create: defaultAllowUserCreate(code),
       created_at: null,
       updated_at: null,
     })),
@@ -226,15 +232,17 @@ function fallbackCategoryRows() {
 }
 
 function mapCategory(row: Record<string, unknown>) {
+  const code = String(row.code ?? "");
   return {
     id: String(row.id ?? ""),
-    code: String(row.code ?? ""),
+    code,
     name: String(row.name ?? ""),
     shortName: String(row.short_name ?? row.name ?? ""),
     sortOrder: Number(row.sort_order ?? 100),
     isVisible: row.is_visible !== false,
     isSystem: row.is_system === true,
     isSkillCategory: row.is_skill_category !== false,
+    allowUserCreate: row.allow_user_create === undefined ? defaultAllowUserCreate(code) : row.allow_user_create !== false,
     createdAt: row.created_at ?? null,
     updatedAt: row.updated_at ?? null,
   };
@@ -261,7 +269,7 @@ function normalizeSortOrder(value: unknown) {
 async function loadCategoryRows(db: SqlDatabase) {
   try {
     const result = await db.query<Record<string, unknown>>(
-      `SELECT id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at
+      `SELECT id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, allow_user_create, created_at, updated_at
        FROM skill_categories
        ORDER BY sort_order ASC, created_at ASC`,
     );
@@ -271,12 +279,16 @@ async function loadCategoryRows(db: SqlDatabase) {
   }
 }
 
-async function normalizeCategory(db: SqlDatabase, value: unknown): Promise<string | null> {
+async function normalizeCategory(db: SqlDatabase, value: unknown, options: { requireUserCreate?: boolean } = {}): Promise<string | null> {
   const category = normalizeCategoryCode(value);
   if (!category || category === "recommended") return null;
   const rows = await loadCategoryRows(db);
   const match = rows.find((row) => String(row.code) === category && row.is_skill_category !== false);
-  return match ? String(match.code) : null;
+  if (!match) return null;
+  if (options.requireUserCreate === true && mapCategory(match).allowUserCreate !== true) {
+    throw new SkillPlazaError(400, "skill_category_not_user_creatable", "该分类不允许用户创建 Skill");
+  }
+  return String(match.code);
 }
 
 function normalizeRecommended(value: unknown) {
@@ -723,7 +735,9 @@ export function createSkillPlazaService(deps: {
   async function create(input: { userId: string; name: string; summary?: string; category?: unknown; detail?: unknown; coverStorageObjectId?: string | null; previewStorageObjectId?: string | null }) {
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = await normalizeCategory(deps.db, input.category) ?? "general";
+    const category = await normalizeCategory(deps.db, input.category || "general", { requireUserCreate: true })
+      ?? await normalizeCategory(deps.db, "general", { requireUserCreate: true })
+      ?? "general";
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? input.detail : {};
     const requestedFileListPublic = (detail as Record<string, unknown>).fileListPublic;
     const fileListPublic = requestedFileListPublic === true || requestedFileListPublic === "true" || requestedFileListPublic === 1 || requestedFileListPublic === "1";
@@ -756,7 +770,15 @@ export function createSkillPlazaService(deps: {
     if (!current) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在或不可编辑");
     const name = String(input.name ?? "").trim();
     if (!name) throw new SkillPlazaError(400, "skill_name_required", "Skill 名称不能为空");
-    const category = await normalizeCategory(deps.db, input.category) ?? (String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general"));
+    const requestedCategory = input.category === undefined
+      ? String(current.category ?? "general")
+      : String(input.category ?? "");
+    const currentCategory = String(current.category ?? "general") === "recommended" ? "general" : String(current.category ?? "general");
+    const category = requestedCategory === currentCategory
+      ? (await normalizeCategory(deps.db, requestedCategory) ?? currentCategory)
+      : (await normalizeCategory(deps.db, requestedCategory, { requireUserCreate: true })
+        ?? await normalizeCategory(deps.db, "general", { requireUserCreate: true })
+        ?? "general");
     const previousDetail = current.detail_json && typeof current.detail_json === "object" && !Array.isArray(current.detail_json) ? current.detail_json as Record<string, unknown> : {};
     const detail = input.detail && typeof input.detail === "object" && !Array.isArray(input.detail) ? { ...previousDetail, ...(input.detail as Record<string, unknown>) } : { ...previousDetail };
     const requestedFileListPublic = detail.fileListPublic;
@@ -843,7 +865,7 @@ export function createSkillPlazaService(deps: {
     };
   }
 
-  async function createCategory(input: { code?: unknown; name?: unknown; shortName?: unknown; sortOrder?: unknown; isVisible?: unknown }) {
+  async function createCategory(input: { code?: unknown; name?: unknown; shortName?: unknown; sortOrder?: unknown; isVisible?: unknown; allowUserCreate?: unknown }) {
     const code = normalizeCategoryCode(input.code);
     if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(code)) throw new SkillPlazaError(400, "skill_category_code_invalid", "分类编码仅支持小写字母、数字、下划线和连字符");
     if (code === "recommended") throw new SkillPlazaError(400, "skill_category_not_assignable", "推荐不是可创建的 Skill 分类");
@@ -853,10 +875,10 @@ export function createSkillPlazaService(deps: {
     if (shortName.length > 40) throw new SkillPlazaError(400, "skill_category_short_name_invalid", "分类简称不能超过 40 个字符");
     try {
       const row = await queryOne<Record<string, unknown>>(deps.db,
-        `INSERT INTO skill_categories (id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category)
-         VALUES ($1, $2, $3, $4, $5, $6, false, true)
-         RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at`,
-        [randomUUID(), code, name, shortName, normalizeSortOrder(input.sortOrder), normalizeBooleanFlag(input.isVisible, true)],
+        `INSERT INTO skill_categories (id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, allow_user_create)
+         VALUES ($1, $2, $3, $4, $5, $6, false, true, $7)
+         RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, allow_user_create, created_at, updated_at`,
+        [randomUUID(), code, name, shortName, normalizeSortOrder(input.sortOrder), normalizeBooleanFlag(input.isVisible, true), normalizeBooleanFlag(input.allowUserCreate, true)],
       );
       if (!row) throw new SkillPlazaError(500, "skill_category_create_failed", "Skill 分类创建失败");
       return mapCategory(row);
@@ -867,9 +889,9 @@ export function createSkillPlazaService(deps: {
     }
   }
 
-  async function updateCategory(input: { categoryId: string; code?: unknown; name?: unknown; shortName?: unknown; sortOrder?: unknown; isVisible?: unknown }) {
+  async function updateCategory(input: { categoryId: string; code?: unknown; name?: unknown; shortName?: unknown; sortOrder?: unknown; isVisible?: unknown; allowUserCreate?: unknown }) {
     const current = await queryOne<Record<string, unknown>>(deps.db,
-      `SELECT id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at
+      `SELECT id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, allow_user_create, created_at, updated_at
        FROM skill_categories WHERE id::text = $1 OR code = $1`,
       [input.categoryId],
     );
@@ -889,9 +911,9 @@ export function createSkillPlazaService(deps: {
     try {
       const row = await queryOne<Record<string, unknown>>(deps.db,
         `UPDATE skill_categories
-         SET code = $2, name = $3, short_name = $4, sort_order = $5, is_visible = $6, updated_at = now()
+         SET code = $2, name = $3, short_name = $4, sort_order = $5, is_visible = $6, allow_user_create = $7, updated_at = now()
          WHERE id = $1
-         RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at`,
+         RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, allow_user_create, created_at, updated_at`,
         [
           current.id,
           nextCode,
@@ -899,6 +921,7 @@ export function createSkillPlazaService(deps: {
           shortName,
           input.sortOrder === undefined ? Number(current.sort_order ?? 100) : normalizeSortOrder(input.sortOrder),
           input.isVisible === undefined ? current.is_visible !== false : normalizeBooleanFlag(input.isVisible, true),
+          input.allowUserCreate === undefined ? current.allow_user_create !== false : normalizeBooleanFlag(input.allowUserCreate, true),
         ],
       );
       if (!row) throw new SkillPlazaError(404, "skill_category_not_found", "Skill 分类不存在");
@@ -921,7 +944,7 @@ export function createSkillPlazaService(deps: {
     if (Number(usage?.count ?? 0) > 0) throw new SkillPlazaError(409, "skill_category_in_use", "该分类仍有 Skill 使用，不能删除");
     const row = await queryOne<Record<string, unknown>>(deps.db,
       `DELETE FROM skill_categories WHERE id = $1
-       RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, created_at, updated_at`,
+       RETURNING id, code, name, short_name, sort_order, is_visible, is_system, is_skill_category, allow_user_create, created_at, updated_at`,
       [current.id],
     );
     if (!row) throw new SkillPlazaError(404, "skill_category_not_found", "Skill 分类不存在");

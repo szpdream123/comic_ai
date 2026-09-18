@@ -22289,6 +22289,7 @@ export function createPhoneAuthDevServer(
             shortName: body.shortName ?? body.short_name,
             sortOrder: body.sortOrder ?? body.sort_order,
             isVisible: body.isVisible ?? body.is_visible,
+            allowUserCreate: body.allowUserCreate ?? body.allow_user_create,
           }) } });
         } catch (error) {
           if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });
@@ -22313,6 +22314,7 @@ export function createPhoneAuthDevServer(
             shortName: body.shortName ?? body.short_name,
             sortOrder: body.sortOrder ?? body.sort_order,
             isVisible: body.isVisible ?? body.is_visible,
+            allowUserCreate: body.allowUserCreate ?? body.allow_user_create,
           }) } });
         } catch (error) {
           if (error instanceof SkillPlazaError) return writeJson(response, { status: error.status, body: { error: { code: error.code, message: error.message } } });

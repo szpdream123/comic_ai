@@ -27,6 +27,11 @@ export function filterProjectWorkflowPlazaSkills(items = [], source = "", catego
     .filter((item) => item.category === PROJECT_WORKFLOW_SKILL_CATEGORY);
 }
 
+export function filterOfficialProjectWorkflowPlazaSkills(items = [], source = "official", categories = EPISODE_PLAZA_SKILL_CATEGORIES) {
+  return filterProjectWorkflowPlazaSkills(items, source, categories)
+    .filter((item) => item.official === true && item.source !== "library" && item.source !== "mine" && item.source !== "private");
+}
+
 export function resolvePlazaSkillCategories(items) {
   const mapped = (Array.isArray(items) ? items : [])
     .map((item) => {
@@ -38,14 +43,26 @@ export function resolvePlazaSkillCategories(items) {
         label,
         shortLabel,
         isVisible: item?.isVisible !== false,
+        allowUserCreate: item?.allowUserCreate === true
+          || item?.allow_user_create === true
+          || (
+            item?.allowUserCreate !== false
+            && item?.allow_user_create !== false
+            && code !== "recommended"
+            && code !== "project-workflow"
+          ),
       };
     })
     .filter((item) => item.id && item.label && item.isVisible);
-  return mapped.length ? mapped : EPISODE_PLAZA_SKILL_CATEGORIES;
+  return mapped.length ? mapped : EPISODE_PLAZA_SKILL_CATEGORIES.map((item) => ({
+    ...item,
+    isVisible: true,
+    allowUserCreate: item.id !== "recommended" && item.id !== "project-workflow",
+  }));
 }
 
 export function plazaSkillCreateCategories(items) {
-  return resolvePlazaSkillCategories(items).filter((item) => item.id !== "recommended");
+  return resolvePlazaSkillCategories(items).filter((item) => item.id !== "recommended" && item.allowUserCreate === true);
 }
 
 export const PLAZA_WORKFLOW_STAGES = ["script", "scene", "character", "prop", "shot"];
@@ -166,31 +183,22 @@ export function renderEpisodePromptSkillControl({
       : "请选择创作技能";
   const label = variant === "plaza" ? "Skill" : "创作技能";
   if (variant === "plaza") {
+    const triggerLabel = selectedSkills.length
+      ? selectedSkills.map((skill) => skill.title).join("、")
+      : loading
+        ? "正在加载 Skill"
+        : "请选择 Skill";
     return `
       <section class="episode-prompt-skill-control plaza-skill-chip-control${open ? " is-open" : ""}" aria-label="Skill">
         <div class="single-episode-look-label"><span>Skill</span></div>
-        <div class="plaza-skill-chip-row${selectedSkills.length ? "" : " is-empty"}">
-          ${selectedSkills.map((skill) => `
-            <button
-              class="plaza-skill-chip"
-              type="button"
-              data-action="remove-episode-plaza-skill"
-              data-episode-skill-id="${escapeAttr(skill.id)}"
-              title="移除 ${escapeAttr(skill.title)}"
-            >
-              <span aria-hidden="true">⚒</span>
-              <strong>${escapeHtml(skill.title)}</strong>
-            </button>
-          `).join("")}
-          <button
-            class="plaza-skill-chip-add"
-            type="button"
-            data-action="open-episode-prompt-skill-modal"
-            aria-haspopup="dialog"
-            aria-expanded="${open ? "true" : "false"}"
-            aria-label="${selectedSkills.length ? "添加 Skill" : (loading ? "正在加载 Skill" : "请选择 Skill")}"
-          >${selectedSkills.length ? "+" : (loading ? "正在加载 Skill" : "请选择 Skill")}</button>
-        </div>
+        <button
+          class="plaza-skill-chip-add"
+          type="button"
+          data-action="open-episode-prompt-skill-modal"
+          aria-haspopup="dialog"
+          aria-expanded="${open ? "true" : "false"}"
+          aria-label="${escapeAttr(triggerLabel)}"
+        >${escapeHtml(triggerLabel)}</button>
       </section>
     `;
   }
@@ -209,6 +217,51 @@ export function renderEpisodePromptSkillControl({
         <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
         <small>${formatSkillCredits(total)}</small>
       </button>
+    </section>
+  `;
+}
+
+export function renderOfficialProjectWorkflowSkillPicker({
+  show = false,
+  skills = [],
+  selectedPlazaSkillIds = [],
+  loading = false,
+} = {}) {
+  if (!show) return "";
+  const officialSkills = filterOfficialProjectWorkflowPlazaSkills(skills);
+  const selectedIds = normalizePlazaSkillIds(selectedPlazaSkillIds);
+  const emptyCopy = loading ? "正在加载官方工作流 Skill..." : "暂无官方项目工作流 Skill";
+  return `
+    <section class="episode-skill-picker-layer plaza-skill-picker-layer project-workflow-skill-picker-layer" data-episode-skill-picker="true" data-episode-skill-variant="plaza">
+      <div class="plaza-skill-picker-modal project-workflow-skill-picker" role="dialog" aria-modal="false" aria-labelledby="project-workflow-skill-picker-title">
+        <header class="plaza-skill-picker-header">
+          <h2 id="project-workflow-skill-picker-title">官方项目工作流 Skill</h2>
+        </header>
+        <div class="project-workflow-skill-list-body plaza-skill-picker-list" role="listbox" aria-label="官方项目工作流 Skill">
+          ${officialSkills.length
+            ? officialSkills.map((skill) => {
+              const selected = selectedIds.includes(skill.id);
+              return `
+                <button
+                  class="project-workflow-skill-item${selected ? " active" : ""}"
+                  type="button"
+                  role="option"
+                  aria-selected="${selected ? "true" : "false"}"
+                  data-action="select-official-project-workflow-skill"
+                  data-episode-skill-id="${escapeAttr(skill.id)}"
+                  title="${escapeAttr(skill.summary || skill.title)}"
+                >
+                  <span class="project-workflow-skill-icon" aria-hidden="true">⚒</span>
+                  <span class="project-workflow-skill-copy">
+                    <strong>${escapeHtml(skill.title)}</strong>
+                    <small>${escapeHtml(skill.summary || "官方项目工作流")}</small>
+                  </span>
+                </button>
+              `;
+            }).join("")
+            : `<div class="project-workflow-skill-empty">${escapeHtml(emptyCopy)}</div>`}
+        </div>
+      </div>
     </section>
   `;
 }
@@ -496,6 +549,19 @@ export function normalizePlazaEpisodeSkills(items = [], source = "", categories 
         isRecommended: item?.isRecommended === true || item?.is_recommended === true,
         priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
         source: source || (item?.isFavorite ? "library" : item?.isMine || item?.ownerUserId || item?.owner_user_id ? "mine" : "official"),
+        official: item?.official === true
+          || item?.isOfficial === true
+          || item?.is_official === true
+          || (
+            item?.official !== false
+            && item?.isOfficial !== false
+            && item?.is_official !== false
+            && !item?.isMine
+            && !item?.isFavorite
+            && !item?.ownerUserId
+            && !item?.owner_user_id
+            && (source === "official" || (!source && !item?.isMine && !item?.isFavorite))
+          ),
         isMine: item?.isMine === true || Boolean(item?.ownerUserId || item?.owner_user_id),
         isFavorite: item?.isFavorite === true || item?.is_favorite === true,
         isDefault: item?.isDefault === true || item?.is_default === true,

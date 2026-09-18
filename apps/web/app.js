@@ -4,6 +4,7 @@ import {
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
 import { applyAiCanvasRuntimeNodeModel, hydrateAiCanvasRuntimeSkillRows, normalizeAiCanvasRuntimeGrouping, normalizeAiCanvasRuntimeSkill } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import { installAiCanvasRuntimeMascotSkinSwitcher, normalizeAiCanvasRuntimeMascotSkin } from "./src/features/new-canvas/canvas-mascot-skin.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
 import {
   normalizePlazaEpisodeSkills,
@@ -45,7 +46,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260915-01";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260918-07";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -96,6 +97,7 @@ function createAiCanvasRuntimeThemeBridge(surface, theme) {
 }
 
 const AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY = "ai-canvas.mascot.visible";
+const AI_CANVAS_MASCOT_SKIN_STORAGE_KEY = "ai-canvas.mascot.skin";
 
 function shouldShowAiCanvasRuntimeMascot() {
   try {
@@ -108,6 +110,20 @@ function shouldShowAiCanvasRuntimeMascot() {
 function persistAiCanvasRuntimeMascotVisible(visible) {
   try {
     localStorage.setItem(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY, visible ? "true" : "false");
+  } catch {}
+}
+
+function readAiCanvasRuntimeMascotSkin() {
+  try {
+    return normalizeAiCanvasRuntimeMascotSkin(localStorage.getItem(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY));
+  } catch {
+    return normalizeAiCanvasRuntimeMascotSkin();
+  }
+}
+
+function persistAiCanvasRuntimeMascotSkin(skin) {
+  try {
+    localStorage.setItem(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY, normalizeAiCanvasRuntimeMascotSkin(skin));
   } catch {}
 }
 
@@ -2855,7 +2871,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260915-01";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260918-07";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -3554,6 +3570,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     let disposeFooterZoomControls = () => {};
     let disposePromptCreditCost = () => {};
     let disposeSkillPicker = () => {};
+    let disposeMascotSkinSwitcher = () => {};
     const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
         ...context,
         ...runtimeContext,
@@ -3567,6 +3584,10 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeFooterZoomControls = installAiCanvasRuntimeFooterZoomControls(surface);
       disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost(surface, runtimeStore);
       disposeSkillPicker = installAiCanvasRuntimeSkillPicker(surface, runtimeStore, runtimeContext);
+      disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher(surface, {
+        readSkin: readAiCanvasRuntimeMascotSkin,
+        persistSkin: persistAiCanvasRuntimeMascotSkin,
+      });
       return ({
       ...runtimeHandle,
       async update(next = {}) {
@@ -3601,6 +3622,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           disposeFooterZoomControls();
           disposePromptCreditCost();
           disposeSkillPicker();
+          disposeMascotSkinSwitcher();
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
           taskCenterBridge.dispose();
           projectBridge.dispose();
@@ -3619,6 +3641,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       unsubscribeAssistantPreference();
       disposeHeaderChrome();
       disposeFooterZoomControls();
+      disposeMascotSkinSwitcher();
       runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
       taskCenterBridge.dispose();
       projectBridge.dispose();

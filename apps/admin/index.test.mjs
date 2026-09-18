@@ -3109,6 +3109,41 @@ test("admin shell provides submitting and success feedback for write actions", (
   }
 });
 
+test("admin official skill file tree folders start collapsed as dropdowns", () => {
+  const start = script.indexOf("function ensureAdminSkillCreateFolder");
+  const end = script.indexOf("function toggleAdminSkillCreateMenu", start);
+  const block = script.slice(start, end);
+  assert.notEqual(start, -1, "admin skill folder helpers exist");
+  assert.match(block, /function ensureAdminSkillCreateFolder\(form, folderName, collapsed = true\)/);
+  assert.match(block, /const isCollapsed = collapsed.get\(name\) !== false/);
+  assert.match(block, /ensureAdminSkillCreateFolder\(form, name, isCollapsed\)/);
+  assert.match(block, /return \{ name, collapsed: isCollapsed \}/);
+});
+
+test("admin official skill folder clicks only toggle the tree dropdown", () => {
+  const start = script.indexOf("const folderButton = target.closest?.(\"[data-admin-skill-folder]\")");
+  const end = script.indexOf("const fileButton = target.closest?.(\"[data-admin-skill-file]\")", start);
+  const block = script.slice(start, end);
+  assert.notEqual(start, -1, "admin skill folder click handler exists");
+  assert.match(block, /folder\.dataset\.collapsed = folder\.dataset\.collapsed === "true" \? "false" : "true"/);
+  assert.match(block, /refreshAdminSkillCreateTree\(form\)/);
+  assert.doesNotMatch(block, /selectAdminSkillCreateFolder\(form, folder\.dataset\.folderName\)/);
+});
+
+test("admin official skill editor keeps the content box a fixed scrollable height", () => {
+  const start = html.indexOf(".admin-skill-editor {");
+  const end = html.indexOf(".admin-skill-cover {", start);
+  const block = html.slice(start, end);
+  assert.notEqual(start, -1, "admin skill editor styles exist");
+  assert.match(block, /\.admin-skill-editor \{[^}]*height: 22rem;/);
+  assert.match(block, /\.admin-skill-editor \{[^}]*max-height: 22rem;/);
+  assert.match(block, /\.admin-skill-editor \{[^}]*grid-template-rows: 22rem;/);
+  assert.match(block, /\.admin-skill-editor \{[^}]*overflow: hidden;/);
+  assert.match(block, /\.admin-skill-tree \{[^}]*overflow: hidden;/);
+  assert.match(block, /\.admin-skill-tree-list \{[^}]*overflow-y: auto;/);
+  assert.match(block, /\.admin-skill-editor-main \{[^}]*overflow: hidden;/);
+});
+
 test("admin official skill create surfaces a 50-file limit error", () => {
   const drawerStart = script.indexOf("async function openAdminSkillDrawer");
   const drawerBlock = script.slice(drawerStart, script.indexOf("async function openAdminSkillReviewDrawer", drawerStart));

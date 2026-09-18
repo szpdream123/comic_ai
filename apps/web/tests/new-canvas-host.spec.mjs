@@ -175,6 +175,58 @@ test("canvas grid toggle does not leave the off-white theme texture visible", ()
   assert.match(appSource, /color:`color-mix\(in srgb, var\(--theme-text\) 28%, transparent\)`/);
 });
 
+test("canvas hover tooltips open immediately without a show delay", () => {
+  const tooltipSource = readRuntimeAsset("useTooltipAutoPlacement-");
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(tooltipSource, /var Q=6,\$=8,Zd=0;/);
+  assert.match(tooltipSource, /i=window\.setTimeout\(c,Zd\)/);
+  assert.doesNotMatch(tooltipSource, /Zd=800/);
+  assert.match(brandCss, /\.app-tooltip,\s*\.app-tooltip\[data-open="true"\]\s*\{\s*transition:\s*none\s*!important;/);
+});
+
+test("canvas node dragging keeps pointer tracking at low zoom", () => {
+  const snapSource = readRuntimeAsset("ResizeHandle-");
+  const appRuntime = readRuntimeAsset("App-");
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(snapSource, /function we\(e\)\{return Number\.isFinite\(e\)&&e>0\?Math\.max\(F,F\/e\):F\}/);
+  assert.match(snapSource, /screenToFlowPosition:e,getZoom:be/);
+  assert.match(snapSource, /snapThreshold:we\(be\(\)\)/);
+  assert.match(snapSource, /Y\(\[v\.top,v\.bottom\],l,ye\),Y\(\[v\.centerY\],u,ye\)/);
+  assert.match(snapSource, /J\(v,f,`vertical`,ye\)/);
+  assert.match(snapSource, /if\(!\(Number\.isFinite\(ze\)&&ze>=\.3\)\)return r\(e=>e\.length===0\?e:\[\]\),t;/);
+  assert.match(snapSource, /r\(e=>e\.length===0&&y\.length===0\?e:y\)/);
+  assert.match(appRuntime, /j\.current\.size>0&&!j\.current\.has\(`node`\)&&te\(F\.current,!0\)/);
+  assert.match(appRuntime, /if\(e&&!j\.current\.has\(`node`\)\)\{let t=new MutationObserver/);
+  assert.match(appRuntime, /if\(j\.current\.has\(`node`\)\)return;V\(C\.screenToFlowPosition/);
+  assert.match(appRuntime, /if\(a\.length>0&&\(C\.getZoom\?\.\(\)\?\?1\)>=\.3\)/);
+  assert.match(appRuntime, /if\(\(C\.getZoom\?\.\(\)\?\?1\)<\.3\)\{Pn\(\),An\(\),jn\(\),En\(null\),kn\(\);return\}/);
+  assert.match(brandCss, /html\.canvas-interacting \.react-flow__node\.dragging \.node/);
+  assert.doesNotMatch(snapSource, /Y\(\[v\.top,v\.bottom\],l\),Y\(\[v\.centerY\],u\)/);
+  assert.doesNotMatch(appRuntime, /ne=\(0,Z\.useCallback\)\(\(\)=>\{j\.current\.size>0&&te\(F\.current,!0\)\}/);
+});
+
+test("empty media upload placeholders stay draggable on the canvas", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(appRuntime, /className:`node-preview-placeholder nopan border-0 bg-transparent p-0 cursor-pointer/);
+  assert.match(appRuntime, /onPointerDown:e=>\{e\.currentTarget\.dataset\.canvasDragX=String\(e\.clientX\),e\.currentTarget\.dataset\.canvasDragY=String\(e\.clientY\)\}/);
+  assert.match(appRuntime, /Math\.hypot\(e\.clientX-t,e\.clientY-n\)>4\)return;v\(\)/);
+  assert.match(appRuntime, /Math\.hypot\(e\.clientX-t,e\.clientY-n\)>4\)return;ce\(\)/);
+  assert.doesNotMatch(appRuntime, /node-preview-placeholder nodrag nopan/);
+});
+
+test("output history modal stays centered and top chrome menus keep the AI assistant open", () => {
+  const historySource = readRuntimeAsset("OutputHistoryPanel-");
+  const storeSource = readRuntimeAsset("main-upstream-");
+  assert.match(historySource, /fixed left-1\/2 top-1\/2 w-\[min\(720px,calc\(100vw-32px\)\)\] max-h-\[75vh\] -translate-x-1\/2 -translate-y-1\/2 border rounded-2xl/);
+  assert.doesNotMatch(historySource, /fixed inset-x-0 bottom-0 mx-auto w-full max-w-\[720px\] max-h-\[75vh\] border border-b-0 rounded-t-2xl/);
+  assert.match(storeSource, /setAssetsPanelOpen:\(t,n=`modal`\)=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!0,assetsPanelMode:n,characterLibraryOpen:!1,characterActionLibraryOpen:!1,historyPanelOpen:!1,dramaAssetsPanelOpen:!1\}:\{assetsPanelOpen:!1/);
+  assert.match(storeSource, /setCharacterLibraryOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!0,characterActionLibraryOpen:!1,historyPanelOpen:!1,dramaAssetsPanelOpen:!1\}:\{characterLibraryOpen:!1/);
+  assert.match(storeSource, /setHistoryPanelOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!1,characterActionLibraryOpen:!1,historyPanelOpen:!0,dramaAssetsPanelOpen:!1\}:\{historyPanelOpen:!1\}/);
+  assert.doesNotMatch(storeSource, /setAssetsPanelOpen:\(t,n=`modal`\)=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!0[\s\S]{0,280}?chatOpen:!1/);
+  assert.doesNotMatch(storeSource, /setCharacterLibraryOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!0[\s\S]{0,220}?chatOpen:!1/);
+  assert.doesNotMatch(storeSource, /setHistoryPanelOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!1[\s\S]{0,220}?chatOpen:!1/);
+});
+
 test("expand editor toasts budget errors above the fullscreen overlay", () => {
   const expandSource = readRuntimeAsset("ExpandEditor-");
   const appSource = readRuntimeAsset("App-");
@@ -230,6 +282,56 @@ test("empty canvas uses the header brand mark and hides the title copy", () => {
   assert.match(source, /\.flex\.flex-col\.items-center\.gap-4\.opacity-50 > \.text-center > \.text-lg\.font-medium\.text-canvas-text\.mb-1[\s\S]*display:\s*none\s*!important/);
 });
 
+test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", async () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const skinSource = readFileSync(new URL("../src/features/new-canvas/canvas-mascot-skin.js", import.meta.url), "utf8");
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const {
+    AI_CANVAS_MASCOT_DEFAULT_SKIN,
+    AI_CANVAS_MASCOT_SKINS,
+    nextAiCanvasRuntimeMascotSkin,
+    normalizeAiCanvasRuntimeMascotSkin,
+  } = await import("../src/features/new-canvas/canvas-mascot-skin.js");
+  assert.equal(AI_CANVAS_MASCOT_DEFAULT_SKIN, "cloud");
+  assert.deepEqual(AI_CANVAS_MASCOT_SKINS, ["cloud", "cat", "dog", "bunny", "fox", "puff"]);
+  assert.equal(normalizeAiCanvasRuntimeMascotSkin(), "cloud");
+  assert.equal(nextAiCanvasRuntimeMascotSkin("cloud"), "cat");
+  assert.equal(nextAiCanvasRuntimeMascotSkin("fox"), "puff");
+  assert.equal(nextAiCanvasRuntimeMascotSkin("puff"), "cloud");
+  assert.match(appSource, /ai-canvas\.mascot\.skin/);
+  assert.match(appSource, /installAiCanvasRuntimeMascotSkinSwitcher/);
+  assert.match(appSource, /normalizeAiCanvasRuntimeMascotSkin\(localStorage\.getItem\(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY\)\)/);
+  assert.match(skinSource, /切换桌宠/);
+  assert.match(skinSource, /AI_CANVAS_MASCOT_SKINS = \["cloud", "cat", "dog", "bunny", "fox", "puff"\]/);
+  assert.match(skinSource, /AI_CANVAS_MASCOT_DEFAULT_SKIN = "cloud"/);
+  assert.match(skinSource, /nextAiCanvasRuntimeMascotSkin/);
+  assert.match(skinSource, /precision highp float/);
+  assert.match(skinSource, /sdSphere/);
+  assert.match(skinSource, /getContext\("webgl"/);
+  assert.doesNotMatch(skinSource, /WEBGL_lose_context/);
+  assert.match(brandCss, /\.host-mascot-skin-switch/);
+  assert.match(brandCss, /\[data-host-mascot-skin\]:hover \.host-mascot-skin-switch/);
+  assert.match(brandCss, /\[data-host-mascot-skin\]:focus-within \.host-mascot-skin-switch/);
+  assert.match(brandCss, /\[data-host-mascot-skin\]:not\(\[data-host-mascot-skin="puff"\]\) button\[aria-label\^="打开画布助手"\] canvas/);
+  assert.match(brandCss, /inset: -16%/);
+  assert.match(brandCss, /transform: scale\(1.1\)/);
+  assert.match(brandCss, /top: calc\(100% \+ 2px\)/);
+  assert.match(brandCss, /bottom: auto/);
+  assert.match(skinSource, /host-mascot-avatar-icon/);
+  assert.match(skinSource, /findMascotAvatarHosts/);
+  assert.match(skinSource, /radialGradient\[id\^='mascot-avatar-'\]/);
+  assert.match(skinSource, /float facing = smoothstep\(0.02, 0.18, lp.z\)/);
+  assert.match(skinSource, /eyeC = vec2\(0.14, 0.02\)/);
+  assert.match(skinSource, /sdSphere\(p - vec3\(0.0, 0.24, 0.0\), 0.36\)/);
+  assert.match(skinSource, /function isHostMascotMutation/);
+  assert.match(skinSource, /if \(icon\.getAttribute\("data-host-mascot-skin"\) === skin\) return/);
+  assert.match(skinSource, /observer\.disconnect\(\)/);
+  assert.match(skinSource, /if \(records\.every\(isHostMascotMutation\)\) return/);
+  assert.match(skinSource, /if \(typeof globalThis\.queueMicrotask === "function"\) globalThis\.queueMicrotask\(run\)/);
+  assert.doesNotMatch(skinSource, /queueMicrotask\?\.[\s\S]{0,80}\?\? sync\(\)/);
+  assert.match(brandCss, /\.host-mascot-avatar-icon/);
+});
+
 test("canvas header restores project switch and help after upstream chrome split", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   assert.match(appSource, /function installAiCanvasRuntimeHeaderChrome/);
@@ -270,6 +372,16 @@ test("canvas drawing toolbar restores the pan hand tool before drawing tools", (
   assert.match(toolbar, /cu\.map\(\(\{id:n,label:r,icon:o\}\)/);
   assert.match(appRuntime, /interactionMode:g===`classic`\?`classic`:`default`/);
   assert.match(appRuntime, /Hg\(\{interactionMode:g===`classic`\?`default`:`classic`\}\),Yg\(\)/);
+});
+
+test("canvas note drafts keep live dimensions while the pointer is dragging", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(appRuntime, /function Md\(e,t,n,r\)\{return\{id:`node-\$\{G\(\)\}`,type:`canvas-note`,position:t,width:n\.width,height:n\.height,style:\{width:n\.width,height:n\.height\}/);
+  assert.match(appRuntime, /S=\(0,Z\.useRef\)\(0\),L=\(0,Z\.useRef\)\(null\)/);
+  assert.match(appRuntime, /Od\.has\(f\)&&_\(L\.current=\{kind:f,start:n,current:n,points:\[n\],style:\{\.\.\.m\[f\]\}\}\)/);
+  assert.match(appRuntime, /if\(!L\.current\)return;t\.preventDefault\(\),t\.stopPropagation\(\)/);
+  assert.match(appRuntime, /T\(Nd\(L\.current\|\|g\)\),L\.current=null,_\(null\),p\(`select`\)/);
+  assert.doesNotMatch(appRuntime, /M=\(0,Z\.useCallback\)\(t=>\{if\(b\.current!==t\.pointerId\|\|f===`select`\)return;if\(f===`eraser`\)\{t\.preventDefault\(\),t\.stopPropagation\(\),A\(t\.clientX,t\.clientY\);return\}if\(!g\)return;/);
 });
 
 test("AI Canvas App runtime keeps the series rail button props inside one jsx object", () => {

@@ -16,16 +16,16 @@ import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-
 import {
   EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
-  filterProjectWorkflowPlazaSkills,
+  filterOfficialProjectWorkflowPlazaSkills,
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
   plazaSkillCreateCategories,
   renderEpisodePromptSkillControl,
   renderEpisodePromptSkillModal,
+  renderOfficialProjectWorkflowSkillPicker,
   resolvePlazaSelectedSkills,
   resolvePlazaSkillCategories,
   sumEpisodePromptSkillCredits,
-  PROJECT_WORKFLOW_SKILL_CATEGORY,
 } from "./episode-prompt-skill-modal.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
@@ -1320,18 +1320,11 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderProductionAgentSession(ui)}
     ${renderHomeAgentSkillPicker(ui)}
     ${renderScriptConversionSkillModal(ui)}
-    ${renderEpisodePromptSkillModal({
+    ${renderOfficialProjectWorkflowSkillPicker({
       show: ui.episodePromptSkillModalOpen === true && (ui.isSingleEpisodeModalOpen === true || ui.homeCreationMode === "workflow"),
-      variant: "plaza",
-      sourceTab: ui.episodePromptSkillSourceTab,
-      officialSkills: ui.episodePlazaOfficialSkills,
-      librarySkills: ui.episodePlazaLibrarySkills,
-      mineSkills: ui.episodePlazaMineSkills,
-      draftPlazaSkillIds: ui.episodePromptSkillDraftPlazaIds,
-      query: ui.episodePlazaSkillQuery,
+      skills: resolveEpisodePlazaSkillItems(ui),
+      selectedPlazaSkillIds: ui.selectedEpisodePlazaSkillIds,
       loading: ui.episodePromptSkillLoading,
-      categories: ui.skillPlazaCategories,
-      categoryFilter: PROJECT_WORKFLOW_SKILL_CATEGORY,
     })}
     ${renderCanvasTextSkillModal({
       show: ui.canvasTextSkillModalOpen === true
@@ -5947,12 +5940,7 @@ function resolveEpisodePromptSkillItems(ui = {}) {
 }
 
 function resolveEpisodePlazaSkillItems(ui = {}) {
-  return [
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories),
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaLibrarySkills, "library", ui.skillPlazaCategories),
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaMineSkills, "mine", ui.skillPlazaCategories),
-    ...filterProjectWorkflowPlazaSkills(ui.episodePlazaPrivateSkills, "private", ui.skillPlazaCategories),
-  ];
+  return filterOfficialProjectWorkflowPlazaSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories);
 }
 
 function normalizeScriptConversionSkills(items = []) {
@@ -9169,7 +9157,11 @@ function renderSkillCreatePicker(name, options, selectedValue, extraAttrs = "") 
 function renderSkillCreatePage(ui = {}) {
   const draft = ui.skillCreateDraft && typeof ui.skillCreateDraft === "object" ? ui.skillCreateDraft : null;
   const draftDetail = draft?.detail && typeof draft.detail === "object" ? draft.detail : {};
-  const draftCategory = String(draft?.category || "general") === "recommended" ? "general" : String(draft?.category || "general");
+  const createCategories = plazaSkillCreateCategories(ui.skillPlazaCategories);
+  const requestedCategory = String(draft?.category || "general") === "recommended" ? "general" : String(draft?.category || "general");
+  const draftCategory = createCategories.some((item) => item.id === requestedCategory)
+    ? requestedCategory
+    : (createCategories[0]?.id || "general");
   const draftCoverUrl = String(draftDetail.effectImageUrl || draft?.coverUrl || "").trim();
   const draftPreviewUrl = String(draftDetail.effectVideoUrl || draft?.previewUrl || "").trim();
   const draftCoverType = draftPreviewUrl ? "video" : draftCoverUrl ? "image" : "image";

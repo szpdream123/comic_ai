@@ -2278,3 +2278,79 @@
   color: var(--theme-text, #1f2937) !important;
   font-weight: 600;
 }
+
+.new-canvas-root [data-host-mascot-skin] {
+  overflow: visible;
+}
+
+.new-canvas-root [data-host-mascot-skin]:not([data-host-mascot-skin="puff"]) button[aria-label^="打开画布助手"] canvas,
+.new-canvas-root [data-host-mascot-skin]:not([data-host-mascot-skin="puff"]) button[aria-label^="打开画布助手"] [aria-label="正在加载吉祥物"] {
+  visibility: hidden !important;
+}
+
+.new-canvas-root .host-mascot-cloud-layer {
+  position: absolute;
+  inset: -16%;
+  z-index: 1;
+  pointer-events: none;
+  transform: scale(1.1);
+  transform-origin: center;
+}
+
+.new-canvas-root .host-mascot-cloud-layer[hidden] {
+  display: none !important;
+}
+
+.new-canvas-root .host-mascot-cloud-layer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.new-canvas-root .host-mascot-skin-switch {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 2px);
+  bottom: auto;
+  z-index: 2;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--theme-border, #2a2a3a) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-surface, #14141c) 92%, transparent);
+  color: var(--theme-text, #e8e8ed);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.new-canvas-root [data-host-mascot-skin]:hover .host-mascot-skin-switch,
+.new-canvas-root [data-host-mascot-skin]:focus-within .host-mascot-skin-switch,
+.new-canvas-root .host-mascot-skin-switch:hover,
+.new-canvas-root .host-mascot-skin-switch:focus-visible {
+  display: flex;
+}
+
+.new-canvas-root svg[data-host-mascot-native-hidden="true"] {
+  display: none !important;
+}
+
+.new-canvas-root .host-mascot-avatar-icon {
+  display: block;
+  flex: none;
+  overflow: visible;
+  color: var(--theme-text, #e8e8ed);
+}
+
+html.canvas-interacting .react-flow__node.dragging .node,
+html.canvas-interacting .react-flow__node.dragging {
+  transition: none !important;
+  animation: none !important;
+}

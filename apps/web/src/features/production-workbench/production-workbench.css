@@ -18988,16 +18988,93 @@
   background: var(--theme-control-hover-background);
 }
 
-.single-episode-skill-controls .plaza-skill-chip-row.is-empty {
-  display: grid;
+.single-episode-skill-controls .plaza-skill-chip-row.is-empty,
+.single-episode-skill-controls .plaza-skill-chip-add {
+  width: 100%;
 }
 
-.single-episode-skill-controls .plaza-skill-chip-row.is-empty .plaza-skill-chip-add {
-  width: 100%;
+.single-episode-skill-controls .plaza-skill-chip-add,
+.home-workflow-script-skill .plaza-skill-chip-add {
   min-height: 2.25rem;
   justify-content: flex-start;
   padding: 0 0.55rem 0 0.7rem;
   border-radius: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.project-workflow-skill-picker-layer .plaza-skill-picker-header {
+  padding-bottom: 0.7rem;
+}
+
+.project-workflow-skill-list-body {
+  display: grid;
+  gap: 0.4rem;
+  min-height: 0;
+  padding: 0 0.7rem 0.8rem;
+  overflow-y: auto;
+}
+
+.project-workflow-skill-item {
+  display: grid;
+  grid-template-columns: 1.7rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  min-height: 3.1rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--theme-control-border);
+  border-radius: 10px;
+  background: var(--theme-control-background);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-workflow-skill-item:hover {
+  border-color: var(--theme-control-active-border);
+  background: var(--theme-control-hover-background);
+}
+
+.project-workflow-skill-item.active {
+  background: var(--theme-control-active-background);
+  color: var(--theme-control-active-text);
+}
+
+.project-workflow-skill-icon {
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--theme-accent-soft);
+  color: var(--theme-accent-icon);
+}
+
+.project-workflow-skill-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.project-workflow-skill-copy strong,
+.project-workflow-skill-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-workflow-skill-copy small {
+  color: rgb(var(--director-text-muted-rgb));
+  font-size: 0.73rem;
+}
+
+.project-workflow-skill-empty {
+  min-height: 3.1rem;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--theme-control-border);
+  border-radius: 10px;
+  color: rgb(var(--director-text-muted-rgb));
   font-size: 0.78rem;
 }
 
@@ -44837,16 +44914,23 @@ button.asset-generator-task-preview:focus-visible {
 }
 
 .home-workflow-script-skill {
-  flex: 1;
-  min-width: 0;
+  flex: 0 0 auto;
+  width: 11.5rem;
 }
 
 .home-workflow-script-skill .episode-prompt-skill-control {
-  width: auto;
+  width: 100%;
 }
 
 .home-workflow-script-skill .single-episode-look-label {
   display: none;
+}
+
+.home-workflow-script-skill .plaza-skill-chip-add {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .home-workflow-script-clear,
