@@ -159,7 +159,7 @@ test("free conversation skill buttons select a Chinese tag and question choices 
   assert.deepEqual(controls, [{
     taskId: "creative-task",
     action: "interject",
-    input: { message: { text: "水彩", preferredModels: { image: "image-pro" }, preferredGenerationParameters: { image: {} } } },
+    input: { message: { text: "水彩", plazaSkillIds: [], preferredModels: { image: "image-pro" }, preferredGenerationParameters: { image: {} } } },
   }, {
     taskId: "creative-task",
     action: "resume",
@@ -226,7 +226,7 @@ test("Agent mode interjects the waiting task instead of creating another task", 
   assert.deepEqual(controls, [{
     taskId: "waiting-task",
     action: "interject",
-    input: { message: { text: "把镜头改成黄昏", preferredModels: { image: "image-pro" }, preferredGenerationParameters: { image: {} } } },
+    input: { message: { text: "把镜头改成黄昏", plazaSkillIds: [], preferredModels: { image: "image-pro" }, preferredGenerationParameters: { image: {} } } },
   }]);
   controller.dispose();
 });
@@ -431,7 +431,7 @@ test("free conversation Enter sends a typed answer through interject when the la
   assert.deepEqual(controls, [{
     taskId: "creative-task",
     action: "interject",
-    input: { message: { text: "偏暖色调", preferredModels: { image: "image-pro" }, preferredGenerationParameters: { image: {} } } },
+    input: { message: { text: "偏暖色调", plazaSkillIds: [], preferredModels: { image: "image-pro" }, preferredGenerationParameters: { image: {} } } },
   }, {
     taskId: "creative-task",
     action: "resume",

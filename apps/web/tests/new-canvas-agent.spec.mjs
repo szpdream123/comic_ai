@@ -3583,6 +3583,7 @@ test("media-only Agent creates a new text-model task instead of interjecting whi
         budget: { generationPermissionMode: "full_access" },
         message: {
           text: "基于参考图生成 5 秒视频",
+          plazaSkillIds: [],
           preferredModels: { video: "video-model" },
           preferredGenerationKind: "video",
           preferredGenerationParameters: { image: {}, video: {}, audio: {} },
@@ -3603,6 +3604,7 @@ test("media-only Agent does not re-fetch generation details on every waiting pol
       canvasAgentCapabilityProfile: "media_generation_only",
       canvasAgent: {
         promptDraft: "生成一张图片",
+        generationKind: "image",
         generationModelsStatus: "ready",
         generationModels: [{ modelCode: "image-model", modelLabel: "Image", mediaType: "image", enabled: true }],
         generationModelCodes: { image: "image-model" },
@@ -4002,6 +4004,7 @@ test("media-only Agent interjection sends a video request with an image referenc
       input: {
         message: {
           text: "基于这张参考图生成 5 秒视频",
+          plazaSkillIds: [],
           preferredModels: { video: "video-model" },
           preferredGenerationKind: "video",
           preferredGenerationParameters: { video: {} },

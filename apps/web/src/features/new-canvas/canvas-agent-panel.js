@@ -530,6 +530,7 @@ function renderMediaOnlyAgentPanel({
         ${pendingApproval ? renderAgentApprovalCard(pendingApproval, busy) : ""}
         <form class="home-agent-composer canvas-agent-media-composer is-focus-composer" data-free-generation-form style="--canvas-agent-media-composer-height: ${Math.min(MEDIA_COMPOSER_MAX_HEIGHT, Math.max(MEDIA_COMPOSER_MIN_HEIGHT, Math.round(Number(agent.mediaComposerHeight) || DEFAULT_MEDIA_COMPOSER_HEIGHT)))}px">
           <div class="canvas-agent-media-composer-resize" data-agent-media-composer-resize role="separator" aria-orientation="horizontal" aria-label="拖动调整输入框高度" tabindex="0" title="拖动调整输入框高度"><span aria-hidden="true"></span></div>
+          ${renderFreeConversationPlazaSelection(agent, busy)}
           <div class="home-agent-composer-content canvas-agent-media-composer-content" data-home-agent-attachment-list>
             <div class="episode-replica-textarea has-inline-attachments">
               <div class="episode-replica-ref-strip inline-upload-tray">
@@ -627,21 +628,42 @@ function renderComposerToolIcon(kind) {
 function renderFreeConversationSkills(disabled, agent = {}) {
   const selectedId = agent.selectedSkillId || /^\/([\w-]+)(?:\s|$)/.exec(agent.promptDraft ?? "")?.[1];
   const selected = FREE_CONVERSATION_SKILLS.find(skill => skill.id === selectedId);
-  return `<div class="canvas-agent-free-skills" role="group" aria-label="内置创作技能">
+  return `<div class="canvas-agent-free-skills" role="group" aria-label="创作技能">
     <button type="button" class="canvas-agent-skill-library-trigger canvas-agent-composer-tool" data-agent-action="toggle-skill-library" aria-label="技能库" aria-expanded="${Boolean(agent.skillLibraryOpen)}" ${disabled ? "disabled" : ""}>${renderComposerToolIcon("skill")}<span>技能</span></button>
     ${selected ? `<span class="canvas-agent-selected-skill">${escapeHtml(selected.label)}<button type="button" data-agent-action="clear-free-conversation-skill" aria-label="移除当前技能" ${disabled ? "disabled" : ""}>×</button></span>` : FREE_CONVERSATION_SKILLS.slice(0, 3).map((skill) => `<button type="button" data-agent-action="select-free-conversation-skill" data-skill-id="${escapeAttr(skill.id)}" title="${escapeAttr(skill.description)}" ${disabled ? "disabled" : ""}>${escapeHtml(skill.label)}</button>`).join("")}
-    ${agent.skillLibraryOpen ? `<section class="canvas-agent-skill-library" role="dialog" aria-label="创作技能库"><header><div><strong>选择一项创作技能</strong><small>告诉 Agent 你想完成什么</small></div><button type="button" data-agent-action="toggle-skill-library" aria-label="关闭技能库">×</button></header><input type="search" data-agent-field="skillQuery" value="${escapeAttr(agent.skillQuery ?? "")}" placeholder="搜索创作技能" aria-label="搜索创作技能" /><div class="canvas-agent-skill-results" data-skill-results>${renderFreeConversationSkillResults(agent)}</div></section>` : ""}
+    ${agent.skillLibraryOpen ? `<section class="canvas-agent-skill-library" role="dialog" aria-label="创作技能库"><header><div><strong>选择创作 Skill</strong><small>按技能流程创作，也可以组合使用</small></div><button type="button" data-agent-action="toggle-skill-library" aria-label="关闭技能库">×</button></header><input type="search" data-agent-field="skillQuery" value="${escapeAttr(agent.skillQuery ?? "")}" placeholder="搜索创作技能" aria-label="搜索创作技能" /><nav class="canvas-agent-skill-sources" aria-label="技能来源">${[["official", "Skill 广场"], ["library", "我的收藏"], ["mine", "我的 Skill"]].map(([source, label]) => `<button type="button" data-agent-action="set-agent-skill-source" data-skill-source="${source}" aria-pressed="${(agent.skillSourceTab || "official") === source}">${label}</button>`).join("")}</nav><div class="canvas-agent-skill-results" data-skill-results>${renderFreeConversationSkillResults(agent)}</div></section>` : ""}
   </div>`;
 }
 
 function renderFreeConversationSkillResults(agent) {
-  const query = String(agent.skillQuery ?? "").trim().toLowerCase();
+  const query = String(agent.skillQuery ?? "").trim().replace(/^\/+\s*/, "").toLowerCase();
   const skills = FREE_CONVERSATION_SKILLS.filter(skill => `${skill.label} ${skill.description} ${skill.output} ${skill.category}`.toLowerCase().includes(query));
-  if (!skills.length) return '<p class="canvas-agent-skill-empty">没有匹配的技能，也可以直接描述你的想法。</p>';
-  return ["视觉设计", "故事与分镜", "视频创作"].map(category => {
+  const source = agent.skillSourceTab === "mine" ? agent.skillMineItems : agent.skillSourceTab === "library" ? agent.skillLibraryItems : agent.skillOfficialItems;
+  const plazaSkills = (Array.isArray(source) ? source : []).filter(skill => `${skill.title} ${skill.name} ${skill.summary} ${skill.category}`.toLowerCase().includes(query));
+  const selectedIds = normalizePlazaSkillIds(agent.promptPlazaSkillIds);
+  const plaza = agent.skillStatus === "loading"
+    ? '<p class="canvas-agent-skill-empty" role="status">正在加载 Skill…</p>'
+    : agent.skillStatus === "unavailable"
+      ? '<p class="canvas-agent-skill-empty" role="status">Skill 暂时无法加载，可使用下方内置技能。<button type="button" data-agent-action="reload-free-plaza-skills">重新加载</button></p>'
+      : plazaSkills.length
+        ? `<section class="canvas-agent-plaza-skill-results"><div>${plazaSkills.map(skill => `<button type="button" data-agent-action="select-free-plaza-skill" data-skill-id="${escapeAttr(skill.id)}" aria-pressed="${selectedIds.includes(skill.id)}"><strong>${escapeHtml(skill.title || skill.name)}${selectedIds.includes(skill.id) ? '<span class="canvas-agent-skill-selected-mark">已选择</span>' : ""}</strong><span>${escapeHtml(skill.summary || "按此 Skill 的创作流程执行")}</span><small>${skill.priceCredits > 0 ? `${skill.priceCredits} 积分 · 以技能使用规则为准` : "Skill"}</small></button>`).join("")}</div></section>`
+        : '<p class="canvas-agent-skill-empty">当前来源没有匹配的 Skill，可切换来源或使用内置技能。</p>';
+  if (!skills.length) return plaza;
+  return plaza + '<h4 class="canvas-agent-built-in-heading">内置创作技能</h4>' + ["视觉设计", "故事与分镜", "视频创作"].map(category => {
     const items = skills.filter(skill => skill.category === category);
     return items.length ? `<section><h4>${category}</h4><div>${items.map(skill => `<button type="button" data-agent-action="select-free-conversation-skill" data-skill-id="${skill.id}"><strong>${skill.label}</strong><span>${skill.description}</span><small>${skill.output}</small></button>`).join("")}</div></section>` : "";
   }).join("");
+}
+
+function renderFreeConversationPlazaSelection(agent, disabled) {
+  const ids = normalizePlazaSkillIds(agent.promptPlazaSkillIds);
+  if (!ids.length) return "";
+  const skills = [...(agent.skillOfficialItems ?? []), ...(agent.skillLibraryItems ?? []), ...(agent.skillMineItems ?? [])];
+  return `<div class="canvas-agent-plaza-selection" aria-label="当前会话的 Skill"><span>使用 Skill</span>${ids.map(id => {
+    const skill = skills.find(item => item.id === id);
+    const title = skill?.title || skill?.name || "已选 Skill";
+    return `<span class="canvas-agent-plaza-chip"><span>${escapeHtml(title)}</span><button type="button" data-agent-action="remove-free-plaza-skill" data-skill-id="${escapeAttr(id)}" aria-label="移除技能：${escapeAttr(title)}" ${disabled ? "disabled" : ""}>×</button></span>`;
+  }).join("")}</div>`;
 }
 
 function renderFreeGenerationModelPickers(agent, disabled) {
@@ -1197,6 +1219,7 @@ export function createCanvasAgentController({
           if (!initial && mediaOnly && agent.promptDraft.trim() === "/" && !agent.skillLibraryOpen) {
             agent.skillLibraryOpen = true;
             agent.skillQuery = "";
+            if (agent.skillStatus !== "ready" && agent.skillStatus !== "loading") void loadAgentSkills();
             queueMicrotask(() => { syncPanel(); surface.querySelector?.('[data-agent-field="skillQuery"]')?.focus?.(); });
           }
         },
@@ -1339,7 +1362,9 @@ export function createCanvasAgentController({
     ? String(agent.conversationId ?? "")
     : "";
   const conversationCache = new Map();
+  const initializedPlazaSelections = new Set();
   let conversationLoadGeneration = 0;
+  let plazaSelectionRevision = 0;
   const captureComposerDraft = () => structuredClone({
     promptDraft: agent.promptDraft, promptAttachments: agent.promptAttachments,
     promptCreativeDocumentId: agent.promptCreativeDocumentId, selectedSkillId: agent.selectedSkillId,
@@ -1600,11 +1625,18 @@ export function createCanvasAgentController({
 
   const refreshConversationMessages = async (conversationId) => {
     const loadGeneration = conversationLoadGeneration;
+    const selectionRevision = plazaSelectionRevision;
     const canvasId = mediaOnly ? "free-generation" : String(workbench.ui?.selectedCanvasProjectId ?? "");
     if (!canvasId || !conversationId || typeof agentApi.listMessages !== "function") return agent.messages;
     const payload = await agentApi.listMessages(canvasId, conversationId, { limit: 200 });
     if (disposed || agent.conversationId !== conversationId || loadGeneration !== conversationLoadGeneration) return agent.messages;
     const rows = Array.isArray(payload?.messages) ? payload.messages : [];
+    if (mediaOnly && agent.messagesStatus === "loading" && selectionRevision === plazaSelectionRevision && !initializedPlazaSelections.has(conversationId)) {
+      const latestUser = rows.findLast(message => message.role === "user");
+      agent.promptPlazaSkillIds = normalizePlazaSkillIds(latestUser?.content?.plazaSkillIds);
+      initializedPlazaSelections.add(conversationId);
+      if (agent.promptPlazaSkillIds.length && agent.skillStatus !== "ready" && agent.skillStatus !== "loading") void loadAgentSkills();
+    }
     agent.messages = rows.map(normalizeAgentMessage).filter((message) => message.text || message.generationTaskId || message.creative).slice(-200);
     await hydrateMediaMessages();
     return agent.messages;
@@ -2162,7 +2194,7 @@ export function createCanvasAgentController({
     try {
       const authenticated = workbench.session?.authenticated !== false;
       const [catalog, mine, library] = await Promise.all([
-        workbench.api.getSkills({ query: agent.skillQuery, page: 1, pageSize: 50 }),
+        workbench.api.getSkills({ query: mediaOnly ? "" : agent.skillQuery, page: 1, pageSize: 50 }),
         authenticated && typeof workbench.api.getMySkills === "function"
           ? workbench.api.getMySkills().catch(() => ({ items: [] }))
           : Promise.resolve({ items: [] }),
@@ -2172,7 +2204,14 @@ export function createCanvasAgentController({
             ? workbench.api.getSkillLibrary().catch(() => ({ items: [] }))
             : Promise.resolve({ items: [] }),
       ]);
-      agent.skillOfficialItems = mapAgentSkillItems(rowsFromSkillPayload(catalog), "official");
+      const catalogRows = [...rowsFromSkillPayload(catalog)];
+      if (mediaOnly) {
+        for (let page = 2; page <= Number(catalog?.totalPages ?? 1); page += 1) {
+          const nextPage = await workbench.api.getSkills({ query: "", page, pageSize: 50 });
+          catalogRows.push(...rowsFromSkillPayload(nextPage));
+        }
+      }
+      agent.skillOfficialItems = mapAgentSkillItems(catalogRows, "official");
       agent.skillMineItems = mapAgentSkillItems(rowsFromSkillPayload(mine), "mine");
       agent.skillLibraryItems = mapAgentSkillItems(rowsFromSkillPayload(library), "library");
       const byId = new Map();
@@ -2189,7 +2228,9 @@ export function createCanvasAgentController({
       agent.skillStatus = "unavailable";
       agent.error = friendlyAgentError(error);
     }
-    syncPanel();
+    const skillResults = mediaOnly && agent.skillLibraryOpen ? surface.querySelector?.("[data-skill-results]") : null;
+    if (skillResults) skillResults.innerHTML = renderFreeConversationSkillResults(agent);
+    else syncPanel();
     return agent.skillItems;
   };
 
@@ -2328,7 +2369,10 @@ export function createCanvasAgentController({
       }
       if (field === "skillQuery") {
         if (mediaOnly) {
-          agent.skillQuery = String(target.value ?? "").slice(0, 100);
+          const query = String(target.value ?? "").slice(0, 100);
+          // The host also forwards change on blur; keep the pending pointer target mounted.
+          if (agent.skillQuery === query) return true;
+          agent.skillQuery = query;
           const results = surface.querySelector?.("[data-skill-results]");
           if (results) results.innerHTML = renderFreeConversationSkillResults(agent);
           return true;
@@ -2389,6 +2433,7 @@ export function createCanvasAgentController({
         if (mediaOnly && value.trim() === "/" && !agent.skillLibraryOpen) {
           agent.skillLibraryOpen = true;
           agent.skillQuery = "";
+          if (agent.skillStatus !== "ready" && agent.skillStatus !== "loading") void loadAgentSkills();
           syncPanel();
           queueMicrotask(() => surface.querySelector?.('[data-agent-field="skillQuery"]')?.focus?.());
           return true;
@@ -2446,7 +2491,18 @@ export function createCanvasAgentController({
       }
       if (event.key === "Enter" && (target?.dataset?.agentField === "skillQuery" || target?.matches?.("[data-episode-plaza-skill-search]"))) {
         event.preventDefault();
+        if (mediaOnly && agent.skillLibraryOpen) surface.querySelector?.('[data-skill-results] button[data-skill-id]')?.click?.();
         return true;
+      }
+      if (mediaOnly && agent.skillLibraryOpen && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+        const choices = [...(surface.querySelectorAll?.('[data-skill-results] button[data-skill-id]') ?? [])];
+        if (choices.length && (target?.dataset?.agentField === "skillQuery" || choices.includes(target))) {
+          event.preventDefault();
+          const index = choices.indexOf(target);
+          const next = index < 0 ? (event.key === "ArrowDown" ? 0 : choices.length - 1) : (index + (event.key === "ArrowDown" ? 1 : -1) + choices.length) % choices.length;
+          choices[next].focus?.();
+          return true;
+        }
       }
       if (event.key === "Escape" && agent.generationPermissionMenuOpen) {
         event.preventDefault();
@@ -2558,6 +2614,7 @@ export function createCanvasAgentController({
         const source = String(target.dataset.skillSource ?? "");
         agent.skillSourceTab = source === "library" || source === "mine" ? source : "official";
         syncPanel();
+        if (mediaOnly) queueMicrotask(() => surface.querySelector?.('[data-agent-field="skillQuery"]')?.focus?.());
         return true;
       }
       if (action === "select-agent-skill-draft") {
@@ -2614,6 +2671,7 @@ export function createCanvasAgentController({
         const skillId = String(target.dataset.skillId ?? "").trim();
         if (!FREE_CONVERSATION_SKILLS.some((skill) => skill.id === skillId)) return true;
         agent.selectedSkillId = skillId;
+        if (mediaOnly) agent.generationKind = "agent";
         const knownSkillIds = FREE_CONVERSATION_SKILLS.map((skill) => skill.id).join("|");
         const existingSkillPrefix = new RegExp(`^(?:/(?:${knownSkillIds})(?:\\s+|$))+`);
         agent.promptDraft = String(agent.promptDraft ?? "").replace(existingSkillPrefix, "").replace(/^\/\s*$/, "").trimStart();
@@ -2649,7 +2707,32 @@ export function createCanvasAgentController({
         agent.generationMenuOpen = "";
         agent.skillQuery = "";
         syncPanel();
+        if (agent.skillLibraryOpen && agent.skillStatus !== "ready" && agent.skillStatus !== "loading") await loadAgentSkills();
         queueMicrotask(() => surface.querySelector?.(agent.skillLibraryOpen ? '[data-agent-field="skillQuery"]' : '[data-agent-action="toggle-skill-library"]')?.focus?.());
+        return true;
+      }
+      if (action === "reload-free-plaza-skills" && mediaOnly) {
+        if (agent.skillStatus !== "loading") await loadAgentSkills();
+        return true;
+      }
+      if (action === "select-free-plaza-skill" && mediaOnly) {
+        const skillId = String(target.dataset.skillId ?? "").trim();
+        if (!collectAgentPlazaSkills().some(skill => skill.id === skillId)) return true;
+        plazaSelectionRevision += 1;
+        if (agent.conversationId) initializedPlazaSelections.add(agent.conversationId);
+        agent.promptPlazaSkillIds = normalizePlazaSkillIds([...(agent.promptPlazaSkillIds ?? []), skillId]);
+        agent.generationKind = "agent";
+        agent.promptDraft = String(agent.promptDraft ?? "").replace(/^\/\s*$/, "");
+        agent.skillLibraryOpen = false;
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-prompt-input], [data-agent-field="promptDraft"]')?.focus?.());
+        return true;
+      }
+      if (action === "remove-free-plaza-skill" && mediaOnly) {
+        plazaSelectionRevision += 1;
+        if (agent.conversationId) initializedPlazaSelections.add(agent.conversationId);
+        agent.promptPlazaSkillIds = normalizePlazaSkillIds(agent.promptPlazaSkillIds).filter(id => id !== String(target.dataset.skillId ?? ""));
+        syncPanel();
         return true;
       }
       if (action === "clear-free-conversation-skill" && mediaOnly) {
@@ -2719,7 +2802,7 @@ export function createCanvasAgentController({
         if (fromPrompt) {
           agent.promptDraft = "";
           agent.selectedSkillId = "";
-          agent.promptPlazaSkillIds = [];
+          if (!mediaOnly) agent.promptPlazaSkillIds = [];
           agent.selectedModelOverrides = {};
           agent.visualStylePending = false;
           agent.promptMention = null;
@@ -3376,7 +3459,7 @@ export function createCanvasAgentController({
             message: {
               text,
               ...(creativeDocumentId ? { creativeDocumentId } : {}),
-              ...(plazaSkillIds.length ? { plazaSkillIds } : {}),
+              ...(mediaOnly || plazaSkillIds.length ? { plazaSkillIds } : {}),
               ...(mediaOnly || Object.keys(agent.promptPreferredModels ?? {}).length ? {
                 preferredModels,
               } : {}),
@@ -3431,7 +3514,7 @@ export function createCanvasAgentController({
           syncCurrentAgentTaskItem(agent, { goal: text, conversationId });
           agent.promptDraft = "";
           agent.selectedSkillId = "";
-          agent.promptPlazaSkillIds = [];
+          if (!mediaOnly) agent.promptPlazaSkillIds = [];
           agent.selectedModelOverrides = {};
           agent.visualStylePending = false;
           agent.promptCreativeDocumentId = "";
@@ -3509,12 +3592,12 @@ export function createCanvasAgentController({
             canvasId,
             agent.conversationId,
           );
-          const plazaSkillIds = fromPrompt ? normalizePlazaSkillIds(agent.promptPlazaSkillIds) : [];
+          const plazaSkillIds = mediaOnly || fromPrompt ? normalizePlazaSkillIds(agent.promptPlazaSkillIds) : [];
           await control("interject", {
             message: {
               text,
               ...(creativeDocumentId ? { creativeDocumentId } : {}),
-              ...(plazaSkillIds.length ? { plazaSkillIds } : {}),
+              ...(mediaOnly || plazaSkillIds.length ? { plazaSkillIds } : {}),
               ...(mediaOnly || Object.keys(agent.promptPreferredModels ?? {}).length ? {
                 preferredModels: mediaOnly
                   ? (agentGeneration
@@ -3557,7 +3640,7 @@ export function createCanvasAgentController({
           if (fromPrompt) {
             agent.promptDraft = "";
             agent.selectedSkillId = "";
-            agent.promptPlazaSkillIds = [];
+            if (!mediaOnly) agent.promptPlazaSkillIds = [];
             agent.selectedModelOverrides = {};
             agent.visualStylePending = false;
             agent.promptCreativeDocumentId = "";

@@ -92,6 +92,9 @@
       const controller = createCanvasAgentController({
         surface, capabilityProfile: "media_generation_only",
         workbench: { ui, api: {
+          async getSkills() { return { items: [{ id: "fixture-director", title: "叙事短片导演", summary: "从故事大纲、人物设定到分镜，逐步完成一部短片。" }, { id: "fixture-poster", title: "电影海报设计", summary: "结合参考素材，创作具有电影感的宣传海报。" }] }; },
+          async getSkillFavorites() { return { items: [{ id: "fixture-saved", title: "收藏的分镜 Skill", summary: "沿用人物和镜头语言，编写下一组分镜。" }] }; },
+          async getMySkills() { return { items: [{ id: "fixture-mine", title: "我的角色设定", summary: "使用我的角色设计流程。" }] }; },
           async listFreeGenerationMessages(id) {
             return { messages: [{ id: `${id}-message`, role: "user", content: { text: id === "fixture-a" ? "为我的故事设计一个角色" : "制作一段校园短片" } }] };
           },
@@ -107,6 +110,7 @@
         if (button && !button.disabled) void controller.handleAction(button);
       });
       surface.addEventListener("input", event => controller.handleInput(event.target));
+      surface.addEventListener("change", event => controller.handleInput(event.target));
       surface.addEventListener("keydown", event => controller.handleKeydown(event, event.target));
       if (new URLSearchParams(location.search).get("editor") === "rich") await controller.syncPromptEditor();
       window.fixtureRefresh = () => controller.syncPanel({ liveOnly: true });

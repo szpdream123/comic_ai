@@ -188,18 +188,32 @@ export class CanvasAgentExecutor {
           },
         },
       };
-      const modelMessages = await buildCanvasAgentModelMessages({
-        modelInput,
-        context,
-        modelCapabilities: model.capabilities,
-        modelDisplayName: model.displayName,
-        resolveFileAttachment: this.deps.resolveFileAttachment,
-        resolvePlazaSkill: this.deps.resolvePlazaSkill,
-        canvasId: current.canvasId,
-        conversationId: current.conversationId,
-        actor,
-        capabilityProfile,
-      });
+      let modelMessages: TextGatewayChatCompletionRequest["messages"];
+      try {
+        modelMessages = await buildCanvasAgentModelMessages({
+          modelInput,
+          context,
+          modelCapabilities: model.capabilities,
+          modelDisplayName: model.displayName,
+          resolveFileAttachment: this.deps.resolveFileAttachment,
+          resolvePlazaSkill: this.deps.resolvePlazaSkill,
+          canvasId: current.canvasId,
+          conversationId: current.conversationId,
+          actor,
+          capabilityProfile,
+        });
+      } catch (error) {
+        if (!(error instanceof CanvasAgentPlazaSkillError)) throw error;
+        await appendCanvasAgentMessage(this.deps.db, {
+          conversationId: current.conversationId, taskId, role: "assistant",
+          content: { message: error.message, citations: [] }, now,
+        });
+        return this.finishTask({
+          taskId, from: ["running", "queued"], to: "failed",
+          failureCode: "canvas_agent_plaza_skill_unavailable", event: { message: error.message },
+          pricing: model.pricing, now,
+        });
+      }
       const modelStep = await createCanvasAgentStep(this.deps.db, {
         taskId,
         kind: "model",
@@ -1331,6 +1345,12 @@ function plazaSkillTokensFromText(text: string) {
   return [...tokens];
 }
 
+class CanvasAgentPlazaSkillError extends Error {
+  constructor() {
+    super("所选技能暂时无法加载，可能已下架、无权访问或服务暂时异常。请重新选择技能后再试。");
+  }
+}
+
 async function plazaSkillInstructionForLatestUser(input: {
   context: unknown;
   actor: CanvasAgentActor;
@@ -1340,11 +1360,17 @@ async function plazaSkillInstructionForLatestUser(input: {
     name?: string;
   }) => Promise<{ id: string; title: string; content: string } | null>;
 }) {
-  if (!input.resolvePlazaSkill) return "";
-  const userId = String(input.actor.ownerUserId ?? "").trim();
-  if (!userId) return "";
   const content = latestUserContentValue(input.context, (value) => value, null);
   const ids = plazaSkillIdsFromContent(content);
+  if (!input.resolvePlazaSkill) {
+    if (ids.length) throw new CanvasAgentPlazaSkillError();
+    return "";
+  }
+  const userId = String(input.actor.ownerUserId ?? "").trim();
+  if (!userId) {
+    if (ids.length) throw new CanvasAgentPlazaSkillError();
+    return "";
+  }
   const tokens = ids.length ? [] : plazaSkillTokensFromText(latestUserMessageText(input.context));
   if (!ids.length && !tokens.length) return "";
   const seen = new Set<string>();
@@ -1354,11 +1380,16 @@ async function plazaSkillInstructionForLatestUser(input: {
       const skill = await input.resolvePlazaSkill?.({ userId, ...request });
       const id = String(skill?.id ?? "").trim();
       const body = String(skill?.content ?? "").trim();
-      if (!id || !body || seen.has(id)) return;
+      if (!id || !body) {
+        if (request.skillId) throw new CanvasAgentPlazaSkillError();
+        return;
+      }
+      if (seen.has(id)) return;
       seen.add(id);
       const title = String(skill?.title ?? "").trim() || id;
       sections.push(`Plaza skill ${title}:\n${body}`);
     } catch {
+      if (request.skillId) throw new CanvasAgentPlazaSkillError();
     }
   };
   for (const skillId of ids) await resolve({ skillId });
