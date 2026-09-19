@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { p0Capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { createSkillPlazaService } from "../skill-plaza/skill-plaza.service.ts";
+import { applySqlMigration } from "../shared/db/migrations.ts";
 import { createMigratedTestDb } from "../shared/db/test-db.ts";
 import { claimProductionAgentTask } from "./production-agent.adapter.ts";
 import {
@@ -289,6 +290,87 @@ describe("production agent session", { concurrency: false }, () => {
         target_entity_type: "production_agent_session",
         agent_type: "production",
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("repairs drifted session_json into workspace_json before creating a conversation", async () => {
+    const db = await createMigratedTestDb();
+    const userId = "00000000-0000-4000-8000-000000000211";
+    try {
+      await seedUser(db, userId, "13800138211");
+      await db.query(`
+        ALTER TABLE production_agent_conversations
+          RENAME COLUMN workspace_json TO session_json
+      `);
+      await db.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conrelid = to_regclass(current_schema() || '.production_agent_conversations')
+              AND conname = 'production_agent_conversations_workspace_json_not_null'
+          ) THEN
+            ALTER TABLE production_agent_conversations
+              RENAME CONSTRAINT production_agent_conversations_workspace_json_not_null
+              TO production_agent_conversations_session_json_not_null;
+          END IF;
+        END
+        $$;
+      `);
+      await assert.rejects(
+        createProductionAgentConversation(db, {
+          actor: sessionActor(userId),
+          title: "漂移会话",
+          mode: "auto",
+          modelCode: "preview-script-model",
+          source: { text: "任小野进入乌坦城。" },
+          skillCatalog: [],
+          now: new Date("2026-09-16T08:00:00.000Z"),
+        }),
+        /workspace_json/,
+      );
+      await applySqlMigration(db, process.cwd(), "20261109-rename-production-agent-session-json.sql");
+      await applySqlMigration(db, process.cwd(), "20261110-rename-production-agent-session-json-constraint.sql");
+      const conversation = await createProductionAgentConversation(db, {
+        actor: sessionActor(userId),
+        title: "漂移会话",
+        mode: "auto",
+        modelCode: "preview-script-model",
+        source: { text: "任小野进入乌坦城。" },
+        skillCatalog: [],
+        now: new Date("2026-09-16T08:00:00.000Z"),
+      });
+      assert.equal(conversation.title, "漂移会话");
+      const columns = await db.query<{ column_name: string }>(
+        `
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'production_agent_conversations'
+            AND column_name IN ('session_json', 'workspace_json')
+          ORDER BY column_name
+        `,
+      );
+      assert.deepEqual(columns.rows.map((row) => row.column_name), ["workspace_json"]);
+      const constraints = await db.query<{ conname: string }>(
+        `
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = to_regclass(current_schema() || '.production_agent_conversations')
+            AND conname IN (
+              'production_agent_conversations_session_json_not_null',
+              'production_agent_conversations_workspace_json_not_null'
+            )
+          ORDER BY conname
+        `,
+      );
+      assert.deepEqual(
+        constraints.rows.map((row) => row.conname),
+        ["production_agent_conversations_workspace_json_not_null"],
+      );
     } finally {
       await db.close();
     }

@@ -480,6 +480,23 @@ test("AI Canvas runtime seeds a default assistant selection from the backend tex
   assert.match(catalogBridge, /!state\?\.config\?\.assistantModelId && defaultTextModelId[\s\S]*?assistantModelId: `general\/\$\{defaultTextModelId\}`/);
 });
 
+test("AI Canvas auto-invokes plaza skills only when the user did not select one", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const catalogBridge = appSource.slice(
+    appSource.indexOf("function createAiCanvasRuntimeCatalogBridge"),
+    appSource.indexOf("function createAiCanvasRuntimeScaleBridge"),
+  );
+  assert.match(catalogBridge, /userSkills: skillCatalog/);
+  assert.doesNotMatch(catalogBridge, /disableModelInvocation: true/);
+  assert.match(appSource, /function selectedAiCanvasRuntimeSkillIds\(input = \{\}, text = ""\)/);
+  assert.match(appSource, /function withAiCanvasRuntimeSkillInvocationScope\(skills = \[\], selectedIds = \[\]\)/);
+  assert.match(appSource, /disableModelInvocation: restrict \? !selected\.has\(id\) : false/);
+  assert.match(appSource, /async function submitAiCanvasRuntimeAgentPrompt[\s\S]*?await applyAiCanvasRuntimeSkillInvocationScope\(/);
+  assert.match(appSource, /const syncInvocationScope = \(\) => \{[\s\S]*?applyAiCanvasRuntimeSkillInvocationScope\(/);
+  assert.match(appSource, /root\.addEventListener\("click", onSendIntent, true\)/);
+  assert.match(appSource, /root\.addEventListener\("input", onComposerScopeInput, true\)/);
+});
+
 test("AI Canvas backend media models declare task polling instead of a synchronous URL response", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const catalogBridge = appSource.slice(

@@ -16,6 +16,7 @@ import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-
 import {
   EPISODE_PLAZA_SKILL_CATEGORIES,
   EPISODE_PROMPT_SKILL_CATEGORIES,
+  excludeProjectWorkflowPlazaSkills,
   filterOfficialProjectWorkflowPlazaSkills,
   normalizeEpisodePromptSkills,
   normalizePlazaEpisodeSkills,
@@ -5436,7 +5437,7 @@ function renderSingleEpisodeAiTable(table, key, options = {}) {
           <tbody>
             ${
               rows.length
-                ? rows.map((row) => renderSingleEpisodeAiTableRow(row, key, columns, options)).join("")
+                ? rows.map((row, index) => renderSingleEpisodeAiTableRow(row, key, columns, options, index)).join("")
                 : options.previewMode === "live"
                   ? ""
                   : `<tr><td colspan="${Math.max(columns.length, 1)}">暂无数据</td></tr>`
@@ -5455,20 +5456,20 @@ function isChapterStoryboardTable(columns = []) {
 }
 
 function isLiveStoryboardTable(columns = []) {
-  const liveStoryboardColumns = ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+  const liveStoryboardColumns = ["镜号", "动态视频提示词"];
   return columns.length === liveStoryboardColumns.length
     && columns.every((column, index) => column === liveStoryboardColumns[index]);
 }
 
 function resolveSingleEpisodeAiTableColumns(table, key) {
-  if (key === "storyboards" && Array.isArray(table?.columns) && table.columns.length) {
-    return table.columns;
+  if (key === "storyboards") {
+    return ["镜号", "动态视频提示词"];
   }
   const fixedColumns = {
-    characters: ["角色名称", "角色描述", "角色图片提示词"],
-    scenes: ["场景名称", "场景描述", "场景图片提示词"],
-    props: ["道具名称", "道具描述", "道具图片提示词"],
-    storyboards: ["镜号", "分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"],
+    characters: ["角色名称", "角色图片提示词"],
+    scenes: ["场景名称", "场景图片提示词"],
+    props: ["道具名称", "道具图片提示词"],
+    storyboards: ["镜号", "动态视频提示词"],
   };
   if (fixedColumns[key]) {
     return fixedColumns[key];
@@ -5691,16 +5692,13 @@ function resolveStructuredScriptTextValue(payload) {
   return "";
 }
 
-function renderSingleEpisodeAiTableRow(row, key, columns = [], options = {}) {
-  const chapterStoryboardColumns = ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"];
+function renderSingleEpisodeAiTableRow(row, key, columns = [], options = {}, index = 0) {
   const valuesByKey = {
     script: [row.beatNo, row.scriptContent, row.characters, row.sceneHint, row.propHints, row.dialogue],
-    scenes: [row.sceneName, row.sceneDescription, row.sceneImagePrompt],
-    characters: [row.characterName, row.characterDescription, row.characterImagePrompt],
-    props: [row.propName, row.propDescription, row.propImagePrompt],
-    storyboards: columns.length === chapterStoryboardColumns.length && columns.every((column, index) => column === chapterStoryboardColumns[index])
-      ? [row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt]
-      : [row.shotNo, row.plot, row.dialogue, row.displayImagePrompt || row.imagePrompt, row.displayVideoPrompt || row.videoPrompt],
+    scenes: [row.sceneName, row.sceneImagePrompt],
+    characters: [row.characterName, row.characterImagePrompt],
+    props: [row.propName, row.propImagePrompt],
+    storyboards: [`分镜${index + 1}`, row.displayVideoPrompt || row.videoPrompt],
   };
   const values = valuesByKey[key] ?? Object.values(row ?? {});
   return `<tr>${values.map((value) => `<td>${renderSingleEpisodeAiSafeInlineMarkup(resolveSingleEpisodeAiTableCellText(value, options))}</td>`).join("")}</tr>`;
@@ -9332,26 +9330,56 @@ function renderSkillPlazaPage(ui = {}) {
   const section = (label, value) => value ? `<section class="skill-detail-section"><h3>${label}</h3><p>${escapeHtml(String(value))}</p></section>` : "";
   const guideDialog = ui.promptMarketplaceGuideOpen ? `<div class="prompt-marketplace-guide" role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title">
     <section>
-      <header><div><span>SKILL FORMAT</span><h2 id="prompt-guide-title">SKILL开发说明</h2></div><button type="button" data-action="close-prompt-marketplace-guide" aria-label="关闭SKILL开发说明">×</button></header>
+      <header><div><span>技能格式</span><h2 id="prompt-guide-title">技能开发说明</h2></div><button type="button" data-action="close-prompt-marketplace-guide" aria-label="关闭技能开发说明">×</button></header>
       <ol class="prompt-marketplace-guide-notes" aria-label="SKILL 使用说明">
-        <li>项目工作流分类中生成必须以对应的<strong>名称标记</strong>开头；</li>
-        <li>其它形式的 skill 不限，但必须以一个 <code>skill.md</code> 总入口进行。</li>
-        <li>skill 目前最多支持 <mark>50个文件</mark>、如有其它需求请联系客服。</li>
-        <li>skill 目前<strong>不支持脚本</strong>。上传到广场需客服审核、个人使用不受限制。</li>
+        <li>项目工作流分类中生成必须以对应的<strong>名称标记</strong>开头；每个标记拆成<strong>独立画布节点</strong>，禁止把整张表写进同一个文本说明节点或素材节点。</li>
+        <li>其它形式的技能不限，但必须以一份总入口文件作为开头（文件名固定为技能说明）。</li>
+        <li>技能目前最多支持 <mark>50个文件</mark>、如有其它需求请联系客服。</li>
+        <li>技能目前<strong>不支持脚本</strong>。上传到广场需客服审核、个人使用不受限制。</li>
+        <li>画布 AI 助手单任务大约只能继续 <mark>8 次</mark>。请先在内部抽完，再用 1 次（最多 2 次）同时写入全部节点和连线；不要去读画布、读节点正文、查剧集。</li>
       </ol>
       <section class="prompt-marketplace-guide-workflow" aria-label="项目工作流格式要求">
-        <header><span>WORKFLOW FORMAT</span><h3>项目工作流格式要求</h3></header>
+        <header><span>工作流格式</span><h3>项目工作流格式要求</h3></header>
         <div class="prompt-marketplace-guide-rules">
-          <article><b>01</b><div><strong>角色提示词</strong><code>【角色名称】角色名</code><p>人物名称必须以【角色名称】开头。</p></div></article>
-          <article><b>02</b><div><strong>道具提示词</strong><code>【道具名称】道具名</code><p>道具名称必须以【道具名称】开头。</p></div></article>
-          <article><b>03</b><div><strong>场景提示词</strong><code>【场景名称】场景名</code><p>场景名称必须以【场景名称】开头。</p></div></article>
-          <article><b>04</b><div><strong>分镜提示词</strong><code>【分镜】分镜内容</code><p>分镜必须以【分镜】开头，其中生成的角色、道具和场景引用名称必须使用【@名称】格式。</p></div></article>
+          <article><b>01</b><div><strong>角色提示词</strong><code>【角色名称】角色名</code><p>人物名称必须以【角色名称】开头。每个角色生成 1 个图片节点，禁止多人合进一张表。</p></div></article>
+          <article><b>02</b><div><strong>道具提示词</strong><code>【道具名称】道具名</code><p>道具名称必须以【道具名称】开头。每个道具生成 1 个图片节点，禁止整表塞进一个节点。</p></div></article>
+          <article><b>03</b><div><strong>场景提示词</strong><code>【场景名称】场景名</code><p>场景名称必须以【场景名称】开头。每个场景生成 1 个图片节点，禁止把清单和设定表塞进一个节点。</p></div></article>
+          <article><b>04</b><div><strong>分镜提示词</strong><code>【分镜】分镜内容</code><p>分镜必须以【分镜】开头；出场的角色、场景、道具必须写成【@名称】。每个【分镜】生成 1 个视频节点。</p></div></article>
         </div>
       </section>
-      <section class="prompt-marketplace-guide-example" aria-label="提示词格式示例"><header><span>EXAMPLE</span><strong>完整示例</strong></header><pre>【角色名称】白纹鬼
+      <section class="prompt-marketplace-guide-canvas" aria-label="画布节点与连线要求">
+        <header><span>画布格式</span><h3>画布节点与连线要求</h3></header>
+        <div class="prompt-marketplace-guide-flow" aria-label="连线箭头说明">
+          <strong>箭头怎么连（从左指向右）</strong>
+          <pre>小说原文  →  精修剧本
+精修剧本  →  角色图片 / 场景图片 / 道具图片
+
+角色图片  →  分镜视频
+场景图片  →  分镜视频
+道具图片  →  分镜视频
+
+【@白纹鬼】     对上「白纹鬼」图片     →  连进该分镜
+【@黄昏尸骸战场】 对上「黄昏尸骸战场」图片 →  连进该分镜
+【@切割刀】     对上「切割刀」图片     →  连进该分镜</pre>
+          <p>主链是「图片 → 分镜视频」。剧本连到分镜可有可无；图片没连上分镜，就算没做完。箭头反了（分镜 → 图片、视频 → 原文）会失败，把两端对调即可。</p>
+        </div>
+        <div class="prompt-marketplace-guide-rules">
+          <article><b>01</b><div><strong>一人一节点</strong><code>角色 / 场景 / 道具 → 图片节点</code><p>一个角色一张图，一个场景一张图，一个道具一张图，一个分镜一个视频。禁止把整张角色表、场景表、道具表或全部分镜写进同一个文本节点。</p></div></article>
+          <article><b>02</b><div><strong>图片要当成分镜素材</strong><code>角色图 / 场景图 / 道具图 → 分镜视频</code><p>分镜里写了【@名称】，就要把同名图片连进这个视频。只连剧本、不连图片，视为未完成。</p></div></article>
+          <article><b>03</b><div><strong>箭头只能从起点指向终点</strong><code>有输出口的节点 → 有输入口的节点</code><p>原文、上传素材这类节点没有输入口，只能当起点，不能当终点。写反了就交换两端，不要按原方向重试。</p></div></article>
+          <article><b>04</b><div><strong>一次写完</strong><code>先建节点，同一批就连线</code><p>不要每次只建几个节点，也不要等下一轮再连线。画布上已经有图和视频、但一条线都没有时，第一次就要把「图片 → 分镜」全部连完。</p></div></article>
+        </div>
+      </section>
+      <section class="prompt-marketplace-guide-example" aria-label="提示词格式示例"><header><span>示例</span><strong>完整示例</strong></header><pre>【角色名称】白纹鬼
+灰白皮肤，胸腔有洞，四肢修长。
+
 【场景名称】黄昏尸骸战场
+无人纯场景，暮色压在焦土与残甲上。
+
 【道具名称】切割刀
-【分镜】一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人</pre></section>
+黑色短刀，刃口有缺损。
+
+【分镜】一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人</pre><p>拆成：白纹鬼图片、黄昏尸骸战场图片、切割刀图片、1 个分镜视频。<br />连线：白纹鬼图片 → 该分镜；黄昏尸骸战场图片 → 该分镜；切割刀图片 → 该分镜。</p></section>
     </section>
   </div>` : "";
   const renderCard = (item) => {
@@ -11263,9 +11291,9 @@ function renderHomeAgentComposerSegments(segments, selectedModels, attachments, 
 
 function resolveHomeAgentSkillCatalog(ui = {}) {
   return [
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaLibrarySkills, "library", ui.skillPlazaCategories),
-    ...normalizePlazaEpisodeSkills(ui.episodePlazaMineSkills, "mine", ui.skillPlazaCategories),
+    ...excludeProjectWorkflowPlazaSkills(ui.episodePlazaOfficialSkills, "official", ui.skillPlazaCategories),
+    ...excludeProjectWorkflowPlazaSkills(ui.episodePlazaLibrarySkills, "library", ui.skillPlazaCategories),
+    ...excludeProjectWorkflowPlazaSkills(ui.episodePlazaMineSkills, "mine", ui.skillPlazaCategories),
   ];
 }
 

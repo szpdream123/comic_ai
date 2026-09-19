@@ -3435,6 +3435,83 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.assetPromptDraft?.quickReferenceItems?.length, 0);
   });
 
+  it("switches from video tab to image tab when importing an asset card into the dialog", () => {
+    const storyboard = {
+      id: "storyboard-video-selected",
+      title: "视频分镜",
+      description: "这是当前视频对话框里的分镜文案，不应该被资产引入覆盖后仍留在视频页。",
+      generationState: { quickReferenceItems: [] },
+    };
+    const workbench = {
+      state: {
+        episodes: [{ id: "episode-1", title: "第一集" }],
+      },
+      ui: {
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        prompt: storyboard.description,
+        selectedEpisodeId: "episode-1",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-1": [storyboard] },
+        projectAssetTab: "character",
+        selectedEpisodeAssetId: "asset-1",
+        importedAssets: {
+          character: [
+            {
+              id: "asset-1",
+              name: "闻婶",
+              description: "四十多岁妇人，憔悴发髻，深褐旧布衫。",
+              previewUrl: "/uploads/asset-1.avif",
+            },
+          ],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, {
+      assetId: "asset-1",
+      assetKind: "character",
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(workbench.ui.museScopeMode, "assets");
+    assert.equal(workbench.ui.episodeMediaMode, "image");
+    assert.equal(workbench.ui.prompt, "四十多岁妇人，憔悴发髻，深褐旧布衫。");
+    assert.doesNotMatch(workbench.ui.prompt, /视频对话框里的分镜文案/);
+  });
+
+  it("switches to the video tab when importing a storyboard card into the dialog", () => {
+    const storyboards = [
+      { ...addStoryboard([])[0], id: "storyboard-card-1", description: "第一条分镜内容" },
+      { ...addStoryboard([])[0], id: "storyboard-card-2", description: "第二条分镜内容" },
+    ];
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: "storyboard-card-1",
+        storyboards,
+        episodeStoryboardMap: { "episode-new": storyboards },
+        prompt: "当前图片对话框内容",
+        importedAssets: { character: [], scene: [], prop: [] },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: "storyboard-card-2" });
+
+    assert.equal(result.ok, true);
+    assert.equal(workbench.ui.museScopeMode, "storyboard");
+    assert.equal(workbench.ui.episodeMediaMode, "video");
+    assert.equal(workbench.ui.selectedStoryboardId, "storyboard-card-2");
+    assert.equal(workbench.ui.prompt, "第二条分镜内容");
+  });
+
   it("strips only the persisted automatic style when importing an asset into the prompt", () => {
     const workbench = {
       state: {
@@ -54730,19 +54807,17 @@ describe("production workbench project tab", () => {
     assert.match(html, /场景图片提示词/);
     assert.match(html, /道具名称/);
     assert.match(html, /道具图片提示词/);
+    assert.doesNotMatch(html, /<th>角色描述<\/th>/);
+    assert.doesNotMatch(html, /<th>场景描述<\/th>/);
+    assert.doesNotMatch(html, /<th>道具描述<\/th>/);
     assert.match(html, /镜号/);
-    assert.match(html, /分镜剧情/);
-    assert.match(html, /对话\/旁白/);
-    assert.match(html, /静态图片提示词/);
     assert.match(html, /动态视频提示词/);
+    assert.doesNotMatch(html, /<th>分镜剧情<\/th>/);
+    assert.doesNotMatch(html, /<th>对话\/旁白<\/th>/);
+    assert.doesNotMatch(html, /<th>静态图片提示词<\/th>/);
     assert.match(html, /闵婶家门前/);
-    assert.match(html, /旧木屋门前，傍晚微光/);
     assert.match(html, /任小野<\/td>/);
-    assert.match(html, /约17岁的东方少年，旧布短衣/);
-    assert.match(html, /旧布包裹的朴素饭食/);
-    assert.match(html, /递出饭食/);
-    assert.match(html, /麻烦您了/);
-    assert.match(html, /任小野递出饭食/);
+    assert.match(html, /分镜1/);
     assert.match(html, /中景固定镜头/);
   });
 
@@ -56208,10 +56283,9 @@ describe("production workbench project tab", () => {
     assert.match(row.videoPrompt, /【资产对照表】/);
 
     const html = renderProductionWorkbench(workbench);
-    assert.match(html, /分镜剧情/);
-    assert.match(html, /对话\/旁白/);
-    assert.match(html, /静态图片提示词/);
+    assert.match(html, /镜号/);
     assert.match(html, /动态视频提示词/);
+    assert.match(html, /分镜1/);
     assert.match(html, /地下控制室/);
     assert.match(html, /不能再等了。/);
     assert.doesNotMatch(html, /script_title/);
@@ -58057,19 +58131,15 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /single-episode-ai-table-card storyboards chapter-storyboards/);
+    assert.match(html, /single-episode-ai-table-card storyboards live-storyboards/);
     assert.match(html, /本章分镜/);
-    assert.match(html, /分镜剧情/);
-    assert.match(html, /对话\/旁白/);
-    assert.match(html, /静态图片提示词/);
+    assert.match(html, /镜号/);
     assert.match(html, /动态视频提示词/);
-    assert.match(html, /场景分析：城外阴影深处/);
-    assert.match(html, /主体动作: 无台词，内心OS/);
-    assert.match(html, /视频场景对照表: 城外阴影深处/);
+    assert.match(html, /分镜1/);
     assert.match(html, /镜头1\(分镜剧情\)：弯腰潜行/);
   });
 
-  it("renders chapter storyboard rows with the requested four columns for live preview data", () => {
+  it("renders chapter storyboard rows with shot number and video prompt columns for live preview data", () => {
     const html = renderProductionWorkbench({
       state: {
         ...buildProjectState(),
@@ -58107,13 +58177,9 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /分镜剧情/);
-    assert.match(html, /对话\/旁白/);
-    assert.match(html, /静态图片提示词/);
+    assert.match(html, /镜号/);
     assert.match(html, /动态视频提示词/);
-    assert.match(html, /叶焚野盯着屏幕弹窗。/);
-    assert.match(html, /无台词，内心OS/);
-    assert.match(html, /出租屋内，屏幕弹窗。/);
+    assert.match(html, /分镜1/);
     assert.match(html, /键盘敲击，屏幕弹窗。/);
   });
 
@@ -58155,7 +58221,6 @@ describe("production workbench project tab", () => {
     assert.match(html, /场景名称/);
     assert.match(html, /场景图片提示词/);
     assert.match(html, /闵婶家门前/);
-    assert.match(html, /傍晚微光，旧木门与土墙/);
   });
 
   it("renders live preview image prompts and storyboard shot numbers", () => {
@@ -58215,9 +58280,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /道具图片提示词/);
     assert.match(html, /磨损刀刃特写/);
     assert.match(html, /镜号/);
-    assert.match(html, />1<\/td>/);
-    assert.match(html, /任小野在城门口发现尸体异常。/);
-    assert.match(html, /黄昏城门口，任小野低头查看尸体。/);
+    assert.match(html, />分镜1<\/td>/);
     assert.match(html, /中景固定镜头/);
   });
 

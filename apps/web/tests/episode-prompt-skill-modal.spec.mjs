@@ -46,6 +46,30 @@ describe("episode prompt skill modal", () => {
     assert.doesNotMatch(html, /转剧本提示词/);
   });
 
+  it("hides project-workflow plaza skills from the general Skill picker", () => {
+    const html = renderEpisodePromptSkillModal({
+      show: true,
+      variant: "plaza",
+      sourceTab: "official",
+      officialSkills: [
+        { id: "plaza-workflow", title: "项目工作流 Skill", category: "project-workflow", summary: "一键转分镜", slug: "project-workflow-skill" },
+        { id: "plaza-short-drama", title: "官方短剧 Skill", category: "short-drama", summary: "短剧改编", slug: "short-drama-skill" },
+      ],
+      mineSkills: [
+        { id: "plaza-mine-workflow", title: "我的工作流 Skill", category: "project-workflow" },
+        { id: "plaza-mine-general", title: "我的通用 Skill", category: "general" },
+      ],
+      draftPlazaSkillIds: ["plaza-workflow", "plaza-short-drama"],
+    });
+
+    assert.match(html, /官方短剧 Skill/);
+    assert.match(html, /\/short-drama-skill/);
+    assert.doesNotMatch(html, /项目工作流 Skill/);
+    assert.doesNotMatch(html, /\/project-workflow-skill/);
+    assert.doesNotMatch(html, /我的工作流 Skill/);
+    assert.match(html, /已选 1 项/);
+  });
+
   it("hides non-workflow plaza skills when the picker is filtered to project-workflow", () => {
     const html = renderEpisodePromptSkillModal({
       show: true,

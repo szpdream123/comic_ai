@@ -160,7 +160,8 @@ test("AI Canvas initializes the browser process shim before the runtime bridge i
   assert.match(source, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?aiCanvasRuntimePromise \?\?= import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
   assert.match(bridgeBlock, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
   assert.match(source, /action === "confirm-host-skills"[\s\S]*?injectHydratedAiCanvasRuntimeSkills/);
-  assert.match(source, /async function submitAiCanvasRuntimeAgentPrompt[\s\S]*?hydrateAiCanvasRuntimePromptSkills/);
+  assert.match(source, /async function submitAiCanvasRuntimeAgentPrompt[\s\S]*?hydrateAiCanvasRuntimePromptSkills[\s\S]*?applyAiCanvasRuntimeSkillInvocationScope/);
+  assert.match(source, /root\.addEventListener\("click", onSendIntent, true\)/);
   assert.doesNotMatch(
     source.slice(source.indexOf("const loadCatalogs = async"), source.indexOf("const closePicker")),
     /hydrateAiCanvasRuntimeSkillRows/,

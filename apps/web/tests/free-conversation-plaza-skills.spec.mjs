@@ -22,6 +22,26 @@ function fixture(overrides = {}, surface = { querySelector: () => null }) {
   return { ui, calls, sent, controller, action };
 }
 
+test("free conversation skill library hides project-workflow skills", async () => {
+  const f = fixture({
+    async getSkills() {
+      return {
+        items: [
+          { id: "director", title: "短片导演", summary: "先写分镜，再制作短片", category: "short-drama" },
+          { id: "plaza-workflow", title: "项目工作流 Skill", summary: "一键转分镜", category: "project-workflow" },
+        ],
+      };
+    },
+  });
+  try {
+    await f.action("toggle-skill-library");
+    const html = renderCanvasAgentPanel(f.ui);
+    assert.match(html, /短片导演/);
+    assert.doesNotMatch(html, /项目工作流 Skill/);
+    assert.equal(f.ui.canvasAgent.skillOfficialItems.some((skill) => skill.id === "plaza-workflow"), false);
+  } finally { f.controller.dispose(); }
+});
+
 test("free conversation loads real skills and sends selected IDs without altering the user's draft", async () => {
   const f = fixture();
   try {

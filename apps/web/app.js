@@ -7,6 +7,7 @@ import { applyAiCanvasRuntimeNodeModel, hydrateAiCanvasRuntimeSkillRows, normali
 import { installAiCanvasRuntimeMascotSkinSwitcher, normalizeAiCanvasRuntimeMascotSkin } from "./src/features/new-canvas/canvas-mascot-skin.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
 import {
+  excludeProjectWorkflowPlazaSkills,
   normalizePlazaEpisodeSkills,
   renderEpisodePromptSkillModal,
   resolvePlazaSelectedSkills,
@@ -358,6 +359,9 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
         source: String(skill?.source ?? (skill?.ownerUserId ? "mine" : "official")).trim() || "official",
         version: String(skill?.version ?? "").trim() || undefined,
         content: typeof skill?.content === "string" ? skill.content : "",
+        ...(skill?.manifest && typeof skill.manifest === "object" && !Array.isArray(skill.manifest)
+          ? { manifest: skill.manifest }
+          : {}),
       };
     })
     .filter(Boolean);
@@ -418,6 +422,14 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
             ...previous,
             ...skill,
             content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+            manifest: {
+              ...(previous?.manifest && typeof previous.manifest === "object" && !Array.isArray(previous.manifest)
+                ? previous.manifest
+                : {}),
+              ...(skill?.manifest && typeof skill.manifest === "object" && !Array.isArray(skill.manifest)
+                ? skill.manifest
+                : {}),
+            },
           });
         }
         skillCatalog = [...byId.values()];
@@ -1800,9 +1812,9 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
   const findOverlay = () => root.querySelector?.("[data-host-skill-picker]");
   const hostApi = () => context.api ?? context.creatorApi ?? globalThis.__COMIC_AI_CANVAS_HOST_API__;
   const collectSkills = () => [
-    ...normalizePlazaEpisodeSkills(officialSkills, "official"),
-    ...normalizePlazaEpisodeSkills(librarySkills, "library"),
-    ...normalizePlazaEpisodeSkills(mineSkills, "mine"),
+    ...excludeProjectWorkflowPlazaSkills(officialSkills, "official"),
+    ...excludeProjectWorkflowPlazaSkills(librarySkills, "library"),
+    ...excludeProjectWorkflowPlazaSkills(mineSkills, "mine"),
   ];
 
   const hideNativeSkillList = (node) => {
@@ -2038,9 +2050,44 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     if (!findOverlay()) renderOverlay();
   };
 
+  const readComposerSkillText = () => {
+    const composer = findComposer();
+    if (!composer) return "";
+    const chips = composer.querySelectorAll?.('[data-chat-reference="skill"]') ?? [];
+    const raw = [...chips].map((node) => String(node.getAttribute("data-chat-reference-raw") ?? "")).join(" ");
+    return `${raw} ${String(composer.textContent ?? "")}`;
+  };
+
+  const syncInvocationScope = () => {
+    void applyAiCanvasRuntimeSkillInvocationScope(
+      runtimeStore,
+      context,
+      selectedAiCanvasRuntimeSkillIds({}, readComposerSkillText()),
+    );
+  };
+
+  const onComposerScopeInput = (event) => {
+    if (!event.target?.closest?.(".chat-panel-textarea")) return;
+    syncInvocationScope();
+  };
+
+  const onSendIntent = (event) => {
+    if (!event.target?.closest?.(".chat-panel-send-btn, [aria-label=\"发送消息\"], [aria-label=\"将消息加入队列\"]")) return;
+    syncInvocationScope();
+  };
+
+  const onComposerSubmitKey = (event) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (!event.target?.closest?.(".chat-panel-textarea")) return;
+    syncInvocationScope();
+  };
+
   root.addEventListener("click", onClick, true);
+  root.addEventListener("click", onSendIntent, true);
   root.addEventListener("input", onInput, true);
+  root.addEventListener("input", onComposerScopeInput, true);
   root.addEventListener("keydown", onKeyDown, true);
+  root.addEventListener("keydown", onComposerSubmitKey, true);
   root.addEventListener("pointerdown", onPointerDown, true);
   const observer = new MutationObserver(() => sync());
   observer.observe(root, { childList: true, subtree: true });
@@ -2050,8 +2097,11 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     loadToken += 1;
     observer.disconnect();
     root.removeEventListener("click", onClick, true);
+    root.removeEventListener("click", onSendIntent, true);
     root.removeEventListener("input", onInput, true);
+    root.removeEventListener("input", onComposerScopeInput, true);
     root.removeEventListener("keydown", onKeyDown, true);
+    root.removeEventListener("keydown", onComposerSubmitKey, true);
     root.removeEventListener("pointerdown", onPointerDown, true);
     open = false;
     removeOverlay();
@@ -2158,9 +2208,67 @@ function mergeAiCanvasRuntimeSkillCatalog(existing = [], next = []) {
       ...previous,
       ...skill,
       content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+      manifest: {
+        ...(previous?.manifest && typeof previous.manifest === "object" && !Array.isArray(previous.manifest)
+          ? previous.manifest
+          : {}),
+        ...(skill?.manifest && typeof skill.manifest === "object" && !Array.isArray(skill.manifest)
+          ? skill.manifest
+          : {}),
+      },
     });
   }
   return [...byId.values()];
+}
+
+function selectedAiCanvasRuntimeSkillIds(input = {}, text = "") {
+  const ids = [];
+  if (Array.isArray(input?.plazaSkillIds)) {
+    for (const id of input.plazaSkillIds) {
+      const value = String(id ?? "").trim();
+      if (value) ids.push(value);
+    }
+  }
+  for (const match of String(text ?? "").matchAll(/@skill\{([^|}]+)\|/g)) {
+    const value = String(match[1] ?? "").trim();
+    if (value) ids.push(value);
+  }
+  return [...new Set(ids)];
+}
+
+function withAiCanvasRuntimeSkillInvocationScope(skills = [], selectedIds = []) {
+  const selected = new Set((Array.isArray(selectedIds) ? selectedIds : []).map((id) => String(id ?? "").trim()).filter(Boolean));
+  const restrict = selected.size > 0;
+  return (Array.isArray(skills) ? skills : []).map((skill) => {
+    const id = String(skill?.id ?? skill?.skillId ?? "").trim();
+    return {
+      ...skill,
+      manifest: {
+        ...(skill?.manifest && typeof skill.manifest === "object" && !Array.isArray(skill.manifest)
+          ? skill.manifest
+          : {}),
+        disableModelInvocation: restrict ? !selected.has(id) : false,
+      },
+    };
+  });
+}
+
+async function applyAiCanvasRuntimeSkillInvocationScope(runtimeStore, context = {}, selectedIds = []) {
+  const existing = [
+    ...(Array.isArray(runtimeStore?.getState?.()?.userSkills) ? runtimeStore.getState().userSkills : []),
+    ...(Array.isArray(context?.skillCatalog) ? context.skillCatalog : []),
+    ...(Array.isArray(context?.skills) ? context.skills : []),
+  ];
+  const skills = withAiCanvasRuntimeSkillInvocationScope(
+    mergeAiCanvasRuntimeSkillCatalog(existing, []),
+    selectedIds,
+  );
+  if (!skills.length) return;
+  context.skillCatalog = skills;
+  runtimeStore?.setState?.({ userSkills: skills });
+  if (typeof context.injectRuntimeCatalogs === "function") {
+    await context.injectRuntimeCatalogs({ skillCatalog: skills });
+  }
 }
 
 async function injectHydratedAiCanvasRuntimeSkills(api, rows, context = {}, runtimeStore) {
@@ -2546,6 +2654,11 @@ async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, contex
   await hydrateAiCanvasRuntimePromptSkills(runtimeStore, input, context);
   const skillTokens = plazaSkillTokensForAiCanvasRuntimePrompt(input, runtimeStore, context);
   const withSkills = applyAiCanvasRuntimePlazaSkillTokens(String(input.text ?? input.content ?? ""), skillTokens);
+  await applyAiCanvasRuntimeSkillInvocationScope(
+    runtimeStore,
+    context,
+    selectedAiCanvasRuntimeSkillIds(input, withSkills),
+  );
   const state = runtimeStore?.getState?.();
   if (!state) throw new Error("画布 Agent 未就绪");
   state.setChatPanelDetached?.(false);

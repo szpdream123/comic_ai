@@ -21,7 +21,7 @@ import { renderCanvasStyleGuide } from "./canvas-style-guide.js";
 import { confirmCanvasAction } from "./canvas-ui-controls.js";
 import { describeGenerationProgress } from "./free-conversation-progress.js";
 import {
-  normalizePlazaEpisodeSkills,
+  excludeProjectWorkflowPlazaSkills,
   normalizePlazaSkillIds,
   resolvePlazaSelectedSkills,
   togglePlazaSkillId,
@@ -554,7 +554,9 @@ function renderFreeConversationSkillResults(agent) {
   const query = String(agent.skillQuery ?? "").trim().replace(/^\/+\s*/, "").toLowerCase();
   const skills = FREE_CONVERSATION_SKILLS.filter(skill => `${skill.label} ${skill.description} ${skill.output} ${skill.category}`.toLowerCase().includes(query));
   const source = agent.skillSourceTab === "mine" ? agent.skillMineItems : agent.skillSourceTab === "library" ? agent.skillLibraryItems : agent.skillOfficialItems;
-  const plazaSkills = (Array.isArray(source) ? source : []).filter(skill => `${skill.title} ${skill.name} ${skill.summary} ${skill.category}`.toLowerCase().includes(query));
+  const plazaSkills = (Array.isArray(source) ? source : [])
+    .filter((skill) => String(skill.category ?? "") !== "project-workflow")
+    .filter(skill => `${skill.title} ${skill.name} ${skill.summary} ${skill.category}`.toLowerCase().includes(query));
   const selectedIds = normalizePlazaSkillIds(agent.promptPlazaSkillIds);
   const plaza = agent.skillStatus === "loading"
     ? '<p class="canvas-agent-skill-empty" role="status">正在加载 Skill…</p>'
@@ -2042,11 +2044,11 @@ export function createCanvasAgentController({
     isMine: skill.isMine === true || Boolean(skill.ownerUserId || skill.owner_user_id),
     isFavorite: skill.isFavorite === true || skill.is_favorite === true,
     priceCredits: Math.max(0, Math.round(Number(skill.priceCredits ?? skill.price_credits ?? 0) || 0)),
-  })).filter((skill) => skill.id);
+  })).filter((skill) => skill.id && skill.category !== "project-workflow");
   const collectAgentPlazaSkills = () => [
-    ...normalizePlazaEpisodeSkills(agent.skillOfficialItems, "official"),
-    ...normalizePlazaEpisodeSkills(agent.skillLibraryItems, "library"),
-    ...normalizePlazaEpisodeSkills(agent.skillMineItems, "mine"),
+    ...excludeProjectWorkflowPlazaSkills(agent.skillOfficialItems, "official"),
+    ...excludeProjectWorkflowPlazaSkills(agent.skillLibraryItems, "library"),
+    ...excludeProjectWorkflowPlazaSkills(agent.skillMineItems, "mine"),
   ];
   const insertSelectedAgentSkills = (skills) => {
     const selected = Array.isArray(skills) ? skills : [];

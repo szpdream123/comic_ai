@@ -32,6 +32,11 @@ export function filterOfficialProjectWorkflowPlazaSkills(items = [], source = "o
     .filter((item) => item.official === true && item.source !== "library" && item.source !== "mine" && item.source !== "private");
 }
 
+export function excludeProjectWorkflowPlazaSkills(items = [], source = "", categories = EPISODE_PLAZA_SKILL_CATEGORIES) {
+  return normalizePlazaEpisodeSkills(items, source, categories)
+    .filter((item) => item.category !== PROJECT_WORKFLOW_SKILL_CATEGORY);
+}
+
 export function resolvePlazaSkillCategories(items) {
   const mapped = (Array.isArray(items) ? items : [])
     .map((item) => {
@@ -655,8 +660,11 @@ function renderPlazaSkillPickerModal({
 
 function applyPlazaCategoryFilter(skills = [], categoryFilter = "") {
   const category = String(categoryFilter ?? "").trim();
-  if (!category) return skills;
-  return (Array.isArray(skills) ? skills : []).filter((skill) => skill.category === category);
+  const list = Array.isArray(skills) ? skills : [];
+  if (!category) {
+    return list.filter((skill) => skill.category !== PROJECT_WORKFLOW_SKILL_CATEGORY);
+  }
+  return list.filter((skill) => skill.category === category);
 }
 
 function renderPlazaSourceTab(id, label, activeTab, action) {

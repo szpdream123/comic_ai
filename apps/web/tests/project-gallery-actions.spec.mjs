@@ -1888,7 +1888,10 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
   workbench.api.getSkills = async (input) => {
     calls.push(["getSkills", input]);
     return {
-      items: [{ id: "official-style", title: "电影感画面", summary: "统一镜头语言", category: "general" }],
+      items: [
+        { id: "official-style", title: "电影感画面", summary: "统一镜头语言", category: "general" },
+        { id: "plaza-workflow", title: "项目工作流 Skill", summary: "一键转分镜", category: "project-workflow" },
+      ],
     };
   };
   workbench.api.getMySkills = async () => {
@@ -1916,6 +1919,12 @@ test("home Agent Skill picker inserts a selected Skill inline without leaving th
     ["getSkillFavorites"],
   ]);
   assert.equal(workbench.ui.episodePlazaOfficialSkills.some((skill) => skill.id === "official-style"), true);
+  assert.equal(workbench.ui.episodePlazaOfficialSkills.some((skill) => skill.id === "plaza-workflow"), true);
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "select-home-agent-skill", episodeSkillId: "plaza-workflow", skillCategory: "project-workflow" },
+  });
+  assert.deepEqual(workbench.ui.homeAgentSkillDraftPlazaIds, []);
 
   await handleWorkbenchActionForTest(workbench, {
     dataset: { action: "select-home-agent-skill", episodeSkillId: "official-style", skillCategory: "general" },

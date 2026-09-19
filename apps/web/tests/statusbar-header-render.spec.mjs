@@ -293,6 +293,11 @@ test("home Skill entry reuses the existing plaza Skill picker", () => {
         title: "电影感画面",
         summary: "统一镜头语言",
         category: "general",
+      }, {
+        id: "plaza-workflow",
+        title: "项目工作流 Skill",
+        summary: "一键转分镜",
+        category: "project-workflow",
       }],
       episodePlazaLibrarySkills: [],
       episodePlazaMineSkills: [],
@@ -306,6 +311,7 @@ test("home Skill entry reuses the existing plaza Skill picker", () => {
   assert.match(html, /data-action="confirm-home-agent-skill"/);
   assert.match(html, />电影感画面</);
   assert.match(html, />确认选择</);
+  assert.doesNotMatch(html, /项目工作流 Skill/);
   assert.doesNotMatch(html, /class="canvas-text-skill-layer"/);
   assert.doesNotMatch(html, />选择生成技能</);
   assert.doesNotMatch(html, /selection-picker-layer/);
