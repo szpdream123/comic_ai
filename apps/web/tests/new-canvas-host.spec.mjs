@@ -188,7 +188,10 @@ test("canvas node dragging keeps pointer tracking at low zoom", () => {
   const snapSource = readRuntimeAsset("ResizeHandle-");
   const appRuntime = readRuntimeAsset("App-");
   const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
-  assert.match(snapSource, /function we\(e\)\{return Number\.isFinite\(e\)&&e>0\?Math\.max\(F,F\/e\):F\}/);
+  assert.match(snapSource, /function we\(e\)\{return F\}/);
+  assert.match(snapSource, /function isNodeSnapOn\(\)\{try\{return localStorage\.getItem\(`canvas-nodeSnap`\)!==`false`\}catch\{return!0\}\}/);
+  assert.match(snapSource, /if\(!isNodeSnapOn\(\)\)\{a\.current=null;return\}/);
+  assert.match(snapSource, /if\(!isNodeSnapOn\(\)\)return r\(e=>e\.length===0\?e:\[\]\),t;/);
   assert.match(snapSource, /screenToFlowPosition:e,getZoom:be/);
   assert.match(snapSource, /snapThreshold:we\(be\(\)\)/);
   assert.match(snapSource, /Y\(\[v\.top,v\.bottom\],l,ye\),Y\(\[v\.centerY\],u,ye\)/);
@@ -198,8 +201,12 @@ test("canvas node dragging keeps pointer tracking at low zoom", () => {
   assert.match(appRuntime, /j\.current\.size>0&&!j\.current\.has\(`node`\)&&te\(F\.current,!0\)/);
   assert.match(appRuntime, /if\(e&&!j\.current\.has\(`node`\)\)\{let t=new MutationObserver/);
   assert.match(appRuntime, /if\(j\.current\.has\(`node`\)\)return;V\(C\.screenToFlowPosition/);
-  assert.match(appRuntime, /if\(a\.length>0&&\(C\.getZoom\?\.\(\)\?\?1\)>=\.3\)/);
+  assert.match(appRuntime, /if\(a\.length>0&&\(C\.getZoom\?\.\(\)\?\?1\)>=\.3&&localStorage\.getItem\(`canvas-nodeSnap`\)!==`false`\)/);
   assert.match(appRuntime, /if\(\(C\.getZoom\?\.\(\)\?\?1\)<\.3\)\{Pn\(\),An\(\),jn\(\),En\(null\),kn\(\);return\}/);
+  assert.match(appRuntime, /localStorage\.getItem\(`canvas-nodeSnap`\)!==`false`/);
+  assert.match(appRuntime, /"aria-label":i\(a\?`关闭节点吸附`:`开启节点吸附`\)/);
+  assert.match(appRuntime, /onToggleSnap:o/);
+  assert.match(appRuntime, /nodeSnap:nodeSnapEnabled,onToggleGrid:Ge,onToggleLine:\(\)=>He\(e=>!e\),onToggleSnap:\(\)=>setNodeSnapEnabled\(e=>\{let t=!e;localStorage\.setItem\(`canvas-nodeSnap`,String\(t\)\);return t\}\)/);
   assert.match(brandCss, /html\.canvas-interacting \.react-flow__node\.dragging \.node/);
   assert.doesNotMatch(snapSource, /Y\(\[v\.top,v\.bottom\],l\),Y\(\[v\.centerY\],u\)/);
   assert.doesNotMatch(appRuntime, /ne=\(0,Z\.useCallback\)\(\(\)=>\{j\.current\.size>0&&te\(F\.current,!0\)\}/);
@@ -214,17 +221,72 @@ test("empty media upload placeholders stay draggable on the canvas", () => {
   assert.doesNotMatch(appRuntime, /node-preview-placeholder nodrag nopan/);
 });
 
+test("media nodes keep the full preview while dragging", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(appRuntime, /s=q\(t=>e\.dragging\?0:!!xl\(t\.selectedNodeIds,e\.id\)/);
+  assert.match(appRuntime, /S=f\|\|s!==0\|\|!!e\.selected&&!e\.dragging\|\|t\.status===/);
+  assert.match(appRuntime, /let C=\(!d&&!S\)&&x/);
+  assert.doesNotMatch(appRuntime, /let C=\(e\.dragging\|\|!d&&!S\)&&x/);
+});
+
 test("output history modal stays centered and top chrome menus keep the AI assistant open", () => {
   const historySource = readRuntimeAsset("OutputHistoryPanel-");
   const storeSource = readRuntimeAsset("main-upstream-");
   assert.match(historySource, /fixed left-1\/2 top-1\/2 w-\[min\(720px,calc\(100vw-32px\)\)\] max-h-\[75vh\] -translate-x-1\/2 -translate-y-1\/2 border rounded-2xl/);
   assert.doesNotMatch(historySource, /fixed inset-x-0 bottom-0 mx-auto w-full max-w-\[720px\] max-h-\[75vh\] border border-b-0 rounded-t-2xl/);
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(brandCss, /\[data-resource-video-boundary\]\.fixed\.left-1\\\/2\.top-1\\\/2[\s\S]*translate:\s*-50% -50%\s*!important/);
   assert.match(storeSource, /setAssetsPanelOpen:\(t,n=`modal`\)=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!0,assetsPanelMode:n,characterLibraryOpen:!1,characterActionLibraryOpen:!1,historyPanelOpen:!1,dramaAssetsPanelOpen:!1\}:\{assetsPanelOpen:!1/);
   assert.match(storeSource, /setCharacterLibraryOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!0,characterActionLibraryOpen:!1,historyPanelOpen:!1,dramaAssetsPanelOpen:!1\}:\{characterLibraryOpen:!1/);
   assert.match(storeSource, /setHistoryPanelOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!1,characterActionLibraryOpen:!1,historyPanelOpen:!0,dramaAssetsPanelOpen:!1\}:\{historyPanelOpen:!1\}/);
   assert.doesNotMatch(storeSource, /setAssetsPanelOpen:\(t,n=`modal`\)=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!0[\s\S]{0,280}?chatOpen:!1/);
   assert.doesNotMatch(storeSource, /setCharacterLibraryOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!0[\s\S]{0,220}?chatOpen:!1/);
   assert.doesNotMatch(storeSource, /setHistoryPanelOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!1[\s\S]{0,220}?chatOpen:!1/);
+});
+
+test("asset manager node image and video previews stay compact", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const assetsPanel = readRuntimeAsset("AssetsPanel-");
+  assert.match(assetsPanel, /className:`ui-card assets-node-card p-2`/);
+  assert.match(assetsPanel, /className:`assets-node-media`/);
+  assert.match(assetsPanel, /className:`assets-node-content\$\{i\?` has-expanded-video`:``\}`/);
+  assert.match(source, /\.assets-node-media\s*\{[\s\S]*height:\s*170px/);
+  assert.match(source, /\.assets-node-media img\s*\{[\s\S]*object-fit:\s*contain/);
+  assert.match(source, /\.assets-node-content > \.resource-video-preview\s*\{[\s\S]*height:\s*170px/);
+  assert.match(source, /\.assets-node-content > \.resource-video-preview[\s\S]*object-fit:\s*contain/);
+});
+
+test("multi-image composer side panel matches the canvas right panel width", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(source, /\.composer-root\s*\{[\s\S]*--composer-side-w:\s*600px/);
+});
+
+test("asset manager defaults to six waterfall columns and hides the canvas project picker", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const assetsPanel = readRuntimeAsset("AssetsPanel-");
+  assert.match(assetsPanel, /je=2,Me=6,Ne=6/);
+  assert.match(assetsPanel, /className:`assets-project-select-wrap`/);
+  assert.match(source, /\.assets-project-select-wrap\s*\{[\s\S]*display:\s*none\s*!important/);
+});
+
+test("model dropdown shows admin remarks instead of real model IDs", () => {
+  const mediaProtocolSource = readRuntimeAsset("useTooltipAutoPlacement-");
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /description: String\(model\?\.remark \?\? model\?\.notes \?\? model\?\.summary \?\? model\?\.description \?\? ""\)\.trim\(\) \|\| undefined/);
+  assert.match(mediaProtocolSource, /description:\(e\.description\?\?e\.remark\?\?``\)\.trim\(\)/);
+  assert.doesNotMatch(mediaProtocolSource, /description:`ID: \$\{e\.modelId\}`/);
+  assert.doesNotMatch(mediaProtocolSource, /e\.description\?\.trim\(\)\|\|`ID: \$\{e\.modelId\}`/);
+});
+
+test("model dropdown hides general-model and workflow group chrome while keeping models listed", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const modelSelector = readRuntimeAsset("ModelSelector-");
+  assert.match(source, /\.model-dropdown \.model-group:has\(\.model-group-header \[aria-label="通用模型"\]\) > \.model-group-header/);
+  assert.match(source, /\.model-dropdown \.model-group:has\(\.model-group-header \[aria-label="General models"\]\) > \.model-group-header/);
+  assert.match(source, /\.model-dropdown \.model-group-wf[\s\S]*display:\s*none\s*!important/);
+  assert.match(modelSelector, /e!==`general-models`/);
+  assert.match(modelSelector, /className:`model-group model-group-wf`/);
+  assert.match(modelSelector, /genericName:S\(`通用模型`\)/);
 });
 
 test("expand editor toasts budget errors above the fullscreen overlay", () => {
@@ -341,6 +403,51 @@ test("canvas header restores project switch and help after upstream chrome split
   assert.match(appSource, /切换项目/);
 });
 
+test("ChatPanel hides the detach-to-independent-window control", () => {
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const chatPanel = readRuntimeAsset("ChatPanel-");
+  assert.match(chatPanel, /className:`chat-panel-detach-btn /);
+  assert.match(chatPanel, /g\(t\?`收回内嵌`:`独立窗口`\)/);
+  assert.match(brandCss, /\.chat-panel-detach-btn[\s\S]*display:\s*none\s*!important/);
+});
+
+test("ChatPanel hides agent center and sub-agent header controls", () => {
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const chatPanel = readRuntimeAsset("ChatPanel-");
+  assert.match(chatPanel, /className:`chat-panel-agents-btn /);
+  assert.match(chatPanel, /g\(`智能体中心`\)/);
+  assert.match(chatPanel, /className:`chat-panel-sub-agents-btn /);
+  assert.match(chatPanel, /g\(`子智能体`\)/);
+  assert.match(brandCss, /\.chat-panel-agents-btn[\s\S]*display:\s*none\s*!important/);
+  assert.match(brandCss, /\.chat-panel-sub-agents-btn[\s\S]*display:\s*none\s*!important/);
+});
+
+test("ChatPanel header shows the conversation title before the brand logo", () => {
+  const chatPanel = readRuntimeAsset("ChatPanel-");
+  assert.match(chatPanel, /conversationTitle:y/);
+  assert.match(chatPanel, /conversationTitle:J\?\.title/);
+  assert.match(chatPanel, /chat-panel-conversation-title[\s\S]{0,80}title:y/);
+  assert.match(chatPanel, /chat-panel-header-brand-center/);
+  assert.match(chatPanel, /chat-panel-header-brand-center[\s\S]{0,80}De,\{size:26/);
+});
+
+test("ChatPanel conversation list highlights the active session", () => {
+  const chatPanel = readRuntimeAsset("ChatPanel-");
+  const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(chatPanel, /active:t\.id===m/);
+  assert.match(chatPanel, /chat-conversation-item is-active/);
+  assert.match(brandCss, /\.chat-conversation-item\.is-active[\s\S]*box-shadow:\s*inset 3px 0 0/);
+});
+
+test("ChatPanel header exposes a new-conversation control in the sub-agent slot", () => {
+  const chatPanel = readRuntimeAsset("ChatPanel-");
+  assert.match(chatPanel, /onNewConversation:v/);
+  assert.match(chatPanel, /className:`chat-panel-new-conversation-btn /);
+  assert.match(chatPanel, /g\(`新对话`\)/);
+  assert.match(chatPanel, /onNewConversation:ut/);
+  assert.match(chatPanel, /ut=\(0,W\.useCallback\)\(\(\)=>\{U&&\(e\?B\(\{type:`create_conversation`,projectId:U\}\):A\(U\),Re\(`chat`\)\)\}/);
+});
+
 test("ChatPanel slash Skill picker is replaced by a host plaza overlay", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
@@ -429,6 +536,16 @@ test("node and overlay popover buttons match the floating canvas menu size", () 
   assert.match(source, /\.image-editor-zoom-btn[\s\S]*min-height:\s*48px\s*!important/);
   assert.match(source, /\.point-edit-btn[\s\S]*min-height:\s*48px\s*!important/);
   assert.match(source, /\.reverse-prompt-actions \.preset-modal-btn-primary[\s\S]*min-height:\s*48px\s*!important/);
+});
+
+test("image and video floating toolbars hide the copy-file button", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(source, /\.node-floating-toolbar \.ftb-btn\.act-copyFile\s*\{[\s\S]*display:\s*none\s*!important/);
+  assert.match(appRuntime, /className:`ftb-btn icon-only act-\$\{e\}`/);
+  assert.match(appRuntime, /className:`ftb-btn icon-only \$\{i\?`act-preset`:`act-\$\{e\}`\}`/);
+  assert.match(appRuntime, /copyFile:e=>\{e\.stopPropagation\(\),m\?\.\(\)\}/);
+  assert.match(appRuntime, /S=\{copyFile:e=>\{e\.stopPropagation\(\),r\(\)\}/);
 });
 
 test("AI node dialog declares runtime models before using the model fallback", () => {

@@ -1627,6 +1627,10 @@ function resolveCanvasTaskMediaUrl(task, mediaKind) {
   const generatedItems = [
     ...safeArray(task?.generatedOutputItems),
     ...safeArray(result.generatedOutputItems),
+    ...safeArray(task?.resultAssets),
+    ...safeArray(result.resultAssets),
+    ...safeArray(result.images),
+    ...safeArray(result.videos),
     ...safeArray(task?.fixedImages),
     ...safeArray(result.fixedImages),
     ...safeArray(task?.fixedVideos),
@@ -1661,6 +1665,7 @@ function resolveCanvasTaskMediaUrl(task, mediaKind) {
         result.url,
         result.previewUrl,
         result.sourceUrl,
+        result.downloadUrl,
         task?.videoUrl,
         task?.url,
         ...generatedVideoUrls,
@@ -1670,6 +1675,7 @@ function resolveCanvasTaskMediaUrl(task, mediaKind) {
         result.url,
         result.previewUrl,
         result.sourceUrl,
+        result.downloadUrl,
         result.thumbnailUrl,
         task?.imageUrl,
         task?.url,
@@ -1681,7 +1687,14 @@ function resolveCanvasTaskMediaUrl(task, mediaKind) {
       return value;
     }
   }
-  return "";
+  const storageObjectId = String(
+    result.storageObjectId
+      ?? generatedItems.find((item) => String(item?.storageObjectId ?? "").trim())?.storageObjectId
+      ?? "",
+  ).trim();
+  return storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    : "";
 }
 
 function resolveCanvasTaskText(task) {

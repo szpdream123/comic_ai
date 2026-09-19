@@ -124,6 +124,8 @@ export function normalizeAiCanvasRuntimeModel(model = {}, category = "text") {
       : undefined,
     videoCapability,
     pricing: resolveRuntimeModelPricing(model),
+    remark: String(model.remark ?? model.notes ?? model.summary ?? model.description ?? "").trim() || undefined,
+    description: String(model.remark ?? model.notes ?? model.summary ?? model.description ?? "").trim() || undefined,
     inputModalities: Array.isArray(model.inputModalities)
       ? model.inputModalities.map((value) => String(value).trim()).filter(Boolean)
       : undefined,

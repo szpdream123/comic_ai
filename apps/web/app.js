@@ -46,7 +46,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260918-07";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-03";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -339,6 +339,8 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
           ...(defaults.durationSec != null ? { defaultDuration: Number(defaults.durationSec) } : {}),
         } : undefined,
         pricing: sanitizeCatalogValue(resolveAiCanvasRuntimeModelPricing(model)),
+        remark: String(model?.remark ?? model?.notes ?? model?.summary ?? model?.description ?? "").trim() || undefined,
+        description: String(model?.remark ?? model?.notes ?? model?.summary ?? model?.description ?? "").trim() || undefined,
         source: "comic-ai-backend",
       };
     })
@@ -2636,6 +2638,7 @@ function resolveAiCanvasAssistantTaskMedia(task) {
     ...(Array.isArray(task?.generatedOutputItems) ? task.generatedOutputItems : []),
     ...(Array.isArray(result.generatedOutputItems) ? result.generatedOutputItems : []),
     ...(Array.isArray(task?.resultAssets) ? task.resultAssets : []),
+    ...(Array.isArray(result.resultAssets) ? result.resultAssets : []),
     ...(Array.isArray(result.images) ? result.images : []),
     ...(Array.isArray(result.videos) ? result.videos : []),
     ...(Array.isArray(task?.fixedImages) ? task.fixedImages : []),
@@ -2653,11 +2656,25 @@ function resolveAiCanvasAssistantTaskMedia(task) {
     ])
     .map(readAiCanvasAssistantMediaCandidate)
     .find(Boolean) ?? "";
+  const storageObjectId = [
+    result.storageObjectId,
+    task?.storageObjectId,
+    items.find((item) => String(item?.storageObjectId ?? "").trim())?.storageObjectId,
+  ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
+  const storageUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    : "";
   const videoUrl = [
     result.videoUrl,
+    result.previewUrl,
+    result.sourceUrl,
+    result.downloadUrl,
+    result.url,
     task?.videoUrl,
+    task?.url,
     task?.fixedVideos?.[0]?.url,
     itemUrl,
+    storageUrl,
   ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
   const imageUrl = [
     result.imageUrl,
@@ -2669,6 +2686,7 @@ function resolveAiCanvasAssistantTaskMedia(task) {
     task?.url,
     task?.fixedImages?.[0]?.url,
     itemUrl,
+    storageUrl,
   ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
   const kind = task?.kind === "video" || task?.mediaKind === "video" || videoUrl ? "video" : "image";
   return { kind, url: kind === "video" ? videoUrl || imageUrl : imageUrl || videoUrl };
@@ -2871,7 +2889,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260918-07";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-03";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";

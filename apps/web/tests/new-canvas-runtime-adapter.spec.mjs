@@ -533,6 +533,8 @@ test("AI Canvas image and video generation registers with the project task cente
   assert.match(appSource, /result\.previewUrl/);
   assert.match(appSource, /result\.images/);
   assert.match(appSource, /generatedOutputItems/);
+  assert.match(appSource, /result\.storageObjectId/);
+  assert.match(appSource, /\/api\/storage\/objects\/\$\{encodeURIComponent\(storageObjectId\)\}\/content\?proxy=1/);
   assert.match(appSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__/);
   assert.match(appSource, /isSuccess && !resolveAiCanvasAssistantTaskMedia\(task\)\.url\) return/);
   assert.match(appSource, /\(unbound\.length \? unbound : generating\)\.at\(-1\)/);
@@ -601,6 +603,30 @@ test("AI Canvas adapter preserves backend media parameter schemas and defaults",
   assert.equal(video.pricing.billingMode, "duration");
   assert.equal(video.pricing.resolutionCredits["720p"], 120);
   assert.equal(video.pricing.displayBaseCost, 120);
+});
+
+test("AI Canvas catalog uses admin remarks instead of real model IDs", () => {
+  const image = normalizeAiCanvasRuntimeModel({
+    modelCode: "sd_2_0_special",
+    modelLabel: "Seedance 2.0 特价版（图片参考）",
+    mediaType: "image",
+    remark: "过不了真人，需人脸遮挡，否则请用别的模型！！！",
+  });
+  const video = normalizeAiCanvasRuntimeModel({
+    modelCode: "wan2.7-r2v",
+    modelLabel: "Wan2.7",
+    mediaType: "video",
+    remark: "图生视频备注",
+  });
+  assert.equal(image.description, "过不了真人，需人脸遮挡，否则请用别的模型！！！");
+  assert.equal(image.remark, "过不了真人，需人脸遮挡，否则请用别的模型！！！");
+  assert.equal(video.description, "图生视频备注");
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const mediaProtocolSource = readRuntimeAsset("useTooltipAutoPlacement-");
+  assert.match(appSource, /description: String\(model\?\.remark \?\? model\?\.notes \?\? model\?\.summary \?\? model\?\.description \?\? ""\)\.trim\(\) \|\| undefined/);
+  assert.match(mediaProtocolSource, /function lr\(e\)\{return\{value:`general\/\$\{e\.id\}`,provider:`general`,label:e\.name,description:\(e\.description\?\?e\.remark\?\?``\)\.trim\(\)/);
+  assert.doesNotMatch(mediaProtocolSource, /description:`ID: \$\{e\.modelId\}`/);
+  assert.doesNotMatch(mediaProtocolSource, /description:t\.description\|\|`ID: \$\{t\.id\}`/);
 });
 
 test("AI Canvas adapter preserves the host API without falling back to X6", async () => {
@@ -821,7 +847,7 @@ test("browser series original uploads through COS instead of a local project fol
     "utf8",
   );
   assert.match(runtimeSource, /__COMIC_AI_CANVAS_HOST_API__/);
-  assert.match(fileServiceSource, /purpose:`series-original`/);
+  assert.match(fileServiceSource, /purpose:c\?`series-original`:`canvas-assets`/);
   assert.match(fileServiceSource, /filePath:o,storageObjectId:i\|\|void 0/);
   assert.match(fileServiceSource, /function Iw\(e\)\{return new Promise\(t=>\{let n=document\.createElement\(`input`\),r=!1,i=e=>\{r\|\|\(r=!0/);
   assert.doesNotMatch(fileServiceSource, /function Iw\(e\)\{[\s\S]{0,800}window\.addEventListener\(`focus`/);
@@ -843,6 +869,20 @@ test("browser series original uploads through COS instead of a local project fol
   assert.match(appSource, /max:500,value:D/);
   assert.doesNotMatch(appSource, /Math\.min\(100,Math\.max\(1,Number\.parseInt\(D,10\)\|\|24\)\)/);
   assert.doesNotMatch(appSource, /max:100,value:D/);
+});
+
+test("browser source media node uploads through COS then echoes the storage URL", () => {
+  const fileServiceSource = readRuntimeAsset("main-upstream-");
+  const appSource = readRuntimeAsset("App-");
+  const uploadHookSource = readRuntimeAsset("useSourceFileUpload-");
+  assert.match(fileServiceSource, /purpose:c\?`series-original`:`canvas-assets`/);
+  assert.match(fileServiceSource, /if\(c\)\{let l=Hv\(await n\.arrayBuffer\(\)\)/);
+  assert.match(fileServiceSource, /return\{dataUrl:o,fileName:n\.name,fileSize:n\.size,filePath:o,storageObjectId:i\|\|void 0\}/);
+  assert.match(
+    appSource,
+    /a\(e,\{imageUrl:t\.dataUrl,filePath:t\.filePath,fileName:t\.fileName,label:t\.fileName,status:`success`,annotation:void 0,annotationLayer:void 0\}\);let n=new Image;n\.onload=/,
+  );
+  assert.match(uploadHookSource, /f\?\.\(a instanceof Error\?a\.message:`上传失败`,`error`\),null/);
 });
 
 test("browser text-node uploads keep file bytes instead of showing the storage path", () => {

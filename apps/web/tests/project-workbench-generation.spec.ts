@@ -41279,6 +41279,58 @@ describe("production workbench project tab", () => {
     }
   });
 
+  it("projects completed task-center video assets onto ai-video nodes like image nodes", async () => {
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      api: { getGenerationTask() {} },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [{
+            id: "video-node",
+            type: "ai-video",
+            data: {
+              mediaKind: "video",
+              status: "loading",
+              taskId: "task-canvas-video-assets",
+              lastTaskId: "task-canvas-video-assets",
+              prompt: "生成视频",
+            },
+          }],
+          edges: [],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "task-canvas-video-assets",
+      status: "completed",
+      workflowStatus: "completed",
+      kind: "video",
+      mediaKind: "video",
+      targetType: "canvas",
+      targetId: "video-node",
+      result: { storageObjectId: "storage-video-1" },
+      resultAssets: [{
+        storageObjectId: "storage-video-1",
+        previewUrl: "https://example.test/canvas-generated.mp4",
+        sourceUrl: "https://example.test/canvas-generated.mp4",
+        downloadUrl: "https://example.test/canvas-generated.mp4",
+      }],
+    });
+
+    const videoNode = workbench.ui.canvasDocument.nodes.find((node) => node.id === "video-node");
+    assert.equal(videoNode.data.status, "completed");
+    assert.equal(videoNode.data.videoUrl, "https://example.test/canvas-generated.mp4");
+    assert.equal(videoNode.data.storageObjectId, "storage-video-1");
+    assert.equal(workbench.ui.canvasGeneratingNodeId ?? null, null);
+  });
+
   it("discovers canvas tasks in detail view and keeps global polling active after navigation", async () => {
     const previousWindow = globalThis.window;
     const timers = [];

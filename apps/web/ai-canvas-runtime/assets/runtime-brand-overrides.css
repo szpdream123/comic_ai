@@ -482,6 +482,17 @@
   display: none !important;
 }
 
+/* Keep the output-history modal centered; motion scale must not replace the
+   Tailwind -translate-x/y-1/2 that places left/top 50% at the viewport center. */
+.new-canvas-root [data-resource-video-boundary].fixed.left-1\/2.top-1\/2,
+.ai-canvas-standalone-mount [data-resource-video-boundary].fixed.left-1\/2.top-1\/2 {
+  left: 50% !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  translate: -50% -50% !important;
+}
+
 .new-canvas-root .sidebar-floating .sidebar-logo-wrap {
   display: flex;
   align-items: center;
@@ -618,6 +629,58 @@
 .new-canvas-root .chat-panel-root .chat-panel-send-btn {
   min-width: 38px;
   min-height: 38px;
+}
+
+.new-canvas-root .chat-panel-detach-btn,
+.ai-canvas-standalone-mount .chat-panel-detach-btn,
+.new-canvas-root .chat-panel-agents-btn,
+.ai-canvas-standalone-mount .chat-panel-agents-btn,
+.new-canvas-root .chat-panel-sub-agents-btn,
+.ai-canvas-standalone-mount .chat-panel-sub-agents-btn {
+  display: none !important;
+}
+
+
+.new-canvas-root .chat-panel-header,
+.ai-canvas-standalone-mount .chat-panel-header {
+  position: relative !important;
+}
+
+.new-canvas-root .chat-panel-header-brand,
+.ai-canvas-standalone-mount .chat-panel-header-brand {
+  z-index: 1;
+  min-width: 0;
+  max-width: calc(50% - 72px);
+  padding-right: 8px;
+}
+
+.new-canvas-root .chat-panel-header-brand-center,
+.ai-canvas-standalone-mount .chat-panel-header-brand-center {
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  z-index: 0;
+  transform: translate(-50%, -50%) !important;
+}
+
+.new-canvas-root .chat-panel-header-actions,
+.ai-canvas-standalone-mount .chat-panel-header-actions {
+  z-index: 1;
+  position: relative;
+}
+
+.new-canvas-root .chat-conversation-item.is-active,
+.ai-canvas-standalone-mount .chat-conversation-item.is-active {
+  background: color-mix(in srgb, var(--brand, #6366f1) 18%, var(--theme-surface, #ffffff)) !important;
+  color: var(--theme-text, #111827) !important;
+  box-shadow: inset 3px 0 0 var(--brand, #6366f1);
+  font-weight: 650;
+}
+
+.new-canvas-root .chat-conversation-item.is-active .truncate,
+.ai-canvas-standalone-mount .chat-conversation-item.is-active .truncate {
+  color: var(--theme-text, #111827) !important;
+  font-weight: 650;
 }
 
 .new-canvas-root .chat-panel-root .chat-panel-input-toolbar button:not(.agent-mode-trigger):not([role="option"]):not([role="tab"]):not(.chat-skill-source-tab) {
@@ -794,6 +857,13 @@
 .new-canvas-root .chat-panel-input-toolbar .model-group-desc,
 .new-canvas-root .chat-panel-input-toolbar .model-item-desc {
   color: var(--theme-text-secondary) !important;
+}
+
+/* Hide the 通用模型 / 工作流 group chrome; keep injected models listed by default. */
+.model-dropdown .model-group:has(.model-group-header [aria-label="通用模型"]) > .model-group-header,
+.model-dropdown .model-group:has(.model-group-header [aria-label="General models"]) > .model-group-header,
+.model-dropdown .model-group-wf {
+  display: none !important;
 }
 
 /* Keep the three Agent modes as readable rows in a stable-width popover. */
@@ -2353,4 +2423,63 @@ html.canvas-interacting .react-flow__node.dragging .node,
 html.canvas-interacting .react-flow__node.dragging {
   transition: none !important;
   animation: none !important;
+}
+
+/* Keep asset-manager node image/video previews compact. */
+.assets-node-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 170px;
+  overflow: hidden;
+  position: relative;
+  border-radius: var(--ui-radius);
+  background: var(--theme-bg);
+}
+
+.assets-node-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.assets-node-content > .resource-video-preview {
+  width: 100%;
+  min-width: 0;
+  height: 170px;
+  min-height: 0;
+  aspect-ratio: auto;
+  overflow: hidden;
+  position: relative;
+  border-radius: var(--ui-radius);
+  background: var(--media-well);
+}
+
+.assets-node-content > .resource-video-preview .resource-video-open,
+.assets-node-content > .resource-video-preview .resource-video-player,
+.assets-node-content > .resource-video-preview video,
+.assets-node-content > .resource-video-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.assets-project-select-wrap {
+  display: none !important;
+}
+
+/* Match the multi-image editor side tools to the canvas right panel. */
+.composer-root {
+  --composer-side-w: 600px;
+}
+
+@media (width <= 760px) {
+  .composer-root {
+    --composer-side-w: 210px;
+  }
+}
+
+/* Hide image/video floating-toolbar copy until clipboard write is restored. */
+.node-floating-toolbar .ftb-btn.act-copyFile {
+  display: none !important;
 }

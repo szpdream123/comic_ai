@@ -1524,6 +1524,54 @@ describe("canvas workflow document", () => {
     assert.equal(resultNode.data.imageUrl, "https://example.test/canvas-generated.png");
   });
 
+  it("writes task-center result assets into canvas video nodes like image nodes", () => {
+    const document = {
+      version: 2,
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{
+        id: "video-node",
+        type: "ai-video",
+        data: {
+          mediaKind: "video",
+          status: "loading",
+          taskId: "task-canvas-video-1",
+          lastTaskId: "task-canvas-video-1",
+          prompt: "生成视频",
+        },
+      }],
+      edges: [],
+    };
+    const preview = {
+      ok: true,
+      nodeId: "video-node",
+      mediaKind: "video",
+      modelCode: "Wan2.7",
+      prompt: "生成视频",
+      taskId: "task-canvas-video-1",
+      upstreamNodeIds: [],
+      upstreamTextFragments: [],
+    };
+    const nextDocument = applyCanvasRunResult(document, preview, {
+      taskId: "task-canvas-video-1",
+      status: "completed",
+      kind: "video",
+      mediaKind: "video",
+      result: { storageObjectId: "storage-video-1" },
+      resultAssets: [{
+        storageObjectId: "storage-video-1",
+        previewUrl: "https://example.test/canvas-generated.mp4",
+        sourceUrl: "https://example.test/canvas-generated.mp4",
+        downloadUrl: "https://example.test/canvas-generated.mp4",
+      }],
+    });
+    const videoNode = nextDocument.nodes.find((node) => node.id === "video-node");
+
+    assert.equal(videoNode.data.status, "completed");
+    assert.equal(videoNode.data.storageObjectId, "storage-video-1");
+    assert.equal(videoNode.data.videoUrl, "https://example.test/canvas-generated.mp4");
+    assert.equal(videoNode.data.previewUrl, "https://example.test/canvas-generated.mp4");
+  });
+
   it("maps generation task stages to the fixed canvas progress milestones", () => {
     const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
       prompt: "Generate first interior storyboard",

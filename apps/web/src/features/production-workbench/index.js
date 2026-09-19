@@ -55722,9 +55722,9 @@ function resolveCanvasGenerationPollTargets(workbench) {
             ? "audio"
             : node.data?.mediaKind === "text" || node.type === "ai-text" || node.type === "ai-markdown"
               ? "text"
-            : node.type === "ai-animation"
+              : node.type === "ai-animation"
               ? "image"
-              : node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image",
+              : node.data?.mediaKind === "video" || node.type === "video" || node.type === "ai-video" || node.type === "source-video" ? "video" : "image",
           modelCode: String(node.data?.modelCode ?? ""),
           prompt: String(node.data?.prompt ?? ""),
           taskId,
@@ -56375,24 +56375,54 @@ function isGenerationTaskTerminalStatus(status) {
 }
 
 function hasGenerationTaskMediaResult(taskOrResult, mediaKind = "image") {
+  const result = taskOrResult?.result && typeof taskOrResult.result === "object"
+    ? taskOrResult.result
+    : {};
+  const resultAsset = Array.isArray(taskOrResult?.resultAssets) ? taskOrResult.resultAssets[0] : null;
+  const storageObjectId = String(
+    result.storageObjectId
+      ?? resultAsset?.storageObjectId
+      ?? taskOrResult?.fixedVideos?.[0]?.storageObjectId
+      ?? taskOrResult?.fixedImages?.[0]?.storageObjectId
+      ?? "",
+  ).trim();
   if (mediaKind === "video") {
     return Boolean(
       readPublicGenerationMediaUrl(
-        taskOrResult?.result?.videoUrl,
+        result.videoUrl,
+        result.previewUrl,
+        result.sourceUrl,
+        result.downloadUrl,
+        result.url,
         taskOrResult?.videoUrl,
+        taskOrResult?.previewUrl,
+        resultAsset?.videoUrl,
+        resultAsset?.previewUrl,
+        resultAsset?.sourceUrl,
+        resultAsset?.downloadUrl,
+        resultAsset?.url,
         taskOrResult?.fixedVideos?.[0]?.url,
+        taskOrResult?.fixedVideos?.[0]?.previewUrl,
         taskOrResult?.fixedVideos?.[0]?.src,
-      ),
+      ) || storageObjectId,
     );
   }
   return Boolean(
-    taskOrResult?.result?.imageUrl ||
-      taskOrResult?.result?.previewUrl ||
+    result.imageUrl ||
+      result.previewUrl ||
+      result.sourceUrl ||
+      result.downloadUrl ||
       taskOrResult?.imageUrl ||
       taskOrResult?.previewUrl ||
+      resultAsset?.imageUrl ||
+      resultAsset?.previewUrl ||
+      resultAsset?.sourceUrl ||
+      resultAsset?.downloadUrl ||
+      resultAsset?.url ||
       taskOrResult?.fixedImages?.[0]?.url ||
       taskOrResult?.fixedImages?.[0]?.previewUrl ||
-      taskOrResult?.fixedImages?.[0]?.src,
+      taskOrResult?.fixedImages?.[0]?.src ||
+      storageObjectId,
   );
 }
 
