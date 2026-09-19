@@ -8,6 +8,7 @@ import { CanvasAgentContextService } from "../canvas-agent-context.service.ts";
 import { CanvasAgentExecutor } from "../canvas-agent-executor.ts";
 import { CanvasAgentPolicyService } from "../canvas-agent-policy.service.ts";
 import {
+  appendCanvasAgentMessage,
   createCanvasAgentTask,
   interjectCanvasAgentTask,
   resumeCanvasAgentTask,
@@ -18,7 +19,7 @@ import type { CanvasAgentActor } from "../canvas-agent.types.ts";
 import { registerFreeConversationTools } from "../free-conversation-tools.ts";
 
 test("free conversation pauses on a blocking question and resumes the same task with the user's answer", async () => {
-  const fixture = await createFixture();
+  const fixture = await createFixture({ userMessage: { text: "请帮我设计主角设定。", plazaSkillIds: ["selected-skill"] } });
   const modelRequests: string[] = [];
   let modelTurn = 0;
   const turns = [
@@ -58,6 +59,10 @@ test("free conversation pauses on a blocking question and resumes the same task 
     tools: registry,
     billing: noOpBilling(),
     resolveActor: async () => fixture.actor,
+    resolvePlazaSkill: async ({ skillId }) => {
+      assert.equal(skillId, "selected-skill");
+      return { id: String(skillId), title: "角色导演", content: "使用选中的角色导演完整规则。" };
+    },
     now: () => fixture.now,
   });
   try {
@@ -96,6 +101,7 @@ test("free conversation pauses on a blocking question and resumes the same task 
     assert.equal(completed.status, "succeeded");
 
     assert.equal(modelRequests.length, 3);
+    for (const request of modelRequests) assert.match(request, /使用选中的角色导演完整规则/);
     assert.match(modelRequests[1] ?? "", /设计主角设定/);
     assert.match(modelRequests[1] ?? "", /蓝色连衣裙，长发/);
     const saved = await fixture.db.query<{ summary_json: { creative?: { documents?: Array<Record<string, unknown>> } } }>(
@@ -332,6 +338,73 @@ test("a known anime reference pauses a realistic request before intake but remai
       assert.equal(submissions, selected === "真人写实" ? 0 : 1);
     } finally {await fixture.db.close();}
   }
+});
+
+test("skill continuity cannot import another conversation's task messages", async () => {
+  const fixture = await createFixture({ userMessage: { text: "另一个会话的私有需求", plazaSkillIds: ["other-conversation-skill"] } });
+  try {
+    const otherConversationId = randomUUID();
+    await fixture.db.query(`
+      INSERT INTO canvas_agent_conversations (id,canvas_id,owner_user_id,created_at,updated_at)
+      VALUES ($1,$2,$3,$4,$4)
+    `, [otherConversationId, fixture.canvasId, fixture.actor.ownerUserId, fixture.now]);
+    const context = await new CanvasAgentContextService({
+      db: fixture.db, loadCanvasContext: async () => ({}),
+    }).build({
+      canvasId: fixture.canvasId, conversationId: otherConversationId, taskId: fixture.task.id,
+      actor: fixture.actor, capabilityProfile: "media_generation_only",
+    });
+    assert.equal(context.messages.length, 0);
+  } finally { await fixture.db.close(); }
+});
+
+test("skill continuity loads at most the latest message and newest selection", async () => {
+  const fixture = await createFixture({ userMessage: { text: "角色创作", plazaSkillIds: ["selected-skill"] } });
+  try {
+    for (let index = 0; index < 12; index += 1) {
+      await appendCanvasAgentMessage(fixture.db, {
+        conversationId: fixture.conversationId, taskId: fixture.task.id,
+        role: "user", content: { text: `补充要求 ${index}` }, now: fixture.now,
+      });
+    }
+    let candidates = 0;
+    const context = await new CanvasAgentContextService({
+      db: { async query(sql: string, params: unknown[] = []) {
+        const result = await fixture.db.query(sql, params);
+        if (sql.includes("WITH task_user_messages")) candidates = result.rows.length;
+        return result;
+      } } as never,
+      loadCanvasContext: async () => ({}), maxMessages: 8,
+    }).build({
+      canvasId: fixture.canvasId, conversationId: fixture.conversationId, taskId: fixture.task.id,
+      actor: fixture.actor, capabilityProfile: "media_generation_only",
+    });
+    assert.equal(candidates, 2);
+    assert.deepEqual(context.messages.at(-1)?.content.plazaSkillIds, ["selected-skill"]);
+    assert.equal(context.messages.at(-1)?.content.text, "补充要求 11");
+  } finally { await fixture.db.close(); }
+});
+
+test("unavailable selected plaza skill fails visibly before model or generation execution", async () => {
+  const fixture = await createFixture({ userMessage: { text: "生成角色图片", plazaSkillIds: ["unavailable"] } });
+  try {
+    const executor = new CanvasAgentExecutor({
+      db: fixture.db,
+      context: new CanvasAgentContextService({ db: fixture.db, loadCanvasContext: async () => ({}) }),
+      textGateway: { chat: { completions: { create: async () => { throw new Error("model must not be called"); } } } } as never,
+      tools: new CanvasAgentToolRegistry(), policy: new CanvasAgentPolicyService(), billing: noOpBilling(),
+      resolveActor: async () => fixture.actor, resolvePlazaSkill: async () => null, now: () => fixture.now,
+    });
+    const failed = await executor.execute(fixture.task.id);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.failureCode, "canvas_agent_plaza_skill_unavailable");
+    const messages = await fixture.db.query<{ content_json: { message: string } }>(
+      "SELECT content_json FROM canvas_agent_messages WHERE task_id=$1 AND role='assistant'", [fixture.task.id],
+    );
+    assert.match(messages.rows[0].content_json.message, /所选技能暂时无法加载/);
+    const steps = await fixture.db.query("SELECT id FROM canvas_agent_steps WHERE task_id=$1", [fixture.task.id]);
+    assert.equal(steps.rows.length, 0);
+  } finally { await fixture.db.close(); }
 });
 
 async function createFixture(input: { userMessage?: Record<string, unknown> } = {}) {

@@ -82,6 +82,42 @@ export class CanvasAgentContextService {
       content: compactCanvasReadMessage(row.role, row.content_json),
       sequence: Number(row.sequence),
     }));
+    let taskSkillMessage: (typeof messages)[number] | undefined;
+    if (mediaGenerationOnly && input.taskId) {
+      // A clarification resumes the same task; its selection may be outside retained context.
+      const selections = await this.deps.db.query<{ content_json: Record<string, unknown>; sequence: number | string }>(
+        `WITH task_user_messages AS (
+          SELECT content_json, sequence FROM canvas_agent_messages
+          WHERE task_id=$1 AND conversation_id=$2 AND role='user'
+        )
+        SELECT content_json, sequence FROM task_user_messages
+        WHERE sequence = (SELECT MAX(sequence) FROM task_user_messages)
+          OR jsonb_typeof(content_json->'plazaSkillIds') = 'array'
+          OR content_json->>'text' ~ '^[[:space:]]*/[^[:space:]]+|【Skill[：:]|@skill[{][^|}\\r\\n]+[|][^}\\r\\n]*[}]'
+        ORDER BY sequence DESC LIMIT 2`,
+        [input.taskId, input.conversationId],
+      );
+      for (const row of selections.rows) {
+        const content = readRecord(row.content_json);
+        const text = String(content.text ?? "");
+        const explicitIds = Array.isArray(content.plazaSkillIds) ? content.plazaSkillIds : null;
+        const mentionIds = [...text.matchAll(/@skill\{([^|}\r\n]+)\|([^}\r\n]*)\}/g)].map(match => match[1]);
+        // An empty selection or another slash skill is a boundary, never search past it.
+        if (!explicitIds && !mentionIds.length && !/^\s*\/\S+|【Skill[：:]/.test(text)) continue;
+        const ids = [...new Set([...(explicitIds ?? []), ...mentionIds].map(id => String(id ?? "").trim()).filter(Boolean))];
+        const latest = selections.rows[0];
+        if (ids.length && latest) {
+          taskSkillMessage = messages.find(message => message.sequence === Number(latest.sequence));
+          if (!taskSkillMessage) {
+            taskSkillMessage = { role: "user", content: readRecord(latest.content_json), sequence: Number(latest.sequence) };
+            messages.push(taskSkillMessage);
+            messages.sort((left, right) => left.sequence - right.sequence);
+          }
+          taskSkillMessage.content = { ...taskSkillMessage.content, plazaSkillIds: ids };
+        }
+        break;
+      }
+    }
     const memories = !mediaGenerationOnly && this.deps.knowledge
       ? await this.deps.knowledge.listMemories({
           canvasId: input.canvasId,
@@ -117,6 +153,9 @@ export class CanvasAgentContextService {
 
     const retainCount = Math.min(messages.length, Math.max(8, Math.floor(maxMessages / 2)));
     messages = messages.slice(-retainCount);
+    if (taskSkillMessage && !messages.includes(taskSkillMessage)) {
+      messages = [taskSkillMessage, ...messages].sort((left, right) => left.sequence - right.sequence);
+    }
     const firstRetainedSequence = messages[0]?.sequence ?? throughSequence + 1;
     const compactedResult = await this.deps.db.query<{
       role: "system" | "user" | "assistant" | "tool";
