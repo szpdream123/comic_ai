@@ -496,9 +496,12 @@ function registerCanvasNode(X6) {
       },
       wrap: {
         cursor: "pointer",
-        stroke: "transparent",
+        fill: "none",
+        pointerEvents: "stroke",
+        stroke: "rgba(0,0,0,0.01)",
         strokeLinecap: "round",
-        strokeWidth: 18,
+        strokeWidth: 28,
+        "vector-effect": "non-scaling-stroke",
       },
       flow: {
         pointerEvents: "none",
@@ -2420,8 +2423,17 @@ function wireGraphSync(graph, workbench, mount) {
     positionCanvasNodeActionToolbar(graph, mount);
     selectGraphNode(node);
   });
-  graph.on("cell:click", ({ cell }) => {
+  graph.on("cell:click", ({ cell, e }) => {
     if (cell?.isNode?.()) selectGraphNode(cell);
+    else if (isCanvasGraphEdge(cell)) {
+      const selection = graph.getPlugin?.("selection");
+      if (typeof selection?.reset === "function") selection.reset([cell], { batch: true });
+      else {
+        graph.unselectAll?.();
+        graph.select?.(cell);
+      }
+      graph.__comicAiShowEdgeDisconnect?.({ cell, e });
+    }
   });
   graph.on("node:mousedown", ({ node, e }) => {
     suspendDragSnapline();
@@ -2556,6 +2568,12 @@ function isCanvasSelectionTranslationEvent(event) {
     && Object.values(eventData).some((value) => value?.action === "translating"));
 }
 
+function isCanvasGraphEdge(cell) {
+  if (!cell) return false;
+  if (typeof cell.isEdge === "function") return cell.isEdge() === true;
+  return cell.isEdge === true;
+}
+
 function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
   if (!graph?.on || !mount?.append || typeof document === "undefined") return false;
   mount.querySelector?.("[data-canvas-edge-disconnect]")?.remove?.();
@@ -2565,9 +2583,24 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
   button.dataset.canvasEdgeDisconnect = "true";
   button.setAttribute("aria-label", "取消这条连接");
   button.title = "取消连接";
-  button.hidden = true;
-  button.style.transform = "translate(-50%, -50%)";
-  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">
+  button.style.cssText = [
+    "position:absolute",
+    "z-index:10000",
+    "display:none",
+    "width:36px",
+    "height:36px",
+    "place-items:center",
+    "padding:0",
+    "border:1px solid rgba(145,160,168,0.52)",
+    "border-radius:50%",
+    "background:rgba(24,30,34,0.96)",
+    "color:#dfe7ea",
+    "cursor:pointer",
+    "box-shadow:0 8px 20px rgba(0,0,0,0.34)",
+    "transform:translate(-50%, -50%)",
+    "pointer-events:auto",
+  ].join(";");
+  button.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
     <circle cx="6" cy="7" r="3"></circle>
     <circle cx="6" cy="17" r="3"></circle>
     <path d="m8.7 8.4 10.8 6.2"></path>
@@ -2578,35 +2611,53 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
   let activeEdge = null;
   let hideTimer = null;
   let showTimer = null;
-  let pendingShow = null;
+  let pendingShowRequest = null;
+  const EDGE_DISCONNECT_SHOW_DELAY_MS = 500;
+  const pointerClient = (event) => ({
+    x: Number(event?.clientX ?? event?.e?.clientX ?? event?.originalEvent?.clientX),
+    y: Number(event?.clientY ?? event?.e?.clientY ?? event?.originalEvent?.clientY),
+  });
   const clearHideTimer = () => {
     if (hideTimer == null) return;
     globalThis.clearTimeout?.(hideTimer);
     hideTimer = null;
   };
   const clearShowTimer = () => {
-    if (showTimer != null) globalThis.clearTimeout?.(showTimer);
+    if (showTimer == null) return;
+    globalThis.clearTimeout?.(showTimer);
     showTimer = null;
-    pendingShow = null;
   };
   const hide = () => {
     clearHideTimer();
     clearShowTimer();
-    activeEdge?.removeTools?.();
+    pendingShowRequest = null;
+    try { activeEdge?.removeTools?.(); } catch { /* Keep HTML fallback available. */ }
     activeEdge = null;
-    button.hidden = true;
+    button.style.display = "none";
   };
+  const isActiveEdgeSelected = () => Boolean(
+    activeEdge
+    && (graph.isSelected?.(activeEdge) || (graph.getSelectedCells?.() ?? []).includes(activeEdge)),
+  );
   const scheduleHide = () => {
+    if (isActiveEdgeSelected()) return;
     clearHideTimer();
     clearShowTimer();
-    hideTimer = globalThis.setTimeout?.(hide, 100);
+    pendingShowRequest = null;
+    hideTimer = globalThis.setTimeout?.(hide, 400);
+  };
+  const disconnectEdge = (edge) => {
+    if (!edge) return;
+    hide();
+    graph.removeCell?.(edge);
   };
   const show = ({ edge, edgeElement, pointerClientX, pointerClientY } = {}) => {
-    if (!edge || workbench?.ui?.canvasEdgesHidden === true) {
+    if (!isCanvasGraphEdge(edge) || workbench?.ui?.canvasEdgesHidden === true) {
       hide();
       return;
     }
-    const edgePath = edgeElement?.querySelector?.("path");
+    const view = graph.findViewByCell?.(edge);
+    const edgePath = edgeElement?.querySelector?.("path") ?? view?.container?.querySelector?.("path");
     const pathRect = edgePath?.getBoundingClientRect?.() ?? {};
     let clientX = Number(pointerClientX);
     let clientY = Number(pointerClientY);
@@ -2625,48 +2676,12 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
         // Keep the bounding-box midpoint fallback for incomplete SVG implementations.
       }
     }
-    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
     clearHideTimer();
-    if (typeof edge.addTools === "function") {
-      const edgeView = graph.findViewByCell?.(edge);
-      const localPoint = graph.clientToLocal?.(clientX, clientY);
-      const closestRatio = edgeView?.getClosestPointRatio?.(localPoint);
-      const distance = Number.isFinite(closestRatio)
-        ? `${Math.max(0, Math.min(1, closestRatio)) * 100}%`
-        : "50%";
-      if (activeEdge === edge && edge.hasTools?.("canvas-edge-disconnect")) {
-        const activeTool = edgeView?.tools?.tools?.find?.((tool) => tool?.name === "button");
-        if (activeTool?.options) {
-          activeTool.options.distance = distance;
-          activeTool.update?.();
-          return;
-        }
-      }
-      activeEdge?.removeTools?.();
-      activeEdge = edge;
-      button.hidden = true;
-      edge.addTools([{
-        name: "button",
-        args: {
-          className: "canvas-edge-disconnect-tool",
-          distance,
-          markup: [
-            { tagName: "circle", selector: "button", attrs: { r: 18, fill: "#181e22", stroke: "#91a0a8", strokeWidth: 1, cursor: "pointer" } },
-            { tagName: "circle", selector: "handleTop", attrs: { cx: -6, cy: -5, r: 3, fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, pointerEvents: "none" } },
-            { tagName: "circle", selector: "handleBottom", attrs: { cx: -6, cy: 5, r: 3, fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, pointerEvents: "none" } },
-            { tagName: "path", selector: "bladeDown", attrs: { d: "M -3.3 -3.6 9 3.8", fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, strokeLinecap: "round", pointerEvents: "none" } },
-            { tagName: "path", selector: "bladeUp", attrs: { d: "M -3.3 3.6 9 -3.8", fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, strokeLinecap: "round", pointerEvents: "none" } },
-          ],
-          onClick({ cell }) {
-            hide();
-            graph.removeCell?.(cell);
-          },
-        },
-      }], "canvas-edge-disconnect", { local: true, reset: true });
-      return;
-    }
-    activeEdge = edge;
     const rect = mount.getBoundingClientRect?.() ?? {};
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+      clientX = Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2;
+      clientY = Number(rect.top ?? 0) + Number(rect.height ?? 0) / 2;
+    }
     const width = Number(mount.clientWidth ?? rect.width ?? 0);
     const height = Number(mount.clientHeight ?? rect.height ?? 0);
     const scaleX = Number(rect.width) > 0 && width > 0 ? Number(rect.width) / width : 1;
@@ -2678,24 +2693,102 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
     const top = Math.min(Math.max(buttonSize / 2, pointerY), Math.max(buttonSize / 2, height - buttonSize / 2));
     button.style.left = `${left}px`;
     button.style.top = `${top}px`;
-    button.hidden = false;
+    button.style.display = "grid";
+    if (typeof edge.addTools !== "function") {
+      activeEdge = edge;
+      return;
+    }
+    try {
+      const localPoint = graph.clientToLocal?.(clientX, clientY);
+      const closestRatio = view?.getClosestPointRatio?.(localPoint);
+      const distance = Number.isFinite(closestRatio)
+        ? `${Math.max(0, Math.min(1, closestRatio)) * 100}%`
+        : "50%";
+      if (activeEdge === edge && edge.hasTools?.("canvas-edge-disconnect")) {
+        const activeTool = view?.tools?.tools?.find?.((tool) => tool?.name === "button");
+        if (activeTool?.options) {
+          activeTool.options.distance = distance;
+          activeTool.update?.();
+        }
+      } else {
+        activeEdge?.removeTools?.();
+        edge.addTools([{
+          name: "button",
+          args: {
+            className: "canvas-edge-disconnect-tool",
+            distance,
+            markup: [
+              { tagName: "circle", selector: "button", attrs: { r: 18, fill: "#181e22", stroke: "#91a0a8", strokeWidth: 1, cursor: "pointer" } },
+              { tagName: "circle", selector: "handleTop", attrs: { cx: -6, cy: -5, r: 3, fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, pointerEvents: "none" } },
+              { tagName: "circle", selector: "handleBottom", attrs: { cx: -6, cy: 5, r: 3, fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, pointerEvents: "none" } },
+              { tagName: "path", selector: "bladeDown", attrs: { d: "M -3.3 -3.6 9 3.8", fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, strokeLinecap: "round", pointerEvents: "none" } },
+              { tagName: "path", selector: "bladeUp", attrs: { d: "M -3.3 3.6 9 -3.8", fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, strokeLinecap: "round", pointerEvents: "none" } },
+            ],
+            onClick({ cell }) {
+              disconnectEdge(cell);
+            },
+          },
+        }], "canvas-edge-disconnect", { local: true, reset: true });
+      }
+    } catch {
+      // HTML scissors remain the primary disconnect control.
+    }
+    activeEdge = edge;
   };
-  const queueShow = (request) => {
+  const queueShow = (request, { immediate = false } = {}) => {
     clearHideTimer();
-    if (activeEdge === request?.edge) {
+    if (immediate || (activeEdge && activeEdge === request?.edge)) {
+      pendingShowRequest = null;
+      clearShowTimer();
       show(request);
       return;
     }
-    if (activeEdge) hide();
-    if (pendingShow?.edge !== request?.edge) clearShowTimer();
-    pendingShow = request;
-    if (showTimer != null) return;
+    const samePendingEdge = pendingShowRequest?.edge === request?.edge;
+    pendingShowRequest = request;
+    if (showTimer != null && samePendingEdge) return;
+    clearShowTimer();
+    if (activeEdge && activeEdge !== request?.edge) {
+      try { activeEdge.removeTools?.(); } catch { /* Keep HTML fallback available. */ }
+      activeEdge = null;
+      button.style.display = "none";
+    }
     showTimer = globalThis.setTimeout?.(() => {
-      const nextShow = pendingShow;
       showTimer = null;
-      pendingShow = null;
-      show(nextShow);
-    }, 1000);
+      const nextRequest = pendingShowRequest;
+      pendingShowRequest = null;
+      if (nextRequest) show(nextRequest);
+    }, EDGE_DISCONNECT_SHOW_DELAY_MS);
+  };
+  const showFromGraphEvent = (event = {}, options = {}) => {
+    const edge = event.edge ?? event.cell;
+    if (!isCanvasGraphEdge(edge)) return;
+    const pointer = pointerClient(event.e ?? event);
+    queueShow({
+      edge,
+      edgeElement: event.view?.container ?? graph.findViewByCell?.(edge)?.container,
+      pointerClientX: pointer.x,
+      pointerClientY: pointer.y,
+    }, options);
+  };
+  const edgeAtPointer = (event) => {
+    const path = event.composedPath?.() ?? [];
+    const edgeElement = path.find((candidate) => candidate?.classList?.contains?.("x6-edge"))
+      ?? event.target?.closest?.(".x6-edge, [data-shape='comic-ai-canvas-edge']");
+    const edgeId = String(edgeElement?.getAttribute?.("data-cell-id") ?? "");
+    let edge = edgeId ? graph.getCellById?.(edgeId) : null;
+    if (isCanvasGraphEdge(edge)) return { edge, edgeElement };
+    const view = graph.findViewByElem?.(event.target) ?? graph.findView?.(event.target);
+    if (isCanvasGraphEdge(view?.cell)) return { edge: view.cell, edgeElement: view.container ?? edgeElement };
+    const localPoint = graph.clientToLocal?.(event.clientX, event.clientY);
+    const nearby = graph.renderer?.findEdgeViewsFromPoint?.(localPoint, 28) ?? [];
+    const nearbyView = nearby.find((candidate) => isCanvasGraphEdge(candidate?.cell));
+    if (nearbyView?.cell) return { edge: nearbyView.cell, edgeElement: nearbyView.container };
+    return { edge: null, edgeElement: null };
+  };
+  const showSelectedEdge = () => {
+    const selectedEdge = (graph.getSelectedCells?.() ?? []).find((cell) => isCanvasGraphEdge(cell));
+    if (!selectedEdge) return;
+    queueShow({ edge: selectedEdge }, { immediate: true });
   };
 
   button.addEventListener("pointerenter", clearHideTimer);
@@ -2707,30 +2800,41 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    const edge = activeEdge;
-    hide();
-    if (edge) graph.removeCell?.(edge);
+    disconnectEdge(activeEdge);
   });
   const trackPointer = (event) => {
     const path = event.composedPath?.() ?? [];
-    if (path.includes(button)) {
+    if (path.includes(button) || path.some((candidate) => (
+      candidate?.classList?.contains?.("canvas-edge-disconnect-tool")
+      || candidate?.classList?.contains?.("x6-cell-tool-button")
+    ))) {
       clearHideTimer();
       if (activeEdge) show({ edge: activeEdge, pointerClientX: event.clientX, pointerClientY: event.clientY });
       return;
     }
-    const edgeElement = path.find((candidate) => candidate?.classList?.contains?.("x6-edge"))
-      ?? event.target?.closest?.(".x6-edge[data-cell-id]");
-    const edgeId = String(edgeElement?.getAttribute?.("data-cell-id") ?? "");
-    const edge = edgeId ? graph.getCellById?.(edgeId) : null;
-    if (edge) queueShow({ edge, edgeElement, pointerClientX: event.clientX, pointerClientY: event.clientY });
+    const hit = edgeAtPointer(event);
+    if (hit.edge) queueShow({ edge: hit.edge, edgeElement: hit.edgeElement, pointerClientX: event.clientX, pointerClientY: event.clientY });
     else scheduleHide();
   };
   mount.addEventListener("pointermove", trackPointer, true);
   mount.addEventListener("mousemove", trackPointer, true);
   mount.addEventListener("mouseleave", scheduleHide);
+  graph.on("edge:mouseenter", showFromGraphEvent);
+  graph.on("edge:mousemove", showFromGraphEvent);
+  graph.on("edge:click", (event) => showFromGraphEvent(event, { immediate: true }));
+  graph.on("cell:mouseenter", showFromGraphEvent);
+  graph.on("cell:mousemove", showFromGraphEvent);
+  graph.on("cell:click", (event) => showFromGraphEvent(event, { immediate: true }));
+  graph.on("selection:changed", showSelectedEdge);
+  graph.on("edge:mouseleave", scheduleHide);
   graph.on("edge:removed", ({ edge } = {}) => {
     if (edge === activeEdge) hide();
   });
+  graph.__comicAiShowEdgeDisconnect = showFromGraphEvent;
+  graph.__comicAiEdgeDisconnectCleanup = () => {
+    hide();
+    button.remove();
+  };
   return true;
 }
 
@@ -3917,6 +4021,15 @@ export function readCanvasWorkflowGraphData(graph) {
 function buildEdgeAttrs(status) {
   const active = status === "running";
   return {
+    wrap: {
+      cursor: "pointer",
+      fill: "none",
+      pointerEvents: "stroke",
+      stroke: "rgba(0,0,0,0.01)",
+      strokeLinecap: "round",
+      strokeWidth: 28,
+      "vector-effect": "non-scaling-stroke",
+    },
     line: {
       stroke: active ? "#5ec7ff" : "rgba(156,168,174,0.82)",
       strokeWidth: active ? 3 : 2.2,

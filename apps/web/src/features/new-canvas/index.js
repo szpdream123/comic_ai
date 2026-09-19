@@ -156,6 +156,7 @@ export function parseCanvasStoryboardCellDragPayload(value) {
 
 export function disposeCanvasGraph(graph) {
   if (!graph) return false;
+  graph.__comicAiEdgeDisconnectCleanup?.();
   graph.off?.();
   graph.clearCells?.({ silent: true });
   graph.dispose?.();
@@ -1022,7 +1023,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         const canvasStage = event.target?.closest?.(".canvas-stage");
         const interactive = event.target?.closest?.(
-          ".x6-node, .canvas-x6-special-node, .canvas-node-editor, .canvas-context-menu, .canvas-selection-action-toolbar, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
+          ".x6-node, .x6-edge, .canvas-edge-disconnect-button, [data-canvas-edge-disconnect], .canvas-x6-special-node, .canvas-node-editor, .canvas-context-menu, .canvas-selection-action-toolbar, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
         );
         if (canvasStage && !interactive && Date.now() < suppressCanvasBlankClickUntil) {
           suppressCanvasBlankClickUntil = 0;

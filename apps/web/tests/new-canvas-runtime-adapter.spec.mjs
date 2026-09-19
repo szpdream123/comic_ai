@@ -1177,6 +1177,15 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /openAiCanvasRuntimeAssistant\(runtimeStore\);[\s\S]*?unsubscribeAssistantPreference = subscribeAiCanvasRuntimeAssistantPreference\(runtimeStore\)/);
   assert.match(appSource, /function installAiCanvasRuntimeHeaderChrome\(surface, runtimeStore, context = \{\}\)/);
   assert.match(appSource, /function installAiCanvasRuntimeFooterZoomControls\(surface\)/);
+  assert.match(appSource, /function installAiCanvasRuntimeEdgeDisconnect\(surface, runtimeStore\)/);
+  assert.match(appSource, /const SHOW_DELAY_MS = 500/);
+  assert.match(appSource, /dataset\.canvasEdgeDisconnect = "true"/);
+  assert.match(appSource, /closestPointOnPath\(edgePath, clientX, clientY\)/);
+  assert.match(appSource, /positionButton\(hit\.x, hit\.y\)/);
+  assert.match(appSource, /button\.addEventListener\("pointerleave", \(event\) => \{[\s\S]*?if \(edgeAtPointer\(event\)\) return;[\s\S]*?hide\(\);/);
+  assert.match(appSource, /state\.onEdgesChange\(\[\{ id, type: "remove" \}\]\)/);
+  assert.match(appSource, /disposeEdgeDisconnect = installAiCanvasRuntimeEdgeDisconnect\(surface, runtimeStore\)/);
+  assert.match(appSource, /disposeEdgeDisconnect\(\);/);
   assert.match(appSource, /function installAiCanvasRuntimePromptCreditCost\(surface, runtimeStore\)/);
   assert.match(appSource, /function installAiCanvasRuntimeSkillPicker\(surface, runtimeStore, context = \{\}\)/);
   assert.match(appSource, /suppressReopen = Boolean\(findNativeSkillList\(\)\)/);

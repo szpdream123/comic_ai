@@ -363,6 +363,7 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.equal(nextAiCanvasRuntimeMascotSkin("puff"), "cloud");
   assert.match(appSource, /ai-canvas\.mascot\.skin/);
   assert.match(appSource, /installAiCanvasRuntimeMascotSkinSwitcher/);
+  assert.match(appSource, /installAiCanvasRuntimeEdgeDisconnect/);
   assert.match(appSource, /normalizeAiCanvasRuntimeMascotSkin\(localStorage\.getItem\(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY\)\)/);
   assert.match(skinSource, /切换桌宠/);
   assert.match(skinSource, /AI_CANVAS_MASCOT_SKINS = \["cloud", "cat", "dog", "bunny", "fox", "puff"\]/);
@@ -482,6 +483,13 @@ test("canvas drawing toolbar restores the pan hand tool before drawing tools", (
   assert.match(appRuntime, /Hg\(\{interactionMode:g===`classic`\?`default`:`classic`\}\),Yg\(\)/);
 });
 
+test("canvas drawing tools close the style popover when the active tool is clicked again", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  assert.match(appRuntime, /D=\(0,Z\.useCallback\)\(e=>\{if\(L\.current=null,_\(null\),e!==`select`&&e===f&&\(e=`select`\),p\(e\),e!==`select`\)\{/);
+  assert.match(appRuntime, /p\(`select`\)\}\)\):\(S\.current\+=1,y\(null\)\)\},\[E,d,f\]\),O=\(0,Z\.useCallback\)\(\(e,t=!1\)=>C\?/);
+  assert.match(appRuntime, /w=f!==`select`&&te\(f\)\?k\(f,\{style:m\[f\]\}\):C\?\.data\.note\?\?null/);
+});
+
 test("canvas note drafts keep live dimensions while the pointer is dragging", () => {
   const appRuntime = readRuntimeAsset("App-");
   assert.match(appRuntime, /function Md\(e,t,n,r\)\{return\{id:`node-\$\{G\(\)\}`,type:`canvas-note`,position:t,width:n\.width,height:n\.height,style:\{width:n\.width,height:n\.height\}/);
@@ -537,6 +545,22 @@ test("node and overlay popover buttons match the floating canvas menu size", () 
   assert.match(source, /\.image-editor-zoom-btn[\s\S]*min-height:\s*48px\s*!important/);
   assert.match(source, /\.point-edit-btn[\s\S]*min-height:\s*48px\s*!important/);
   assert.match(source, /\.reverse-prompt-actions \.preset-modal-btn-primary[\s\S]*min-height:\s*48px\s*!important/);
+});
+
+test("canvas node connection ports keep upstream gooey-btn styles", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  const runtimeCss = readRuntimeAsset("runtime-DvQFP_");
+  assert.match(source, /\.new-canvas-root \.gooey-btn\s*\{[\s\S]*width:\s*40px;[\s\S]*height:\s*40px;/);
+  assert.match(source, /\.new-canvas-root \.gooey-btn::before\s*\{[\s\S]*hsla\(var\(--hue\), 77%, 77%, var\(--a\)\)/);
+  assert.match(source, /\.new-canvas-root \.gooey-btn-wrapper\s*\{[\s\S]*position:\s*absolute !important;[\s\S]*width:\s*40px;[\s\S]*height:\s*40px;/);
+  assert.match(source, /\.new-canvas-root \.gooey-btn-left\s*\{[\s\S]*top:\s*50% !important;[\s\S]*translate\(calc\(-50% - 10px \* var\(--gooey-inv-zoom, 1\)\), -50%\)/);
+  assert.match(source, /\.new-canvas-root \.gooey-btn-right\s*\{[\s\S]*top:\s*50% !important;[\s\S]*translate\(calc\(50% \+ 10px \* var\(--gooey-inv-zoom, 1\)\), -50%\)/);
+  assert.match(source, /\.new-canvas-root \.gooey-btn-right \.gooey-btn::before\s*\{[\s\S]*padding:\s*19px 26px 19px 10px/);
+  assert.match(source, /\.new-canvas-root \.react-flow__edge-interaction\s*\{[\s\S]*stroke-width:\s*28px !important/);
+  assert.match(source, /\.new-canvas-root \.canvas-edge-disconnect-button\s*\{[\s\S]*transform:\s*translate\(-50%, -50%\)/);
+  assert.match(runtimeCss, /\.gooey-btn-wrapper\{[\s\S]*opacity:0/);
+  assert.match(runtimeCss, /\.react-flow__node:hover \.gooey-btn-wrapper/);
+  assert.doesNotMatch(source, /\.new-canvas-root \.react-flow__handle\.node-handle[\s\S]*background:\s*#818cf8/);
 });
 
 test("image and video floating toolbars hide the copy-file button", () => {
@@ -2230,4 +2254,17 @@ test("canvas save materializes data URLs into COS object URLs before persisting"
   assert.equal(next.nodes[0].data.imageUrl, "https://cdn.example.test/canvas-uploads/obj-uploaded.png");
   assert.equal(next.nodes[0].data.storageObjectId, "obj-uploaded");
   assert.equal(Object.prototype.hasOwnProperty.call(next.nodes[0].data, "previewUrl"), false);
+});
+
+test("node context menu can disconnect the selected node's edges", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  const storeSource = readRuntimeAsset("main-upstream-");
+  assert.match(appRuntime, /\{label:`取消连接`,shortcut:``,action:`disconnect`,conditional:!0\}/);
+  assert.match(appRuntime, /e\.conditional&&e\.action===`disconnect`&&!N/);
+  assert.match(appRuntime, /handleDisconnect:HeDisconnect/);
+  assert.match(appRuntime, /onDisconnect:fS\?fD:void 0/);
+  assert.match(storeSource, /disconnectNodeEdges:n=>\{[\s\S]*?e\.source===n\|\|e\.target===n/);
+  assert.match(storeSource, /取消连接:`Disconnect`/);
+  assert.match(storeSource, /已取消连接:`Disconnected`/);
+  assert.match(storeSource, /没有可取消的连接:`No connections to remove`/);
 });

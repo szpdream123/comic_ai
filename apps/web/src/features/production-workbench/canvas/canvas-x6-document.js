@@ -118,6 +118,15 @@ function buildX6EdgeAttrs(edge) {
     lines: {
       connection: true,
     },
+    wrap: {
+      cursor: "pointer",
+      fill: "none",
+      pointerEvents: "stroke",
+      stroke: "rgba(0,0,0,0.01)",
+      strokeLinecap: "round",
+      strokeWidth: 28,
+      "vector-effect": "non-scaling-stroke",
+    },
     line: {
       stroke: active ? "#5ec7ff" : "rgba(156,168,174,0.82)",
       strokeWidth: active ? 3 : 2.2,

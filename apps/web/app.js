@@ -47,7 +47,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-03";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-07";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -1680,6 +1680,211 @@ function installAiCanvasRuntimePromptCreditCost(surface, runtimeStore) {
   };
 }
 
+function installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  const doc = surface?.ownerDocument ?? globalThis.document;
+  if (!root || !doc?.createElement) return () => {};
+
+  const SHOW_DELAY_MS = 500;
+  const EDGE_HIT_PADDING = 18;
+  root.querySelector?.("[data-canvas-edge-disconnect]")?.remove?.();
+  const button = doc.createElement("button");
+  button.type = "button";
+  button.className = "canvas-edge-disconnect-button";
+  button.dataset.canvasEdgeDisconnect = "true";
+  button.setAttribute("aria-label", "取消这条连接");
+  button.title = "取消连接";
+  button.hidden = true;
+  button.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="3"></circle><circle cx="6" cy="17" r="3"></circle><path d="m8.7 8.4 10.8 6.2"></path><path d="m8.7 15.6 10.8-6.2"></path></svg>`;
+  let overlay = root.querySelector?.(".react-flow") ?? root;
+  overlay.append(button);
+
+  let activeEdgeId = "";
+  let pendingEdgeId = "";
+  let showTimer = null;
+  let lastPointer = { x: 0, y: 0 };
+
+  const clearShowTimer = () => {
+    if (showTimer == null) return;
+    globalThis.clearTimeout?.(showTimer);
+    showTimer = null;
+  };
+  const hide = () => {
+    clearShowTimer();
+    pendingEdgeId = "";
+    activeEdgeId = "";
+    button.hidden = true;
+  };
+  const overlayPoint = (clientX, clientY) => {
+    const rect = overlay.getBoundingClientRect?.() ?? {};
+    const width = Number(overlay.clientWidth ?? rect.width ?? 0);
+    const height = Number(overlay.clientHeight ?? rect.height ?? 0);
+    const scaleX = Number(rect.width) > 0 && width > 0 ? Number(rect.width) / width : 1;
+    const scaleY = Number(rect.height) > 0 && height > 0 ? Number(rect.height) / height : 1;
+    return {
+      x: (Number(clientX) - Number(rect.left ?? 0)) / scaleX,
+      y: (Number(clientY) - Number(rect.top ?? 0)) / scaleY,
+    };
+  };
+  const positionButton = (clientX, clientY) => {
+    const point = overlayPoint(clientX, clientY);
+    button.style.left = `${point.x}px`;
+    button.style.top = `${point.y}px`;
+  };
+  const closestPointOnPath = (path, clientX, clientY) => {
+    try {
+      const length = Number(path.getTotalLength?.() ?? 0);
+      const matrix = path.getScreenCTM?.();
+      if (!Number.isFinite(length) || length < 1 || !matrix) return null;
+      const samples = Math.min(64, Math.max(12, Math.ceil(length / 16)));
+      let nearest = null;
+      for (let index = 0; index <= samples; index += 1) {
+        const point = path.getPointAtLength(length * index / samples);
+        const x = point.x * matrix.a + point.y * matrix.c + matrix.e;
+        const y = point.x * matrix.b + point.y * matrix.d + matrix.f;
+        const distance = Math.hypot(x - clientX, y - clientY);
+        if (!nearest || distance < nearest.distance) nearest = { x, y, distance };
+      }
+      return nearest;
+    } catch {
+      return null;
+    }
+  };
+  const show = (edgeId, clientX, clientY) => {
+    const hit = resolveEdgeHit(edgeId, clientX, clientY);
+    if (!hit) {
+      hide();
+      return;
+    }
+    clearShowTimer();
+    pendingEdgeId = "";
+    activeEdgeId = hit.edgeId;
+    positionButton(hit.x, hit.y);
+    button.hidden = false;
+  };
+  const resolveEdgeHit = (preferredEdgeId, clientX, clientY) => {
+    if (!Number.isFinite(Number(clientX)) || !Number.isFinite(Number(clientY))) return null;
+    const edges = [...(root.querySelectorAll?.(".react-flow__edge") ?? [])];
+    let nearest = null;
+    for (const edge of edges) {
+      const edgeId = String(edge.getAttribute?.("data-id") ?? "").trim();
+      if (!edgeId) continue;
+      if (preferredEdgeId && edgeId !== preferredEdgeId) continue;
+      const edgePath = edge.querySelector?.(".react-flow__edge-path, path");
+      if (!edgePath) continue;
+      const point = closestPointOnPath(edgePath, clientX, clientY);
+      if (!point || point.distance > EDGE_HIT_PADDING) continue;
+      if (!nearest || point.distance < nearest.distance) nearest = { edgeId, ...point };
+    }
+    return nearest;
+  };
+  const edgeAtPointer = (event) => {
+    const clientX = Number(event?.clientX);
+    const clientY = Number(event?.clientY);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return "";
+    const path = event.composedPath?.() ?? [];
+    if (path.includes(button) && activeEdgeId) return activeEdgeId;
+    const fromDom = path.find((candidate) => candidate?.classList?.contains?.("react-flow__edge"))
+      ?? event.target?.closest?.(".react-flow__edge, [data-testid^='rf__edge-']");
+    const fromDomId = String(fromDom?.getAttribute?.("data-id") ?? fromDom?.dataset?.id ?? "").trim();
+    const hit = resolveEdgeHit(fromDomId, clientX, clientY);
+    return hit?.edgeId ?? "";
+  };
+  const queueShow = (edgeId, clientX, clientY, { immediate = false } = {}) => {
+    lastPointer = { x: clientX, y: clientY };
+    if (!edgeId) {
+      hide();
+      return;
+    }
+    if (immediate || activeEdgeId === edgeId) {
+      show(edgeId, clientX, clientY);
+      return;
+    }
+    const samePendingEdge = pendingEdgeId === edgeId;
+    pendingEdgeId = edgeId;
+    if (showTimer != null && samePendingEdge) return;
+    clearShowTimer();
+    showTimer = globalThis.setTimeout?.(() => {
+      showTimer = null;
+      const nextId = pendingEdgeId;
+      pendingEdgeId = "";
+      if (nextId) show(nextId, lastPointer.x, lastPointer.y);
+    }, SHOW_DELAY_MS);
+  };
+  const disconnectEdge = (edgeId) => {
+    const id = String(edgeId || activeEdgeId || "").trim();
+    if (!id) return;
+    const state = runtimeStore?.getState?.() ?? {};
+    const edges = Array.isArray(state.edges) ? state.edges : [];
+    if (!edges.some((edge) => String(edge?.id ?? "") === id)) {
+      hide();
+      return;
+    }
+    hide();
+    state.commitToHistory?.();
+    if (typeof state.onEdgesChange === "function") {
+      state.onEdgesChange([{ id, type: "remove" }]);
+      return;
+    }
+    runtimeStore?.setState?.((current) => ({
+      edges: (Array.isArray(current?.edges) ? current.edges : []).filter((edge) => String(edge?.id ?? "") !== id),
+    }));
+  };
+  const trackPointer = (event) => {
+    const path = event.composedPath?.() ?? [];
+    if (path.includes(button) && activeEdgeId) return;
+    queueShow(edgeAtPointer(event), event.clientX, event.clientY);
+  };
+
+  button.addEventListener("pointerleave", (event) => {
+    if (edgeAtPointer(event)) return;
+    hide();
+  });
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    disconnectEdge(activeEdgeId);
+  });
+  const onOverlayClick = (event) => {
+    const edgeId = edgeAtPointer(event);
+    if (edgeId) queueShow(edgeId, event.clientX, event.clientY, { immediate: true });
+  };
+  const bindOverlay = (nextOverlay) => {
+    if (!nextOverlay || nextOverlay === overlay) return;
+    overlay.removeEventListener("pointermove", trackPointer, true);
+    overlay.removeEventListener("pointerleave", hide);
+    overlay.removeEventListener("click", onOverlayClick, true);
+    overlay = nextOverlay;
+    if (!button.isConnected || button.parentElement !== overlay) overlay.append(button);
+    overlay.addEventListener("pointermove", trackPointer, true);
+    overlay.addEventListener("pointerleave", hide);
+    overlay.addEventListener("click", onOverlayClick, true);
+  };
+  overlay.addEventListener("pointermove", trackPointer, true);
+  overlay.addEventListener("pointerleave", hide);
+  overlay.addEventListener("click", onOverlayClick, true);
+  const observer = typeof MutationObserver === "function"
+    ? new MutationObserver(() => {
+        const nextOverlay = root.querySelector?.(".react-flow");
+        if (nextOverlay) bindOverlay(nextOverlay);
+      })
+    : null;
+  observer?.observe?.(root, { childList: true, subtree: true });
+
+  return () => {
+    hide();
+    observer?.disconnect?.();
+    overlay.removeEventListener("pointermove", trackPointer, true);
+    overlay.removeEventListener("pointerleave", hide);
+    overlay.removeEventListener("click", onOverlayClick, true);
+    button.remove();
+  };
+}
+
 function installAiCanvasRuntimeFooterZoomControls(surface) {
   const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
   if (!root || typeof MutationObserver !== "function") return () => {};
@@ -3002,7 +3207,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-03";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-07";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -3702,6 +3907,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     let disposePromptCreditCost = () => {};
     let disposeSkillPicker = () => {};
     let disposeMascotSkinSwitcher = () => {};
+    let disposeEdgeDisconnect = () => {};
     const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
         ...context,
         ...runtimeContext,
@@ -3719,6 +3925,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         readSkin: readAiCanvasRuntimeMascotSkin,
         persistSkin: persistAiCanvasRuntimeMascotSkin,
       });
+      disposeEdgeDisconnect = installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore);
       return ({
       ...runtimeHandle,
       async update(next = {}) {
@@ -3754,6 +3961,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           disposePromptCreditCost();
           disposeSkillPicker();
           disposeMascotSkinSwitcher();
+          disposeEdgeDisconnect();
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
           taskCenterBridge.dispose();
           projectBridge.dispose();
@@ -3773,6 +3981,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeHeaderChrome();
       disposeFooterZoomControls();
       disposeMascotSkinSwitcher();
+      disposeEdgeDisconnect();
       runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
       taskCenterBridge.dispose();
       projectBridge.dispose();
