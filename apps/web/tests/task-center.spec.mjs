@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   applyTaskCenterTaskProjectionForTest,
+  bindCanvasGenerationTaskToNodeForTest,
   discoverActiveTaskCenterTasksForTest,
   registerTaskCenterTaskForTest,
   resolveTaskCenterPollDelayForTest,
@@ -342,6 +343,86 @@ describe("production workbench task center", () => {
     assert.equal(expandNode.data.status, "completed");
     assert.equal(expandNode.data.imageUrl, "/expanded.png");
     assert.equal(expandNode.data.lastTaskId, "586e7908-df8d-4a64-a954-f9c7d279db9a");
+  });
+
+  it("binds a canvas video task id onto the generating video node", () => {
+    const document = {
+      version: 1,
+      nodes: [
+        {
+          id: "image-loading",
+          type: "ai-image",
+          data: { status: "loading", prompt: "生成图像" },
+        },
+        {
+          id: "video-39",
+          type: "ai-video",
+          data: { status: "loading", prompt: "生成视频" },
+        },
+      ],
+      edges: [],
+    };
+    const workbench = {
+      ui: {
+        selectedCanvasProjectId: "canvas-1",
+        canvasProjects: [{ id: "canvas-1" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-1": document },
+      },
+      newCanvasInstance: { update: async () => true },
+      newCanvasMount: { isConnected: true, dataset: { canvasProjectId: "canvas-1" } },
+    };
+    const bound = bindCanvasGenerationTaskToNodeForTest(workbench, "2266c439-37d1-40b1-9bfb-de2808ca2c71", {
+      kind: "video",
+      mediaKind: "video",
+      targetType: "canvas",
+      targetId: "canvas-1",
+    });
+    assert.equal(bound, true);
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.taskId, undefined);
+    assert.equal(workbench.ui.canvasDocument.nodes[1].data.taskId, "2266c439-37d1-40b1-9bfb-de2808ca2c71");
+    assert.equal(workbench.ui.canvasDocument.nodes[1].data.lastTaskId, "2266c439-37d1-40b1-9bfb-de2808ca2c71");
+  });
+
+  it("projects a completed canvas video onto the bound video node", async () => {
+    const document = {
+      version: 1,
+      nodes: [{
+        id: "video-39",
+        type: "ai-video",
+        data: {
+          status: "loading",
+          prompt: "生成视频",
+          taskId: "2266c439-37d1-40b1-9bfb-de2808ca2c71",
+          lastTaskId: "2266c439-37d1-40b1-9bfb-de2808ca2c71",
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-1",
+        canvasProjects: [{ id: "canvas-1" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-1": document },
+        canvasGenerationHistoryItems: [],
+      },
+    };
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "2266c439-37d1-40b1-9bfb-de2808ca2c71",
+      kind: "video",
+      mediaKind: "video",
+      status: "succeeded",
+      targetType: "canvas",
+      targetId: "canvas-1",
+      result: { videoUrl: "/completed-video.mp4" },
+      updatedAt: "2026-09-20T12:05:51.000Z",
+    });
+    const node = workbench.ui.canvasDocument.nodes[0];
+    assert.equal(node.data.status, "completed");
+    assert.equal(node.data.videoUrl, "/completed-video.mp4");
+    assert.equal(node.data.lastTaskId, "2266c439-37d1-40b1-9bfb-de2808ca2c71");
   });
 
   it("keeps polling a succeeded canvas task until the media URL arrives", async () => {

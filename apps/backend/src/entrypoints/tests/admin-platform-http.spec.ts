@@ -7265,7 +7265,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
            id, prompt_category, name, summary, prompt_content, cover_image_url,
            status, is_official, is_published, price_credits, published_at
          ) VALUES (
-           $1, 'script', '官方广场剧本提示词', '官方剧本提示词',
+           $1, 'storyboard', '官方广场故事板提示词', '官方故事板提示词',
            '这是用于官方提示词广场卡片验证的完整提示词正文。',
            '/admin/assets/prompt-covers/official-script.webp', 'enabled', true, true, 0, now()
          )`,
@@ -7280,7 +7280,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
            id, prompt_category, name, summary, prompt_content,
            status, is_official, is_published, price_credits, usage_count, published_at
          ) VALUES (
-           $1, 'script', '私人广场剧本提示词', '用户发布的剧本提示词', '这是用户私有的完整提示词正文，后台可以管理状态但不应读取或返回该正文。',
+           $1, 'storyboard', '私人广场故事板提示词', '用户发布的故事板提示词', '这是用户私有的完整提示词正文，后台可以管理状态但不应读取或返回该正文。',
            'enabled', false, true, 6, 3, now()
          )`,
         [privatePromptId],
@@ -7289,13 +7289,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         "INSERT INTO prompt_user_links (id, prompt_id, user_id, relation_type, status, added_at, created_at, updated_at) VALUES ($1, $2, $3, 'owner', 'active', now(), now(), now())",
         [randomUUID(), privatePromptId, privateOwnerId],
       );
-      const listResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace?category=script&status=published`, {
+      const listResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace?category=storyboard&status=published`, {
         headers: { cookie },
       });
       const listPayload = await listResponse.json();
       assert.equal(listResponse.status, 200, JSON.stringify(listPayload));
       const listedItems = listPayload.data?.items ?? listPayload.items ?? listPayload.body?.items ?? [];
-      const item = listedItems.find((entry: { title: string }) => entry.title === "官方广场剧本提示词");
+      const item = listedItems.find((entry: { title: string }) => entry.title === "官方广场故事板提示词");
       assert.ok(item);
       assert.equal(item.official, true);
       assert.equal(item.priceCredits, 0);
@@ -7304,6 +7304,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.ok(privateItem);
       assert.equal(privateItem.official, false);
       assert.equal(privateItem.ownerUserId, privateOwnerId);
+      assert.equal(privateItem.publisherName, "私人提示词作者");
+      assert.equal(privateItem.publisherPhone, "13800139001");
       assert.equal(privateItem.contentVisible, false);
       assert.equal(Object.prototype.hasOwnProperty.call(privateItem, "content"), false);
 
@@ -7311,10 +7313,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          title: "后台新增人物提示词",
-          category: "character_extract",
-          summary: "由后台手动新增的人物抽取提示词",
-          content: "这是可由后台手动新增并发布的人物抽取提示词完整正文。",
+          title: "后台新增故事板提示词",
+          category: "storyboard",
+          summary: "由后台手动新增的故事板提示词",
+          content: "这是可由后台手动新增并发布的故事板提示词完整正文。",
           priceCredits: 8,
           usageCount: 0,
           status: "published",
@@ -7324,15 +7326,15 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const createdOfficial = createOfficialPayload.data?.item ?? createOfficialPayload.item ?? createOfficialPayload.body?.item;
       assert.equal(createOfficialResponse.status, 201, JSON.stringify(createOfficialPayload));
       assert.equal(createdOfficial?.official, true);
-      assert.equal(createdOfficial?.category, "character_extract");
+      assert.equal(createdOfficial?.category, "storyboard");
       assert.equal(createdOfficial?.status, "published");
 
       const updateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${item.id}`, {
         method: "PATCH",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          title: "编辑后的官方剧本提示词",
-          summary: "编辑后的官方剧本提示词简介",
+          title: "编辑后的官方故事板提示词",
+          summary: "编辑后的官方故事板提示词简介",
           content: "这是后台编辑后的官方提示词正文。",
           coverImageUrl: "https://example.com/edited-official-cover.png",
           cover_storage_object_id: null,
@@ -7343,7 +7345,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const updatePayload = await updateResponse.json();
       assert.equal(updateResponse.status, 200);
       assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.priceCredits, 15, JSON.stringify(updatePayload));
-      assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.title, "编辑后的官方剧本提示词");
+      assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.title, "编辑后的官方故事板提示词");
       assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.content, "这是后台编辑后的官方提示词正文。");
 
       const updatePrivateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${privatePromptId}`, {

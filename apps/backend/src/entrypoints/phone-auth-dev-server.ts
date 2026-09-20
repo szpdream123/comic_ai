@@ -35687,6 +35687,7 @@ export function createPhoneAuthDevServer(
         if (request.method === "DELETE" && pathname === "/api/creator/project") {
           const body = (await readJsonBody(request)) as {
             projectId?: string | null;
+            projectIds?: string[] | null;
           };
           const projectResponse = await creatorApplication.deleteProject({
             user: {

@@ -9255,10 +9255,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(stylesResponse.status, 200, JSON.stringify(envelope));
       assert.ok(Array.isArray(envelope.styles));
-      assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
+      assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "anime"));
       assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
       assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.startsWith("/api/public/style-covers/")));
-      assert.ok(envelope.styles.some((item: { prompt_content?: string }) => item.prompt_content?.includes("二次元")));
+      assert.ok(envelope.styles.some((item: { prompt_content?: string }) => item.prompt_content?.includes("日系动漫")));
       assert.equal(envelope.styles.every((item: { status?: string }) => item.status === "enabled"), true);
     } finally {
       await server.close();

@@ -5461,11 +5461,6 @@
         renderShell();
       }
       const promptMarketplaceCategoryLabels = {
-        script: "剧本提示词",
-        shot: "分镜提示词",
-        scene_extract: "场景抽取提示词",
-        character_extract: "人物抽取提示词",
-        prop_extract: "道具抽取提示词",
         image_style: "生图风格提示词",
         storyboard: "故事板提示词",
         other: "其它",
@@ -5476,23 +5471,23 @@
         const source = state.promptManagementMode === "private" ? "private" : "official";
         const filtered = (state.promptMarketplaceItems || [])
           .filter((item) => source === "all" || (source === "official" ? item.official === true : item.official !== true))
-          .filter((item) => !keyword || [item.title, item["summary"], item.publisherName].join(" ").toLowerCase().includes(keyword));
+          .filter((item) => !keyword || [item.title, item["summary"], item.publisherName, item.publisherPhone].join(" ").toLowerCase().includes(keyword));
         const rows = filtered.length
           ? filtered.map(promptMarketplaceAdminRow).join("")
-          : `<tr><td colspan="9">${escapeHtml(state.promptMarketplaceLoadError || "暂无提示词")}</td></tr>`;
+          : `<tr><td colspan="10">${escapeHtml(state.promptMarketplaceLoadError || "暂无提示词")}</td></tr>`;
         const isOfficial = source === "official";
         return `${promptTabs()}${promptCategoryTabs()}<section class="prompt-workbench prompt-marketplace-admin" data-required-permission="storyboard_prompt:view">
           <section class="section">
             <div class="toolbar">
               <div class="prompt-toolbar-title"><h3>${isOfficial ? "官方提示词管理" : "用户提示词管理"}</h3><div class="metric-note">${isOfficial ? "管理官方提示词的正文、发布状态、价格和默认技能。" : "管理用户提示词的名称、简介、封面、发布状态和价格。"}</div><div class="metric-note">共 ${filtered.length} 条${state.promptMarketplaceLoadError ? ` · ${escapeHtml(state.promptMarketplaceLoadError)}` : ""}</div></div>
               <div class="filters">
-                <input value="${escapeAttribute(state.promptMarketplaceKeyword || "")}" placeholder="搜索名称 / 简介 / 发布者" oninput="updatePromptMarketplaceKeyword(this.value)" />
+                <input value="${escapeAttribute(state.promptMarketplaceKeyword || "")}" placeholder="搜索名称 / 简介 / 发布者 / 手机号" oninput="updatePromptMarketplaceKeyword(this.value)" />
                 <select onchange="updatePromptMarketplaceStatus(this.value)">${optionPairs([["all", "全部状态"], ["published", "已发布"], ["draft", "草稿"], ["archived", "已归档"]], state.promptMarketplaceStatus)}</select>
                 ${isOfficial ? `<button class="btn primary" onclick="openPromptMarketplaceItemDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增官方提示词</button>` : ""}
                 <button class="btn ghost" onclick="loadPromptMarketplace().then(renderShell)">刷新</button>
               </div>
             </div>
-            <div class="table-wrap dense"><table><thead><tr><th>名称</th><th>分类</th><th>来源</th><th>价格</th><th>状态</th><th>默认技能</th><th>使用次数</th><th>最近更新</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+            <div class="table-wrap dense"><table><thead><tr><th class="prompt-cover-col">封面</th><th>名称</th><th>分类</th><th>发布者</th><th>价格</th><th>状态</th><th>默认技能</th><th>使用次数</th><th>最近更新</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
           </section>
         </section>`;
       }
@@ -5501,9 +5496,10 @@
         const isOfficial = item.official === true;
         const status = String(item.status || "draft");
         return `<tr data-prompt-marketplace-row="${escapeAttribute(item.id)}">
+          <td class="prompt-cover-col">${promptCoverMarkup({ name: item.title, coverImageUrl: item.coverImageUrl, cover_image_url: item.cover_image_url }, "提")}</td>
           <td><div class="prompt-title-cell">${escapeHtml(item.title || "-")}<div class="metric-note">${escapeHtml(item["summary"] || "暂无公开简介")}</div></div></td>
           <td><span class="tag blue">${escapeHtml(promptMarketplaceCategoryLabels[item.category] || item.category || "提示词")}</span></td>
-          <td><span class="tag ${isOfficial ? "green" : "blue"}">${isOfficial ? "官方" : escapeHtml(item.publisherName || "私人发布")}</span></td>
+          <td>${isOfficial ? '<span class="tag green">官方</span>' : `<div>${escapeHtml(item.publisherName || "未知用户")}${item.publisherPhone ? `<div class="metric-note">${escapeHtml(item.publisherPhone)}</div>` : ""}</div>`}</td>
           <td>${Number(item.priceCredits || 0)}</td>
           <td><span class="tag ${status === "published" ? "green" : status === "archived" ? "warn" : "blue"}">${status === "published" ? "已发布" : status === "archived" ? "已归档" : "草稿"}</span></td>
           <td>${isOfficial ? (item.isDefault ? '<span class="tag blue">默认</span>' : `<button class="btn ghost" onclick="setOfficialPromptDefault('${escapeAttribute(item.id)}','${escapeAttribute(item.category)}','loadPromptMarketplace')" ${status !== "published" ? "disabled" : ""} ${permissionAttrs("storyboard_prompt:update")}>设为默认</button>`) : "-"}</td>
@@ -5536,7 +5532,7 @@
         const existing = promptMarketplaceItemById(itemId);
         if (itemId && !existing) return;
         const isOfficial = !existing || existing.official === true;
-        const selectedCategory = existing?.category || (state.promptMarketplaceCategory !== "all" ? state.promptMarketplaceCategory : "script");
+        const selectedCategory = existing?.category || (state.promptMarketplaceCategory !== "all" ? state.promptMarketplaceCategory : "image_style");
         const formId = "prompt-marketplace-item-form";
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
@@ -5547,6 +5543,7 @@
               <label class="field"><span>名称</span><input name="title" value="${escapeAttribute(existing?.title || "")}" minlength="2" maxlength="80" required /></label>
               <label class="field"><span>分类</span>${existing ? `<input value="${escapeAttribute(promptMarketplaceCategoryLabels[selectedCategory] || selectedCategory || "提示词")}" disabled />` : `<select name="category">${optionPairs(Object.entries(promptMarketplaceCategoryLabels), selectedCategory)}</select>`}</label>
               <label class="field"><span>来源</span><input value="${isOfficial ? "官方提示词" : "用户提示词"}" disabled /></label>
+              ${!isOfficial && existing ? `<label class="field"><span>发布者</span><input value="${escapeAttribute(existing.publisherName || "未知用户")}" disabled /></label><label class="field"><span>手机号</span><input value="${escapeAttribute(existing.publisherPhone || "-")}" disabled /></label>` : ""}
             </div>
             ${promptPublishingFields(existing)}
             <label class="field"><span>封面</span><div class="prompt-cover-upload" data-cover-field="cover_image_url">${promptCoverMarkup({ name: existing?.title, coverImageUrl: existing?.coverImageUrl }, "提")}${promptCoverUploadFields(existing, formId)}</div></label>

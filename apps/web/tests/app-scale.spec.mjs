@@ -24,6 +24,8 @@ test("desktop workbench renders at the requested 75 percent scale", async () => 
   assert.match(css, /\.ai-canvas-standalone-page[\s\S]*?\.ai-canvas-standalone-mount[\s\S]*?min-height:\s*calc\(100dvh \/ var\(--app-ui-scale\)\)/);
   assert.match(css, /\.initial-workbench-shell[\s\S]*?height:\s*calc\(100dvh \/ var\(--app-ui-scale\)/);
   assert.match(css, /\.initial-workbench-shell[\s\S]*?min-height:\s*calc\(100dvh \/ var\(--app-ui-scale\)/);
+  assert.match(css, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)\s*\{[\s\S]*?zoom:\s*1/);
+  assert.match(css, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\) \.ai-canvas-standalone-mount[\s\S]*?height:\s*100dvh/);
   assert.match(css, /\.ai-canvas-standalone-mount\s*>\s*\[data-new-canvas-light-dom-root\][\s\S]*?height:\s*100%/);
   assert.match(css, /\[data-new-canvas-light-dom-root\]\s*>\s*\.new-canvas-root[\s\S]*?min-height:\s*100%/);
   assert.match(css, /\[data-new-canvas-light-dom-root\]\s*>\s*\[data-new-canvas-style-gate\][\s\S]*?height:\s*100%/);

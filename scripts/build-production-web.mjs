@@ -36,7 +36,7 @@ export async function buildProductionWeb({
     entryNames: "[name]-[hash]",
     chunkNames: "chunks/[name]-[hash]",
     assetNames: "assets/[name]-[hash]",
-    external: ["/vendor/*"],
+    external: ["/vendor/*", "/ai-canvas-runtime/*"],
     plugins: [{
       name: "bundle-three-browser-runtime",
       setup(context) {

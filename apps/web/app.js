@@ -21,7 +21,7 @@ const productionWorkbenchPromise = root
 let aiCanvasRuntimePromise;
 let aiCanvasRuntimeStorePromise;
 let aiCanvasRuntimeGlobalStyle;
-const AI_CANVAS_RUNTIME_MODULE_URL = "/ai-canvas-runtime/runtime.js";
+const AI_CANVAS_RUNTIME_MODULE_URL = "/ai-canvas-runtime/runtime.js?v=20260920-style-skills";
 
 function isAiCanvasRuntimeDetailRoute(hash = globalThis.window?.location?.hash ?? globalThis.location?.hash) {
   const token = String(hash ?? "").replace(/^#/, "");
@@ -716,7 +716,7 @@ function normalizeAiCanvasRuntimeNode(node, index = 0, options = {}) {
   const generating = ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus);
   const staleGenerating = options.recoverStaleGenerating === true
     && generating
-    && !String(data.taskId ?? data.lastTaskId ?? data.generationTaskId ?? "").trim();
+    && !String(data.taskId ?? data.lastTaskId ?? data.generationTaskId ?? data.pendingTask?.taskId ?? "").trim();
   const status = staleGenerating
     ? (mediaUrl ? "success" : "idle")
     : generating
@@ -1031,6 +1031,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     store.setState(patch);
     if (documentProvided && !nodeDragActive) {
       document = readRuntimeDocument();
+      if (saveEnabled) store.getState()?.resumePendingTasks?.();
     }
   };
   const loadedNodeCount = Array.isArray(document?.nodes) ? document.nodes.length : 0;
@@ -1076,6 +1077,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     enableSaves() {
       saveEnabled = true;
       store.setState({ projectLoadStatus: "ready" });
+      store.getState()?.resumePendingTasks?.();
     },
     update(next = {}) {
       if (next.projectCatalog !== undefined || next.currentProjectId !== undefined || next.document !== undefined || next.canvasDocument !== undefined) {
@@ -1685,8 +1687,9 @@ function installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore) {
   const doc = surface?.ownerDocument ?? globalThis.document;
   if (!root || !doc?.createElement) return () => {};
 
-  const SHOW_DELAY_MS = 500;
+  const SHOW_DELAY_MS = 0;
   const EDGE_HIT_PADDING = 18;
+  const PORT_CLEARANCE = 18;
   root.querySelector?.("[data-canvas-edge-disconnect]")?.remove?.();
   const button = doc.createElement("button");
   button.type = "button";
@@ -1713,7 +1716,71 @@ function installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore) {
     clearShowTimer();
     pendingEdgeId = "";
     activeEdgeId = "";
+    button.classList.remove("is-visible");
     button.hidden = true;
+  };
+  const isDisconnectControl = (candidate) => Boolean(
+    candidate === button
+    || candidate?.classList?.contains?.("canvas-edge-disconnect-button")
+    || candidate?.closest?.(".canvas-edge-disconnect-button"),
+  );
+  const isCanvasPortElement = (candidate) => {
+    if (!candidate || isDisconnectControl(candidate)) return false;
+    return Boolean(
+      candidate?.classList?.contains?.("react-flow__handle")
+      || candidate?.classList?.contains?.("node-handle")
+      || candidate?.classList?.contains?.("gooey-btn")
+      || candidate?.classList?.contains?.("gooey-btn-wrapper")
+      || candidate?.closest?.(".react-flow__handle, .node-handle, .gooey-btn-wrapper"),
+    );
+  };
+  const isCanvasNodeElement = (candidate) => {
+    if (!candidate || isDisconnectControl(candidate)) return false;
+    if (isCanvasPortElement(candidate)) return true;
+    return Boolean(
+      candidate?.classList?.contains?.("react-flow__node")
+      || candidate?.closest?.(".react-flow__node"),
+    );
+  };
+  const isClientPointOverCanvasPort = (clientX, clientY) => {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
+    const ports = root.querySelectorAll?.(".react-flow__handle, .node-handle, .gooey-btn") ?? [];
+    for (const port of ports) {
+      const rect = port.getBoundingClientRect?.();
+      if (!rect) continue;
+      const width = Number(rect.width);
+      const height = Number(rect.height);
+      if (![width, height].every(Number.isFinite)) continue;
+      const radius = Math.max(width, height, 16) / 2;
+      const centerX = Number(rect.left) + width / 2;
+      const centerY = Number(rect.top) + height / 2;
+      if (Math.hypot(clientX - centerX, clientY - centerY) <= radius + PORT_CLEARANCE) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const isClientPointOverCanvasNode = (clientX, clientY) => {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
+    if (isClientPointOverCanvasPort(clientX, clientY)) return true;
+    const nodes = root.querySelectorAll?.(".react-flow__node") ?? [];
+    for (const node of nodes) {
+      const rect = node.getBoundingClientRect?.();
+      if (!rect) continue;
+      if (clientX >= Number(rect.left) && clientX <= Number(rect.right)
+        && clientY >= Number(rect.top) && clientY <= Number(rect.bottom)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const isPointerOverCanvasNode = (event) => {
+    const clientX = Number(event?.clientX);
+    const clientY = Number(event?.clientY);
+    if (isClientPointOverCanvasNode(clientX, clientY)) return true;
+    const path = event?.composedPath?.() ?? [];
+    if (path.some((candidate) => candidate?.classList?.contains?.("react-flow__edge"))) return false;
+    return path.some((candidate) => isCanvasNodeElement(candidate) || isCanvasPortElement(candidate));
   };
   const overlayPoint = (clientX, clientY) => {
     const rect = overlay.getBoundingClientRect?.() ?? {};
@@ -1751,8 +1818,12 @@ function installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore) {
     }
   };
   const show = (edgeId, clientX, clientY) => {
+    if (isClientPointOverCanvasNode(Number(clientX), Number(clientY))) {
+      hide();
+      return;
+    }
     const hit = resolveEdgeHit(edgeId, clientX, clientY);
-    if (!hit) {
+    if (!hit || isClientPointOverCanvasNode(hit.x, hit.y)) {
       hide();
       return;
     }
@@ -1760,7 +1831,14 @@ function installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore) {
     pendingEdgeId = "";
     activeEdgeId = hit.edgeId;
     positionButton(hit.x, hit.y);
+    const alreadyVisible = !button.hidden && button.classList.contains("is-visible");
     button.hidden = false;
+    if (!alreadyVisible) {
+      button.classList.add("is-visible");
+      button.style.opacity = "0";
+      void button.offsetWidth;
+      button.style.opacity = "1";
+    }
   };
   const resolveEdgeHit = (preferredEdgeId, clientX, clientY) => {
     if (!Number.isFinite(Number(clientX)) || !Number.isFinite(Number(clientY))) return null;
@@ -1832,8 +1910,17 @@ function installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore) {
   };
   const trackPointer = (event) => {
     const path = event.composedPath?.() ?? [];
+    if (isClientPointOverCanvasNode(event.clientX, event.clientY)) {
+      hide();
+      return;
+    }
     if (path.includes(button) && activeEdgeId) return;
-    queueShow(edgeAtPointer(event), event.clientX, event.clientY);
+    const edgeId = edgeAtPointer(event);
+    if (edgeId) {
+      queueShow(edgeId, event.clientX, event.clientY, { immediate: true });
+      return;
+    }
+    hide();
   };
 
   button.addEventListener("pointerleave", (event) => {
@@ -2982,31 +3069,29 @@ function resolveAiCanvasAssistantTaskMedia(task) {
   const storageUrl = storageObjectId
     ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
     : "";
-  const videoUrl = [
-    result.videoUrl,
+  const explicitVideo = task?.kind === "video" || task?.mediaKind === "video";
+  const sharedUrl = [
     result.previewUrl,
     result.sourceUrl,
     result.downloadUrl,
     result.url,
-    task?.videoUrl,
     task?.url,
-    task?.fixedVideos?.[0]?.url,
     itemUrl,
     storageUrl,
+  ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
+  const videoUrl = [
+    result.videoUrl,
+    task?.videoUrl,
+    task?.fixedVideos?.[0]?.url,
+    ...(explicitVideo ? [sharedUrl] : []),
   ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
   const imageUrl = [
     result.imageUrl,
-    result.previewUrl,
-    result.sourceUrl,
-    result.downloadUrl,
-    result.url,
     task?.imageUrl,
-    task?.url,
     task?.fixedImages?.[0]?.url,
-    itemUrl,
-    storageUrl,
+    ...(explicitVideo ? [] : [sharedUrl]),
   ].map(readAiCanvasAssistantMediaCandidate).find(Boolean) ?? "";
-  const kind = task?.kind === "video" || task?.mediaKind === "video" || videoUrl ? "video" : "image";
+  const kind = explicitVideo ? "video" : "image";
   return { kind, url: kind === "video" ? videoUrl || imageUrl : imageUrl || videoUrl };
 }
 
@@ -3015,12 +3100,15 @@ function createAiCanvasAssistantTaskResponse(task) {
   const mappedStatus = status === "succeeded" ? "completed" : status === "cancelled" ? "canceled" : status;
   const media = resolveAiCanvasAssistantTaskMedia(task);
   const mediaKey = media.kind === "video" ? "videos" : "images";
+  const successWithMedia = mappedStatus === "completed" && Boolean(media.url);
   return new Response(JSON.stringify({
     requestId: `canvas-assistant-task-center-${Date.now().toString(36)}`,
     data: {
       status: mappedStatus || "failed",
       ...(media.url ? { result: { [mediaKey]: [{ url: media.url }] } } : {}),
-      error: task?.failure?.displayMessage ?? task?.displayMessage ?? task?.error ?? undefined,
+      ...(successWithMedia ? {} : {
+        error: task?.failure?.displayMessage ?? task?.displayMessage ?? task?.error ?? undefined,
+      }),
     },
   }), {
     status: 200,
@@ -3028,22 +3116,31 @@ function createAiCanvasAssistantTaskResponse(task) {
   });
 }
 
-function resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context = {}, taskId = "") {
+function resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context = {}, taskId = "", mediaKind = "") {
   const store = context.runtimeStore;
   const nodes = Array.isArray(store?.getState?.()?.nodes) ? store.getState().nodes : [];
+  const wantedKind = String(mediaKind ?? "").trim().toLowerCase();
+  const nodeMediaKind = (node) => {
+    const type = String(node?.type ?? node?.data?.type ?? "").trim();
+    if (node?.data?.mediaKind === "audio" || type === "audio" || type === "ai-audio" || type === "source-audio") return "audio";
+    if (node?.data?.mediaKind === "text" || type === "ai-text" || type === "ai-markdown") return "text";
+    if (node?.data?.mediaKind === "video" || type === "video" || type === "ai-video" || type === "source-video") return "video";
+    return "image";
+  };
   const generating = nodes.filter((node) => {
     const status = String(node?.data?.status ?? "").trim().toLowerCase();
-    return ["loading", "running", "queued", "processing", "pending", "submitted"].includes(status);
+    if (!["loading", "running", "queued", "processing", "pending", "submitted"].includes(status)) return false;
+    return !wantedKind || nodeMediaKind(node) === wantedKind;
   });
   const wanted = String(taskId ?? "").trim();
   if (wanted) {
     const matched = generating.find((node) =>
-      String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? "").trim() === wanted
+      String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? node?.data?.pendingTask?.taskId ?? "").trim() === wanted
     );
     if (matched) return String(matched.id ?? "").trim();
   }
   const unbound = generating.filter((node) =>
-    !String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? "").trim()
+    !String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? node?.data?.pendingTask?.taskId ?? "").trim()
   );
   const pick = (unbound.length ? unbound : generating).at(-1);
   return String(pick?.id ?? "").trim();
@@ -3149,7 +3246,7 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
             body?.canvasNodeId
               ?? body?.nodeKey
               ?? body?.nodeId
-              ?? resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context)
+              ?? resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context, "", mediaKind)
               ?? "",
           ).trim();
           void Promise.resolve(context.onGenerationTaskCreated(taskId, {
@@ -3159,7 +3256,14 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
             targetId: nodeId || context.currentProjectId || context.canvasProjectId,
             prompt: String(body?.prompt ?? ""),
             model: String(body?.model ?? ""),
-          })).catch(() => undefined);
+          })).then(() => {
+            if (!nodeId) return;
+            context.runtimeStore?.getState?.()?.updateNodeDataTransient?.(nodeId, {
+              taskId,
+              lastTaskId: taskId,
+              generationTaskId: taskId,
+            });
+          }).catch(() => undefined);
         }
       } catch {
         // Task-center registration is best-effort; the submit response still returns to runtime.
@@ -3168,12 +3272,19 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
     }
     if (method === "GET" && tasksMatch) {
       const taskId = decodeURIComponent(tasksMatch[1]);
-      const nodeId = resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context, taskId);
+      const nodeId = resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context, taskId, /\/videos\//.test(url) ? "video" : "");
       void Promise.resolve(context.onGenerationTaskCreated?.(taskId, {
         ...(nodeId
           ? { targetType: "canvas_node", targetId: nodeId }
           : {}),
-      })).catch(() => undefined);
+      })).then(() => {
+        if (!nodeId) return;
+        context.runtimeStore?.getState?.()?.updateNodeDataTransient?.(nodeId, {
+          taskId,
+          lastTaskId: taskId,
+          generationTaskId: taskId,
+        });
+      }).catch(() => undefined);
       return waitForTaskCenter(taskId, init?.signal ?? input?.signal);
     }
     return originalFetch(input, init);
@@ -3773,13 +3884,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         }
         @media (min-width: 769px) {
           .ai-canvas-standalone-mount {
-            height: calc(100dvh / var(--app-ui-scale, 1)) !important;
+            height: 100dvh !important;
           }
           .ai-canvas-standalone-mount > [data-new-canvas-light-dom-root] {
             width: 100% !important;
             height: 100% !important;
             min-height: 100% !important;
-            zoom: calc(1 / var(--app-ui-scale, 1));
           }
           .ai-canvas-standalone-mount > [data-new-canvas-light-dom-root] > .new-canvas-root {
             width: 100% !important;
@@ -3792,9 +3902,6 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
             height: 100% !important;
             min-height: 100% !important;
           }
-          .app-tooltip {
-            zoom: calc(1 / var(--app-ui-scale, 1));
-          }
         }
       `;
       layoutStyle.textContent += `
@@ -3803,6 +3910,17 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           position: static !important;
           inset: auto !important;
           background: var(--theme-app-background, #08111b) !important;
+        }
+        body.workbench-body:has(.ai-canvas-standalone-mount) {
+          zoom: 1 !important;
+          height: 100dvh !important;
+          min-height: 100dvh !important;
+        }
+        body.workbench-body:has(.ai-canvas-standalone-mount) .creator-app,
+        body.workbench-body:has(.ai-canvas-standalone-mount) .ai-canvas-standalone-page,
+        body.workbench-body:has(.ai-canvas-standalone-mount) .ai-canvas-standalone-mount {
+          height: 100dvh !important;
+          min-height: 100dvh !important;
         }
         body.workbench-body:has(.ai-canvas-standalone-mount)::after {
           opacity: 0 !important;

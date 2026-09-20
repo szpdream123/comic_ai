@@ -32,6 +32,7 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     assert.ok(names.includes("20261108-skill-category-user-create.sql"));
     assert.ok(names.includes("20261109-rename-production-agent-session-json.sql"));
     assert.ok(names.includes("20261110-rename-production-agent-session-json-constraint.sql"));
+    assert.ok(names.includes("20261111-retire-workflow-prompt-marketplace-categories.sql"));
     assert.match(
       productionMigrationScript,
       /\["20261106-skill-categories\.sql", "packages\/db\/migrations\/20261106-skill-categories\.sql"\]/,
@@ -54,6 +55,10 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     );
     assert.match(
       productionMigrationScript,
+      /\["20261111-retire-workflow-prompt-marketplace-categories\.sql", "packages\/db\/migrations\/20261111-retire-workflow-prompt-marketplace-categories\.sql"\]/,
+    );
+    assert.match(
+      productionMigrationScript,
       /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20261106-skill-categories\.sql"[\s\S]*\]\);/,
     );
     assert.match(
@@ -71,6 +76,10 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     assert.match(
       productionMigrationScript,
       /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20261110-rename-production-agent-session-json-constraint\.sql"[\s\S]*\]\);/,
+    );
+    assert.match(
+      productionMigrationScript,
+      /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20261111-retire-workflow-prompt-marketplace-categories\.sql"[\s\S]*\]\);/,
     );
   });
 

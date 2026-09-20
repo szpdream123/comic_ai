@@ -4,6 +4,12 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 export const promptMarketplaceCategories = [
+  "image_style",
+  "storyboard",
+  "other",
+] as const;
+
+export const promptSkillCategories = [
   "script",
   "shot",
   "scene_extract",
@@ -15,11 +21,12 @@ export const promptMarketplaceCategories = [
 ] as const;
 
 type PromptMarketplaceCategory = (typeof promptMarketplaceCategories)[number];
+type PromptSkillCategory = (typeof promptSkillCategories)[number];
 
 interface PromptMarketplaceRow {
   id: string;
   owner_user_id: string | null;
-  prompt_category: PromptMarketplaceCategory;
+  prompt_category: PromptSkillCategory;
   name: string;
   summary: string;
   prompt_content: string | null;
@@ -35,6 +42,7 @@ interface PromptMarketplaceRow {
   published_at: Date | string | null;
   updated_at: Date | string;
   publisher_name?: string | null;
+  publisher_phone?: string | null;
   purchase_id?: string | null;
   purchase_status?: string | null;
   user_relation_type?: string | null;
@@ -44,7 +52,7 @@ interface PromptMarketplaceRow {
 
 interface PromptSkillListRow {
   id: string;
-  prompt_category: PromptMarketplaceCategory;
+  prompt_category: PromptSkillCategory;
   name: string;
   summary: string;
   prompt_content: string | null;
@@ -62,7 +70,7 @@ interface PromptSkillListRow {
 }
 
 interface PromptSkillCategoryCountRow {
-  prompt_category: PromptMarketplaceCategory;
+  prompt_category: PromptSkillCategory;
   count: number | string;
 }
 
@@ -97,6 +105,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
           WHERE item.deleted_at IS NULL
             AND item.status = 'enabled'
             AND item.is_published = true
+            AND item.prompt_category IN ('image_style', 'storyboard', 'other')
             AND ($1::text IS NULL OR item.prompt_category = $1)
             AND (
               $2::text IS NULL
@@ -166,11 +175,14 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
         WHERE item.deleted_at IS NULL
           AND item.status = 'enabled'
           AND item.is_published = true
+          AND item.prompt_category IN ('image_style', 'storyboard', 'other')
           AND ($2::text IS NULL OR item.prompt_category = $2)
           AND (
             $3::text IS NULL
             OR lower(item.name) LIKE $3
             OR lower(item.summary) LIKE $3
+            OR lower(COALESCE(owner.display_name, '')) LIKE $3
+            OR owner.phone_e164 LIKE $3
           )
         ORDER BY item.is_official DESC, item.usage_count DESC, item.rating_count DESC, item.published_at DESC, item.id ASC
         LIMIT $4
@@ -233,6 +245,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
         WHERE item.deleted_at IS NULL
           AND item.status = 'enabled'
           AND item.is_published = true
+          AND item.prompt_category IN ('image_style', 'storyboard', 'other')
         ORDER BY item.usage_count DESC, item.rating_score DESC, item.rating_count DESC, item.id ASC
           LIMIT 20
         `,
@@ -297,6 +310,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
           ON user_rating.prompt_id = item.id
           AND user_rating.user_id = $1
         WHERE item.deleted_at IS NULL
+          AND item.prompt_category IN ('image_style', 'storyboard', 'other')
         ORDER BY (user_link.relation_type = 'owner') DESC, item.updated_at DESC, item.id ASC
       `,
       [input.userId],
@@ -311,7 +325,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     page?: number;
     pageSize?: number;
   }) {
-    const category = normalizeCategoryFilter(input.category);
+    const category = normalizeSkillCategoryFilter(input.category);
     const keyword = promptSkillKeyword(input.query);
     const requestedPage = normalizePage(input.page);
     const pageSize = normalizePageSize(input.pageSize);
@@ -404,7 +418,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     page?: number;
     pageSize?: number;
   }) {
-    const category = normalizeCategoryFilter(input.category);
+    const category = normalizeSkillCategoryFilter(input.category);
     const keyword = promptSkillKeyword(input.query);
     const requestedPage = normalizePage(input.page);
     const pageSize = normalizePageSize(input.pageSize);
@@ -511,7 +525,8 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
               AND prompt_default.prompt_id = item.id
           ) AS is_default,
           owner_link.user_id AS owner_user_id,
-          owner.display_name AS publisher_name
+          owner.display_name AS publisher_name,
+          owner.phone_e164 AS publisher_phone
         FROM prompts item
         LEFT JOIN prompt_user_links owner_link
           ON owner_link.prompt_id = item.id
@@ -519,6 +534,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
           AND owner_link.status = 'active'
         LEFT JOIN users owner ON owner.id = owner_link.user_id
         WHERE item.deleted_at IS NULL
+          AND item.prompt_category IN ('image_style', 'storyboard', 'other')
           AND ($1::text IS NULL OR item.prompt_category = $1)
           AND (
             $2::text IS NULL
@@ -530,6 +546,8 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
             $3::text IS NULL
             OR lower(item.name) LIKE $3
             OR lower(item.summary) LIKE $3
+            OR lower(COALESCE(owner.display_name, '')) LIKE $3
+            OR COALESCE(owner.phone_e164, '') LIKE $3
           )
           AND ($4::text IS NULL OR ($4 = 'official' AND item.is_official = true) OR ($4 = 'private' AND item.is_official = false))
         ORDER BY item.is_official DESC, item.updated_at DESC, item.id ASC
@@ -1193,7 +1211,7 @@ function promptSkillListResponse(input: {
   total: number;
   totalPages: number;
 }) {
-  const categoryCounts = Object.fromEntries(promptMarketplaceCategories.map((category) => [category, 0])) as Record<PromptMarketplaceCategory, number>;
+  const categoryCounts = Object.fromEntries(promptSkillCategories.map((category) => [category, 0])) as Record<PromptSkillCategory, number>;
   for (const row of input.categoryCountRows) categoryCounts[row.prompt_category] = Number(row.count || 0);
   return {
     items: input.rows.map(promptSkillListItemFromRow),
@@ -1284,9 +1302,11 @@ function marketplaceItemFromRow(row: PromptMarketplaceRow, userId: string | null
 }
 
 function promptSkillCoverUrl(row: Pick<PromptSkillListRow, "cover_image_url" | "cover_storage_object_id">) {
+  const coverImageUrl = String(row.cover_image_url || "").trim();
+  if (/^https?:\/\//i.test(coverImageUrl)) return coverImageUrl;
   return row.cover_storage_object_id
     ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-    : row.cover_image_url || "";
+    : coverImageUrl;
 }
 
 function adminMarketplaceItemFromRow(row: PromptMarketplaceRow) {
@@ -1304,7 +1324,8 @@ function adminMarketplaceItemFromRow(row: PromptMarketplaceRow) {
     official: isOfficial,
     isDefault: Boolean(row.is_default),
     ownerUserId: isOfficial ? null : row.owner_user_id,
-    publisherName: isOfficial ? "官方" : row.publisher_name || "创作者",
+    publisherName: isOfficial ? "官方" : row.publisher_name || "未知用户",
+    publisherPhone: isOfficial ? null : row.publisher_phone || null,
     usageCount: Number(row.usage_count || 0),
     ratingAverage: Number(row.rating_score || 5),
     ratingCount,
@@ -1321,6 +1342,13 @@ function normalizeCategoryFilter(value: unknown): PromptMarketplaceCategory | nu
   const normalized = String(value ?? "").trim();
   return promptMarketplaceCategories.includes(normalized as PromptMarketplaceCategory)
     ? normalized as PromptMarketplaceCategory
+    : null;
+}
+
+function normalizeSkillCategoryFilter(value: unknown): PromptSkillCategory | null {
+  const normalized = String(value ?? "").trim();
+  return promptSkillCategories.includes(normalized as PromptSkillCategory)
+    ? normalized as PromptSkillCategory
     : null;
 }
 
@@ -1364,11 +1392,6 @@ function requireCategory(value: unknown): PromptMarketplaceCategory {
 
 function categoryLabel(category: PromptMarketplaceCategory) {
   return ({
-    script: "剧本提示词",
-    shot: "分镜提示词",
-    scene_extract: "场景抽取提示词",
-    character_extract: "人物抽取提示词",
-    prop_extract: "道具抽取提示词",
     image_style: "生图风格提示词",
     storyboard: "故事板提示词",
     other: "其它提示词",

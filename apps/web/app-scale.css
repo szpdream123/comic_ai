@@ -79,4 +79,17 @@
     height: calc(100dvh / var(--app-ui-scale));
     min-height: calc(100dvh / var(--app-ui-scale));
   }
+
+  body.workbench-body:has(.ai-canvas-standalone-mount) {
+    zoom: 1;
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+
+  body.workbench-body:has(.ai-canvas-standalone-mount) .creator-app,
+  body.workbench-body:has(.ai-canvas-standalone-mount) .ai-canvas-standalone-page,
+  body.workbench-body:has(.ai-canvas-standalone-mount) .ai-canvas-standalone-mount {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
 }

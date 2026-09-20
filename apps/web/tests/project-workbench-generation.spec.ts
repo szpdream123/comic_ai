@@ -31595,7 +31595,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-action="submit-episode-batch-modal"/);
     assert.match(html, /--episode-batch-anchor-top:80px/);
     assert.doesNotMatch(html, /data:image\/svg\+xml;charset=UTF-8/);
-    assert.match(html, /episode-batch-style-card no-preview/);
+    assert.match(html, /episode-batch-style-picker-trigger/);
   });
 
   it("keeps the batch modal above the backdrop hit area and scrollable", () => {
@@ -31667,16 +31667,12 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /官方技能/);
-    assert.match(html, /私人技能库/);
     assert.match(html, /中国武侠/);
-    assert.match(html, /赛博朋克/);
     assert.match(html, /https:\/\/example\.com\/style-wuxia\.png/);
-    assert.match(html, /https:\/\/example\.com\/style-cyberpunk\.png/);
     assert.match(html, /12积分\/张/);
-    assert.match(html, /免费/);
     assert.match(html, /生成 78 \+ 12积分/);
-    assert.match(html, /episode-batch-style-card[^"\n]* selected/);
+    assert.match(html, /当前风格[\s\S]*中国武侠/);
+    assert.match(html, /episode-batch-style-picker-trigger has-preview/);
   });
 
   it("renders the asset image style picker with the actual project style and official or private skills", () => {
@@ -31710,17 +31706,23 @@ describe("production workbench project tab", () => {
             { id: "official-image-style", label: "电影光影", category: "image_style", priceCredits: 12 },
           ],
           episodeBatchPrivateImageStyleSkills: [
-            { id: "private-image-style", label: "我的水墨", category: "image_style", priceCredits: 8 },
+            { id: "private-image-style", label: "我的水墨", category: "image_style", priceCredits: 8, owned: true },
           ],
         }),
       },
     });
 
     assert.match(html, /id="asset-image-style-skill-picker"/);
-    assert.match(html, /官方技能/);
-    assert.match(html, /私人技能库/);
+    assert.match(html, /选择画风/);
+    assert.match(html, /aria-label="添加自定义画风"/);
+    assert.match(html, /aria-label="清除画风"/);
     assert.match(html, />油画</);
     assert.match(html, /电影光影/);
+    assert.match(html, /我的水墨/);
+    assert.match(html, /selection-picker-card/);
+    assert.doesNotMatch(html, /selection-picker-footer/);
+    assert.doesNotMatch(html, /官方技能/);
+    assert.doesNotMatch(html, /私人技能库/);
     assert.doesNotMatch(html, /故事版提示词|道具抽取提示词|人物抽取提示词|场景抽取提示词/);
   });
 
@@ -33564,6 +33566,29 @@ describe("production workbench project tab", () => {
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       api: {
+        async getPromptSkills(input = {}) {
+          if (input.source === "private") {
+            return {
+              items: [{
+                id: "private-style-1",
+                title: "我的赛博朋克",
+                category: "image_style",
+                official: false,
+                owned: true,
+                priceCredits: 15,
+              }],
+            };
+          }
+          return {
+            items: [{
+              id: "official-style-1",
+              title: "中国武侠",
+              category: "image_style",
+              official: true,
+              priceCredits: 8,
+            }],
+          };
+        },
         async getPromptMarketplace() {
           return {
             items: [{
@@ -33613,9 +33638,12 @@ describe("production workbench project tab", () => {
 
       assert.equal(workbench.ui.assetImageStyleSkillModalOpen, true);
       assert.match(workbench.root.innerHTML, /data-selection-picker-id="asset-image-style-skill-picker"/);
-      assert.match(workbench.root.innerHTML, /官方技能/);
-      assert.match(workbench.root.innerHTML, /私人技能库/);
+      assert.match(workbench.root.innerHTML, /选择画风/);
+      assert.match(workbench.root.innerHTML, /aria-label="添加自定义画风"/);
+      assert.match(workbench.root.innerHTML, /aria-label="清除画风"/);
       assert.match(workbench.root.innerHTML, /中国武侠/);
+      assert.doesNotMatch(workbench.root.innerHTML, /官方技能/);
+      assert.doesNotMatch(workbench.root.innerHTML, /私人技能库/);
     } finally {
       globalThis.document = previousDocument;
     }

@@ -362,10 +362,18 @@
   position: absolute !important;
   top: calc(100% + 1px) !important;
   left: 8px !important;
+  z-index: 10001 !important;
   width: 190px;
   min-width: 150px;
+  overflow: hidden;
+  isolation: isolate;
   padding: 4px;
+  border: 1px solid var(--theme-border, rgba(120, 140, 170, .35));
   border-radius: 8px;
+  background: var(--theme-surface, var(--theme-card, #ffffff)) !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .28);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 .app-header .app-brand + [role="menu"] button {
@@ -2583,6 +2591,48 @@ html.canvas-interacting .react-flow__node.dragging {
   padding: 19px 26px 19px 10px;
 }
 
+/* React Flow docks edges to handle.x + handle.width (Right) using offsetWidth,
+   so a 16px port attaches at the circle rim instead of the center. Shrink the
+   layout box to 1px so the rim is the center, and keep a 16px ::after hit target. */
+.new-canvas-root .react-flow__handle.node-handle {
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+  overflow: visible !important;
+}
+
+.new-canvas-root .react-flow__handle.node-handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.new-canvas-root .react-flow__handle-left {
+  left: 0 !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+.new-canvas-root .react-flow__handle-right {
+  right: 0 !important;
+  top: 50% !important;
+  transform: translate(50%, -50%) !important;
+}
+
+.new-canvas-root .react-flow__handle-left:hover {
+  transform: translate(-50%, -50%) !important;
+}
+
+.new-canvas-root .react-flow__handle-right:hover {
+  transform: translate(50%, -50%) !important;
+}
+
 .new-canvas-root .react-flow {
   position: relative;
 }
@@ -2607,6 +2657,13 @@ html.canvas-interacting .react-flow__node.dragging {
   cursor: pointer;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.16);
   transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1000ms ease-out;
+}
+
+.new-canvas-root .canvas-edge-disconnect-button.is-visible {
+  opacity: 1;
   pointer-events: auto;
 }
 

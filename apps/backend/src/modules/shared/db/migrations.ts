@@ -851,6 +851,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20261110-rename-production-agent-session-json-constraint.sql",
       sql: await readFile(join(rootDir, "packages/db/migrations/20261110-rename-production-agent-session-json-constraint.sql"), "utf8"),
     },
+    {
+      name: "20261111-retire-workflow-prompt-marketplace-categories.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261111-retire-workflow-prompt-marketplace-categories.sql"), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

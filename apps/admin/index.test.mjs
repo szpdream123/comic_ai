@@ -3677,6 +3677,7 @@ test("admin prompt manager separates official and user prompts with edit and del
     '价格',
     '使用次数',
     '用户提示词正文受保护',
+    'prompt-cover-col',
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
@@ -3685,7 +3686,9 @@ test("admin prompt manager separates official and user prompts with edit and del
   assert.match(html, /\.prompt-marketplace-admin\s*>\s*\.section\s*\{[\s\S]*?width:\s*100%;/);
   const marketplace = script.slice(script.indexOf("function promptMarketplacePage"), script.indexOf("function scriptPromptsPage"));
   assert.doesNotMatch(marketplace, /item\.tags|\/ 标签/);
-  assert.match(marketplace, /搜索名称 \/ 简介 \/ 发布者/);
+  assert.match(marketplace, /搜索名称 \/ 简介 \/ 发布者 \/ 手机号/);
+  assert.match(marketplace, /publisherPhone/);
+  assert.match(marketplace, /<th>发布者<\/th>/);
   assert.match(script, /全部分类/);
   assert.match(marketplace, /promptCategoryTabs/);
   assert.match(script, /onclick="updatePromptMarketplaceCategory/);
@@ -3701,6 +3704,8 @@ test("admin prompt manager separates official and user prompts with edit and del
   assert.match(marketplace, /window\.confirm\(/);
   assert.match(marketplace, /name="prompt_content"/);
   assert.match(marketplace, /promptPublishingPayloadFromForm\(form\)/);
+  assert.match(marketplace, /<th class="prompt-cover-col">封面<\/th>/);
+  assert.match(marketplace, /promptCoverMarkup\(\{ name: item\.title, coverImageUrl: item\.coverImageUrl, cover_image_url: item\.cover_image_url \}, "提"\)/);
 });
 
 test("admin system settings manages a separate enterprise contact qr", () => {

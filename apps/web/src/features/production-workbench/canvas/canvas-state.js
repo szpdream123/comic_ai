@@ -1421,6 +1421,8 @@ export function applyCanvasRunResult(document, preview, task = null) {
             lastRunAt: new Date(0).toISOString(),
             lastTaskId: taskId,
             taskId,
+            generationTaskId: taskId,
+            pendingTask: undefined,
             generationProgress: taskProgress,
             generationStage: taskStage,
             failureCode,

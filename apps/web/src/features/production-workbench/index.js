@@ -3404,6 +3404,8 @@ export async function initProductionWorkbench({
       assetImageStyleSkillModalOpen: false,
       assetImageStyleSkillTab: "official",
       assetImageStyleSkillDraftId: "project-style",
+      assetImageStyleCreateOpen: false,
+      assetImageStyleCreateDraft: { name: "", prompt: "", previewUrl: "", coverImageUrl: "", coverStorageObjectId: "" },
       episodePromptSkillLoading: false,
       episodePromptSkillModalOpen: false,
       episodePromptSkillSourceTab: "official",
@@ -4245,6 +4247,8 @@ export async function initProductionWorkbench({
     if (
       actionTarget.matches?.('input[data-action="upload-asset-generator-image"]') ||
       actionTarget.matches?.('input[data-action="upload-prompt-marketplace-cover"]') ||
+      actionTarget.matches?.('input[data-action="upload-asset-image-style-cover"]') ||
+      actionTarget.matches?.('input[data-action="upload-episode-batch-style-cover"]') ||
       actionTarget.matches?.('input[data-action="toggle-membership-payment-agreement"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-project"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-script"]') ||
@@ -4534,6 +4538,20 @@ export async function initProductionWorkbench({
       });
       return;
     }
+    if (workbench.ui.episodeBatchModal?.imageStyleCreateOpen === true) {
+      event.preventDefault();
+      workbench.ui.episodeBatchModal.imageStyleCreateOpen = false;
+      workbench.ui.episodeBatchModal.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.assetImageStyleCreateOpen) {
+      event.preventDefault();
+      workbench.ui.assetImageStyleCreateOpen = false;
+      workbench.ui.assetImageStyleCreateDraft = emptyImageStyleCreateDraft();
+      render(workbench);
+      return;
+    }
     if (workbench.ui.episodeBatchModal?.styleModalOpen === true) {
       event.preventDefault();
       workbench.ui.episodeBatchModal.styleModalOpen = false;
@@ -4686,6 +4704,13 @@ export async function initProductionWorkbench({
     if (workbench.ui.storyboardPromptSkillModalOpen) {
       workbench.ui.storyboardPromptSkillModalOpen = false;
       workbench.ui.storyboardPromptSkillDraftId = String(workbench.ui.selectedStoryboardPromptSkillId ?? "");
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.assetImageStyleCreateOpen) {
+      workbench.ui.assetImageStyleCreateOpen = false;
+      workbench.ui.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+      workbench.ui.assetImageStyleCreateDraft = emptyImageStyleCreateDraft();
       render(workbench);
       return;
     }
@@ -4925,6 +4950,16 @@ export async function initProductionWorkbench({
 
     if (target?.matches?.('input[data-action="upload-prompt-marketplace-cover"]')) {
       await uploadPromptMarketplaceCoverFile(workbench, target);
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="upload-asset-image-style-cover"], input[data-action="upload-episode-batch-style-cover"]')) {
+      await uploadImageStyleCreateCover(workbench, target);
+      return;
+    }
+
+    if (target?.matches?.("[data-image-style-create-field]")) {
+      syncImageStyleCreateDraftFromDom(workbench, target);
       return;
     }
 
@@ -8934,7 +8969,8 @@ async function syncEpisodeBatchImageStyleSkills(workbench) {
     ]);
     const officialSkills = normalizeEpisodeBatchImageStyleSkills(catalog?.items, "official")
       .filter((item) => item.official);
-    const privateSkills = normalizeEpisodeBatchImageStyleSkills(library?.items, "private");
+    const privateSkills = normalizeEpisodeBatchImageStyleSkills(library?.items, "private")
+      .filter((item) => item.owned === true);
     const availableSkills = [...officialSkills, ...privateSkills];
     const currentId = String(workbench.ui.selectedEpisodePromptSkillIds?.image_style ?? "");
     const selected = availableSkills.find((item) => item.id === currentId);
@@ -8957,17 +8993,22 @@ function normalizeEpisodeBatchImageStyleSkills(items = [], source = "") {
     .map((item) => {
       const promptContent = String(item?.prompt_content ?? item?.promptContent ?? "").trim();
       const coverStorageObjectId = String(item?.coverStorageObjectId ?? item?.cover_storage_object_id ?? "").trim();
+      const coverImageUrl = String(item?.coverImageUrl ?? item?.cover_image_url ?? "").trim();
       return {
         id: String(item?.id ?? ""),
         label: String(item?.title ?? item?.name ?? "未命名技能"),
-        preview: coverStorageObjectId
-          ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
-          : String(item?.coverImageUrl ?? item?.cover_image_url ?? ""),
+        summary: String(item?.summary ?? item?.description ?? "").trim(),
+        preview: /^https?:\/\//i.test(coverImageUrl)
+          ? coverImageUrl
+          : coverStorageObjectId
+            ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+            : coverImageUrl,
         coverStorageObjectId,
         ...(promptContent ? { prompt_content: promptContent, promptContent } : {}),
         priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
         isDefault: item?.isDefault === true || item?.is_default === true,
         official: item?.official === true,
+        owned: item?.owned === true,
         source,
       };
     })
@@ -10976,6 +11017,7 @@ async function syncNewCanvasMount(workbench) {
         runtime: workbench.aiCanvasRuntime,
         mountRuntime: workbench.mountAiCanvasRuntime,
         creatorApi: workbench.api,
+        getCreatorApi: () => workbench.api,
       })
     : null;
   if (isAiCanvasRuntime) {
@@ -11024,6 +11066,7 @@ async function syncNewCanvasMount(workbench) {
           taskId,
         });
         if (normalizedTaskId) {
+          bindCanvasGenerationTaskToNode(workbench, normalizedTaskId, defaults);
           scheduleTaskCenterPolling(workbench, { immediate: true });
           syncTaskCenterActionCountDom(workbench);
         }
@@ -14712,6 +14755,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "submit-result-image-annotation",
     "open-episode-batch-actions",
     "close-episode-batch-modal",
+    "open-episode-batch-style-modal",
+    "close-episode-batch-style-modal",
+    "set-episode-batch-style-modal-tab",
+    "select-episode-batch-style-draft",
+    "confirm-episode-batch-style",
+    "open-episode-batch-style-create-modal",
+    "close-episode-batch-style-create-modal",
+    "save-episode-batch-style-create",
+    "open-asset-image-style-skill-modal",
+    "close-asset-image-style-skill-modal",
+    "set-asset-image-style-skill-tab",
+    "select-asset-image-style-skill-draft",
+    "confirm-asset-image-style-skill",
+    "open-asset-image-style-create-modal",
+    "close-asset-image-style-create-modal",
+    "save-asset-image-style-create",
+    "clear-asset-image-style-skill",
+    "clear-episode-batch-style",
+    "pick-image-style-create-cover",
     "close-single-episode-modal",
     "close-script-conversion-skill-modal",
     "set-script-conversion-skill-tab",
@@ -21066,7 +21128,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-prompt-plaza-type") {
     cancelPromptMarketplaceSearch(workbench);
     const type = String(target.dataset.type ?? "all").trim();
-    workbench.ui.promptPlazaType = ["all", "script", "shot", "scene_extract", "character_extract", "prop_extract", "image_style", "storyboard", "other"].includes(type) ? type : "all";
+    workbench.ui.promptPlazaType = ["all", "image_style", "storyboard", "other"].includes(type) ? type : "all";
     workbench.ui.promptMarketplacePage = 1;
     workbench.ui.promptLibraryPage = 1;
     workbench.ui.promptMarketplaceRankingItemId = null;
@@ -24716,7 +24778,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         id: String(style.id ?? ""),
         group,
         label: String(style.label ?? "未命名风格"),
-        description: "生图风格提示词",
+        description: String(style.summary ?? style.description ?? "").trim(),
         previewUrl: style.preview ? resolveApiUrl(String(style.preview)) : "",
         meta: style.priceCredits > 0 ? `${style.priceCredits}积分/张` : "免费",
       });
@@ -24729,8 +24791,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         activeTab: tab,
         items,
         selectedId: modal.styleDraftId ?? "",
-        selectAction: "select-episode-batch-style-draft",
+        selectAction: "confirm-episode-batch-style",
         emptyLabel: tab === "custom" ? "暂无私人生图风格技能" : "暂无官方生图风格技能",
+        layout: "card",
       });
     }
     return;
@@ -24748,9 +24811,52 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-episode-batch-style-create-modal") {
+    if (workbench.ui.episodeBatchModal) {
+      workbench.ui.episodeBatchModal.imageStyleCreateOpen = true;
+      workbench.ui.episodeBatchModal.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "close-episode-batch-style-create-modal") {
+    if (workbench.ui.episodeBatchModal) {
+      workbench.ui.episodeBatchModal.imageStyleCreateOpen = false;
+      workbench.ui.episodeBatchModal.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "save-episode-batch-style-create") {
+    await saveCustomImageStyle(workbench, "batch", target);
+    return;
+  }
+
+  if (action === "clear-episode-batch-style") {
+    if (workbench.ui.episodeBatchModal) {
+      const projectStyleId = String(workbench.ui.episodeBatchModal.projectStyle?.id ?? "").trim();
+      workbench.ui.selectedEpisodePromptSkillIds = {
+        ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+        image_style: "",
+      };
+      workbench.ui.assetImageStyleSkillId = "project-style";
+      workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+      workbench.ui.episodeGenerationStyleSnapshot = null;
+      workbench.ui.episodeBatchModal.styleDraftId = projectStyleId;
+      workbench.ui.episodeBatchModal.selectedStyleId = projectStyleId;
+      workbench.ui.episodeBatchModal.styleModalOpen = false;
+      workbench.ui.episodeBatchModal = syncEpisodeBatchModal(workbench.ui.episodeBatchModal);
+      render(workbench);
+      restoreEpisodeBatchStylePickerTriggerFocus(workbench);
+    }
+    return;
+  }
+
   if (action === "confirm-episode-batch-style") {
     if (workbench.ui.episodeBatchModal) {
-      const styleDraftId = workbench.ui.episodeBatchModal.styleDraftId;
+      const styleDraftId = String(target?.dataset?.pickerItemId ?? workbench.ui.episodeBatchModal.styleDraftId ?? workbench.ui.episodeBatchModal.selectedStyleId ?? "").trim();
       if (styleDraftId) {
         const isProjectStyle = styleDraftId === String(workbench.ui.episodeBatchModal.projectStyle?.id ?? "").trim();
         workbench.ui.selectedEpisodePromptSkillIds = {
@@ -26225,8 +26331,50 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "pick-image-style-create-cover") {
+    const input = target.closest?.(".image-style-create-thumb")?.querySelector?.("input[type='file']")
+      ?? workbench.root?.querySelector?.(".image-style-create-thumb input[type='file']");
+    input?.click?.();
+    return;
+  }
+
+  if (action === "open-asset-image-style-create-modal") {
+    workbench.ui.assetImageStyleCreateOpen = true;
+    workbench.ui.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+    workbench.ui.assetImageStyleCreateDraft = emptyImageStyleCreateDraft();
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-asset-image-style-create-modal") {
+    workbench.ui.assetImageStyleCreateOpen = false;
+    workbench.ui.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+    workbench.ui.assetImageStyleCreateDraft = emptyImageStyleCreateDraft();
+    render(workbench);
+    return;
+  }
+
+  if (action === "save-asset-image-style-create") {
+    await saveCustomImageStyle(workbench, "asset", target);
+    return;
+  }
+
+  if (action === "clear-asset-image-style-skill") {
+    workbench.ui.assetImageStyleSkillId = "project-style";
+    workbench.ui.assetImageStyleSkillDraftId = "project-style";
+    workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    workbench.ui.episodeGenerationStyleSnapshot = null;
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: "",
+    };
+    workbench.ui.assetImageStyleSkillModalOpen = false;
+    render(workbench);
+    return;
+  }
+
   if (action === "confirm-asset-image-style-skill") {
-    const skillId = String(workbench.ui.assetImageStyleSkillDraftId ?? "project-style");
+    const skillId = String(target?.dataset?.pickerItemId ?? workbench.ui.assetImageStyleSkillDraftId ?? "project-style");
     const availableIds = new Set([
       "project-style",
       ...(workbench.ui.episodeBatchOfficialImageStyleSkills ?? []).map((item) => String(item?.id ?? "")),
@@ -29676,20 +29824,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       workbench.ui.deleteProjectSubmitting = true;
       await runAction(workbench, "正在删除所选项目...", async () => {
-        const deletedProjectIds = [];
-        try {
-          for (const projectId of uniqueProjectIds) {
-            await deleteProjectIfPresent(workbench, projectId);
-            deletedProjectIds.push(projectId);
-          }
-        } catch (error) {
-          applyDeletedProjectsToWorkbench(workbench, deletedProjectIds);
-          const deletedIdSet = new Set(deletedProjectIds);
-          workbench.ui.deleteProjectIds = uniqueProjectIds.filter((projectId) => !deletedIdSet.has(projectId));
+        const result = await deleteProjectsIfPresent(workbench, uniqueProjectIds);
+        const deletedProjectIds = Array.isArray(result?.projectIds) ? result.projectIds : uniqueProjectIds;
+        const failedProjectIds = Array.isArray(result?.failedProjectIds) ? result.failedProjectIds : [];
+        applyDeletedProjectsToWorkbench(workbench, deletedProjectIds);
+        if (failedProjectIds.length) {
+          workbench.ui.deleteProjectIds = failedProjectIds;
+          workbench.ui.selectedProjectIds = failedProjectIds;
           refreshProjectLibraryAfterDelete(workbench);
-          throw error;
+          throw new Error("部分项目删除失败，请重试。");
         }
-        applyDeletedProjectsToWorkbench(workbench, uniqueProjectIds);
         workbench.ui.selectedProjectIds = [];
         workbench.ui.deleteProjectId = null;
         workbench.ui.deleteProjectMode = "single";
@@ -30213,6 +30357,203 @@ function buildPromptMarketplacePublishInput(data) {
     priceCredits: Number(data.get("priceCredits") ?? 0),
     publish: data.get("publish") === "on",
   };
+}
+
+function emptyImageStyleCreateDraft() {
+  return { name: "", prompt: "", previewUrl: "", coverImageUrl: "", coverStorageObjectId: "" };
+}
+
+function readImageStyleCreateDraft(workbench, scope = "asset") {
+  const source = scope === "batch" ? workbench.ui.episodeBatchModal : workbench.ui;
+  const draft = source?.imageStyleCreateDraft && typeof source.imageStyleCreateDraft === "object"
+    ? source.imageStyleCreateDraft
+    : source?.assetImageStyleCreateDraft && typeof source.assetImageStyleCreateDraft === "object"
+      ? source.assetImageStyleCreateDraft
+      : emptyImageStyleCreateDraft();
+  return { ...emptyImageStyleCreateDraft(), ...draft };
+}
+
+function writeImageStyleCreateDraft(workbench, scope, patch = {}) {
+  const next = { ...readImageStyleCreateDraft(workbench, scope), ...patch };
+  if (scope === "batch") {
+    if (!workbench.ui.episodeBatchModal) return next;
+    workbench.ui.episodeBatchModal.imageStyleCreateDraft = next;
+    return next;
+  }
+  workbench.ui.imageStyleCreateDraft = next;
+  workbench.ui.assetImageStyleCreateDraft = next;
+  return next;
+}
+
+function syncImageStyleCreateDraftFromDom(workbench, target) {
+  const field = String(target?.dataset?.imageStyleCreateField ?? "").trim();
+  if (field !== "name" && field !== "prompt") return;
+  const scope = target?.closest?.("[data-image-style-create-scope]")?.dataset?.imageStyleCreateScope === "batch"
+    ? "batch"
+    : "asset";
+  writeImageStyleCreateDraft(workbench, scope, { [field]: String(target.value ?? "") });
+  if (field === "name") {
+    const saveButton = target.closest?.(".image-style-create-modal")?.querySelector?.(".image-style-create-save");
+    if (saveButton) saveButton.disabled = !String(target.value ?? "").trim();
+  }
+}
+
+function paintImageStyleCreateCoverPreview(input, previewUrl) {
+  const thumb = input?.closest?.(".image-style-create-thumb");
+  if (!thumb || !previewUrl) return;
+  thumb.classList.add("has-preview");
+  const existing = thumb.querySelector("img");
+  if (existing) {
+    existing.src = previewUrl;
+    return;
+  }
+  const image = document.createElement("img");
+  image.alt = "";
+  image.src = previewUrl;
+  const placeholder = thumb.querySelector(".image-style-create-thumb-placeholder");
+  if (placeholder) {
+    placeholder.replaceWith(image);
+    return;
+  }
+  thumb.prepend(image);
+}
+
+async function uploadImageStyleCreateCover(workbench, input) {
+  const file = input.files?.[0];
+  const scope = input?.dataset?.action === "upload-episode-batch-style-cover" ? "batch" : "asset";
+  if (!file) return;
+  if (!String(file.type || "").startsWith("image/")) {
+    workbench.ui.toast = "请选择图片文件。";
+    input.value = "";
+    return;
+  }
+  const localPreviewUrl = typeof globalThis.URL?.createObjectURL === "function"
+    ? globalThis.URL.createObjectURL(file)
+    : "";
+  const previousDraft = readImageStyleCreateDraft(workbench, scope);
+  if (previousDraft.previewUrl?.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(previousDraft.previewUrl);
+  }
+  writeImageStyleCreateDraft(workbench, scope, {
+    previewUrl: localPreviewUrl,
+    coverImageUrl: previousDraft.coverImageUrl,
+    coverStorageObjectId: previousDraft.coverStorageObjectId,
+  });
+  paintImageStyleCreateCoverPreview(input, localPreviewUrl);
+  if (typeof workbench.api?.uploadFile !== "function") {
+    input.value = "";
+    return;
+  }
+  input.disabled = true;
+  try {
+    const result = await workbench.api.uploadFile(file, {
+      category: "prompt-marketplace-covers",
+      projectId: null,
+      uploadLimits: defaultUploadLimits,
+    });
+    const upload = result?.upload ?? result ?? {};
+    const coverImageUrl = String(
+      result?.urls?.previewUrl
+      ?? result?.urls?.sourceUrl
+      ?? upload?.previewUrl
+      ?? upload?.publicUrl
+      ?? upload?.sourceUrl
+      ?? "",
+    ).trim();
+    const coverStorageObjectId = String(upload?.storageObjectId ?? result?.storageObject?.id ?? "").trim();
+    const remotePreviewUrl = coverImageUrl ? resolveApiUrl(coverImageUrl) : localPreviewUrl;
+    writeImageStyleCreateDraft(workbench, scope, {
+      coverImageUrl,
+      coverStorageObjectId,
+      previewUrl: remotePreviewUrl || localPreviewUrl,
+    });
+    paintImageStyleCreateCoverPreview(input, remotePreviewUrl || localPreviewUrl);
+    if (localPreviewUrl && remotePreviewUrl && localPreviewUrl !== remotePreviewUrl && typeof globalThis.URL?.revokeObjectURL === "function") {
+      globalThis.URL.revokeObjectURL(localPreviewUrl);
+    }
+  } catch (error) {
+    workbench.ui.toast = `封面上传失败：${friendlyError(error)}`;
+    render(workbench);
+  } finally {
+    input.disabled = false;
+    input.value = "";
+  }
+}
+
+function syncImageStyleCreateDraftFromModal(workbench, scope = "asset", target = null) {
+  const modal = target?.closest?.(".image-style-create-modal")
+    ?? workbench.root?.querySelector?.(".image-style-create-modal");
+  const name = String(modal?.querySelector?.('[data-image-style-create-field="name"]')?.value ?? "").trim();
+  const prompt = String(modal?.querySelector?.('[data-image-style-create-field="prompt"]')?.value ?? "").trim();
+  if (name || prompt) {
+    writeImageStyleCreateDraft(workbench, scope, {
+      ...(name ? { name } : {}),
+      ...(prompt ? { prompt } : {}),
+    });
+  }
+  return readImageStyleCreateDraft(workbench, scope);
+}
+
+async function saveCustomImageStyle(workbench, scope = "asset", target = null) {
+  const draft = syncImageStyleCreateDraftFromModal(workbench, scope, target);
+  const name = String(draft.name ?? "").trim();
+  const prompt = String(draft.prompt ?? "").trim();
+  if (name.length < 2) {
+    workbench.ui.toast = "画风名称需为 2-80 个字符";
+    render(workbench);
+    return;
+  }
+  if (!prompt) {
+    workbench.ui.toast = "提示词正文不能为空";
+    render(workbench);
+    return;
+  }
+  if (typeof workbench.api?.createPromptMarketplaceItem !== "function") {
+    workbench.ui.toast = "当前账号无法保存私人画风。";
+    render(workbench);
+    return;
+  }
+  await runAction(workbench, "正在保存画风...", async () => {
+    const created = await workbench.api.createPromptMarketplaceItem({
+      title: name,
+      category: "image_style",
+      summary: prompt.slice(0, 240),
+      content: prompt,
+      coverImageUrl: String(draft.coverImageUrl ?? "").trim(),
+      coverStorageObjectId: String(draft.coverStorageObjectId ?? "").trim() || null,
+      priceCredits: 0,
+      publish: true,
+    });
+    const createdId = String(created?.item?.id ?? created?.id ?? "").trim();
+    await syncEpisodeBatchImageStyleSkills(workbench);
+    if (scope === "batch" && workbench.ui.episodeBatchModal) {
+      workbench.ui.episodeBatchModal.imageStyleCreateOpen = false;
+      workbench.ui.episodeBatchModal.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+      workbench.ui.episodeBatchModal.customStyles = Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills)
+        ? workbench.ui.episodeBatchPrivateImageStyleSkills
+        : [];
+      workbench.ui.episodeBatchModal.styleTab = "custom";
+      if (createdId) {
+        workbench.ui.episodeBatchModal.styleDraftId = createdId;
+        workbench.ui.episodeBatchModal.selectedStyleId = createdId;
+      }
+      workbench.ui.episodeBatchModal = syncEpisodeBatchModal(workbench.ui.episodeBatchModal);
+    } else {
+      workbench.ui.assetImageStyleCreateOpen = false;
+      workbench.ui.imageStyleCreateDraft = emptyImageStyleCreateDraft();
+      workbench.ui.assetImageStyleCreateDraft = emptyImageStyleCreateDraft();
+      workbench.ui.assetImageStyleSkillTab = "private";
+      if (createdId) {
+        workbench.ui.assetImageStyleSkillDraftId = createdId;
+        workbench.ui.assetImageStyleSkillId = createdId;
+        workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+        workbench.ui.selectedEpisodePromptSkillIds = {
+          ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+          image_style: createdId,
+        };
+      }
+    }
+  }, { successToast: "自定义画风已保存到私人技能库。" });
 }
 
 async function uploadPromptMarketplaceCoverFile(workbench, input) {
@@ -38009,6 +38350,10 @@ export function runTaskCenterPollingForTest(workbench, options = {}) {
 
 export function applyTaskCenterTaskProjectionForTest(workbench, task) {
   return applyTaskCenterTaskProjection(workbench, task);
+}
+
+export function bindCanvasGenerationTaskToNodeForTest(workbench, taskId, defaults = {}) {
+  return bindCanvasGenerationTaskToNode(workbench, taskId, defaults);
 }
 
 export function appendCanvasScriptWorkflowConfigurationsForTest(workbench, scriptNodeId, configurations) {
@@ -53307,7 +53652,9 @@ function buildEpisodeBatchModal(workbench, {
         ...(selectedVideoStyleOption ? [selectedVideoStyleOption] : []),
         ...projectStyles.filter((style) => style.id !== selectedVideoStyleOption?.id),
       ];
-  const customStyles = mode === "image" ? privateImageStyleSkills : [];
+  const customStyles = mode === "image"
+    ? privateImageStyleSkills.filter((item) => item?.owned === true)
+    : [];
   const imageModelOptions = resolveEpisodeBatchImageModelOptions(workbench);
   const batchPromptPresetCategories = resolveBatchPromptPresetCategories(workbench);
   const defaultImageModelId = resolveEpisodeBatchImageModelId(workbench, imageModelOptions);
@@ -55195,10 +55542,20 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
       generatingStatuses.includes(String(node?.data?.status ?? "").trim().toLowerCase())
     );
     const unboundLoadingNodes = loadingNodes.filter((node) => !resolveCanvasNodeTaskId(workbench.ui.canvasDocument, node.id));
-    const matchedNode = nodes.find((node) => String(node?.id ?? "") === targetNodeId)
+    const canvasProjectId = String(workbench.ui?.selectedCanvasProjectId ?? workbench.ui?.activeCanvasProjectId ?? "").trim();
+    const targetIsNode = Boolean(targetNodeId)
+      && targetNodeId !== canvasProjectId
+      && nodes.some((node) => String(node?.id ?? "") === targetNodeId);
+    const kindLoadingNodes = loadingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind));
+    const kindUnboundLoadingNodes = unboundLoadingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind));
+    const matchedNode = (targetIsNode ? nodes.find((node) => String(node?.id ?? "") === targetNodeId) : null)
       ?? (
         ["canvas", "canvas_node"].includes(targetType)
-          ? unboundLoadingNodes.at(-1) ?? loadingNodes.at(-1) ?? null
+          ? kindUnboundLoadingNodes.at(-1)
+            ?? unboundLoadingNodes.at(-1)
+            ?? kindLoadingNodes.at(-1)
+            ?? loadingNodes.at(-1)
+            ?? null
           : null
       );
     if (
@@ -55639,7 +55996,7 @@ async function loadTaskCenterPage(workbench) {
     for (const task of items) {
       upsertTaskCenterTask(workbench, task);
       const taskId = resolveGenerationTaskIdForConversation(task);
-      if (taskId && trackedTaskIds.has(taskId)) {
+      if (taskId && (trackedTaskIds.has(taskId) || isCanvasTargetedTaskCenterTask(task))) {
         await applyTaskCenterTaskProjection(
           workbench,
           workbench.ui.taskCenterTasksById?.[taskId] ?? task,
@@ -55782,7 +56139,7 @@ function isCanvasGenerationPollingVisible(workbench) {
 function resolveCanvasGenerationPollTargets(workbench) {
   const canvasDocument = workbench.ui?.canvasDocument;
   return (Array.isArray(canvasDocument?.nodes) ? canvasDocument.nodes : [])
-    .filter((node) => ["loading", "running", "queued", "processing"].includes(String(node?.data?.status ?? "").trim().toLowerCase()))
+    .filter((node) => ["loading", "running", "queued", "processing", "pending", "submitted"].includes(String(node?.data?.status ?? "").trim().toLowerCase()))
     .map((node) => {
       const taskId = resolveCanvasNodeTaskId(canvasDocument, node.id);
       return taskId ? {
@@ -55829,6 +56186,60 @@ function resumeEpisodeStoryboardGenerationPollingIfNeeded(workbench) {
   });
 }
 
+function canvasNodeMatchesTaskMedia(node, mediaKind) {
+  const type = String(node?.type ?? node?.data?.type ?? "").trim();
+  const nodeKind = node?.data?.mediaKind === "audio" || type === "audio" || type === "ai-audio" || type === "source-audio"
+    ? "audio"
+    : node?.data?.mediaKind === "text" || type === "ai-text" || type === "ai-markdown"
+      ? "text"
+      : node?.data?.mediaKind === "video" || type === "video" || type === "ai-video" || type === "source-video"
+        ? "video"
+        : "image";
+  return nodeKind === String(mediaKind ?? "image").trim().toLowerCase();
+}
+
+function isCanvasTargetedTaskCenterTask(task) {
+  return String(task?.targetType ?? "").trim().toLowerCase().includes("canvas");
+}
+
+function bindCanvasGenerationTaskToNode(workbench, taskId, defaults = {}) {
+  const normalizedTaskId = String(taskId ?? "").trim();
+  const canvasDocument = workbench.ui?.canvasDocument;
+  if (!normalizedTaskId || !canvasDocument) return false;
+  const nodes = Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes : [];
+  const canvasProjectId = String(workbench.ui?.selectedCanvasProjectId ?? workbench.ui?.activeCanvasProjectId ?? "").trim();
+  const targetType = String(defaults.targetType ?? "").trim().toLowerCase();
+  const targetNodeId = String(defaults.targetId ?? defaults.target?.nodeId ?? "").trim();
+  const mediaKind = defaults.kind === "video" || defaults.mediaKind === "video"
+    ? "video"
+    : defaults.kind === "audio" || defaults.mediaKind === "audio"
+      ? "audio"
+      : "image";
+  const generatingStatuses = ["loading", "queued", "running", "processing", "pending", "submitted"];
+  const generatingNodes = nodes.filter((node) =>
+    generatingStatuses.includes(String(node?.data?.status ?? "").trim().toLowerCase())
+  );
+  const nodeId = (
+    targetNodeId
+    && targetNodeId !== canvasProjectId
+    && nodes.some((node) => String(node?.id ?? "") === targetNodeId)
+      ? targetNodeId
+      : ""
+  )
+    || generatingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind) && !resolveCanvasNodeTaskId(canvasDocument, node.id)).at(-1)?.id
+    || generatingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind)).at(-1)?.id
+    || "";
+  if (!nodeId || (targetType && targetType !== "canvas" && targetType !== "canvas_node")) return false;
+  const nextDocument = updateCanvasNodeData(canvasDocument, nodeId, {
+    taskId: normalizedTaskId,
+    lastTaskId: normalizedTaskId,
+    generationTaskId: normalizedTaskId,
+  });
+  updateActiveCanvasDocument(workbench, nextDocument, { immediateSave: true });
+  updateMountedNewCanvasSurface(workbench, { nodeOnly: true, nodeId, document: nextDocument });
+  return true;
+}
+
 function resolveCanvasNodeTaskId(canvasDocument, nodeId) {
   const normalizedNodeId = String(nodeId ?? "");
   if (!normalizedNodeId) {
@@ -55837,7 +56248,7 @@ function resolveCanvasNodeTaskId(canvasDocument, nodeId) {
   const node = (Array.isArray(canvasDocument?.nodes) ? canvasDocument.nodes : [])
     .find((item) => String(item?.id ?? "") === normalizedNodeId);
   const data = node?.data ?? {};
-  const value = data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? data.platform?.tasks?.[0]?.taskId ?? null;
+  const value = data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? data.pendingTask?.taskId ?? data.platform?.tasks?.[0]?.taskId ?? null;
   const normalized = String(value ?? "").trim();
   return normalized || null;
 }
@@ -65157,8 +65568,29 @@ function removeDeletedProjectsFromLibrary(workbench, projectIds) {
 }
 
 async function deleteProjectIfPresent(workbench, projectId) {
+  await deleteProjectsIfPresent(workbench, [projectId]);
+}
+
+async function deleteProjectsIfPresent(workbench, projectIds) {
+  const uniqueProjectIds = [...new Set((Array.isArray(projectIds) ? projectIds : [])
+    .map((projectId) => String(projectId ?? "").trim())
+    .filter(Boolean))];
+  if (!uniqueProjectIds.length) {
+    return { projectIds: [], failedProjectIds: [] };
+  }
   try {
-    await workbench.api.deleteProject({ projectId });
+    if (uniqueProjectIds.length === 1) {
+      await workbench.api.deleteProject({ projectId: uniqueProjectIds[0] });
+      return { projectIds: uniqueProjectIds, failedProjectIds: [] };
+    }
+    const result = await workbench.api.deleteProject({ projectIds: uniqueProjectIds });
+    const deletedProjectIds = Array.isArray(result?.projectIds)
+      ? result.projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean)
+      : uniqueProjectIds;
+    const failedProjectIds = Array.isArray(result?.failedProjectIds)
+      ? result.failedProjectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean)
+      : [];
+    return { projectIds: deletedProjectIds, failedProjectIds };
   } catch (error) {
     const errorText = [
       error?.errorCode,
@@ -65169,6 +65601,7 @@ async function deleteProjectIfPresent(workbench, projectId) {
     if (!errorText.includes("project_not_found")) {
       throw error;
     }
+    return { projectIds: uniqueProjectIds, failedProjectIds: [] };
   }
 }
 

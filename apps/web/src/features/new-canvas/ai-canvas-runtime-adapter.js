@@ -5,7 +5,7 @@
  * the product shell and the upstream AI Canvas implementation.
  */
 
-import { creatorApi as defaultCreatorApi } from "../../shared/creator-api.js";
+import { creatorApi as defaultCreatorApi, resolveApiUrl } from "../../shared/creator-api.js";
 
 export const AI_CANVAS_RUNTIME_ADAPTER_VERSION = "1.0.0";
 export const AI_CANVAS_RUNTIME_KIND = "ai-canvas";
@@ -489,6 +489,12 @@ function normalizeRuntimeNodeData(node, nextType) {
   if (nextType === "ai-video" || nextType === "source-video") {
     Object.assign(next, normalizeRuntimeVideoPoster(next));
   }
+  const pendingTaskId = String(next.taskId ?? next.lastTaskId ?? next.generationTaskId ?? next.pendingTask?.taskId ?? "").trim();
+  if (pendingTaskId) {
+    next.taskId = pendingTaskId;
+    next.lastTaskId = pendingTaskId;
+    next.generationTaskId = pendingTaskId;
+  }
   const rawStatus = String(next.status ?? "").trim().toLowerCase();
   if (previousType !== "send" && ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus)) {
     next.status = "loading";
@@ -706,7 +712,8 @@ export function deserializeAiCanvasDocument(serialized, fallback = {}) {
 }
 
 function resolveCreatorApi(dependencies, context) {
-  return context?.creatorApi
+  return context?.workbench?.api
+    ?? context?.creatorApi
     ?? context?.api
     ?? dependencies.creatorApi
     ?? defaultCreatorApi;
@@ -719,17 +726,153 @@ function requireMethod(api, method) {
   return api[method].bind(api);
 }
 
+function dataUrlToFile(dataUrl, fileName) {
+  const match = String(dataUrl ?? "").match(/^data:([^;]+);base64,(.+)$/);
+  if (!match || typeof atob !== "function" || typeof File !== "function") return null;
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new File([bytes], fileName, { type: match[1] || "image/webp" });
+}
+
 function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) {
   const defaultPurpose = String(dependencies.uploadPurpose ?? "canvas-assets").trim() || "canvas-assets";
   const resolveCanvasId = (value) => normalizeId(value) ?? canvasProjectId;
+  const customStyleOwnerIds = new Map();
 
   const uploadFile = async (file, options = {}) => {
-    const method = requireMethod(creatorApi, "uploadFile");
+    const api = dependencies.getCreatorApi?.() ?? creatorApi ?? defaultCreatorApi;
+    const method = requireMethod(api, "uploadFile");
     return method(file, {
       ...options,
       canvasProjectId: resolveCanvasId(options.canvasProjectId),
       purpose: options.purpose ?? defaultPurpose,
     });
+  };
+  const persistCustomStyle = async (style = {}) => {
+    const api = dependencies.getCreatorApi?.() ?? creatorApi ?? defaultCreatorApi;
+    const name = String(style.name ?? "").trim();
+    const prompt = String(style.prompt ?? "").trim();
+    if (!name) return style;
+    const thumbnail = String(style.thumbnail ?? "").trim();
+    const content = prompt || `${name}视觉风格，统一构图、色彩、光影、材质与细节表现。`;
+    let coverImageUrl = thumbnail.startsWith("data:") ? "" : thumbnail;
+    let coverStorageObjectId = null;
+    if (thumbnail.startsWith("data:")) {
+      const file = dataUrlToFile(thumbnail, `${name}.webp`);
+      if (file) {
+        const uploaded = await uploadFile(file, {
+          purpose: "prompt-marketplace-covers",
+          canvasProjectId: null,
+        });
+        coverImageUrl = String(
+          uploaded?.urls?.previewUrl
+          ?? uploaded?.urls?.sourceUrl
+          ?? uploaded?.upload?.previewUrl
+          ?? uploaded?.upload?.publicUrl
+          ?? "",
+        );
+        coverStorageObjectId = String(uploaded?.upload?.storageObjectId ?? uploaded?.storageObject?.id ?? "").trim() || null;
+      }
+    }
+    const payload = {
+      title: name,
+      category: "image_style",
+      summary: String(style.description ?? prompt ?? "").trim().slice(0, 240),
+      content,
+      coverImageUrl: coverImageUrl || null,
+      coverStorageObjectId,
+      publish: false,
+    };
+    const existingId = customStyleOwnerIds.get(String(style.id ?? ""));
+    if (existingId && typeof api?.updatePromptMarketplaceItem === "function") {
+      const updated = await api.updatePromptMarketplaceItem(existingId, payload);
+      const itemId = String(updated?.item?.id ?? existingId);
+      if (itemId) customStyleOwnerIds.set(String(style.id ?? itemId), itemId);
+      return { ...style, id: String(style.id ?? itemId) };
+    }
+    const created = await requireMethod(api, "createPromptMarketplaceItem")(payload);
+    const itemId = String(created?.item?.id ?? "");
+    if (itemId && style.id) customStyleOwnerIds.set(String(style.id), itemId);
+    return { ...style, id: String(style.id ?? itemId) };
+  };
+  const extractPromptSkillItems = (payload) => {
+    if (Array.isArray(payload?.items)) return payload.items;
+    if (Array.isArray(payload?.data?.items)) return payload.data.items;
+    if (Array.isArray(payload)) return payload;
+    return [];
+  };
+  const mapImageStyleSkill = (item, { isCustom }) => {
+    const id = String(item?.id ?? "").trim();
+    const name = String(item?.title ?? item?.name ?? "").trim();
+    const coverStorageObjectId = String(item?.coverStorageObjectId ?? item?.cover_storage_object_id ?? "").trim();
+    const coverImageUrl = String(item?.coverImageUrl ?? item?.cover_image_url ?? "").trim();
+    const thumbnail = /^https?:\/\//i.test(coverImageUrl)
+      ? coverImageUrl
+      : coverStorageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+        : coverImageUrl;
+    return {
+      id,
+      nodeType: "ai-image",
+      name,
+      prompt: String(item?.promptContent ?? item?.prompt_content ?? item?.content ?? "").trim(),
+      description: String(item?.summary ?? item?.description ?? "").trim(),
+      thumbnail: thumbnail ? resolveApiUrl(thumbnail) : "",
+      createdAt: Date.parse(String(item?.updatedAt ?? item?.updated_at ?? "")) || Date.now(),
+      official: item?.official === true,
+      isCustom,
+    };
+  };
+  const loadCustomStyles = async () => {
+    const apis = [
+      dependencies.getCreatorApi?.() ?? creatorApi,
+      defaultCreatorApi,
+    ].filter((api, index, list) => (
+      api
+      && typeof api.getPromptSkills === "function"
+      && list.indexOf(api) === index
+    ));
+    const request = { category: "image_style", page: 1, pageSize: 100 };
+    let lastError = null;
+    for (const api of apis) {
+      try {
+        const [catalog, library] = await Promise.all([
+          api.getPromptSkills({ ...request, source: "official" }),
+          api.getPromptSkills({ ...request, source: "private" }),
+        ]);
+        const official = extractPromptSkillItems(catalog)
+          .filter((item) => !String(item?.category ?? item?.promptCategory ?? "") || String(item?.category ?? item?.promptCategory ?? "") === "image_style")
+          .map((item) => mapImageStyleSkill({ ...item, official: item?.official !== false }, { isCustom: false }));
+        const privateOwned = extractPromptSkillItems(library)
+          .filter((item) => item && item.official !== true && (
+            item.owned === true
+            || item.userRelationType === "owner"
+            || item.user_relation_type === "owner"
+          ))
+          .map((item) => {
+            const mapped = mapImageStyleSkill(item, { isCustom: true });
+            if (mapped.id) customStyleOwnerIds.set(mapped.id, mapped.id);
+            return mapped;
+          });
+        const byId = new Map();
+        for (const style of [...official, ...privateOwned]) {
+          if (style.id && style.name) byId.set(style.id, style);
+        }
+        return [...byId.values()];
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) console.warn("[加载画风] 接口失败", lastError);
+    return [];
+  };
+  const deleteCustomStyle = async (styleId) => {
+    const itemId = customStyleOwnerIds.get(String(styleId ?? "")) || String(styleId ?? "");
+    if (!itemId || typeof creatorApi?.deletePromptMarketplaceItem !== "function") return;
+    await creatorApi.deletePromptMarketplaceItem(itemId);
+    customStyleOwnerIds.delete(String(styleId ?? ""));
+    customStyleOwnerIds.delete(itemId);
   };
   const runCanvasNode = (projectId, nodeId, input = {}, options = {}) => {
     const method = requireMethod(creatorApi, "runCanvasNode");
@@ -753,6 +896,9 @@ function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) 
   const bridge = {
     uploadFile,
     uploadAsset: uploadFile,
+    persistCustomStyle,
+    loadCustomStyles,
+    deleteCustomStyle,
     runCanvasNode,
     runNode: (nodeId, input = {}, options = {}) => runCanvasNode(canvasProjectId, nodeId, input, options),
     runCanvasTextNodeStream,
@@ -807,7 +953,10 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
           ?? context.workbench?.ui?.selectedCanvasProjectId,
       );
       const creatorApi = resolveCreatorApi(dependencies, context);
-      const creatorApiBridge = createCreatorApiBridge(creatorApi, canvasProjectId, dependencies);
+      const creatorApiBridge = createCreatorApiBridge(creatorApi, canvasProjectId, {
+        ...dependencies,
+        getCreatorApi: () => resolveCreatorApi(dependencies, context),
+      });
       let catalog = { models: [], skills: [] };
       const catalogPromise = resolveRuntimeCatalogs(creatorApi, canvasProjectId, context, dependencies);
       let document = deserializeAiCanvasDocument(context.document ?? context.canvasDocument);
@@ -876,6 +1025,12 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
       runtimeHandle = runtimeMount
         ? await runtimeMount(surface, runtimeContext)
         : null;
+      void creatorApiBridge.loadCustomStyles?.().then((styles) => {
+        if (!Array.isArray(styles) || styles.length === 0) return;
+        const store = globalThis.__COMIC_AI_CANVAS_RUNTIME__?.useAppStore;
+        store?.setState?.({ customStyles: styles });
+        store?.getState?.()?.loadCustomStyles?.();
+      }).catch(() => {});
       const catalogsReady = catalogPromise.then(async (resolved) => {
         if (disposed) return catalog;
         catalog.models = resolved.models;

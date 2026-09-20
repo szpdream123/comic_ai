@@ -289,9 +289,11 @@ function styleFromRow(row: ImagePromptStyleRow) {
 }
 
 function imagePromptCoverUrl(row: Pick<ImagePromptStyleRow, "cover_image_url" | "cover_storage_object_id">) {
+  const coverImageUrl = String(row.cover_image_url || "").trim();
+  if (/^https?:\/\//i.test(coverImageUrl)) return coverImageUrl;
   return row.cover_storage_object_id
     ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
-    : row.cover_image_url || "";
+    : coverImageUrl;
 }
 
 function dateString(value: Date | string) {
@@ -315,51 +317,34 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function style(name: string, legacyIdentifier: string, promptContent: string, _legacyOrder?: number, _legacyMetadata?: string[]) {
+function style(name: string, legacyIdentifier: string, promptContent: string, remark?: string) {
   return {
     id: stableUuid(`image-prompt-style:${legacyIdentifier}`),
     code: legacyIdentifier,
     name,
     cover_image_url: styleCoverDataUrl(legacyIdentifier),
     prompt_content: promptContent,
-    remark: `将画面转换为「${name}」视觉风格，统一构图、色彩、光影、材质与细节表现。`,
+    remark: remark || `将画面转换为「${name}」视觉风格，统一构图、色彩、光影、材质与细节表现。`,
   };
 }
 function styleCoverDataUrl(name: string) {
   return `/api/public/style-covers/${encodeURIComponent(name)}`;
 }
 
-const defaultImagePromptStyles = [
-  style("人像摄影", "portrait_photography", "真实人像摄影风格，皮肤质感自然，表情细腻，浅景深背景虚化，柔和棚拍光，画面清晰高级", 320, ["摄影", "人像"]),
-  style("电影写真", "cinematic_portrait", "电影剧照写真风格，强叙事氛围，胶片色调，侧逆光，光影层次丰富，镜头感明显", 310, ["电影", "写真"]),
-  style("中国风", "chinese_style", "中国传统美学风格，东方构图，古典纹样，雅致配色，含蓄留白，画面有国风意境", 300, ["国风", "东方"]),
-  style("动画", "animation", "高质量动画电影风格，角色造型生动，色彩明快，线条干净，表情动作夸张但自然", 290, ["动画"]),
-  style("3D渲染", "three_d_render", "精致 3D 渲染风格，真实材质，立体光影，细节丰富，电影级质感，画面干净清晰", 280, ["3D", "渲染"]),
-  style("赛博朋克", "cyberpunk", "赛博朋克风格，未来城市，霓虹灯光，机械科技元素，高对比冷暖色，夜景氛围强", 270, ["科幻", "霓虹"]),
-  style("CG 动画", "cg_animation", "CG 动画电影质感，角色建模精致，材质柔和，光照自然，画面有梦幻商业动画感", 260, ["CG", "动画"]),
-  style("水墨画", "ink_wash", "中国水墨画风格，墨色晕染，宣纸质感，写意笔触，留白构图，整体淡雅有诗意", 250, ["水墨", "国风"]),
-  style("油画", "oil_painting", "古典油画风格，厚重笔触，布面纹理，色彩层次丰富，明暗柔和，画面具有艺术馆质感", 240, ["油画"]),
-  style("古典", "classic_art", "古典艺术风格，庄重优雅，复古色调，精致服饰与装饰，柔和光影，构图稳定", 230, ["古典"]),
-  style("水彩画", "watercolor", "水彩插画风格，透明颜料晕染，纸张纹理明显，边缘柔和，色彩清新明亮", 220, ["水彩"]),
-  style("卡通", "cartoon", "卡通插画风格，造型圆润可爱，色彩鲜明，线条简洁，表情活泼，画面轻松有趣", 210, ["卡通"]),
-  style("平面插画", "flat_illustration", "扁平插画风格，简洁几何造型，干净色块，现代配色，少阴影，整体设计感强", 200, ["插画", "扁平"]),
-  style("风景", "landscape", "高质量风景画面，自然光线，空间纵深明显，环境细节丰富，构图开阔，氛围真实", 190, ["风景"]),
-  style("港风动漫", "hong_kong_anime", "港风复古动漫风格，怀旧胶片色调，霓虹街景，90 年代城市氛围，线条有漫画感", 180, ["港风", "动漫"]),
-  style("像素风格", "pixel_art", "像素艺术风格，复古游戏画面，低分辨率像素块，轮廓清楚，有限色板，画面规整", 170, ["像素"]),
-  style("荧光绘画", "fluorescent_painting", "荧光绘画风格，深色背景，高饱和霓虹色，发光边缘，电光效果，视觉冲击强", 160, ["荧光"]),
-  style("彩铅画", "colored_pencil", "彩色铅笔手绘风格，细腻排线，纸张纹理，柔和渐变，色彩温暖自然", 150, ["彩铅", "手绘"]),
-  style("手办", "figurine", "精品手办摄影风格，PVC 材质，精致雕刻，上色细腻，棚拍灯光，收藏级质感", 140, ["手办"]),
-  style("儿童绘画", "children_drawing", "儿童绘画风格，天真线条，明亮色彩，简单形状，童趣构图，画面温暖可爱", 130, ["儿童", "手绘"]),
-  style("抽象", "abstract_art", "抽象艺术风格，用形状、色块和线条表达情绪，非写实构图，视觉节奏强", 120, ["抽象"]),
-  style("锐笔插画", "sharp_pen_illustration", "针管笔锐利插画风格，线条清晰有力，细节密集，黑白对比强，边缘利落", 110, ["插画", "线稿"]),
-  style("二次元", "anime_2d", "二次元动漫风格，精致线稿，大眼角色，干净上色，柔和高光，日系动画质感", 100, ["二次元", "动漫"]),
-  style("油墨印刷", "ink_print", "复古油墨印刷风格，网点纹理，套色偏移，纸张颗粒感，海报印刷质感", 90, ["印刷", "复古"]),
-  style("版画", "printmaking", "木刻版画风格，粗犷刻线，强烈黑白关系，有限色彩，图形感突出", 80, ["版画"]),
-  style("莫奈", "monet_impressionism", "印象派莫奈风格，柔和光色，松散笔触，自然景致，空气感强，色彩朦胧", 70, ["印象派"]),
-  style("毕加索", "picasso_cubism", "立体主义风格，几何分解，多视角构图，夸张形体，艺术实验感强", 60, ["立体主义"]),
-  style("伦勃朗", "rembrandt_lighting", "伦勃朗式古典光影，深色背景，强明暗对比，戏剧性侧光，肖像质感厚重", 50, ["古典", "光影"]),
-  style("马蒂斯", "matisse_fauvism", "马蒂斯风格，鲜艳纯色，装饰性平面构图，流畅线条，色彩大胆明快", 40, ["野兽派"]),
-  style("巴洛克", "baroque", "巴洛克艺术风格，华丽装饰，戏剧光影，动态构图，金色细节，宏大气势", 30, ["巴洛克"]),
-  style("复古动漫", "retro_anime", "复古赛璐璐动漫风格，怀旧配色，胶片颗粒，手绘线条，旧动画质感", 20, ["复古", "动漫"]),
-  style("绘本", "picture_book", "绘本插画风格，温暖色调，柔和手绘线条，童话叙事感，纸张纹理清晰", 10, ["绘本", "插画"]),
+export const defaultImagePromptStyles = [
+  style("写实摄影", "realistic", "写实摄影风格，真实材质，自然光影，细节清晰，皮肤质感自然，画面干净高级", "真实质感，光影自然"),
+  style("动漫风格", "anime", "日系动漫风格，干净线稿，统一角色设计，细腻上色，二次元造型明确", "日系二次元绘画"),
+  style("水彩画", "watercolor", "水彩画风格，柔和通透的晕染，自然纸张纹理，边缘柔和，色彩清新", "柔和通透的晕染"),
+  style("油画", "oil-painting", "油画风格，厚重颜料肌理，清晰笔触，层次丰富，画面具有艺术馆质感", "厚重肌理与笔触"),
+  style("妖冶阴柔风", "bewitching", "妖冶阴柔风格，破碎魅惑气质，瓷白冷白皮，通透柔光，细腻皮肤纹理与绒毛质感", "破碎魅惑瓷白质感"),
+  style("素描", "sketch", "素描风格，黑白线条，细腻排线，结构准确，光影层次清楚", "黑白线条速写"),
+  style("赛博朋克", "cyberpunk", "赛博朋克风格，霓虹光影，未来都市，高对比氛围，机械科技细节丰富", "霓虹都市科技感"),
+  style("水墨画", "ink-wash", "中国水墨画风格，墨色层次，留白构图，写意笔触，宣纸肌理明显", "水墨留白与写意笔触"),
+  style("像素艺术", "pixel-art", "像素艺术风格，清晰像素边缘，统一色板，复古游戏质感，轮廓规整", "统一色板与像素质感"),
+  style("CG游戏风", "cg-game", "次世代CG游戏风格，UE5路径追踪，皮肤次表面散射，锐利干净，织物材质真实", "次世代写实渲染"),
+  style("3D 渲染", "3d-render", "高品质 3D 渲染风格，立体材质，精细灯光，空间层次清晰，细节丰富", "立体材质与精细灯光"),
+  style("扁平插画", "flat-illustration", "扁平插画风格，简洁几何造型，统一配色，干净轮廓，少阴影", "简洁干净的矢量风"),
+  style("电影质感", "cinematic", "电影级画面风格，叙事构图，电影调色，富有层次的光影，镜头感明显", "电影级调色与光影"),
+  style("复古胶片", "vintage", "复古胶片风格，自然颗粒，柔和色偏，怀旧影调，轻微漏光质感", "胶片颗粒与怀旧影调"),
+  style("3D国漫风", "3d-guoman", "3D国漫风格，新中式东方气韵，柔和通透光影，雅致配色，国风织物质感", "东方气韵柔和质感"),
 ];

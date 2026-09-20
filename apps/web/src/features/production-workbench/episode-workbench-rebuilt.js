@@ -5,7 +5,7 @@ import { buildConfiguredGenerationSettingsSections, normalizeGenerationPricingOb
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
-import { renderSelectionPickerModal, syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
+import { renderImageStyleCreateModal, renderSelectionPickerModal, syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
 import { EPISODE_PROMPT_PLACEHOLDER } from "./episode-prompt-placeholder.js";
 
 const MEDIA_TABS = [
@@ -5178,7 +5178,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
 }
 
 export function renderEpisodeBatchStyleModal(modal) {
-  if (!modal?.styleModalOpen) {
+  if (!modal?.styleModalOpen && modal?.imageStyleCreateOpen !== true) {
     return "";
   }
   const publicStyles = Array.isArray(modal.publicStyles) ? modal.publicStyles : [];
@@ -5193,7 +5193,7 @@ export function renderEpisodeBatchStyleModal(modal) {
       id: String(style.id ?? ""),
       group,
       label: String(style.label ?? "未命名风格"),
-      description: "生图风格提示词",
+      description: String(style.summary ?? style.description ?? "").trim(),
       previewUrl,
       meta: formatEpisodeBatchSkillCredits(style.priceCredits ?? 0),
     };
@@ -5202,23 +5202,26 @@ export function renderEpisodeBatchStyleModal(modal) {
   return renderSelectionPickerModal({
     show: true,
     id: "episode-batch-style-picker",
-    title: "选择生图风格",
-    tabs: [
-      { id: "public", label: "官方技能", count: publicStyles.length },
-      { id: "custom", label: "私人技能库", count: customStyles.length },
-    ],
-    activeTab: styleTab,
+    title: "选择画风",
     items: [
-      ...publicStyles.map((style) => toPickerItem(style, "public")),
-      ...customStyles.map((style) => toPickerItem(style, "custom")),
+      ...publicStyles.map((style) => toPickerItem(style, "all")),
+      ...customStyles
+        .filter((style) => style?.owned === true)
+        .map((style) => toPickerItem(style, "all")),
     ],
     selectedId: selectedStyleId,
-    emptyLabel: styleTab === "custom" ? "暂无私人生图风格技能" : "暂无官方生图风格技能",
+    emptyLabel: "暂无可选画风",
     closeAction: "close-episode-batch-style-modal",
     tabAction: "set-episode-batch-style-modal-tab",
-    selectAction: "select-episode-batch-style-draft",
+    selectAction: "confirm-episode-batch-style",
     confirmAction: "confirm-episode-batch-style",
-  });
+    layout: "card",
+    hideFooter: true,
+    headerAction: "open-episode-batch-style-create-modal",
+    headerActionLabel: "添加自定义画风",
+    clearAction: "clear-episode-batch-style",
+    clearActionLabel: "清除画风",
+  }) + renderImageStyleCreateModal(modal, "batch");
 }
 
 function renderEpisodeBatchSelectField(field, label, value, open, options, displayOptions = {}) {

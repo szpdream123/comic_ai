@@ -130,6 +130,37 @@ describe("admin image prompt service", { concurrency: false }, () => {
     }
   });
 
+  it("seeds the 15 canvas image styles when the catalog is empty", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await db.query("DELETE FROM prompt_official_defaults WHERE prompt_category = 'image_style'");
+      await db.query("UPDATE prompts SET deleted_at = now() WHERE prompt_category = 'image_style'");
+      const service = createAdminImagePromptService({ db });
+      const listed = await service.listStyles({ status: "enabled", pageSize: 50 });
+      assert.equal(listed.meta.total, 15);
+      assert.equal(listed.data.some((item) => item.code === "bewitching" && item.name === "妖冶阴柔风"), true);
+      assert.equal(listed.data.some((item) => item.code === "cg-game" && item.name === "CG游戏风"), true);
+      assert.equal(listed.data.some((item) => item.code === "3d-guoman" && item.name === "3D国漫风"), true);
+      assert.equal(listed.data.some((item) => item.code === "realistic" && String(item.cover_image_url).includes("/api/public/style-covers/realistic")), true);
+      const coverStorageObjectId = "82000000-0000-4000-8000-000000000088";
+      const publicCoverUrl = "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/promptCovers/officialStyles/realistic.webp";
+      await db.query(
+        `INSERT INTO storage_objects (id, bucket, object_key, content_type, status)
+         VALUES ($1, 'prompt-cover-test', 'officialStyles/realistic.webp', 'image/webp', 'available')`,
+        [coverStorageObjectId],
+      );
+      await db.query(
+        "UPDATE prompts SET cover_image_url = $2, cover_storage_object_id = $3 WHERE id = $1",
+        [listed.data.find((item) => item.code === "realistic")?.id, publicCoverUrl, coverStorageObjectId],
+      );
+      const listedWithPublicCover = await service.listStyles({ status: "enabled", pageSize: 50 });
+      assert.equal(listedWithPublicCover.data.find((item) => item.code === "realistic")?.cover_image_url, publicCoverUrl);
+      assert.equal(listedWithPublicCover.data.find((item) => item.code === "realistic")?.coverImageUrl, publicCoverUrl);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("lists only image styles and filters them by status and searchable content", async () => {
     const db = await createMigratedTestDb();
     try {

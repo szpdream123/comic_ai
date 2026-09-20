@@ -91,42 +91,42 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         `INSERT INTO prompts (
            id, prompt_category, name, summary, prompt_content, status,
            is_official, is_published, price_credits, published_at
-         ) VALUES ($1, 'script', '新的官方默认剧本技能', '', '官方技能正文', 'enabled', true, true, 0, $2)`,
+          ) VALUES ($1, 'storyboard', '新的官方默认故事板技能', '', '官方技能正文', 'enabled', true, true, 0, $2)`,
         [officialId, now],
       );
       const service = createPromptMarketplaceService({ db });
       const first = await service.createItem({
         userId,
-        title: "私人默认剧本技能一",
-        category: "script",
+        title: "私人默认故事板技能一",
+        category: "storyboard",
         content: "私人正文一",
         publish: false,
         now,
       });
       const second = await service.createItem({
         userId,
-        title: "私人默认剧本技能二",
-        category: "script",
+        title: "私人默认故事板技能二",
+        category: "storyboard",
         content: "私人正文二",
         publish: false,
         now,
       });
 
-      await setUserPromptDefault(db, { userId, category: "script", promptId: first.item.id, now });
-      await setUserPromptDefault(db, { userId, category: "script", promptId: second.item.id, now });
+      await setUserPromptDefault(db, { userId, category: "storyboard", promptId: first.item.id, now });
+      await setUserPromptDefault(db, { userId, category: "storyboard", promptId: second.item.id, now });
       let library = await service.listLibrary({ userId });
       assert.deepEqual(library.items.filter((item) => item.isDefault).map((item) => item.id), [second.item.id]);
       await assert.rejects(
-        () => setUserPromptDefault(db, { userId: otherUserId, category: "script", promptId: second.item.id, now }),
+        () => setUserPromptDefault(db, { userId: otherUserId, category: "storyboard", promptId: second.item.id, now }),
         (error) => error?.code === "private_prompt_default_invalid",
       );
-      await clearUserPromptDefault(db, { userId, category: "script" });
+      await clearUserPromptDefault(db, { userId, category: "storyboard" });
       library = await service.listLibrary({ userId });
       assert.equal(library.items.some((item) => item.isDefault), false);
 
       await service.purchaseItem({ userId, itemId: officialId, now });
-      await setUserPromptDefault(db, { userId, category: "script", promptId: officialId, now });
-      for (const category of ["shot", "scene_extract", "character_extract", "prop_extract", "image_style", "storyboard", "other"]) {
+      await setUserPromptDefault(db, { userId, category: "storyboard", promptId: officialId, now });
+      for (const category of ["image_style", "other"]) {
         const item = await service.createItem({
           userId,
           title: `${category} 私人默认技能`,
@@ -141,12 +141,12 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         "SELECT prompt_category FROM prompt_user_defaults WHERE user_id = $1 ORDER BY prompt_category",
         [userId],
       );
-      assert.equal(userDefaults.rows.length, 8);
+      assert.equal(userDefaults.rows.length, 3);
       library = await service.listLibrary({ userId });
       assert.equal(library.items.find((item) => item.id === officialId)?.isDefault, true);
 
-      await setOfficialPromptDefault(db, { category: "script", promptId: officialId, now });
-      const catalog = await service.listCatalog({ userId, category: "script", pageSize: 100 });
+      await setOfficialPromptDefault(db, { category: "storyboard", promptId: officialId, now });
+      const catalog = await service.listCatalog({ userId, category: "storyboard", pageSize: 100 });
       assert.equal(catalog.items.find((item) => item.id === officialId)?.isDefault, true);
       await assert.rejects(
         () => assertPromptCanBeDeactivated(db, officialId),
@@ -178,24 +178,23 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         [officialId, now],
       );
       const service = createPromptMarketplaceService({ db });
-      const personal = await service.createItem({
-        userId: ownerId,
-        title: "个人小说转剧本",
-        category: "script",
-        content: "短",
-        priceCredits: 21,
-        publish: false,
-        now,
-      });
-      const sceneSkill = await service.createItem({
-        userId: ownerId,
-        title: "个人场景抽取技能",
-        category: "scene_extract",
-        content: "抽取全部场景并保持空间连续性。",
-        priceCredits: 9,
-        publish: false,
-        now,
-      });
+      const personalId = "82000000-0000-4000-8000-000000000011";
+      const sceneSkillId = "82000000-0000-4000-8000-000000000012";
+      await db.query(
+        `INSERT INTO prompts (
+           id, prompt_category, name, summary, prompt_content, status,
+           is_official, is_published, price_credits, published_at, created_at, updated_at
+         ) VALUES
+           ($1, 'script', '个人小说转剧本', '', '改', 'enabled', false, false, 21, NULL, $3, $3),
+           ($2, 'scene_extract', '个人场景抽取技能', '', '抽取全部场景并保持空间连续性。', 'enabled', false, false, 9, NULL, $3, $3)`,
+        [personalId, sceneSkillId, now],
+      );
+      await db.query(
+        `INSERT INTO prompt_user_links (id, prompt_id, user_id, relation_type, status, added_at, created_at, updated_at)
+         VALUES ($1, $1, $3, 'owner', 'active', $4, $4, $4),
+                ($2, $2, $3, 'owner', 'active', $4, $4, $4)`,
+        [personalId, sceneSkillId, ownerId, now],
+      );
       const imageStyleSkill = await service.createItem({
         userId: ownerId,
         title: "个人生图风格技能",
@@ -205,22 +204,12 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         publish: false,
         now,
       });
-      await service.updateOwnItem({
-        userId: ownerId,
-        itemId: personal.item.id,
-        title: "个人小说转剧本",
-        category: "script",
-        content: "改",
-        priceCredits: 21,
-        publish: false,
-        now,
-      });
       const longContent = "长".repeat(50_001);
       await assert.rejects(
         () => service.createItem({
           userId: ownerId,
           title: "超长小说转剧本",
-          category: "script",
+          category: "storyboard",
           content: longContent,
           publish: false,
           now,
@@ -229,10 +218,10 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       );
 
       const official = await service.resolveScriptConversionSkill({ userId: otherId, itemId: officialId, now });
-      const owned = await service.resolveScriptConversionSkill({ userId: ownerId, itemId: personal.item.id, now });
+      const owned = await service.resolveScriptConversionSkill({ userId: ownerId, itemId: personalId, now });
       const ownedSceneSkill = await service.resolveWorkflowPromptSkill({
         userId: ownerId,
-        itemId: sceneSkill.item.id,
+        itemId: sceneSkillId,
         category: "scene_extract",
         now,
       });
@@ -259,7 +248,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       await assert.rejects(
         () => service.resolveWorkflowPromptSkill({
           userId: ownerId,
-          itemId: sceneSkill.item.id,
+          itemId: sceneSkillId,
           category: "character_extract",
           now,
         }),
@@ -269,7 +258,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         () => service.createItem({
           userId: ownerId,
           title: "空正文提示词",
-          category: "script",
+          category: "storyboard",
           content: "   ",
           publish: false,
           now,
@@ -277,7 +266,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         (error) => error?.code === "prompt_marketplace_content_invalid" && error?.message === "提示词正文不能为空",
       );
       await assert.rejects(
-        () => service.resolveScriptConversionSkill({ userId: otherId, itemId: personal.item.id, now }),
+        () => service.resolveScriptConversionSkill({ userId: otherId, itemId: personalId, now }),
         (error) => error?.code === "script_conversion_skill_forbidden" && error?.status === 403,
       );
     } finally {
@@ -309,10 +298,10 @@ describe("prompt marketplace service", { concurrency: false }, () => {
             status, is_official, is_published, price_credits, published_at
           ) VALUES (
             '83000000-0000-4000-8000-000000000010',
-            'script',
-            '官方剧本提示词',
-            '官方发布的剧本提示词。',
-            '这是由管理端发布到提示词广场的官方剧本提示词正文。',
+            'storyboard',
+            '官方故事板提示词',
+            '官方发布的故事板提示词。',
+            '这是由管理端发布到提示词广场的官方故事板提示词正文。',
             '/admin/assets/prompt-covers/official-script.webp',
             'enabled',
             true,
@@ -384,7 +373,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
 
       const catalog = await service.listCatalog({ userId: buyerId });
       const privateItem = catalog.items.find((item) => item.id === created.item.id);
-      const officialItem = catalog.items.find((item) => item.title === "官方剧本提示词");
+      const officialItem = catalog.items.find((item) => item.title === "官方故事板提示词");
       assert.equal(privateItem?.priceCredits, 25);
       assert.equal(privateItem?.title, "高转化故事板提示词（修订）");
       assert.equal(privateItem?.ratingAverage, 5);
@@ -394,7 +383,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(officialItem?.priceCredits, 0);
       assert.equal(officialItem?.coverImageUrl, "/admin/assets/prompt-covers/official-script.webp");
 
-      const adminItems = await service.listAdminItems({ category: "script", status: "published" });
+      const adminItems = await service.listAdminItems({ category: "storyboard", status: "published" });
       const adminOfficial = adminItems.items.find((item) => item.id === officialItem?.id);
       assert.equal(adminOfficial?.official, true);
       assert.equal(adminOfficial?.priceCredits, 0);
@@ -411,6 +400,8 @@ describe("prompt marketplace service", { concurrency: false }, () => {
         .items.find((item) => item.id === created.item.id);
       assert.equal(adminPrivate?.official, false);
       assert.equal(adminPrivate?.ownerUserId, sellerId);
+      assert.equal(adminPrivate?.publisherName, "提示词作者");
+      assert.equal(adminPrivate?.publisherPhone, "13800138101");
       assert.equal(adminPrivate?.contentVisible, false);
       assert.equal("content" in (adminPrivate ?? {}), false);
       assert.equal((await service.listAdminItems({ source: "official" })).items.some((item) => item.id === created.item.id), false);
@@ -590,6 +581,21 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(updatedOfficial.item.summary, "编辑后的官方简介");
       assert.equal(updatedOfficial.item.content, "编辑后的官方故事板正文。");
       assert.equal(updatedOfficial.item.coverImageUrl, "https://example.com/official-storyboard-cover.png");
+      const coverStorageObjectId = "82000000-0000-4000-8000-000000000099";
+      await db.query(
+        `INSERT INTO storage_objects (id, bucket, object_key, content_type, status)
+         VALUES ($1, 'prompt-cover-test', 'officialStyles/storyboard.webp', 'image/webp', 'available')`,
+        [coverStorageObjectId],
+      );
+      await db.query(
+        "UPDATE prompts SET cover_storage_object_id = $2 WHERE id = $1",
+        [officialId, coverStorageObjectId],
+      );
+      const listedWithStorage = await service.listAdminItems({ category: "storyboard", source: "official" });
+      assert.equal(
+        listedWithStorage.items.find((item) => item.id === officialId)?.coverImageUrl,
+        "https://example.com/official-storyboard-cover.png",
+      );
 
       const updatedPrivate = await service.updateAdminItem({
         itemId: privateItem.item.id,
@@ -734,9 +740,9 @@ describe("prompt marketplace service", { concurrency: false }, () => {
             id, prompt_category, name, summary, prompt_content, status,
             is_official, is_published, price_credits, usage_count, rating_score, rating_count, published_at
           ) VALUES
-            ($1, 'script', '第一页提示词', '排行榜第一名', '第一页提示词正文，长度满足测试所需的最小提示词内容要求。', 'enabled', false, true, 0, 90, 4.2, 8, now()),
-            ($2, 'script', '第二页提示词', '排行榜第二名', '第二页提示词正文，长度满足测试所需的最小提示词内容要求。', 'enabled', false, true, 0, 60, 4.8, 12, now()),
-            ($3, 'script', '第三页提示词', '排行榜第三名', '第三页提示词正文，长度满足测试所需的最小提示词内容要求。', 'enabled', false, true, 0, 20, 5, 20, now())
+            ($1, 'storyboard', '第一页提示词', '排行榜第一名', '第一页提示词正文，长度满足测试所需的最小提示词内容要求。', 'enabled', false, true, 0, 90, 4.2, 8, now()),
+            ($2, 'storyboard', '第二页提示词', '排行榜第二名', '第二页提示词正文，长度满足测试所需的最小提示词内容要求。', 'enabled', false, true, 0, 60, 4.8, 12, now()),
+            ($3, 'storyboard', '第三页提示词', '排行榜第三名', '第三页提示词正文，长度满足测试所需的最小提示词内容要求。', 'enabled', false, true, 0, 20, 5, 20, now())
         `,
         [firstId, secondId, thirdId],
       );
@@ -748,7 +754,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
           )
           SELECT
             format('83000000-0000-4000-8000-%s', lpad(entry::text, 12, '0'))::uuid,
-            'script',
+            'storyboard',
             '额外排行榜提示词' || entry,
             '用于验证排行榜上限的额外提示词',
             '用于验证提示词广场排行榜上限的额外提示词正文，长度满足测试所需的最小内容要求。',
@@ -767,10 +773,10 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       );
       const service = createPromptMarketplaceService({ db });
 
-      const defaultPage = await service.listCatalog({ userId, category: "script" });
+      const defaultPage = await service.listCatalog({ userId, category: "storyboard" });
       assert.equal(defaultPage.pagination.pageSize, 12);
 
-      const firstPage = await service.listCatalog({ userId, category: "script", page: 1, pageSize: 2 });
+      const firstPage = await service.listCatalog({ userId, category: "storyboard", page: 1, pageSize: 2 });
       assert.deepEqual(firstPage.items.map((item) => item.id), [firstId, secondId]);
       assert.deepEqual(firstPage.pagination, { page: 1, pageSize: 2, total: 21, totalPages: 11 });
       assert.deepEqual(firstPage.ranking.slice(0, 3).map((item) => item.id), [firstId, secondId, thirdId]);
@@ -778,7 +784,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(firstPage.ranking[0]?.owned, true);
       assert.equal(firstPage.ranking[1]?.purchased, true);
 
-      const searched = await service.listCatalog({ userId, category: "script", query: "第二页", page: 1, pageSize: 999 });
+      const searched = await service.listCatalog({ userId, category: "storyboard", query: "第二页", page: 1, pageSize: 999 });
       assert.deepEqual(searched.items.map((item) => item.id), [secondId]);
       assert.deepEqual(searched.pagination, { page: 1, pageSize: 100, total: 1, totalPages: 1 });
       assert.deepEqual(searched.ranking.slice(0, 3).map((item) => item.id), [firstId, secondId, thirdId]);
@@ -787,7 +793,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       const emptyCategory = await service.listCatalog({ userId, category: "other", query: "no-such-prompt", page: 9, pageSize: 2 });
       assert.deepEqual(emptyCategory.pagination, { page: 1, pageSize: 2, total: 0, totalPages: 0 });
       assert.deepEqual(emptyCategory.items, []);
-      assert.equal(emptyCategory.ranking[0]?.category, "script");
+      assert.equal(emptyCategory.ranking[0]?.category, "storyboard");
     } finally {
       await db.close();
     }
@@ -806,17 +812,17 @@ describe("prompt marketplace service", { concurrency: false }, () => {
             id, prompt_category, name, summary, prompt_content, status,
             is_official, is_published, price_credits, usage_count, rating_score, rating_count, published_at
           ) VALUES
-            ('83000000-0000-4000-8000-000000000411', 'script', '官方剧本技能一', '官方分页测试', '官方正文一', 'enabled', true, true, 0, 20, 5, 2, now()),
-            ('83000000-0000-4000-8000-000000000412', 'script', '官方剧本技能二', '官方分页测试', '官方正文二', 'enabled', true, true, 0, 10, 5, 1, now()),
-            ('83000000-0000-4000-8000-000000000413', 'shot', '官方分镜技能', '官方分页测试', '官方正文三', 'enabled', true, true, 0, 5, 5, 1, now()),
+            ('83000000-0000-4000-8000-000000000411', 'storyboard', '官方故事板技能一', '官方分页测试', '官方正文一', 'enabled', true, true, 0, 20, 5, 2, now()),
+            ('83000000-0000-4000-8000-000000000412', 'storyboard', '官方故事板技能二', '官方分页测试', '官方正文二', 'enabled', true, true, 0, 10, 5, 1, now()),
+            ('83000000-0000-4000-8000-000000000413', 'other', '官方其它技能', '官方分页测试', '官方正文三', 'enabled', true, true, 0, 5, 5, 1, now()),
             ('83000000-0000-4000-8000-000000000414', 'image_style', '官方人像风格', '官方分页测试', '人像摄影风格，真实皮肤质感。', 'enabled', true, true, 0, 4, 5, 1, now())
         `,
       );
       const service = createPromptMarketplaceService({ db });
       const catalog = await service.listSkillCatalog({ userId, query: "官方", page: 1, pageSize: 1 });
       assert.deepEqual(catalog.pagination, { page: 1, pageSize: 1, total: 4, totalPages: 4, hasNext: true });
-      assert.equal(catalog.categoryCounts.script, 2);
-      assert.equal(catalog.categoryCounts.shot, 1);
+      assert.equal(catalog.categoryCounts.storyboard, 2);
+      assert.equal(catalog.categoryCounts.other, 1);
       assert.equal(Object.prototype.hasOwnProperty.call(catalog.items[0]!, "content"), false);
       assert.equal(Object.prototype.hasOwnProperty.call(catalog, "ranking"), false);
 
@@ -824,12 +830,12 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(styleCatalog.items[0]?.prompt_content, "人像摄影风格，真实皮肤质感。");
       assert.equal(styleCatalog.items[0]?.promptContent, "人像摄影风格，真实皮肤质感。");
 
-      await service.createItem({ userId, title: "私人剧本技能", category: "script", content: "私人正文一", priceCredits: 10, publish: false, now: new Date() });
-      await service.createItem({ userId, title: "私人分镜技能", category: "shot", content: "私人正文二", publish: false, now: new Date() });
+      await service.createItem({ userId, title: "私人故事板技能", category: "storyboard", content: "私人正文一", priceCredits: 10, publish: false, now: new Date() });
+      await service.createItem({ userId, title: "私人其它技能", category: "other", content: "私人正文二", publish: false, now: new Date() });
       const library = await service.listSkillLibrary({ userId, query: "私人", page: 99, pageSize: 1 });
       assert.deepEqual(library.pagination, { page: 2, pageSize: 1, total: 2, totalPages: 2, hasNext: false });
-      assert.equal(library.categoryCounts.script, 1);
-      assert.equal(library.categoryCounts.shot, 1);
+      assert.equal(library.categoryCounts.storyboard, 1);
+      assert.equal(library.categoryCounts.other, 1);
       assert.equal(Object.prototype.hasOwnProperty.call(library.items[0]!, "content"), false);
       assert.equal(Object.prototype.hasOwnProperty.call(library, "ranking"), false);
       assert.equal(library.items.every((item) => item.priceCredits === 0), true);

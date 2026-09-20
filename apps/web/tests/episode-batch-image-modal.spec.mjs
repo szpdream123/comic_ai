@@ -218,7 +218,7 @@ it("falls back to the committed style and renders the custom-style empty state",
     publicStyles: [{ id: "cinematic", label: "电影写真" }],
     customStyles: [],
   });
-  assert.match(readOpeningTagByAttribute(selectedHtml, 'data-picker-item-id="cinematic"'), /class="selection-picker-item active"/);
+  assert.match(readOpeningTagByAttribute(selectedHtml, 'data-picker-item-id="cinematic"'), /class="selection-picker-item selection-picker-card active/);
 
   const emptyCustomHtml = renderEpisodeBatchStyleModal({
     styleModalOpen: true,
@@ -226,7 +226,29 @@ it("falls back to the committed style and renders the custom-style empty state",
     publicStyles: [],
     customStyles: [],
   });
-  assert.match(emptyCustomHtml, /暂无私人生图风格技能/);
+  assert.match(emptyCustomHtml, /暂无可选画风/);
+  assert.match(selectedHtml, /aria-label="添加自定义画风"/);
+  assert.match(selectedHtml, /aria-label="清除画风"/);
+  assert.match(selectedHtml, /data-action="clear-episode-batch-style"/);
+  assert.match(selectedHtml, /data-action="open-episode-batch-style-create-modal"/);
+  assert.doesNotMatch(selectedHtml, /selection-picker-footer/);
+  assert.doesNotMatch(selectedHtml, /官方技能/);
+  assert.doesNotMatch(selectedHtml, /私人技能库/);
+
+  const createHtml = renderEpisodeBatchStyleModal({
+    styleModalOpen: true,
+    imageStyleCreateOpen: true,
+    imageStyleCreateDraft: { name: "赛博朋克", prompt: "霓虹都市科技感", previewUrl: "/covers/cyberpunk.png" },
+    publicStyles: [{ id: "cinematic", label: "电影写真" }],
+    customStyles: [],
+  });
+  assert.match(createHtml, /添加自定义画风/);
+  assert.match(createHtml, /画风名称/);
+  assert.match(createHtml, /例如：赛博朋克/);
+  assert.match(createHtml, /生成时会自动附加到主提示词中/);
+  assert.match(createHtml, /data-action="save-episode-batch-style-create"/);
+  assert.match(createHtml, /src="\/covers\/cyberpunk.png"/);
+  assert.match(createHtml, /image-style-create-thumb has-preview/);
 });
 
 it("keeps batch style and model controls rendered after a workflow rerender", () => {
@@ -271,7 +293,7 @@ it("keeps batch style and model controls rendered after a workflow rerender", ()
   assert.equal((html.match(/data-episode-batch-modal-layer/g) ?? []).length, 1);
   assert.equal((html.match(/data-selection-picker-id="episode-batch-style-picker"/g) ?? []).length, 1);
   assert.match(html, /水彩绘本/);
-  assert.match(readOpeningTagByAttribute(html, 'data-picker-item-id="watercolor"'), /class="selection-picker-item active"/);
+  assert.match(readOpeningTagByAttribute(html, 'data-picker-item-id="watercolor"'), /class="selection-picker-item selection-picker-card active/);
   assert.match(html, /data-action="select-episode-batch-option"[\s\S]*data-value="flux-pro"/);
 });
 
@@ -428,10 +450,7 @@ it("keeps style and model controls interactive through home workflow rerenders",
       dataset: { action: "open-episode-batch-style-modal" },
     });
     await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "select-episode-batch-style-draft", pickerItemId: "watercolor" },
-    });
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "confirm-episode-batch-style" },
+      dataset: { action: "confirm-episode-batch-style", pickerItemId: "watercolor" },
     });
     assert.equal(workbench.ui.episodeBatchModal.selectedStyleId, "watercolor");
     assert.match(workbench.root.innerHTML, /当前风格[\s\S]*水彩绘本/);

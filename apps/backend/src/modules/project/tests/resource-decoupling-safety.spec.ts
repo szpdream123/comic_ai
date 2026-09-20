@@ -13,11 +13,11 @@ const migrationDirectoryUrl = new URL("../../../../../../packages/db/migrations/
 describe("resource decoupling safety", () => {
   it("detaches surviving upload records before deleting project upload sessions", async () => {
     const source = await readFile(projectServiceUrl, "utf8");
-    const start = source.indexOf("async function deleteProjectRecord(");
+    const start = source.indexOf("async function deleteProjectRecords(");
     const end = source.indexOf("async function listDeletableProjectStorageObjects(", start);
     const deleteProjectSource = source.slice(start, end < 0 ? undefined : end);
     const detachIndex = deleteProjectSource.indexOf("UPDATE project_upload_records\n     SET upload_session_id = NULL");
-    const deleteSessionIndex = deleteProjectSource.indexOf("DELETE FROM storage_upload_sessions WHERE project_id = $1");
+    const deleteSessionIndex = deleteProjectSource.indexOf("DELETE FROM storage_upload_sessions WHERE project_id = ANY($1::uuid[])");
 
     assert.ok(detachIndex >= 0);
     assert.ok(deleteSessionIndex > detachIndex);
@@ -38,7 +38,7 @@ describe("resource decoupling safety", () => {
 
   it("does not modify scripts or canvas records while deleting a project", async () => {
     const source = await readFile(projectServiceUrl, "utf8");
-    const start = source.indexOf("async function deleteProjectRecord(");
+    const start = source.indexOf("async function deleteProjectRecords(");
     const end = source.indexOf("\nasync function ", start + 1);
     const deleteProjectSource = source.slice(start, end < 0 ? undefined : end);
 

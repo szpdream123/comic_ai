@@ -76,6 +76,32 @@ test("AI Canvas document hooks are versioned and round-trip without mutation", (
   assert.equal(deserializeAiCanvasDocument("invalid").version, AI_CANVAS_DOCUMENT_VERSION);
 });
 
+test("AI Canvas pending generation task ids persist on canvas nodes", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const runtimeSource = readRuntimeAsset("main-upstream-");
+  const roundTrip = deserializeAiCanvasDocument({
+    nodes: [{
+      id: "image-1",
+      type: "ai-image",
+      data: {
+        status: "loading",
+        pendingTask: { nodeId: "image-1", taskId: "task-77", taskType: "general", submitted: true },
+      },
+    }],
+  }).nodes[0];
+  assert.equal(roundTrip.data.taskId, "task-77");
+  assert.equal(roundTrip.data.lastTaskId, "task-77");
+  assert.equal(roundTrip.data.pendingTask.taskId, "task-77");
+  assert.match(appSource, /data\.pendingTask\?\.taskId/);
+  assert.match(appSource, /resumePendingTasks\?\.\(\)/);
+  assert.match(runtimeSource, /function pendingFromNodes\(\)/);
+  assert.match(runtimeSource, /try\{localStorage\.setItem\(IM,JSON\.stringify\(e\.map\(BM\)\)\)\}catch/);
+  assert.match(runtimeSource, /resumePendingTasks:\(\)=>\{/);
+  assert.match(runtimeSource, /if\(!a\?\.apiKey\|\|!i\)\{return\}/);
+  assert.match(runtimeSource, /if\(!i\)\{return\}/);
+  assert.match(runtimeSource, /e\.data\.pendingTask\?\.taskId/);
+});
+
 
 test("AI Canvas document hooks normalize legacy X6 canvas data for React Flow runtime", () => {
   const legacyDocument = {
@@ -552,13 +578,20 @@ test("AI Canvas image and video generation registers with the project task cente
   assert.match(appSource, /generatedOutputItems/);
   assert.match(appSource, /result\.storageObjectId/);
   assert.match(appSource, /\/api\/storage\/objects\/\$\{encodeURIComponent\(storageObjectId\)\}\/content\?proxy=1/);
+  assert.match(appSource, /const explicitVideo = task\?\.kind === "video" \|\| task\?\.mediaKind === "video"/);
+  assert.match(appSource, /const kind = explicitVideo \? "video" : "image"/);
+  assert.doesNotMatch(appSource, /task\?\.kind === "video" \|\| task\?\.mediaKind === "video" \|\| videoUrl \? "video" : "image"/);
+  assert.match(appSource, /const successWithMedia = mappedStatus === "completed" && Boolean\(media\.url\)/);
   assert.match(appSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__/);
   assert.match(appSource, /isSuccess && !resolveAiCanvasAssistantTaskMedia\(task\)\.url\) return/);
   assert.match(appSource, /\(unbound\.length \? unbound : generating\)\.at\(-1\)/);
+  assert.match(appSource, /updateNodeDataTransient\?\.\(nodeId, \{\s*taskId,/);
+  assert.match(appSource, /resolveAiCanvasRuntimeGeneratingNodeId\(runtimeWindow, context, "", mediaKind\)/);
   assert.match(adapterSource, /onGenerationTaskCreated: context\.onGenerationTaskCreated/);
   assert.match(workbenchSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__\?\.\(task\)/);
   assert.match(workbenchSource, /function isTaskCenterSucceededWithoutMedia/);
-  assert.match(workbenchSource, /unboundLoadingNodes\.at\(-1\) \?\? loadingNodes\.at\(-1\)/);
+  assert.match(workbenchSource, /function bindCanvasGenerationTaskToNode/);
+  assert.match(workbenchSource, /kindUnboundLoadingNodes\.at\(-1\)/);
 });
 
 test("AI Canvas task center button shows the same generating count as the workbench", () => {
@@ -1103,7 +1136,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
     "utf8",
   );
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
-  assert.match(appSource, /const AI_CANVAS_RUNTIME_MODULE_URL = "\/ai-canvas-runtime\/runtime\.js"/);
+  assert.match(appSource, /const AI_CANVAS_RUNTIME_MODULE_URL = "\/ai-canvas-runtime\/runtime\.js\?v=20260920-style-skills"/);
   assert.match(appSource, /import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
   assert.doesNotMatch(adapterSource, /mountAssistantLauncher|ai-canvas-agent-launcher/);
   assert.match(chatPanelSource, /chat-panel-input-toolbar-left/);
@@ -1165,11 +1198,14 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /isStandaloneHost/);
   assert.match(appSource, /height: \$\{isStandaloneHost \? "100dvh" : "100%"\} !important/);
   assert.match(appSource, /min-height: \$\{isStandaloneHost \? "100dvh" : "0"\} !important/);
-  assert.match(appSource, /\.ai-canvas-standalone-mount > \[data-new-canvas-light-dom-root\][\s\S]*?width: 100% !important;[\s\S]*?height: 100% !important;[\s\S]*?zoom: calc\(1 \/ var\(--app-ui-scale, 1\)\)/);
+  assert.match(appSource, /\.ai-canvas-standalone-mount > \[data-new-canvas-light-dom-root\][\s\S]*?width: 100% !important;[\s\S]*?height: 100% !important;[\s\S]*?min-height: 100% !important;/);
+  assert.doesNotMatch(appSource, /\[data-new-canvas-light-dom-root\][\s\S]{0,240}zoom:\s*calc\(1 \/ var\(--app-ui-scale, 1\)\)/);
+  assert.match(appSource, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)[\s\S]*?zoom: 1 !important/);
   assert.match(appSource, /\.ai-canvas-standalone-mount > \[data-new-canvas-light-dom-root\] > \[data-new-canvas-style-gate\][\s\S]*?\.ai-canvas-standalone-mount \.new-canvas-loading-skeleton[\s\S]*?height: 100% !important;[\s\S]*?min-height: 100% !important;/);
   assert.match(appSource, /html:has\(\.ai-canvas-standalone-mount\)[\s\S]*?body\.workbench-body:has\(\.ai-canvas-standalone-mount\)[\s\S]*?position: static !important;[\s\S]*?inset: auto !important;[\s\S]*?background: var\(--theme-app-background, #08111b\) !important;/);
   assert.match(appSource, /embedded: context\.embedded !== false/);
   assert.match(appSource, /createAiCanvasRuntimeHostProjectGuard/);
+  assert.match(appSource, /saveEnabled = true;[\s\S]*?resumePendingTasks\?\.\(\)/);
   assert.match(appSource, /setChatPanelDetached\?\.\(false\)/);
   assert.match(appSource, /function openAiCanvasRuntimeAssistant\(runtimeStore\)/);
   assert.match(appSource, /function subscribeAiCanvasRuntimeAssistantPreference\(runtimeStore\)/);
@@ -1178,7 +1214,12 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /function installAiCanvasRuntimeHeaderChrome\(surface, runtimeStore, context = \{\}\)/);
   assert.match(appSource, /function installAiCanvasRuntimeFooterZoomControls\(surface\)/);
   assert.match(appSource, /function installAiCanvasRuntimeEdgeDisconnect\(surface, runtimeStore\)/);
-  assert.match(appSource, /const SHOW_DELAY_MS = 500/);
+  assert.match(appSource, /const SHOW_DELAY_MS = 0/);
+  assert.match(appSource, /classList\.add\("is-visible"\)/);
+  assert.match(appSource, /isClientPointOverCanvasPort/);
+  assert.match(appSource, /isClientPointOverCanvasNode/);
+  assert.match(appSource, /isPointerOverCanvasNode/);
+  assert.match(appSource, /if \(isClientPointOverCanvasNode\(event\.clientX, event\.clientY\)\) \{\s*hide\(\);/);
   assert.match(appSource, /dataset\.canvasEdgeDisconnect = "true"/);
   assert.match(appSource, /closestPointOnPath\(edgePath, clientX, clientY\)/);
   assert.match(appSource, /positionButton\(hit\.x, hit\.y\)/);
@@ -1361,6 +1402,30 @@ test("homepage Agent attachments auto-authorize web files without inlining text"
   assert.match(conversationControllerSource, /id:`file_write_text`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
   assert.doesNotMatch(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
   assert.doesNotMatch(conversationControllerSource, /id:`file_read_text`[\s\S]{0,520}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
+});
+
+test("custom canvas styles persist through the host creator API", () => {
+  const runtimeSource = readRuntimeAsset("main-upstream-");
+  const pickerSource = readRuntimeAsset("MentionEditor-");
+  const adapterSource = readFileSync(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
+  assert.match(runtimeSource, /typeof t\?\.persistCustomStyle==`function`/);
+  assert.match(runtimeSource, /await t\.persistCustomStyle\(e\)/);
+  assert.match(runtimeSource, /typeof e\?\.loadCustomStyles==`function`/);
+  assert.match(runtimeSource, /typeof t\?\.deleteCustomStyle==`function`/);
+  assert.match(adapterSource, /persistCustomStyle/);
+  assert.match(adapterSource, /createPromptMarketplaceItem/);
+  assert.match(adapterSource, /category: "image_style"/);
+  assert.match(adapterSource, /source: "official"/);
+  assert.match(adapterSource, /source: "private"/);
+  assert.match(adapterSource, /item\.owned === true/);
+  assert.doesNotMatch(adapterSource, /\|\| !item\.official/);
+  assert.match(adapterSource, /purpose: "prompt-marketplace-covers"/);
+  assert.match(adapterSource, /extractPromptSkillItems/);
+  assert.match(adapterSource, /coverStorageObjectId/);
+  assert.match(adapterSource, /getCreatorApi/);
+  assert.match(pickerSource, /自定义画风/);
+  assert.match(pickerSource, /e\?\.loadCustomStyles\?\.\(\)/);
+  assert.match(pickerSource, /S=ae\.length\?\[\]:De\[e\]\?\?\[\]/);
 });
 
 test("video param panel follows backend model capability instead of ComfyUI fallback", () => {

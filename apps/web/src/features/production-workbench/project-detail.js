@@ -28,7 +28,7 @@ import {
   resolvePlazaSkillCategories,
   sumEpisodePromptSkillCredits,
 } from "./episode-prompt-skill-modal.js";
-import { renderSelectionPickerModal } from "./selection-picker-modal.js";
+import { renderImageStyleCreateModal, renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
   renderOriginalScriptModal,
   renderScriptManagementPage,
@@ -5810,7 +5810,7 @@ function renderAssetImageStyleSkillModal(ui = {}, state = {}) {
   const privateSkills = Array.isArray(ui.episodeBatchPrivateImageStyleSkills)
     ? ui.episodeBatchPrivateImageStyleSkills
     : [];
-  const activeTab = ui.assetImageStyleSkillTab === "private" ? "private" : "official";
+  const ownedPrivateSkills = privateSkills.filter((item) => item?.owned === true);
   const projectStyleCode = resolveSelectedEpisodeProjectStyleCode(state, ui)
     || resolveEpisodeProjectStyleCode(state, ui);
   const projectStyle = (Array.isArray(ui.projectStyles) ? ui.projectStyles : [])
@@ -5819,54 +5819,61 @@ function renderAssetImageStyleSkillModal(ui = {}, state = {}) {
     ?? null;
   const toPickerItem = (item, group) => {
     const coverStorageObjectId = String(item?.coverStorageObjectId ?? item?.cover_storage_object_id ?? "").trim();
-    const rawPreviewUrl = coverStorageObjectId
-      ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
-      : item?.preview ?? item?.coverImageUrl ?? item?.cover_image_url ?? "";
+    const coverImageUrl = String(item?.preview ?? item?.coverImageUrl ?? item?.cover_image_url ?? "").trim();
+    const rawPreviewUrl = /^https?:\/\//i.test(coverImageUrl)
+      ? coverImageUrl
+      : coverStorageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+        : coverImageUrl;
     const previewUrl = rawPreviewUrl ? resolveApiUrl(String(rawPreviewUrl)) : "";
     return {
       id: String(item?.id ?? ""),
       group,
       label: String(item?.label ?? item?.title ?? "未命名技能"),
-      description: "生图风格提示词",
+      description: String(item?.summary ?? item?.description ?? "").trim(),
       previewUrl,
       meta: Number(item?.priceCredits ?? 0) > 0 ? `${Math.round(Number(item.priceCredits))}积分` : "免费",
     };
   };
   return renderSelectionPickerModal({
-    show: ui.assetImageStyleSkillModalOpen === true,
+    show: ui.assetImageStyleSkillModalOpen === true || ui.assetImageStyleCreateOpen === true,
     id: "asset-image-style-skill-picker",
-    title: "选择生图风格",
-    tabs: [
-      { id: "official", label: "官方技能", count: officialSkills.length + 1 },
-      { id: "private", label: "私人技能库", count: privateSkills.length },
-    ],
-    activeTab,
+    title: "选择画风",
     items: [
       {
         id: "project-style",
-        group: "official",
+        group: "all",
         label: projectStyle?.name ?? "未使用风格",
-        description: projectStyle ? "项目默认风格" : "项目风格暂不可用",
+        description: projectStyle ? (String(projectStyle?.summary ?? projectStyle?.description ?? "").trim() || "项目默认风格") : "项目风格暂不可用",
         previewUrl: (() => {
           const coverStorageObjectId = String(projectStyle?.coverStorageObjectId ?? projectStyle?.cover_storage_object_id ?? "").trim();
-          const rawUrl = coverStorageObjectId
-            ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
-            : projectStyle?.coverImageUrl ?? projectStyle?.cover_image_url ?? "";
+          const coverImageUrl = String(projectStyle?.coverImageUrl ?? projectStyle?.cover_image_url ?? "").trim();
+          const rawUrl = /^https?:\/\//i.test(coverImageUrl)
+            ? coverImageUrl
+            : coverStorageObjectId
+              ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+              : coverImageUrl;
           if (!rawUrl) return "";
           return resolveApiUrl(String(rawUrl));
         })(),
         meta: "免费",
       },
-      ...officialSkills.map((item) => toPickerItem(item, "official")),
-      ...privateSkills.map((item) => toPickerItem(item, "private")),
+      ...officialSkills.map((item) => toPickerItem(item, "all")),
+      ...ownedPrivateSkills.map((item) => toPickerItem(item, "all")),
     ],
     selectedId: String(ui.assetImageStyleSkillDraftId ?? "project-style"),
-    emptyLabel: activeTab === "private" ? "暂无私人生图风格技能" : "暂无官方生图风格技能",
+    emptyLabel: "暂无可选画风",
     closeAction: "close-asset-image-style-skill-modal",
     tabAction: "set-asset-image-style-skill-tab",
-    selectAction: "select-asset-image-style-skill-draft",
+    selectAction: "confirm-asset-image-style-skill",
     confirmAction: "confirm-asset-image-style-skill",
-  });
+    layout: "card",
+    hideFooter: true,
+    headerAction: "open-asset-image-style-create-modal",
+    headerActionLabel: "添加自定义画风",
+    clearAction: "clear-asset-image-style-skill",
+    clearActionLabel: "清除画风",
+  }) + renderImageStyleCreateModal(ui, "asset");
 }
 
 function renderStoryboardPromptSkillModal(ui = {}) {
@@ -9411,11 +9418,6 @@ function renderSkillPlazaPage(ui = {}) {
 function renderPromptPlazaPage(ui = {}) {
   const typeLabels = {
     all: "全部",
-    script: "剧本提示词",
-    shot: "分镜提示词",
-    scene_extract: "场景抽取提示词",
-    character_extract: "人物抽取提示词",
-    prop_extract: "道具抽取提示词",
     image_style: "生图风格提示词",
     storyboard: "故事板提示词",
     other: "其它",
@@ -9432,8 +9434,8 @@ function renderPromptPlazaPage(ui = {}) {
   const fallbackItems = (Array.isArray(ui.storyboardPromptPackages) ? ui.storyboardPromptPackages : []).map((item) => ({
     id: String(item.id ?? item.code ?? ""),
     title: String(item.name ?? item.code ?? "官方提示词"),
-    category: "script",
-    summary: "官方发布的剧本提示词，可免费添加到私人提示词库使用。",
+    category: "storyboard",
+    summary: "官方发布的故事板提示词，可免费添加到私人提示词库使用。",
     coverImageUrl: String(item.coverImageUrl ?? item.cover_image_url ?? "").trim(),
     priceCredits: 0,
     official: true,

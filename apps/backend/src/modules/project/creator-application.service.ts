@@ -3,7 +3,7 @@ import { normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
-import { resolveUserActorContext, type UserActorContext } from "../identity/user-actor-context.service.ts";
+import { resolveUserActorContext, UserAuthorizationError, type UserActorContext } from "../identity/user-actor-context.service.ts";
 import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
 import {
@@ -1204,34 +1204,56 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async deleteProject(input: {
       user: AuthenticatedCreatorUser;
-      body: { projectId?: string | null };
+      body: { projectId?: string | null; projectIds?: string[] | null };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
-      const projectId = input.body.projectId ?? sqlState.projectId;
-      if (!projectId) {
+      const projectIds = uniqueDeleteProjectIds(input.body, sqlState.projectId);
+      if (!projectIds.length) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId,
-        capability: capabilities.projectEdit,
         now: input.now,
       });
       if (actor.teamMember) {
         return { status: 403, body: { error: "team_member_delete_forbidden" } };
       }
-      await deleteProjectRecord(deps.db, {
-        projectId,
-        runtime: deps.storageRuntime ?? null,
-        now: input.now,
-      });
-      if (sqlState.projectId === projectId) {
+      const ownedRows = await deps.db.query<{ id: string }>(
+        "SELECT id FROM projects WHERE owner_user_id = $1 AND id = ANY($2::uuid[])",
+        [input.user.id, projectIds],
+      );
+      const ownedIdSet = new Set(ownedRows.rows.map((row) => row.id));
+      const missingProjectIds = projectIds.filter((projectId) => !ownedIdSet.has(projectId));
+      if (missingProjectIds.length && projectIds.length === 1) {
+        throw new UserAuthorizationError("project_not_found");
+      }
+      const ownedProjectIds = projectIds.filter((projectId) => ownedIdSet.has(projectId));
+      if (ownedProjectIds.length) {
+        await deleteProjectRecords(deps.db, {
+          projectIds: ownedProjectIds,
+          runtime: deps.storageRuntime ?? null,
+          now: input.now,
+        });
+      }
+      if (ownedProjectIds.includes(sqlState.projectId ?? "") || missingProjectIds.includes(sqlState.projectId ?? "")) {
         sqlState.projectId = null;
         sqlState.scriptId = null;
       }
-      return { status: 200, body: { deleted: true, projectId } };
+      const deletedProjectIds = [...ownedProjectIds, ...missingProjectIds];
+      if (projectIds.length === 1) {
+        return { status: 200, body: { deleted: true, projectId: projectIds[0] } };
+      }
+      return {
+        status: 200,
+        body: {
+          deleted: true,
+          projectIds: deletedProjectIds,
+          deletedCount: deletedProjectIds.length,
+          failedProjectIds: [],
+        },
+      };
     },
 
     async parseScript(input: {
@@ -5559,12 +5581,45 @@ async function buildProjectStats(
   return stats;
 }
 
+function uniqueDeleteProjectIds(
+  body: { projectId?: string | null; projectIds?: string[] | null },
+  fallbackProjectId?: string | null,
+) {
+  const fromIds = Array.isArray(body.projectIds)
+    ? [...new Set(body.projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean))]
+    : [];
+  if (fromIds.length) {
+    return fromIds;
+  }
+  const projectId = String(body.projectId ?? fallbackProjectId ?? "").trim();
+  return projectId ? [projectId] : [];
+}
+
+function isProjectNotFoundError(error: unknown) {
+  return error instanceof UserAuthorizationError && error.code === "project_not_found";
+}
+
 async function deleteProjectRecord(
   db: SqlDatabase,
   input: { projectId: string; runtime?: UploadSessionRuntime | null; now: Date },
 ) {
-  await releaseProjectCreditReservationLots(db, input);
-  const removableStorageObjects = await listDeletableProjectStorageObjects(db, input);
+  await deleteProjectRecords(db, {
+    projectIds: [input.projectId],
+    runtime: input.runtime ?? null,
+    now: input.now,
+  });
+}
+
+async function deleteProjectRecords(
+  db: SqlDatabase,
+  input: { projectIds: string[]; runtime?: UploadSessionRuntime | null; now: Date },
+) {
+  const projectIds = [...new Set(input.projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean))];
+  if (!projectIds.length) {
+    return;
+  }
+  await releaseProjectCreditReservationLots(db, { projectIds });
+  const removableStorageObjects = await listDeletableProjectStorageObjects(db, { projectIds });
   await deleteProjectStorageObjectsFromRuntime(db, {
     objects: removableStorageObjects,
     runtime: input.runtime ?? null,
@@ -5573,122 +5628,209 @@ async function deleteProjectRecord(
 
   await db.query("BEGIN");
   try {
-    await db.query(
-      "SELECT release_generation_queue_assignments_for_project($1::uuid, 'project_deleted', $2)",
-      [input.projectId, input.now],
-    );
+    for (const projectId of projectIds) {
+      await db.query(
+        "SELECT release_generation_queue_assignments_for_project($1::uuid, 'project_deleted', $2)",
+        [projectId, input.now],
+      );
+    }
+  await detachCanvasRuntimeFromProject(db, projectIds);
   await db.query(
     `DELETE FROM ai_generation_task_snapshots
-     WHERE project_id = $1
-        OR task_id IN (SELECT id FROM tasks WHERE project_id = $1)
+     WHERE project_id = ANY($1::uuid[])
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
         OR credit_reservation_id IN (
-          SELECT id FROM credit_reservations WHERE project_id = $1
+          SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[])
         )`,
-    [input.projectId],
+    [projectIds],
   );
   await db.query(
     `UPDATE credit_reservation_allocations
      SET settled_ledger_entry_id = NULL
-     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)
-        OR task_id IN (SELECT id FROM tasks WHERE project_id = $1)
-        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)`,
-    [input.projectId],
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
   );
   await db.query(
     `DELETE FROM credit_ledger_entries
-     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))
         OR allocation_id IN (
           SELECT allocation.id
           FROM credit_reservation_allocations allocation
           LEFT JOIN credit_reservations reservation ON reservation.id = allocation.reservation_id
-          WHERE reservation.project_id = $1
-             OR allocation.task_id IN (SELECT id FROM tasks WHERE project_id = $1)
-             OR allocation.attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)
+          WHERE reservation.project_id = ANY($1::uuid[])
+             OR allocation.task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+             OR allocation.attempt_id IN (SELECT id FROM task_attempts WHERE project_id = ANY($1::uuid[]))
         )`,
-    [input.projectId],
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE canvas_agent_steps
+     SET credit_reservation_id = NULL
+     WHERE credit_reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
   );
   await db.query(
     `DELETE FROM credit_reservation_allocations
-     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)
-        OR task_id IN (SELECT id FROM tasks WHERE project_id = $1)
-        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)`,
-    [input.projectId],
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
   );
   await db.query(
     `DELETE FROM credit_reservation_lot_allocations
-     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)`,
-    [input.projectId],
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
   );
-  await db.query("DELETE FROM credit_reservations WHERE project_id = $1", [input.projectId]);
-  await db.query("UPDATE projects SET cover_storage_object_id = NULL WHERE id = $1", [input.projectId]);
-  await db.query("DELETE FROM provider_requests WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM credit_reservations WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("UPDATE projects SET cover_storage_object_id = NULL WHERE id = ANY($1::uuid[])", [projectIds]);
+  await db.query("UPDATE episodes SET cover_storage_object_id = NULL WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query(
+    `UPDATE user_model_request_logs
+     SET project_id = NULL,
+         workflow_id = NULL,
+         task_id = NULL,
+         attempt_id = NULL,
+         agent_task_id = NULL,
+         agent_step_id = NULL
+     WHERE project_id = ANY($1::uuid[])
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        OR workflow_id IN (SELECT id FROM workflows WHERE project_id = ANY($1::uuid[]))
+        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE production_agent_conversations
+     SET created_project_id = NULL
+     WHERE created_project_id = ANY($1::uuid[])`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE production_agent_tasks
+     SET current_step_id = NULL
+     WHERE workflow_id IN (SELECT id FROM workflows WHERE project_id = ANY($1::uuid[]))
+        OR workflow_task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `DELETE FROM production_agent_tasks
+     WHERE workflow_id IN (SELECT id FROM workflows WHERE project_id = ANY($1::uuid[]))
+        OR workflow_task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE canvas_agent_tasks
+     SET current_step_id = NULL
+     WHERE workflow_id IN (SELECT id FROM workflows WHERE project_id = ANY($1::uuid[]))
+        OR workflow_task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE canvas_agent_steps
+     SET generation_task_id = NULL,
+         provider_request_id = NULL
+     WHERE generation_task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        OR provider_request_id IN (SELECT id FROM provider_requests WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE provider_requests
+     SET agent_task_id = NULL,
+         agent_step_id = NULL
+     WHERE project_id = ANY($1::uuid[])
+        OR agent_task_id IN (
+          SELECT id FROM canvas_agent_tasks
+          WHERE workflow_id IN (SELECT id FROM workflows WHERE project_id = ANY($1::uuid[]))
+             OR workflow_task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        )`,
+    [projectIds],
+  );
+  await db.query(
+    `DELETE FROM canvas_agent_tasks
+     WHERE workflow_id IN (SELECT id FROM workflows WHERE project_id = ANY($1::uuid[]))
+        OR workflow_task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query("DELETE FROM provider_requests WHERE project_id = ANY($1::uuid[])", [projectIds]);
   await db.query(
     `UPDATE tasks
      SET current_attempt_id = NULL
-     WHERE project_id = $1
-        OR current_attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)`,
-    [input.projectId],
+     WHERE project_id = ANY($1::uuid[])
+        OR current_attempt_id IN (SELECT id FROM task_attempts WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
   );
   await db.query(
-    "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)",
-    [input.projectId],
+    `UPDATE canvas_character_asset_references
+     SET asset_id = NULL,
+         asset_version_id = NULL
+     WHERE asset_id IN (SELECT id FROM assets WHERE project_id = ANY($1::uuid[]))
+        OR asset_version_id IN (
+          SELECT id FROM asset_versions WHERE asset_id IN (SELECT id FROM assets WHERE project_id = ANY($1::uuid[]))
+        )`,
+    [projectIds],
   );
-  await db.query("DELETE FROM tasks WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM export_records WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM workflows WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM shot_reference_assets WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM project_upload_records WHERE project_id = $1", [input.projectId]);
+  await db.query(
+    "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))",
+    [projectIds],
+  );
+  await db.query("DELETE FROM tasks WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM export_records WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM workflows WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM shot_reference_assets WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM project_upload_records WHERE project_id = ANY($1::uuid[])", [projectIds]);
   await db.query(
     `UPDATE project_upload_records
      SET upload_session_id = NULL
      WHERE upload_session_id IN (
-       SELECT id FROM storage_upload_sessions WHERE project_id = $1
+       SELECT id FROM storage_upload_sessions WHERE project_id = ANY($1::uuid[])
      )`,
-    [input.projectId],
+    [projectIds],
   );
-  await db.query("DELETE FROM storage_upload_sessions WHERE project_id = $1", [input.projectId]);
-  await detachCanvasArtifactsFromProjectAssets(db, input.projectId);
+  await db.query("DELETE FROM storage_upload_sessions WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await detachCanvasArtifactsFromProjectAssets(db, projectIds);
   await db.query(
-    "DELETE FROM asset_versions WHERE asset_id IN (SELECT id FROM assets WHERE project_id = $1)",
-    [input.projectId],
+    "DELETE FROM asset_versions WHERE asset_id IN (SELECT id FROM assets WHERE project_id = ANY($1::uuid[]))",
+    [projectIds],
   );
-  await db.query("DELETE FROM assets WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM assets WHERE project_id = ANY($1::uuid[])", [projectIds]);
   await deleteProjectStorageObjectRecords(db, removableStorageObjects);
   await db.query(
     `DELETE FROM calibration_items
-     WHERE calibration_session_id IN (SELECT id FROM calibration_sessions WHERE project_id = $1)
+     WHERE calibration_session_id IN (SELECT id FROM calibration_sessions WHERE project_id = ANY($1::uuid[]))
         OR shot_id IN (
           SELECT id
           FROM shots
-          WHERE project_id = $1
-             OR episode_id IN (SELECT id FROM episodes WHERE project_id = $1)
+          WHERE project_id = ANY($1::uuid[])
+             OR episode_id IN (SELECT id FROM episodes WHERE project_id = ANY($1::uuid[]))
         )`,
-    [input.projectId],
+    [projectIds],
   );
-  await db.query("DELETE FROM calibration_sessions WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM asset_review_candidates WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM episode_generation_drafts WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM episode_asset_conversation_threads WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM calibration_sessions WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM asset_review_candidates WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM episode_generation_drafts WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM episode_asset_conversation_threads WHERE project_id = ANY($1::uuid[])", [projectIds]);
   await db.query(
     `DELETE FROM shot_reference_assets
      WHERE shot_id IN (
        SELECT id
        FROM shots
-       WHERE episode_id IN (SELECT id FROM episodes WHERE project_id = $1)
+       WHERE episode_id IN (SELECT id FROM episodes WHERE project_id = ANY($1::uuid[]))
      )`,
-    [input.projectId],
+    [projectIds],
   );
   await db.query(
     `DELETE FROM shots
-     WHERE project_id = $1
-        OR episode_id IN (SELECT id FROM episodes WHERE project_id = $1)`,
-    [input.projectId],
+     WHERE project_id = ANY($1::uuid[])
+        OR episode_id IN (SELECT id FROM episodes WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
   );
-  await db.query("DELETE FROM episodes WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM audit_events WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM team_member_projects WHERE project_id = $1", [input.projectId]);
-  await db.query("UPDATE storage_objects SET project_id = NULL WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM projects WHERE id = $1", [input.projectId]);
+  await db.query("DELETE FROM episodes WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM audit_events WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM team_member_project_records WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM team_member_projects WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("UPDATE storage_objects SET project_id = NULL WHERE project_id = ANY($1::uuid[])", [projectIds]);
+  await db.query("DELETE FROM projects WHERE id = ANY($1::uuid[])", [projectIds]);
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
@@ -5698,84 +5840,78 @@ async function deleteProjectRecord(
 
 async function listDeletableProjectStorageObjects(
   db: SqlDatabase,
-  input: { projectId: string },
+  input: { projectIds: string[] },
 ) {
   const result = await db.query<{ id: string; bucket: string; object_key: string }>(
-    `SELECT id, bucket, object_key
-     FROM storage_objects object
-     WHERE object.project_id = $1
-       AND NOT EXISTS (
-         SELECT 1 FROM library_asset_versions version
-         WHERE version.storage_object_key = object.object_key
-       )
-       AND NOT EXISTS (
-         SELECT 1
+    `WITH candidate AS (
+       SELECT object.id, object.bucket, object.object_key
+       FROM storage_objects object
+       WHERE object.project_id = ANY($1::uuid[])
+         AND NOT EXISTS (
+           SELECT 1 FROM library_asset_versions version
+           WHERE version.storage_object_key = object.object_key
+         )
+     ),
+     referenced AS (
+       SELECT DISTINCT referenced_id
+       FROM (
+         SELECT jsonb_path_query(document.document_json, '$.**.storageObjectId') #>> '{}' AS referenced_id
          FROM creator_canvas_documents document
          WHERE document.canvas_project_id IS NOT NULL
-           AND (
-             jsonb_path_exists(
-               document.document_json,
-               '$.**.storageObjectId ? (@ == $storageObjectId)',
-               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
-             )
-             OR jsonb_path_exists(
-               document.document_json,
-               '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
-               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
-             )
-           )
-       )
-       AND NOT EXISTS (
-         SELECT 1
+         UNION ALL
+         SELECT jsonb_path_query(document.document_json, '$.**.resultStorageObjectId') #>> '{}'
+         FROM creator_canvas_documents document
+         WHERE document.canvas_project_id IS NOT NULL
+         UNION ALL
+         SELECT jsonb_path_query(revision.document_json, '$.**.storageObjectId') #>> '{}'
          FROM creator_canvas_revisions revision
          WHERE revision.canvas_project_id IS NOT NULL
-           AND (
-             jsonb_path_exists(
-               revision.document_json,
-               '$.**.storageObjectId ? (@ == $storageObjectId)',
-               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
-             )
-             OR jsonb_path_exists(
-               revision.document_json,
-               '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
-               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
-             )
-           )
-       )
+         UNION ALL
+         SELECT jsonb_path_query(revision.document_json, '$.**.resultStorageObjectId') #>> '{}'
+         FROM creator_canvas_revisions revision
+         WHERE revision.canvas_project_id IS NOT NULL
+       ) extracted
+       WHERE referenced_id ~ '^[0-9a-fA-F-]{36}$'
+     )
+     SELECT candidate.id, candidate.bucket, candidate.object_key
+     FROM candidate
+     WHERE NOT EXISTS (
+       SELECT 1 FROM referenced WHERE referenced.referenced_id = candidate.id::text
+     )
        AND NOT EXISTS (
          SELECT 1
-          FROM creator_canvas_node_artifacts artifact
-          WHERE artifact.canvas_project_id IS NOT NULL
-            AND (
-              artifact.storage_object_id = object.id
-              OR EXISTS (
-                SELECT 1
-                FROM asset_versions version
-                WHERE version.id = artifact.asset_version_id
-                  AND (
-                    version.storage_object_id = object.id
-                    OR (
-                      version.storage_object_id IS NULL
-                      AND version.storage_object_key = object.object_key
-                    )
-                  )
-              )
-              OR EXISTS (
-                SELECT 1
-                FROM asset_versions version
-                WHERE version.asset_id = artifact.asset_id
-                  AND (
-                    version.storage_object_id = object.id
-                    OR (
-                      version.storage_object_id IS NULL
-                      AND version.storage_object_key = object.object_key
-                    )
-                  )
-              )
-            )
-            AND artifact.deleted_at IS NULL
-        )`,
-    [input.projectId],
+         FROM creator_canvas_node_artifacts artifact
+         WHERE artifact.canvas_project_id IS NOT NULL
+           AND artifact.deleted_at IS NULL
+           AND (
+             artifact.storage_object_id = candidate.id
+             OR EXISTS (
+               SELECT 1
+               FROM asset_versions version
+               WHERE version.id = artifact.asset_version_id
+                 AND (
+                   version.storage_object_id = candidate.id
+                   OR (
+                     version.storage_object_id IS NULL
+                     AND version.storage_object_key = candidate.object_key
+                   )
+                 )
+             )
+             OR EXISTS (
+               SELECT 1
+               FROM asset_versions version
+               WHERE version.asset_id = artifact.asset_id
+                 AND (
+                   version.storage_object_id = candidate.id
+                   OR (
+                     version.storage_object_id IS NULL
+                     AND version.storage_object_key = candidate.object_key
+                   )
+                 )
+             )
+           )
+       )`,
+    [input.projectIds],
   );
   return result.rows;
 }
@@ -5856,7 +5992,53 @@ async function detachCanvasArtifactsFromAssetVersions(
   }
 }
 
-async function detachCanvasArtifactsFromProjectAssets(db: SqlDatabase, projectId: string) {
+async function detachCanvasRuntimeFromProject(db: SqlDatabase, projectIds: string[]) {
+  await db.query(
+    `UPDATE creator_canvas_node_runs
+     SET generation_snapshot_id = NULL,
+         task_id = NULL,
+         attempt_id = NULL,
+         provider_request_id = NULL
+     WHERE generation_snapshot_id IN (
+           SELECT id FROM ai_generation_task_snapshots
+           WHERE project_id = ANY($1::uuid[])
+              OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+              OR credit_reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))
+         )
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = ANY($1::uuid[]))
+        OR provider_request_id IN (SELECT id FROM provider_requests WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE creator_canvas_generation_batch_items
+     SET credit_reservation_id = NULL,
+         credit_allocation_id = NULL,
+         task_id = NULL
+     WHERE credit_reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))
+        OR credit_allocation_id IN (
+          SELECT id FROM credit_reservation_allocations
+          WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = ANY($1::uuid[]))
+             OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        )
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))`,
+    [projectIds],
+  );
+  await db.query(
+    `UPDATE creator_canvas_media_derivations
+     SET task_id = NULL,
+         source_asset_id = NULL,
+         source_asset_version_id = NULL
+     WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ANY($1::uuid[]))
+        OR source_asset_id IN (SELECT id FROM assets WHERE project_id = ANY($1::uuid[]))
+        OR source_asset_version_id IN (
+          SELECT id FROM asset_versions WHERE asset_id IN (SELECT id FROM assets WHERE project_id = ANY($1::uuid[]))
+        )`,
+    [projectIds],
+  );
+}
+
+async function detachCanvasArtifactsFromProjectAssets(db: SqlDatabase, projectIds: string[]) {
   await db.query(
     `
       UPDATE creator_canvas_node_artifacts artifact
@@ -5875,20 +6057,20 @@ async function detachCanvasArtifactsFromProjectAssets(db: SqlDatabase, projectId
           asset_id = NULL
       FROM asset_versions version
       JOIN assets asset ON asset.id = version.asset_id
-      WHERE asset.project_id = $1
+      WHERE asset.project_id = ANY($1::uuid[])
         AND artifact.asset_version_id = version.id
     `,
-    [projectId],
+    [projectIds],
   );
   await db.query(
     `
       UPDATE creator_canvas_node_artifacts artifact
       SET asset_id = NULL
       FROM assets asset
-      WHERE asset.project_id = $1
+      WHERE asset.project_id = ANY($1::uuid[])
         AND artifact.asset_id = asset.id
     `,
-    [projectId],
+    [projectIds],
   );
 }
 
@@ -5900,17 +6082,31 @@ async function deleteProjectStorageObjectsFromRuntime(
     now: Date;
   },
 ) {
-  if (!input.runtime) {
+  if (!input.runtime || !input.objects.length) {
     return;
   }
-  for (const object of input.objects) {
-    await deleteStorageObjectRecord(db, {
-      storageObjectId: object.id,
-      adapter: input.runtime.adapter,
-      localObjectStore: input.runtime.localObjectStore ?? null,
-      now: input.now,
-    });
+  const deleteObject =
+    typeof input.runtime.adapter?.deleteObject === "function"
+      ? input.runtime.adapter.deleteObject.bind(input.runtime.adapter)
+      : typeof input.runtime.localObjectStore?.deleteObject === "function"
+        ? input.runtime.localObjectStore.deleteObject.bind(input.runtime.localObjectStore)
+        : null;
+  if (!deleteObject) {
+    return;
   }
+  await Promise.all(input.objects.map(async (object) => {
+    try {
+      await deleteObject({
+        bucket: object.bucket,
+        objectKey: object.object_key,
+      });
+    } catch {
+      await db.query(
+        "UPDATE storage_objects SET status = 'delete_failed', updated_at = $2 WHERE id = $1",
+        [object.id, input.now],
+      ).catch(() => undefined);
+    }
+  }));
 }
 
 async function deleteProjectStorageObjectRecords(
@@ -5931,34 +6127,37 @@ async function deleteProjectStorageObjectRecords(
 
 async function releaseProjectCreditReservationLots(
   db: SqlDatabase,
-  input: { projectId: string },
+  input: { projectIds: string[] },
 ) {
-  const reserved = await db.query<{ reserved_amount: number | string }>(
+  const reserved = await db.query<{ owner_user_id: string; reserved_amount: number | string }>(
     `
-      SELECT COALESCE(sum(amount_reserved), 0)::int AS reserved_amount
-      FROM credit_reservations
-      WHERE project_id = $1
-        AND amount_reserved > 0
+      SELECT project.owner_user_id,
+             COALESCE(sum(reservation.amount_reserved), 0)::int AS reserved_amount
+      FROM projects project
+      JOIN credit_reservations reservation
+        ON reservation.project_id = project.id
+       AND reservation.amount_reserved > 0
+      WHERE project.id = ANY($1::uuid[])
+      GROUP BY project.owner_user_id
     `,
-    [input.projectId],
+    [input.projectIds],
   );
-  const reservedAmount = Number(reserved.rows[0]?.reserved_amount ?? 0);
-  if (reservedAmount <= 0) {
-    return;
+  for (const row of reserved.rows) {
+    const reservedAmount = Number(row.reserved_amount ?? 0);
+    if (reservedAmount <= 0) {
+      continue;
+    }
+    await db.query(
+      `
+        UPDATE users
+        SET credit_balance_cached = credit_balance_cached + $2,
+            credit_reserved_cached = GREATEST(0, credit_reserved_cached - $2),
+            updated_at = now()
+        WHERE id = $1
+      `,
+      [row.owner_user_id, reservedAmount],
+    );
   }
-
-  await db.query(
-    `
-      UPDATE users
-      SET credit_balance_cached = credit_balance_cached + $2,
-          credit_reserved_cached = GREATEST(0, credit_reserved_cached - $2),
-          updated_at = now()
-      WHERE id = (
-        SELECT owner_user_id FROM projects WHERE id = $1
-      )
-    `,
-    [input.projectId, reservedAmount],
-  );
 }
 
 async function episodeExistsForProject(

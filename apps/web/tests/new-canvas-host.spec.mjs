@@ -190,7 +190,7 @@ test("canvas node dragging keeps pointer tracking at low zoom", () => {
   const appRuntime = readRuntimeAsset("App-");
   const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
   assert.match(snapSource, /function we\(e\)\{return F\}/);
-  assert.match(snapSource, /function isNodeSnapOn\(\)\{try\{return localStorage\.getItem\(`canvas-nodeSnap`\)!==`false`\}catch\{return!0\}\}/);
+  assert.match(snapSource, /function isNodeSnapOn\(\)\{try\{return localStorage\.getItem\(`canvas-nodeSnap`\)===`true`\}catch\{return!1\}\}/);
   assert.match(snapSource, /if\(!isNodeSnapOn\(\)\)\{a\.current=null;return\}/);
   assert.match(snapSource, /if\(!isNodeSnapOn\(\)\)return r\(e=>e\.length===0\?e:\[\]\),t;/);
   assert.match(snapSource, /screenToFlowPosition:e,getZoom:be/);
@@ -202,9 +202,10 @@ test("canvas node dragging keeps pointer tracking at low zoom", () => {
   assert.match(appRuntime, /j\.current\.size>0&&!j\.current\.has\(`node`\)&&te\(F\.current,!0\)/);
   assert.match(appRuntime, /if\(e&&!j\.current\.has\(`node`\)\)\{let t=new MutationObserver/);
   assert.match(appRuntime, /if\(j\.current\.has\(`node`\)\)return;V\(C\.screenToFlowPosition/);
-  assert.match(appRuntime, /if\(a\.length>0&&\(C\.getZoom\?\.\(\)\?\?1\)>=\.3&&localStorage\.getItem\(`canvas-nodeSnap`\)!==`false`\)/);
+  assert.match(appRuntime, /if\(a\.length>0&&\(C\.getZoom\?\.\(\)\?\?1\)>=\.3&&localStorage\.getItem\(`canvas-nodeSnap`\)===`true`\)/);
   assert.match(appRuntime, /if\(\(C\.getZoom\?\.\(\)\?\?1\)<\.3\)\{Pn\(\),An\(\),jn\(\),En\(null\),kn\(\);return\}/);
-  assert.match(appRuntime, /localStorage\.getItem\(`canvas-nodeSnap`\)!==`false`/);
+  assert.match(appRuntime, /localStorage\.getItem\(`canvas-showGrid`\)===`true`/);
+  assert.match(appRuntime, /localStorage\.getItem\(`canvas-nodeSnap`\)===`true`/);
   assert.match(appRuntime, /"aria-label":i\(a\?`关闭节点吸附`:`开启节点吸附`\)/);
   assert.match(appRuntime, /onToggleSnap:o/);
   assert.match(appRuntime, /nodeSnap:nodeSnapEnabled,onToggleGrid:Ge,onToggleLine:\(\)=>He\(e=>!e\),onToggleSnap:\(\)=>setNodeSnapEnabled\(e=>\{let t=!e;localStorage\.setItem\(`canvas-nodeSnap`,String\(t\)\);return t\}\)/);
@@ -405,6 +406,12 @@ test("canvas header restores project switch and help after upstream chrome split
   assert.match(appSource, /切换项目/);
 });
 
+test("brand logo menu hides canvas nodes behind an opaque panel", () => {
+  const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
+  assert.match(source, /\.app-header \.app-brand \+ \[role="menu"\][\s\S]*background:\s*var\(--theme-surface,\s*var\(--theme-card,\s*#ffffff\)\)\s*!important/);
+  assert.match(source, /\.app-header \.app-brand \+ \[role="menu"\][\s\S]*backdrop-filter:\s*none\s*!important/);
+});
+
 test("ChatPanel hides the detach-to-independent-window control", () => {
   const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
   const chatPanel = readRuntimeAsset("ChatPanel-");
@@ -556,8 +563,13 @@ test("canvas node connection ports keep upstream gooey-btn styles", () => {
   assert.match(source, /\.new-canvas-root \.gooey-btn-left\s*\{[\s\S]*top:\s*50% !important;[\s\S]*translate\(calc\(-50% - 10px \* var\(--gooey-inv-zoom, 1\)\), -50%\)/);
   assert.match(source, /\.new-canvas-root \.gooey-btn-right\s*\{[\s\S]*top:\s*50% !important;[\s\S]*translate\(calc\(50% \+ 10px \* var\(--gooey-inv-zoom, 1\)\), -50%\)/);
   assert.match(source, /\.new-canvas-root \.gooey-btn-right \.gooey-btn::before\s*\{[\s\S]*padding:\s*19px 26px 19px 10px/);
+  assert.match(source, /\.new-canvas-root \.react-flow__handle\.node-handle\s*\{[\s\S]*width:\s*1px\s*!important;[\s\S]*height:\s*1px\s*!important/);
+  assert.match(source, /\.new-canvas-root \.react-flow__handle\.node-handle::after\s*\{[\s\S]*width:\s*16px;[\s\S]*height:\s*16px;/);
+  assert.match(source, /\.new-canvas-root \.react-flow__handle-left\s*\{[\s\S]*transform:\s*translate\(-50%, -50%\)\s*!important/);
+  assert.match(source, /\.new-canvas-root \.react-flow__handle-right\s*\{[\s\S]*transform:\s*translate\(50%, -50%\)\s*!important/);
   assert.match(source, /\.new-canvas-root \.react-flow__edge-interaction\s*\{[\s\S]*stroke-width:\s*28px !important/);
-  assert.match(source, /\.new-canvas-root \.canvas-edge-disconnect-button\s*\{[\s\S]*transform:\s*translate\(-50%, -50%\)/);
+  assert.match(source, /\.new-canvas-root \.canvas-edge-disconnect-button\s*\{[\s\S]*transform:\s*translate\(-50%, -50%\)[\s\S]*transition:\s*opacity 1000ms ease-out/);
+  assert.match(source, /\.new-canvas-root \.canvas-edge-disconnect-button\.is-visible\s*\{\s*opacity:\s*1/);
   assert.match(runtimeCss, /\.gooey-btn-wrapper\{[\s\S]*opacity:0/);
   assert.match(runtimeCss, /\.react-flow__node:hover \.gooey-btn-wrapper/);
   assert.doesNotMatch(source, /\.new-canvas-root \.react-flow__handle\.node-handle[\s\S]*background:\s*#818cf8/);
@@ -2254,6 +2266,16 @@ test("canvas save materializes data URLs into COS object URLs before persisting"
   assert.equal(next.nodes[0].data.imageUrl, "https://cdn.example.test/canvas-uploads/obj-uploaded.png");
   assert.equal(next.nodes[0].data.storageObjectId, "obj-uploaded");
   assert.equal(Object.prototype.hasOwnProperty.call(next.nodes[0].data, "previewUrl"), false);
+});
+
+test("image node toolbar defaults match the compact primary and secondary layout", () => {
+  const toolbarSource = readRuntimeAsset("useSourceFileUpload-");
+  assert.match(
+    toolbarSource,
+    /L=\{version:8,zones:\[\{id:`zone-0`,name:`Primary`,buttonKeys:\[`matting`,`cameraStudio`,`crop`,`upload`,`more`\]\},\{id:`zone-1`,name:`Secondary`,buttonKeys:\[`copyFile`,`history`,`fullscreen`\]\}\]/,
+  );
+  assert.match(toolbarSource, /key:`expand`,label:`扩图`[\s\S]*?defaultZone:`Primary`/);
+  assert.match(toolbarSource, /key:`reversePrompt`,label:`反推提示词`[\s\S]*?defaultZone:`Primary`/);
 });
 
 test("node context menu can disconnect the selected node's edges", () => {

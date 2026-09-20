@@ -58,10 +58,14 @@ export function canvasDocumentToX6Data(document) {
     source: {
       cell: edge.sourceNodeId,
       port: edge.sourcePortId,
+      anchor: "center",
+      connectionPoint: "anchor",
     },
     target: {
       cell: edge.targetNodeId,
       port: edge.targetPortId,
+      anchor: "center",
+      connectionPoint: "anchor",
     },
     zIndex: 0,
     attrs: buildX6EdgeAttrs(edge),
@@ -440,10 +444,21 @@ export function resolveCanvasConnectionPorts(document, connection) {
 
 function buildX6Ports(node) {
   const { inputs, outputs } = resolveCanvasX6NodePorts(node);
+  const portMarkup = [
+    {
+      tagName: "circle",
+      selector: "circle",
+      attrs: {
+        r: 7,
+        magnet: true,
+      },
+    },
+  ];
   return {
     groups: {
       in: {
-        position: "left",
+        position: { name: "left" },
+        markup: portMarkup,
         attrs: {
           circle: {
             r: 7,
@@ -455,7 +470,8 @@ function buildX6Ports(node) {
         },
       },
       out: {
-        position: "right",
+        position: { name: "right" },
+        markup: portMarkup,
         attrs: {
           circle: {
             r: 7,

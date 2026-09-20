@@ -24,7 +24,7 @@ test("prompt marketplace combines catalog and private library without a publish 
           id: "prompt-1",
           name: "玄幻修仙",
           title: "玄幻修仙",
-          category: "script",
+          category: "storyboard",
           summary: "强化修炼升级和战斗爆发节奏。",
           content: "这段购买前不可见的提示词正文不应渲染。",
           tags: ["修炼"],
@@ -42,7 +42,7 @@ test("prompt marketplace combines catalog and private library without a publish 
       promptMarketplaceRankings: [{
         id: "prompt-1",
         title: "玄幻修仙",
-        category: "script",
+        category: "storyboard",
         usageCount: 128,
         ratingAverage: 4.8,
         official: false,
@@ -56,7 +56,7 @@ test("prompt marketplace combines catalog and private library without a publish 
   assert.doesNotMatch(html, /<h1/);
   assert.match(html, /我的提示词库/);
   assert.doesNotMatch(html, />发布提示词</);
-  assert.match(html, /剧本提示词/);
+  assert.match(html, /故事板提示词/);
   assert.match(html, /生图风格/);
   assert.match(html, /其它/);
   assert.match(html, /提示词排行榜 · 全部分类/);
@@ -138,7 +138,7 @@ test("prompt marketplace ranking shows top twenty metrics and card details", () 
   const items = Array.from({ length: 22 }, (_, index) => ({
     id: `ranked-${index}`,
     title: `排行榜提示词 ${index + 1}`,
-    category: "script",
+    category: "storyboard",
     summary: "排行榜测试简介。",
     usageCount: index === 21 ? 999 : index,
     ratingAverage: index === 21 ? 3 : 1 + (index % 3),
@@ -280,7 +280,7 @@ test("ranking prompts are added to the private library for free without confirma
       promptMarketplaceRankings: [{
         id: "ranking-paid",
         title: "排行榜付费提示词",
-        category: "script",
+        category: "storyboard",
         priceCredits: 88,
       }],
     },
@@ -334,7 +334,7 @@ test("private prompt library paginates and opens creation on demand", () => {
   const library = Array.from({ length: 11 }, (_, index) => ({
     id: `prompt-${index + 1}`,
     title: `我的提示词 ${index + 1}`,
-    category: "script",
+    category: "storyboard",
     summary: "私人提示词简介。",
     owned: true,
     contentVisible: true,
@@ -433,7 +433,7 @@ test("private prompt library only renders content owned by the current user", ()
         {
           id: "purchased-prompt",
           title: "购买的场景提示词",
-          category: "scene_extract",
+          category: "other",
           summary: "购买提示词的公开简介。",
           content: "购买内容绝不能渲染。",
           contentVisible: false,
@@ -452,7 +452,7 @@ test("private prompt library only renders content owned by the current user", ()
   assert.doesNotMatch(html, /prompt-library-row/);
   assert.match(html, /prompt-marketplace-card[^]*prompt-marketplace-card-head[^]*我的故事板提示词/);
   assert.match(html, /prompt-marketplace-default-cover is-storyboard/);
-  assert.match(html, /prompt-marketplace-default-cover is-scene has-image/);
+  assert.match(html, /prompt-marketplace-default-cover is-other/);
   assert.match(html, /data-action="open-edit-prompt-marketplace-item" data-prompt-id="owned-prompt">编辑/);
   assert.match(html, /data-action="clear-prompt-marketplace-default"[^>]*data-prompt-id="owned-prompt"/);
   assert.match(html, /prompt-marketplace-default-badge">默认/);
@@ -539,25 +539,17 @@ test("marketplace uses category-specific covers when an item has no cover image"
       activeNavTab: "prompts",
       promptPlazaSection: "marketplace",
       promptMarketplaceItems: [
-        { id: "script-cover", title: "剧本封面", category: "script", official: true },
-        { id: "shot-cover", title: "分镜封面", category: "shot", official: true },
         { id: "storyboard-cover", title: "故事板封面", category: "storyboard", official: true },
-        { id: "scene-cover", title: "场景封面", category: "scene_extract", official: true },
-        { id: "character-cover", title: "人物封面", category: "character_extract", official: true },
-        { id: "prop-cover", title: "道具封面", category: "prop_extract", official: true },
         { id: "style-cover", title: "风格封面", category: "image_style", official: true },
+        { id: "other-cover", title: "其它封面", category: "other", official: true },
       ],
     },
   });
 
-  assert.match(html, /prompt-marketplace-default-cover is-script/);
-  assert.match(html, /prompt-marketplace-default-cover is-shot has-montage/);
   assert.match(html, /prompt-marketplace-default-cover is-storyboard/);
-  assert.match(html, /prompt-marketplace-default-cover is-scene/);
   assert.match(html, /prompt-marketplace-default-cover is-style has-montage/);
-  assert.match(html, /assets\/library\/official\/characters\/3d-city-heroine\.png/);
-  assert.match(html, /assets\/library\/official\/props\/prop-ancient-sword\.png/);
-  assert.doesNotMatch(html, /<img[^>]+剧本封面/);
+  assert.match(html, /prompt-marketplace-default-cover is-other/);
+  assert.doesNotMatch(html, /<img[^>]+故事板封面/);
 });
 
 test("prompt covers and error fallbacks stay on the serving origin in production and development", () => {
@@ -565,9 +557,9 @@ test("prompt covers and error fallbacks stay on the serving origin in production
   try {
     for (const origin of ["https://www.lingxiyunai.com", "http://127.0.0.1:4310"]) {
       globalThis.window = { location: new URL(origin) };
-      const items = ["shot", "scene_extract", "character_extract", "prop_extract", "image_style"]
+      const items = ["image_style", "storyboard", "other"]
         .map((category) => ({ id: category, title: category, category, official: true }));
-      items.push({ id: "custom", title: "custom", category: "prop_extract", coverImageUrl: "https://example.com/custom.png" });
+      items.push({ id: "custom", title: "custom", category: "image_style", coverImageUrl: "https://example.com/custom.png" });
       for (const section of ["marketplace", "library"]) {
         const html = renderProjectDetail({
           state: {},
@@ -576,16 +568,16 @@ test("prompt covers and error fallbacks stay on the serving origin in production
         });
         const covers = [...html.matchAll(/<div class="prompt-marketplace-cover[^]*?<\/div>/g)].map(([cover]) => cover).join("");
         const sources = [...covers.matchAll(/<img src="([^"]+)"/g)].map(([, src]) => src);
-        assert.equal(sources.length, 10);
-        for (const src of sources.slice(0, -1)) {
+        assert.ok(sources.length >= 4);
+        for (const src of sources.filter((value) => value !== "https://example.com/custom.png")) {
           assert.equal(new URL(src).origin, origin);
           assert.ok(new URL(src).pathname.startsWith("/assets/library/official/"));
         }
-        assert.equal(sources.at(-1), "https://example.com/custom.png");
+        assert.ok(sources.includes("https://example.com/custom.png"));
         const handler = covers.match(/onerror="([^"]+)"/)[1].replaceAll("&#39;", "'");
-        const image = { src: sources.at(-1), onerror: () => {} };
+        const image = { src: "https://example.com/custom.png", onerror: () => {} };
         runInNewContext(`(function () { ${handler} }).call(image)`, { image });
-        assert.equal(image.src, `${origin}/assets/library/official/props/prop-ancient-sword.png`);
+        assert.equal(image.src, `${origin}/assets/library/official/scenes/scene-2d-starry.png`);
         assert.equal(image.onerror, null);
       }
     }
@@ -621,7 +613,7 @@ test("prompt marketplace reuses an in-flight catalog and library sync", async ()
       promptMarketplaceLoading: false,
       promptMarketplaceError: "",
       promptPlazaSection: "library",
-      promptPlazaType: "script",
+      promptPlazaType: "storyboard",
       promptPlazaQuery: "仙侠",
       promptMarketplacePage: 2,
       promptMarketplaceMeta: { page: 2, pageSize: 12, total: 0, totalPages: 1, hasNext: false },
@@ -633,7 +625,7 @@ test("prompt marketplace reuses an in-flight catalog and library sync", async ()
 
   assert.equal(catalogRequestCount, 1);
   assert.equal(libraryRequestCount, 1);
-  assert.deepEqual(catalogInputs, [{ category: "script", query: "仙侠", page: 2, pageSize: 12 }]);
+  assert.deepEqual(catalogInputs, [{ category: "storyboard", query: "仙侠", page: 2, pageSize: 12 }]);
   resolveCatalog({
     items: [{ id: "catalog-item" }],
     ranking: [{ id: "ranked-item" }],

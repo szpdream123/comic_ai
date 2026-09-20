@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
@@ -1678,13 +1679,13 @@ describe("creator application user ownership", { concurrency: false }, () => {
       });
       const source = await creator.createProject({
         user,
-        body: { name: "Deleted source", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p" },
+        body: { name: "Deleted source", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p", projectType: "animation" },
         idempotencyKey: "creator-project-delete-canvas-retention-source",
         now: new Date("2026-07-21T09:00:00.000Z"),
       });
       const surviving = await creator.createProject({
         user,
-        body: { name: "Surviving project", scriptInput: "Episode 2", aspectRatio: "9:16", resolution: "1080p" },
+        body: { name: "Surviving project", scriptInput: "Episode 2", aspectRatio: "9:16", resolution: "1080p", projectType: "animation" },
         idempotencyKey: "creator-project-delete-canvas-retention-surviving",
         now: new Date("2026-07-21T09:01:00.000Z"),
       });
@@ -1904,6 +1905,200 @@ describe("creator application user ownership", { concurrency: false }, () => {
     } finally {
       await db.close();
     }
+  });
+
+  it("deletes a project that still has production-agent and request-log links", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000123",
+        phone: "13800138123",
+        token: "creator-project-delete-production-agent",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user,
+        body: { name: "Linked project", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p", projectType: "animation" },
+        idempotencyKey: "creator-project-delete-production-agent",
+        now: new Date("2026-09-20T10:00:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const workflowId = "00000000-0000-4000-8000-000000000221";
+      const taskId = "00000000-0000-4000-8000-000000000222";
+      const conversationId = "00000000-0000-4000-8000-000000000223";
+      const agentTaskId = "00000000-0000-4000-8000-000000000224";
+      const providerRequestId = "00000000-0000-4000-8000-000000000225";
+      const requestLogId = "00000000-0000-4000-8000-000000000226";
+      const memberRecordId = "00000000-0000-4000-8000-000000000227";
+      const memberId = "00000000-0000-4000-8000-000000000228";
+
+      await db.query(
+        `
+          INSERT INTO workflows (id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id)
+          VALUES ($1, $2, 'production_agent', 'succeeded', '{}'::jsonb, $3)
+        `,
+        [workflowId, projectId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, project_id, workflow_id, task_type, status, queue_name,
+            input_snapshot_json, target_entity_type, target_entity_id
+          ) VALUES (
+            $1, $2, $3, 'production_agent.execute', 'succeeded', 'production-agent-session',
+            '{}'::jsonb, 'production_agent_session', $4
+          )
+        `,
+        [taskId, projectId, workflowId, agentTaskId],
+      );
+      await db.query(
+        `
+          INSERT INTO production_agent_conversations (
+            id, owner_user_id, title, status, mode, model_code, created_project_id
+          ) VALUES ($1, $2, '会话', 'active', 'ask', 'test-model', $3)
+        `,
+        [conversationId, user.id, projectId],
+      );
+      await db.query(
+        `
+          INSERT INTO production_agent_tasks (
+            id, conversation_id, workflow_id, workflow_task_id, owner_user_id, mode, status, model_code
+          ) VALUES ($1, $2, $3, $4, $5, 'ask', 'succeeded', 'test-model')
+        `,
+        [agentTaskId, conversationId, workflowId, taskId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, provider_name, provider_operation,
+            request_key, request_hash, payload_ref, payload_hash, payload_redacted_json, status
+          ) VALUES (
+            $1, $2, $3, $4, 'test', 'llm.chat.completions',
+            'delete-linked-project', 'delete-linked-project', 'delete-linked-project', 'delete-linked-project',
+            '{}'::jsonb, 'succeeded'
+          )
+        `,
+        [providerRequestId, projectId, workflowId, taskId],
+      );
+      await db.query(
+        `
+          INSERT INTO user_model_request_logs (
+            id, provider_request_id, project_id, workflow_id, task_id, user_id,
+            provider_name, provider_operation, model_id, provider_model,
+            request_key, request_hash, payload_hash, request_body_json, status
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            'test', 'llm.chat.completions', 'test-model', 'test-model',
+            'delete-linked-project', 'delete-linked-project', 'delete-linked-project', '{}'::jsonb, 'succeeded'
+          )
+        `,
+        [requestLogId, providerRequestId, projectId, workflowId, taskId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id, user_id, member_account, member_account_suffix, member_login_account,
+            member_name, member_password_hash, member_credits, status
+          ) VALUES ($1, $2, 'delete-linked', 'u00123', 'delete-linked@u00123', '成员', 'hash', 0, 'active')
+        `,
+        [memberId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO team_member_project_records (
+            id, user_id, member_id, project_id, record_type, record_status, record_title
+          ) VALUES ($1, $2, $3, $4, 'project_view', 'recorded', 'Viewed')
+        `,
+        [memberRecordId, user.id, memberId, projectId],
+      );
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId },
+        now: new Date("2026-09-20T10:01:00.000Z"),
+      });
+      const remaining = await db.query<{ id: string }>("SELECT id FROM projects WHERE id = $1", [projectId]);
+      const remainingAgent = await db.query<{ created_project_id: string | null }>(
+        "SELECT created_project_id FROM production_agent_conversations WHERE id = $1",
+        [conversationId],
+      );
+      const remainingLogs = await db.query<{ project_id: string | null; task_id: string | null }>(
+        "SELECT project_id, task_id FROM user_model_request_logs WHERE id = $1",
+        [requestLogId],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.equal(remaining.rows.length, 0);
+      assert.equal(remainingAgent.rows[0]?.created_project_id, null);
+      if (remainingLogs.rows[0]) {
+        assert.deepEqual(remainingLogs.rows[0], { project_id: null, task_id: null });
+      } else {
+        assert.equal(remainingLogs.rows.length, 0);
+      }
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("deletes multiple owned projects in one request", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000124",
+        phone: "13800138124",
+        token: "creator-project-delete-bulk",
+      });
+      const creator = createCreatorApplication({ db });
+      const first = await creator.createProject({
+        user,
+        body: { name: "Bulk one", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p", projectType: "animation" },
+        idempotencyKey: "creator-project-delete-bulk-1",
+        now: new Date("2026-09-20T10:02:00.000Z"),
+      });
+      const second = await creator.createProject({
+        user,
+        body: { name: "Bulk two", scriptInput: "Episode 2", aspectRatio: "9:16", resolution: "1080p", projectType: "animation" },
+        idempotencyKey: "creator-project-delete-bulk-2",
+        now: new Date("2026-09-20T10:03:00.000Z"),
+      });
+      const firstId = String((first.body as { project: { id: string } }).project.id);
+      const secondId = String((second.body as { project: { id: string } }).project.id);
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectIds: [firstId, secondId, firstId] },
+        now: new Date("2026-09-20T10:04:00.000Z"),
+      });
+      const remaining = await db.query<{ id: string }>(
+        "SELECT id FROM projects WHERE id = ANY($1::uuid[]) ORDER BY id",
+        [[firstId, secondId]],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(deleted.body, {
+        deleted: true,
+        projectIds: [firstId, secondId],
+        deletedCount: 2,
+        failedProjectIds: [],
+      });
+      assert.equal(remaining.rows.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("lists deletable storage objects once for a bulk project delete", async () => {
+    const source = await readFile(new URL("../creator-application.service.ts", import.meta.url), "utf8");
+    const start = source.indexOf("async function deleteProjectRecords(");
+    const end = source.indexOf("async function listDeletableProjectStorageObjects(", start);
+    const deleteProjectSource = source.slice(start, end < 0 ? undefined : end);
+    const listCalls = deleteProjectSource.match(/listDeletableProjectStorageObjects\(/g) ?? [];
+    const runtimeCalls = deleteProjectSource.match(/deleteProjectStorageObjectsFromRuntime\(/g) ?? [];
+
+    assert.equal(listCalls.length, 1);
+    assert.equal(runtimeCalls.length, 1);
+    assert.match(deleteProjectSource, /project_id = ANY\(\$1::uuid\[\]\)/);
+    assert.doesNotMatch(deleteProjectSource, /for \(const projectId of projectIds\) \{\s*await deleteProjectRecord/);
   });
 });
 

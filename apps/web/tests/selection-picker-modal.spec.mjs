@@ -39,6 +39,7 @@ describe("selection picker modal", () => {
     assert.match(html, /data-action="confirm-asset-picker"/);
     assert.match(html, /selection-picker-secondary-confirm/);
     assert.match(html, /data-action="confirm-and-create"/);
+    assert.match(html, /selection-picker-header-actions/);
     assert.match(html, /selection-picker-item-gallery/);
     assert.match(html, /src="\/one\.png"/);
     assert.match(html, /src="\/two\.png"/);
@@ -148,6 +149,36 @@ describe("selection picker modal", () => {
     assert.match(content.innerHTML, /data-action="select-asset"/);
     assert.equal(content.scrollTop, 0);
     assert.equal(confirm.disabled, true);
+  });
+
+  it("renders a card grid layout with a header add action and no footer", () => {
+    const html = renderSelectionPickerModal({
+      show: true,
+      id: "style-picker",
+      title: "选择画风",
+      tabs: [{ id: "official", label: "官方技能", count: 1 }],
+      activeTab: "official",
+      selectedId: "style-1",
+      items: [{ id: "style-1", group: "official", label: "写实摄影", description: "真实质感，光影自然", previewUrl: "/styles/realistic.webp" }],
+      layout: "card",
+      hideFooter: true,
+      headerAction: "open-style-create",
+      headerActionLabel: "添加自定义画风",
+      clearAction: "clear-style",
+      clearActionLabel: "清除画风",
+      selectAction: "confirm-style",
+    });
+
+    assert.match(html, /selection-picker-modal is-card-layout is-footerless/);
+    assert.match(html, /selection-picker-content is-card-grid/);
+    assert.match(html, /selection-picker-card/);
+    assert.match(html, /aria-label="添加自定义画风"/);
+    assert.match(html, /aria-label="清除画风"/);
+    assert.match(html, /data-action="open-style-create"/);
+    assert.match(html, /data-action="clear-style"/);
+    assert.match(html, /data-action="confirm-style"/);
+    assert.match(html, /真实质感，光影自然/);
+    assert.doesNotMatch(html, /selection-picker-footer/);
   });
 });
 

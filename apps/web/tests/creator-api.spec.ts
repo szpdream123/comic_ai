@@ -887,6 +887,27 @@ test("getProjects sends backend pagination query parameters", async () => {
   assert.deepEqual(payload.pagination, { page: 2, pageSize: 18, total: 19, totalPages: 2 });
 });
 
+test("deleteProject forwards a single projectId or bulk projectIds", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ deleted: true }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.deleteProject({ projectId: "project-1" });
+  await creatorApi.deleteProject({ projectIds: ["project-1", "project-2"] });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/creator/project");
+  assert.equal(calls[0].options.method, "DELETE");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { projectId: "project-1" });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { projectIds: ["project-1", "project-2"] });
+});
+
 test("Canvas resource helpers use the formal canvases API", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

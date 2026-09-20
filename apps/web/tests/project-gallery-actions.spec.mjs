@@ -883,15 +883,18 @@ test("an already missing project is treated as an idempotent delete success", as
 test("bulk project delete keeps only failed items retryable after a partial failure", async () => {
   const workbench = createWorkbench();
   let deleteCalls = 0;
+  let lastDeleteInput = null;
   workbench.ui.deleteProjectMode = "bulk";
   workbench.ui.deleteProjectIds = ["project-1", "project-2"];
   workbench.ui.selectedProjectIds = ["project-1", "project-2"];
-  workbench.api.deleteProject = async () => {
+  workbench.api.deleteProject = async (input) => {
     deleteCalls += 1;
-    if (deleteCalls === 2) {
-      throw new Error("second delete failed");
-    }
-    return { deleted: true };
+    lastDeleteInput = input;
+    return {
+      deleted: true,
+      projectIds: ["project-1"],
+      failedProjectIds: ["project-2"],
+    };
   };
   workbench.api.getProjects = async () => ({
     projects: createProjectLibrary(23).map((project, index) => ({
@@ -905,14 +908,47 @@ test("bulk project delete keeps only failed items retryable after a partial fail
     dataset: { action: "confirm-delete-project-card" },
   });
 
-  assert.equal(deleteCalls, 2);
+  assert.equal(deleteCalls, 1);
+  assert.deepEqual(lastDeleteInput, { projectIds: ["project-1", "project-2"] });
   assert.equal(workbench.ui.deleteProjectSubmitting, false);
   assert.deepEqual(workbench.ui.deleteProjectIds, ["project-2"]);
   assert.deepEqual(workbench.ui.selectedProjectIds, ["project-2"]);
   assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-1"), false);
   assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-2"), true);
-  assert.match(String(workbench.ui.toast), /second delete failed/);
+  assert.match(String(workbench.ui.toast), /部分项目删除失败/);
   assert.doesNotMatch(workbench.root.innerHTML, /data-action="confirm-delete-project-card"[^>]*disabled/);
+});
+
+test("bulk project delete sends one request for all selected ids", async () => {
+  const workbench = createWorkbench();
+  const deleteInputs = [];
+  workbench.ui.deleteProjectMode = "bulk";
+  workbench.ui.deleteProjectIds = ["project-1", "project-2", "project-3"];
+  workbench.ui.selectedProjectIds = ["project-1", "project-2", "project-3"];
+  workbench.api.deleteProject = async (input) => {
+    deleteInputs.push(input);
+    return {
+      deleted: true,
+      projectIds: ["project-1", "project-2", "project-3"],
+      failedProjectIds: [],
+    };
+  };
+  workbench.api.getProjects = async () => ({
+    projects: createProjectLibrary(21).map((project, index) => ({
+      ...project,
+      id: `project-${index + 4}`,
+    })),
+    pagination: { page: 1, pageSize: 18, total: 21, totalPages: 2 },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+
+  assert.deepEqual(deleteInputs, [{ projectIds: ["project-1", "project-2", "project-3"] }]);
+  assert.deepEqual(workbench.ui.selectedProjectIds, []);
+  assert.equal(workbench.ui.deleteProjectMode, "single");
+  assert.equal(workbench.ui.toast, "已删除 3 个项目。");
 });
 
 test("a stale delete refresh cannot overwrite a newer project page", async () => {

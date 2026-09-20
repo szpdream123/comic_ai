@@ -178,6 +178,7 @@ const migrations = [
   ["20261108-skill-category-user-create.sql", "packages/db/migrations/20261108-skill-category-user-create.sql"],
   ["20261109-rename-production-agent-session-json.sql", "packages/db/migrations/20261109-rename-production-agent-session-json.sql"],
   ["20261110-rename-production-agent-session-json-constraint.sql", "packages/db/migrations/20261110-rename-production-agent-session-json-constraint.sql"],
+  ["20261111-retire-workflow-prompt-marketplace-categories.sql", "packages/db/migrations/20261111-retire-workflow-prompt-marketplace-categories.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -261,6 +262,7 @@ const runtimeSafeMigrationNames = new Set([
   "20261108-skill-category-user-create.sql",
   "20261109-rename-production-agent-session-json.sql",
   "20261110-rename-production-agent-session-json-constraint.sql",
+  "20261111-retire-workflow-prompt-marketplace-categories.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
