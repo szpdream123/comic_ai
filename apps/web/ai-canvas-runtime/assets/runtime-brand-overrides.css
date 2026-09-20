@@ -464,6 +464,10 @@
   content: "任务中心";
 }
 
+.new-canvas-root .sidebar-floating .sidebar-btn-v3[data-host-mascot-toggle]::after {
+  content: attr(data-tooltip);
+}
+
 .new-canvas-root .sidebar-floating .sidebar-btn-v3[data-tooltip^="任务中心"] {
   position: relative !important;
 }
@@ -2682,4 +2686,24 @@ html.canvas-interacting .react-flow__node.dragging {
 .new-canvas-root .canvas-edge-disconnect-button svg {
   width: 16px;
   height: 16px;
+}
+
+.style-card {
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.style-card-img {
+  overflow: hidden !important;
+}
+
+.style-card-delete {
+  position: absolute !important;
+  top: auto !important;
+  right: 8px !important;
+  bottom: 8px !important;
+  left: auto !important;
+  z-index: 8 !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }

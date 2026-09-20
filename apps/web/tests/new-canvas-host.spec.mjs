@@ -364,7 +364,12 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.equal(nextAiCanvasRuntimeMascotSkin("puff"), "cloud");
   assert.match(appSource, /ai-canvas\.mascot\.skin/);
   assert.match(appSource, /installAiCanvasRuntimeMascotSkinSwitcher/);
+  assert.match(appSource, /installAiCanvasRuntimeMascotToggle/);
+  assert.match(appSource, /setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
   assert.match(appSource, /installAiCanvasRuntimeEdgeDisconnect/);
+  assert.match(appSource, /localStorage\.getItem\(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY\) === "true"/);
+  assert.match(appSource, /开启桌宠/);
+  assert.match(appSource, /关闭桌宠/);
   assert.match(appSource, /normalizeAiCanvasRuntimeMascotSkin\(localStorage\.getItem\(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY\)\)/);
   assert.match(skinSource, /切换桌宠/);
   assert.match(skinSource, /AI_CANVAS_MASCOT_SKINS = \["cloud", "cat", "dog", "bunny", "fox", "puff"\]/);
@@ -395,6 +400,7 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.match(skinSource, /if \(typeof globalThis\.queueMicrotask === "function"\) globalThis\.queueMicrotask\(run\)/);
   assert.doesNotMatch(skinSource, /queueMicrotask\?\.[\s\S]{0,80}\?\? sync\(\)/);
   assert.match(brandCss, /\.host-mascot-avatar-icon/);
+  assert.match(brandCss, /sidebar-btn-v3\[data-host-mascot-toggle\]::after/);
 });
 
 test("canvas header restores project switch and help after upstream chrome split", () => {

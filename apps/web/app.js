@@ -47,7 +47,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-07";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260920-01";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -102,9 +102,9 @@ const AI_CANVAS_MASCOT_SKIN_STORAGE_KEY = "ai-canvas.mascot.skin";
 
 function shouldShowAiCanvasRuntimeMascot() {
   try {
-    return localStorage.getItem(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY) !== "false";
+    return localStorage.getItem(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY) === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -181,6 +181,11 @@ function createAiCanvasRuntimeConfigBridge(store, theme) {
   return {
     update(themeValue) {
       currentTheme = normalizeAiCanvasTheme(themeValue);
+      applyConfig();
+    },
+    setMascotVisible(visible) {
+      mascotHiddenByUser = visible !== true;
+      persistAiCanvasRuntimeMascotVisible(visible === true);
       applyConfig();
     },
     dispose() {
@@ -1604,6 +1609,102 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
     root.removeEventListener("pointerdown", onPointerDown, true);
     closeMenus();
     root.querySelectorAll?.("[data-host-header-chrome]").forEach((node) => node.remove());
+  };
+}
+
+function installAiCanvasRuntimeMascotToggle(surface, runtimeStore, options = {}) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  const doc = surface?.ownerDocument ?? globalThis.document;
+  if (!root || !doc?.createElement || typeof MutationObserver !== "function") return () => {};
+
+  let disposed = false;
+  let nesting = false;
+  let pendingVisible = null;
+
+  const isVisible = () => pendingVisible ?? (runtimeStore?.getState?.()?.config?.mascotVisible === true);
+
+  const applyButtonState = (button) => {
+    if (!button) return;
+    const visible = isVisible();
+    const label = visible ? "关闭桌宠" : "开启桌宠";
+    if (button.dataset.tooltip !== label) button.dataset.tooltip = label;
+    if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", String(visible));
+    button.classList.toggle("active", visible);
+  };
+
+  const createButton = () => {
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className = "sidebar-btn-v3";
+    button.dataset.hostMascotToggle = "true";
+    button.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="7" r="1.7"></circle><circle cx="16" cy="7" r="1.7"></circle><circle cx="5.5" cy="12" r="1.6"></circle><circle cx="18.5" cy="12" r="1.6"></circle><path d="M8 16.5c.8-1.8 2.2-2.7 4-2.7s3.2.9 4 2.7c.3.8-.1 2-1.6 2.3-1 .2-1.6-.3-2.4-.3s-1.4.5-2.4.3c-1.5-.3-1.9-1.5-1.6-2.3Z"></path></svg>`;
+    applyButtonState(button);
+    return button;
+  };
+
+  const sync = () => {
+    if (disposed || nesting) return;
+    const rail = root.querySelector?.(".sidebar-floating");
+    if (!rail) return;
+    nesting = true;
+    try {
+      let button = rail.querySelector?.("[data-host-mascot-toggle]");
+      if (!button) {
+        button = createButton();
+        const assistant = rail.querySelector?.('[aria-label="打开 AI 助手"], [data-tooltip="AI 助手"]');
+        if (assistant?.nextSibling) assistant.after(button);
+        else rail.append(button);
+      } else {
+        applyButtonState(button);
+      }
+    } finally {
+      nesting = false;
+    }
+  };
+
+  const onClick = (event) => {
+    const button = event.target?.closest?.("[data-host-mascot-toggle]");
+    if (!button || !root.contains(button)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    const nextVisible = isVisible() !== true;
+    pendingVisible = nextVisible;
+    if (typeof options.setMascotVisible === "function") {
+      options.setMascotVisible(nextVisible);
+    } else {
+      persistAiCanvasRuntimeMascotVisible(nextVisible);
+      const state = runtimeStore?.getState?.() ?? {};
+      if (state.config && typeof runtimeStore?.setState === "function") {
+        runtimeStore.setState({
+          config: {
+            ...state.config,
+            mascotVisible: nextVisible,
+          },
+        });
+      }
+    }
+    applyButtonState(button);
+    pendingVisible = null;
+  };
+
+  root.addEventListener("click", onClick, true);
+  const observer = new MutationObserver(() => sync());
+  observer.observe(root, { childList: true, subtree: true });
+  const unsubscribe = typeof runtimeStore?.subscribe === "function"
+    ? runtimeStore.subscribe(() => {
+      if (disposed) return;
+      sync();
+    })
+    : () => {};
+  sync();
+  return () => {
+    disposed = true;
+    observer.disconnect();
+    unsubscribe?.();
+    root.removeEventListener("click", onClick, true);
+    root.querySelectorAll?.("[data-host-mascot-toggle]").forEach((node) => node.remove());
   };
 }
 
@@ -3318,7 +3419,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260919-07";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260920-01";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -4025,6 +4126,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     let disposePromptCreditCost = () => {};
     let disposeSkillPicker = () => {};
     let disposeMascotSkinSwitcher = () => {};
+    let disposeMascotToggle = () => {};
     let disposeEdgeDisconnect = () => {};
     const projectBridgePromise = createAiCanvasRuntimeProjectBridge({
         ...context,
@@ -4042,6 +4144,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher(surface, {
         readSkin: readAiCanvasRuntimeMascotSkin,
         persistSkin: persistAiCanvasRuntimeMascotSkin,
+      });
+      disposeMascotToggle = installAiCanvasRuntimeMascotToggle(surface, runtimeStore, {
+        setMascotVisible: (visible) => configBridge.setMascotVisible(visible),
       });
       disposeEdgeDisconnect = installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore);
       return ({
@@ -4079,6 +4184,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           disposePromptCreditCost();
           disposeSkillPicker();
           disposeMascotSkinSwitcher();
+          disposeMascotToggle();
           disposeEdgeDisconnect();
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
           taskCenterBridge.dispose();
@@ -4099,6 +4205,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeHeaderChrome();
       disposeFooterZoomControls();
       disposeMascotSkinSwitcher();
+      disposeMascotToggle();
       disposeEdgeDisconnect();
       runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
       taskCenterBridge.dispose();

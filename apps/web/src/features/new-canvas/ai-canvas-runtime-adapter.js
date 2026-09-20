@@ -5,7 +5,7 @@
  * the product shell and the upstream AI Canvas implementation.
  */
 
-import { creatorApi as defaultCreatorApi, resolveApiUrl } from "../../shared/creator-api.js";
+import { creatorApi as defaultCreatorApi, defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
 
 export const AI_CANVAS_RUNTIME_ADAPTER_VERSION = "1.0.0";
 export const AI_CANVAS_RUNTIME_KIND = "ai-canvas";
@@ -729,10 +729,19 @@ function requireMethod(api, method) {
 function dataUrlToFile(dataUrl, fileName) {
   const match = String(dataUrl ?? "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match || typeof atob !== "function" || typeof File !== "function") return null;
+  const type = String(match[1] || "image/png").trim() || "image/png";
+  const extension = type === "image/jpeg" || type === "image/jpg"
+    ? ".jpg"
+    : type === "image/webp"
+      ? ".webp"
+      : type === "image/avif"
+        ? ".avif"
+        : ".png";
   const binary = atob(match[2]);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new File([bytes], fileName, { type: match[1] || "image/webp" });
+  const resolvedName = String(fileName ?? "cover").replace(/\.[^.]+$/, "") + extension;
+  return new File([bytes], resolvedName, { type });
 }
 
 function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) {
@@ -743,10 +752,15 @@ function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) 
   const uploadFile = async (file, options = {}) => {
     const api = dependencies.getCreatorApi?.() ?? creatorApi ?? defaultCreatorApi;
     const method = requireMethod(api, "uploadFile");
+    const requestedCanvasProjectId = options.canvasProjectId;
     return method(file, {
       ...options,
-      canvasProjectId: resolveCanvasId(options.canvasProjectId),
-      purpose: options.purpose ?? defaultPurpose,
+      purpose: options.purpose ?? options.category ?? defaultPurpose,
+      projectId: options.projectId ?? null,
+      canvasProjectId: requestedCanvasProjectId === null
+        ? null
+        : resolveCanvasId(requestedCanvasProjectId),
+      uploadLimits: options.uploadLimits ?? defaultUploadLimits,
     });
   };
   const persistCustomStyle = async (style = {}) => {
@@ -756,45 +770,57 @@ function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) 
     if (!name) return style;
     const thumbnail = String(style.thumbnail ?? "").trim();
     const content = prompt || `${name}视觉风格，统一构图、色彩、光影、材质与细节表现。`;
-    let coverImageUrl = thumbnail.startsWith("data:") ? "" : thumbnail;
-    let coverStorageObjectId = null;
-    if (thumbnail.startsWith("data:")) {
-      const file = dataUrlToFile(thumbnail, `${name}.webp`);
-      if (file) {
-        const uploaded = await uploadFile(file, {
-          purpose: "prompt-marketplace-covers",
-          canvasProjectId: null,
-        });
-        coverImageUrl = String(
-          uploaded?.urls?.previewUrl
-          ?? uploaded?.urls?.sourceUrl
-          ?? uploaded?.upload?.previewUrl
-          ?? uploaded?.upload?.publicUrl
-          ?? "",
-        );
-        coverStorageObjectId = String(uploaded?.upload?.storageObjectId ?? uploaded?.storageObject?.id ?? "").trim() || null;
-      }
-    }
     const payload = {
       title: name,
       category: "image_style",
       summary: String(style.description ?? prompt ?? "").trim().slice(0, 240),
       content,
-      coverImageUrl: coverImageUrl || null,
-      coverStorageObjectId,
-      publish: false,
+      priceCredits: 0,
+      publish: true,
     };
+    let coverImageUrl = "";
+    let coverStorageObjectId = "";
+    if (thumbnail.startsWith("data:")) {
+      const file = dataUrlToFile(thumbnail, `${name}.png`);
+      if (file) {
+        try {
+          const uploaded = await uploadFile(file, {
+            category: "prompt-marketplace-covers",
+            purpose: "prompt-marketplace-covers",
+            canvasProjectId: null,
+            projectId: null,
+            uploadLimits: defaultUploadLimits,
+          });
+          coverImageUrl = String(
+            uploaded?.urls?.previewUrl
+            ?? uploaded?.urls?.sourceUrl
+            ?? uploaded?.upload?.previewUrl
+            ?? uploaded?.upload?.publicUrl
+            ?? "",
+          ).trim();
+          coverStorageObjectId = String(uploaded?.upload?.storageObjectId ?? uploaded?.storageObject?.id ?? "").trim();
+        } catch (error) {
+          console.warn("[保存画风] 封面上传失败，提示词已保存", error);
+        }
+      }
+    } else if (thumbnail && !thumbnail.startsWith("data:")) {
+      coverImageUrl = thumbnail;
+      const objectIdMatch = thumbnail.match(/\/api\/storage\/objects\/([^/?#]+)/i);
+      if (objectIdMatch?.[1]) coverStorageObjectId = decodeURIComponent(objectIdMatch[1]);
+    }
+    if (coverImageUrl && !coverImageUrl.startsWith("data:")) payload.coverImageUrl = coverImageUrl;
+    if (coverStorageObjectId) payload.coverStorageObjectId = coverStorageObjectId;
     const existingId = customStyleOwnerIds.get(String(style.id ?? ""));
+    let itemId = existingId;
     if (existingId && typeof api?.updatePromptMarketplaceItem === "function") {
       const updated = await api.updatePromptMarketplaceItem(existingId, payload);
-      const itemId = String(updated?.item?.id ?? existingId);
-      if (itemId) customStyleOwnerIds.set(String(style.id ?? itemId), itemId);
-      return { ...style, id: String(style.id ?? itemId) };
+      itemId = String(updated?.item?.id ?? existingId);
+    } else {
+      const created = await requireMethod(api, "createPromptMarketplaceItem")(payload);
+      itemId = String(created?.item?.id ?? created?.id ?? "");
     }
-    const created = await requireMethod(api, "createPromptMarketplaceItem")(payload);
-    const itemId = String(created?.item?.id ?? "");
-    if (itemId && style.id) customStyleOwnerIds.set(String(style.id), itemId);
-    return { ...style, id: String(style.id ?? itemId) };
+    if (itemId) customStyleOwnerIds.set(String(style.id ?? itemId), itemId);
+    return { ...style, id: itemId || String(style.id ?? "") };
   };
   const extractPromptSkillItems = (payload) => {
     if (Array.isArray(payload?.items)) return payload.items;
@@ -868,9 +894,10 @@ function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) 
     return [];
   };
   const deleteCustomStyle = async (styleId) => {
+    const api = dependencies.getCreatorApi?.() ?? creatorApi ?? defaultCreatorApi;
     const itemId = customStyleOwnerIds.get(String(styleId ?? "")) || String(styleId ?? "");
-    if (!itemId || typeof creatorApi?.deletePromptMarketplaceItem !== "function") return;
-    await creatorApi.deletePromptMarketplaceItem(itemId);
+    if (!itemId) return;
+    await requireMethod(api, "deletePromptMarketplaceItem")(itemId);
     customStyleOwnerIds.delete(String(styleId ?? ""));
     customStyleOwnerIds.delete(itemId);
   };

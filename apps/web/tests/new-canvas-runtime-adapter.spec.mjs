@@ -1173,11 +1173,19 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /ai-canvas\.mascot\.skin/);
   assert.match(appSource, /mascotHiddenByUser/);
   assert.match(appSource, /mascotVisible = mascotHiddenByUser \? false : true/);
+  assert.match(appSource, /localStorage\.getItem\(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY\) === "true"/);
+  assert.match(appSource, /function installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, options = \{\}\)/);
+  assert.match(appSource, /data-host-mascot-toggle/);
+  assert.match(appSource, /开启桌宠/);
+  assert.match(appSource, /关闭桌宠/);
+  assert.match(appSource, /setMascotVisible\(visible\)/);
+  assert.match(appSource, /setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
   assert.match(appSource, /function readAiCanvasRuntimeMascotSkin/);
   assert.match(appSource, /function persistAiCanvasRuntimeMascotSkin/);
   assert.match(appSource, /normalizeAiCanvasRuntimeMascotSkin\(localStorage\.getItem\(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY\)\)/);
   assert.match(appSource, /installAiCanvasRuntimeMascotSkinSwitcher/);
   assert.match(appSource, /disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher/);
+  assert.match(appSource, /disposeMascotToggle = installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, \{[\s\S]*?setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
   assert.match(appSource, /previousState\?\.configHydrated !== false && nextState\?\.configHydrated !== false/);
   assert.match(appSource, /createAiCanvasRuntimeCatalogBridge/);
   assert.match(appSource, /const catalogBridge = createAiCanvasRuntimeCatalogBridge\(runtimeStore, context\)/);
@@ -1237,6 +1245,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost\(surface, runtimeStore\)/);
   assert.match(appSource, /disposeSkillPicker = installAiCanvasRuntimeSkillPicker\(surface, runtimeStore, runtimeContext\)/);
   assert.match(appSource, /disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher\(surface, \{[\s\S]*?readSkin: readAiCanvasRuntimeMascotSkin[\s\S]*?persistSkin: persistAiCanvasRuntimeMascotSkin/);
+  assert.match(appSource, /disposeMascotToggle = installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, \{[\s\S]*?setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
   assert.match(appSource, /renderEpisodePromptSkillModal/);
   assert.match(appSource, /data-host-skill-picker="true"/);
   assert.match(appSource, /data-host-skill-action=/);
@@ -1474,6 +1483,7 @@ test("new canvas floating menu hosts task center and operation history", () => {
   assert.doesNotMatch(chatPanelSource, /ai-canvas-open-project-task-center/);
   assert.doesNotMatch(chatPanelSource, /任务中心 · \{count\} 进行中/);
   assert.match(brandCss, /sidebar-btn-v3\[data-tooltip\^="任务中心"\]/);
+  assert.match(brandCss, /sidebar-btn-v3\[data-host-mascot-toggle\]::after/);
   assert.match(brandCss, /\.new-canvas-root \.canvas-history-wrap:not\(\[data-pinned="true"\]\)/);
   assert.match(brandCss, /\.new-canvas-root \.chat-panel[\s\S]*?\.new-canvas-root \.chat-panel \*[\s\S]*?backdrop-filter:\s*none !important/);
   assert.match(brandCss, /\.canvas-radial-backdrop,[\s\S]*?\.canvas-radial-menu,[\s\S]*?\.canvas-radial-hold-indicator,[\s\S]*?\.canvas-radial-editor,[\s\S]*?\[data-canvas-radial-menu\] \{[\s\S]*?display: none !important;/);
