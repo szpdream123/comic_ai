@@ -549,7 +549,7 @@ test("canvas chrome keeps the previous four-corner layout after upstream runtime
   const source = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
   const appRuntime = readRuntimeAsset("App-");
   assert.match(source, /\.new-canvas-root \.sidebar-floating,[\s\S]*?top: 12px !important;[\s\S]*?right: 12px !important;[\s\S]*?flex-direction: row !important/);
-  assert.match(source, /\.react-flow__panel\.canvas-drawing-toolbar-slot\.bottom\.left[\s\S]*?left: 50% !important;[\s\S]*?transform: translateX\(-50%\) !important/);
+  assert.match(source, /\.react-flow__panel\.canvas-drawing-toolbar-slot[\s\S]*?position: fixed !important;[\s\S]*?left: 50% !important;[\s\S]*?transform: translateX\(-50%\) !important;[\s\S]*?max-width: calc\(100vw - 24px\) !important/);
   assert.match(source, /\.new-canvas-root \.group\\\/series[\s\S]*?align-items: center !important;[\s\S]*?justify-content: center !important/);
   assert.match(source, /\.canvas-note-style-panel-anchor[\s\S]*?bottom: calc\(100% \+ 8px\) !important;[\s\S]*?transform: translateX\(-50%\) !important/);
   assert.match(appRuntime, /className:`canvas-drawing-toolbar-wrap`[\s\S]*canvas-note-style-panel-anchor/);
@@ -2107,7 +2107,7 @@ test("new Canvas injects the outer project catalog and delegates runtime project
   assert.match(appSource, /\.new-canvas-root \.react-flow__panel\.bottom\.right:has\(\.footer-toolbar\) \{[\s\S]*?left: 12px !important;[\s\S]*?bottom: 12px !important;/);
   assert.match(appSource, /\.new-canvas-root \.react-flow__controls\.canvas-controls \{[\s\S]*?position: absolute !important;[\s\S]*?right: 12px !important;[\s\S]*?bottom: 12px !important;/);
   assert.match(appSource, /\.new-canvas-root \.footer-toolbar \.react-flow__controls\.canvas-controls \{[\s\S]*?position: static !important;/);
-  assert.match(appSource, /\.new-canvas-root \.canvas-drawing-toolbar-slot \{[\s\S]*?left: 50% !important;[\s\S]*?bottom: 12px !important;[\s\S]*?transform: translateX\(-50%\) !important;/);
+  assert.match(appSource, /\.new-canvas-root \.canvas-drawing-toolbar-slot \{[\s\S]*?position: fixed !important;[\s\S]*?left: 50% !important;[\s\S]*?bottom: 12px !important;[\s\S]*?transform: translateX\(-50%\) !important;[\s\S]*?max-width: calc\(100vw - 24px\) !important;/);
   assert.match(appSource, /\.new-canvas-root \.canvas-note-style-panel-anchor \{[\s\S]*?bottom: calc\(100% \+ 8px\) !important;[\s\S]*?transform: translateX\(-50%\) !important;/);
   assert.match(appSource, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)::after \{[\s\S]*?opacity: 0 !important;/);
   assert.match(appSource, /\.ai-canvas-standalone-mount \.app-shell--glass-frame::before,[\s\S]*?\.app-shell--glass-frame::after \{[\s\S]*?opacity: 0 !important;/);

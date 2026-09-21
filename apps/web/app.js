@@ -48,7 +48,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260920-01";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260921-01";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -3422,7 +3422,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260920-01";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260921-01";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
@@ -3589,10 +3589,14 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           height: 22px !important;
         }
         .new-canvas-root .canvas-drawing-toolbar-slot {
+          position: fixed !important;
           left: 50% !important;
+          right: auto !important;
+          top: auto !important;
           bottom: 12px !important;
           transform: translateX(-50%) !important;
           width: max-content !important;
+          max-width: calc(100vw - 24px) !important;
           height: auto !important;
           margin: 0 !important;
           overflow: visible !important;
@@ -3865,10 +3869,14 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           height: 22px !important;
         }
         .new-canvas-root .canvas-drawing-toolbar-slot {
+          position: fixed !important;
           left: 50% !important;
+          right: auto !important;
+          top: auto !important;
           bottom: 12px !important;
           transform: translateX(-50%) !important;
           width: max-content !important;
+          max-width: calc(100vw - 24px) !important;
           height: auto !important;
           margin: 0 !important;
           overflow: visible !important;
