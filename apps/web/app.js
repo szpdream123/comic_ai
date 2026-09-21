@@ -4,6 +4,7 @@ import {
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
 import { applyAiCanvasRuntimeNodeModel, hydrateAiCanvasRuntimeSkillRows, normalizeAiCanvasRuntimeGrouping, normalizeAiCanvasRuntimeSkill } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import { clearAiCanvasRuntimeMediaCache, installAiCanvasRuntimeMediaCache } from "./src/features/new-canvas/canvas-media-cache.js";
 import { installAiCanvasRuntimeMascotSkinSwitcher, normalizeAiCanvasRuntimeMascotSkin } from "./src/features/new-canvas/canvas-mascot-skin.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
 import {
@@ -4120,6 +4121,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       ...runtimeContext,
       runtimeStore,
     });
+    const mediaCacheBridge = installAiCanvasRuntimeMediaCache(runtimeWindow);
     let unsubscribeAssistantPreference = () => {};
     let disposeHeaderChrome = () => {};
     let disposeFooterZoomControls = () => {};
@@ -4187,6 +4189,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           disposeMascotToggle();
           disposeEdgeDisconnect();
           runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+          mediaCacheBridge.dispose();
           taskCenterBridge.dispose();
           projectBridge.dispose();
           await runtimeHandle?.dispose?.();
@@ -4208,6 +4211,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeMascotToggle();
       disposeEdgeDisconnect();
       runtimeWindow?.removeEventListener?.("ai-canvas-open-project-task-center", onOpenProjectTaskCenter);
+      mediaCacheBridge.dispose();
       taskCenterBridge.dispose();
       projectBridge.dispose();
       throw error;
@@ -4215,6 +4219,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       unsubscribeAssistantPreference();
       disposeHeaderChrome();
       disposeFooterZoomControls();
+      mediaCacheBridge.dispose();
       taskCenterBridge.dispose();
       hostProjectGuard.dispose();
       themeBridge.dispose();
@@ -4256,11 +4261,13 @@ async function bootstrap() {
     onLogout: async () => {
       if (!activeSession?.user?.id && !activeSession?.user?.phone) {
         clearCreatorBrowserStorage();
+        await clearAiCanvasRuntimeMediaCache();
         openLoginModal();
         return;
       }
       await creatorApi.logout();
       clearCreatorBrowserStorage();
+      await clearAiCanvasRuntimeMediaCache();
       window.location.replace(homeUrl);
     },
     onRequireLogin: handleRequireLogin,

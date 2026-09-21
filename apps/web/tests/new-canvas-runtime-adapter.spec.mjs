@@ -1489,6 +1489,13 @@ test("new canvas floating menu hosts task center and operation history", () => {
   assert.match(brandCss, /\.canvas-radial-backdrop,[\s\S]*?\.canvas-radial-menu,[\s\S]*?\.canvas-radial-hold-indicator,[\s\S]*?\.canvas-radial-editor,[\s\S]*?\[data-canvas-radial-menu\] \{[\s\S]*?display: none !important;/);
 });
 
+test("standalone canvas reuses cached storage images across page mounts", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /installAiCanvasRuntimeMediaCache\(runtimeWindow\)/);
+  assert.match(appSource, /mediaCacheBridge\.dispose\(\)/);
+  assert.match(appSource, /await clearAiCanvasRuntimeMediaCache\(\)/);
+});
+
 test("project task center opens after the runtime click dispatch completes", () => {
   const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const listener = appSource.match(/const onOpenProjectTaskCenter = \(event\) => \{[\s\S]*?\n    \};/)?.[0] ?? "";
