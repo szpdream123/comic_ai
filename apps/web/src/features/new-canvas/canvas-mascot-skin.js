@@ -351,6 +351,10 @@ function isCustomMascotSkin(skin) {
   return normalizeAiCanvasRuntimeMascotSkin(skin) !== "puff";
 }
 
+function isCanvasInteracting(doc) {
+  return doc?.documentElement?.classList?.contains("canvas-interacting") === true;
+}
+
 function mascotAvatarMarkup(skin) {
   const next = normalizeAiCanvasRuntimeMascotSkin(skin);
   if (next === "puff") {
@@ -512,11 +516,13 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
 
   const readSkin = typeof options.readSkin === "function" ? options.readSkin : () => AI_CANVAS_MASCOT_DEFAULT_SKIN;
   const persistSkin = typeof options.persistSkin === "function" ? options.persistSkin : () => {};
+  const readVisible = typeof options.readVisible === "function" ? options.readVisible : () => true;
 
   let disposed = false;
   let nesting = false;
   let pendingSync = false;
   let skin = normalizeAiCanvasRuntimeMascotSkin(readSkin());
+  let visible = readVisible() !== false;
   let raf = 0;
   let renderer = null;
   let lastPointer = null;
@@ -541,14 +547,17 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
     switcher.title = `切换桌宠（下一个：${SKIN_LABELS[next]}）`;
   };
 
+  const isMascotVisible = () => visible !== false;
+
   const ensureRenderer = () => {
-    if (!isCustomMascotSkin(skin)) return null;
+    if (!isMascotVisible() || !isCustomMascotSkin(skin)) return null;
     if (!renderer) renderer = createMascotSkinRenderer(canvas);
     renderer?.setSkin?.(skin);
     return renderer;
   };
 
   const releaseRenderer = () => {
+    stopLoop();
     renderer?.dispose?.();
     renderer = null;
   };
@@ -567,7 +576,7 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   };
 
   const applySkin = (wrap, button) => {
-    const custom = isCustomMascotSkin(skin) && Boolean(ensureRenderer());
+    const custom = isMascotVisible() && isCustomMascotSkin(skin) && Boolean(ensureRenderer());
     const nextSkin = custom ? skin : "puff";
     if (wrap?.getAttribute?.("data-host-mascot-skin") !== nextSkin) {
       wrap?.setAttribute?.("data-host-mascot-skin", nextSkin);
@@ -577,7 +586,7 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
     }
     overlay.hidden = !custom;
     applyChatAvatars();
-    if (!custom) stopLoop();
+    if (!custom) releaseRenderer();
   };
 
   const attach = (wrap) => {
@@ -587,8 +596,13 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   };
 
   const renderFrame = (now) => {
-    if (disposed || !isCustomMascotSkin(skin) || !renderer) {
-      stopLoop();
+    if (disposed || !isMascotVisible() || !isCustomMascotSkin(skin) || !renderer) {
+      if (!isMascotVisible()) releaseRenderer();
+      else stopLoop();
+      return;
+    }
+    if (isCanvasInteracting(doc)) {
+      raf = globalThis.requestAnimationFrame?.(loop) ?? 0;
       return;
     }
     const button = root.querySelector?.(MASCOT_BUTTON_SELECTOR);
@@ -619,22 +633,28 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   };
 
   const startLoop = () => {
-    if (disposed || raf || !isCustomMascotSkin(skin) || !renderer) return;
+    if (disposed || raf || !isMascotVisible() || !isCustomMascotSkin(skin) || !renderer) return;
     raf = globalThis.requestAnimationFrame?.(loop) ?? 0;
   };
 
   const observer = new MutationObserver((records) => {
-    if (disposed || nesting) return;
+    if (disposed || nesting || isCanvasInteracting(doc)) return;
     if (records.every(isHostMascotMutation)) return;
     scheduleSync();
   });
+
+  const detach = () => {
+    overlay.remove();
+    switcher.remove();
+    releaseRenderer();
+  };
 
   const sync = () => {
     if (disposed || nesting) return;
     const button = root.querySelector?.(MASCOT_BUTTON_SELECTOR);
     const wrap = resolveMascotWrap(button);
-    if (!button || !wrap) {
-      stopLoop();
+    if (!isMascotVisible() || !button || !wrap) {
+      detach();
       return;
     }
     nesting = true;
@@ -662,6 +682,7 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   };
 
   const onPointerMove = (event) => {
+    if (isCanvasInteracting(doc)) return;
     lastPointer = { x: event.clientX, y: event.clientY };
   };
 
@@ -698,7 +719,7 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   doc.addEventListener?.("pointerdown", onSwitcherPointerDown, true);
   sync();
 
-  return () => {
+  const dispose = () => {
     disposed = true;
     observer.disconnect();
     stopLoop();
@@ -713,4 +734,11 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
     findMascotAvatarHosts(root).forEach((node) => restoreMascotAvatarIcon(node));
     root.querySelectorAll?.(".host-mascot-avatar-icon").forEach((node) => node.remove());
   };
+  dispose.setVisible = (nextVisible) => {
+    const next = nextVisible !== false;
+    if (visible === next) return;
+    visible = next;
+    sync();
+  };
+  return dispose;
 }

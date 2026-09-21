@@ -1628,7 +1628,9 @@ function installAiCanvasRuntimeMascotToggle(surface, runtimeStore, options = {})
     if (!button) return;
     const visible = isVisible();
     const label = visible ? "关闭桌宠" : "开启桌宠";
-    if (button.dataset.tooltip !== label) button.dataset.tooltip = label;
+    const tooltip = visible ? label : "注意开启桌宠需要消耗资源，电脑配置不高不建议开启";
+    if (button.dataset.tooltip !== tooltip) button.dataset.tooltip = tooltip;
+    if (button.dataset.tooltipPos !== "bottom") button.dataset.tooltipPos = "bottom";
     if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", String(visible));
     button.classList.toggle("active", visible);
@@ -4146,9 +4148,13 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher(surface, {
         readSkin: readAiCanvasRuntimeMascotSkin,
         persistSkin: persistAiCanvasRuntimeMascotSkin,
+        readVisible: shouldShowAiCanvasRuntimeMascot,
       });
       disposeMascotToggle = installAiCanvasRuntimeMascotToggle(surface, runtimeStore, {
-        setMascotVisible: (visible) => configBridge.setMascotVisible(visible),
+        setMascotVisible: (visible) => {
+          configBridge.setMascotVisible(visible);
+          disposeMascotSkinSwitcher?.setVisible?.(visible);
+        },
       });
       disposeEdgeDisconnect = installAiCanvasRuntimeEdgeDisconnect(surface, runtimeStore);
       return ({

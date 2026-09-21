@@ -183,6 +183,7 @@ test("canvas hover tooltips open immediately without a show delay", () => {
   assert.match(tooltipSource, /i=window\.setTimeout\(c,Zd\)/);
   assert.doesNotMatch(tooltipSource, /Zd=800/);
   assert.match(brandCss, /\.app-tooltip,\s*\.app-tooltip\[data-open="true"\]\s*\{\s*transition:\s*none\s*!important;/);
+  assert.match(brandCss, /white-space:\s*normal\s*!important;/);
 });
 
 test("canvas node dragging keeps pointer tracking at low zoom", () => {
@@ -203,13 +204,19 @@ test("canvas node dragging keeps pointer tracking at low zoom", () => {
   assert.match(appRuntime, /if\(e&&!j\.current\.has\(`node`\)\)\{let t=new MutationObserver/);
   assert.match(appRuntime, /if\(j\.current\.has\(`node`\)\)return;V\(C\.screenToFlowPosition/);
   assert.match(appRuntime, /if\(a\.length>0&&\(C\.getZoom\?\.\(\)\?\?1\)>=\.3&&localStorage\.getItem\(`canvas-nodeSnap`\)===`true`\)/);
-  assert.match(appRuntime, /if\(\(C\.getZoom\?\.\(\)\?\?1\)<\.3\)\{Pn\(\),An\(\),jn\(\),En\(null\),kn\(\);return\}/);
+  assert.match(appRuntime, /Rn=\(0,Z\.useCallback\)\(\(\)=>\{Pn\(\),An\(\),jn\(\),En\(null\),kn\(\)\},\[An,kn,jn,Pn\]\)/);
+  assert.doesNotMatch(appRuntime, /onNodeDrag:Rn[\s\S]{0,80}elementsFromPoint/);
   assert.match(appRuntime, /localStorage\.getItem\(`canvas-showGrid`\)===`true`/);
   assert.match(appRuntime, /localStorage\.getItem\(`canvas-nodeSnap`\)===`true`/);
   assert.match(appRuntime, /"aria-label":i\(a\?`关闭节点吸附`:`开启节点吸附`\)/);
   assert.match(appRuntime, /onToggleSnap:o/);
   assert.match(appRuntime, /nodeSnap:nodeSnapEnabled,onToggleGrid:Ge,onToggleLine:\(\)=>He\(e=>!e\),onToggleSnap:\(\)=>setNodeSnapEnabled\(e=>\{let t=!e;localStorage\.setItem\(`canvas-nodeSnap`,String\(t\)\);return t\}\)/);
   assert.match(brandCss, /html\.canvas-interacting \.react-flow__node\.dragging \.node/);
+  assert.match(brandCss, /html\.canvas-interacting \.react-flow__edges/);
+  assert.doesNotMatch(brandCss, /html\.canvas-interacting \.host-mascot-cloud-layer/);
+  const skinSource = readFileSync(new URL("../src/features/new-canvas/canvas-mascot-skin.js", import.meta.url), "utf8");
+  assert.match(skinSource, /function isCanvasInteracting\(doc\)/);
+  assert.match(skinSource, /if \(isCanvasInteracting\(doc\)\) \{\s*raf = globalThis\.requestAnimationFrame\?\.\(loop\) \?\? 0;\s*return;/);
   assert.doesNotMatch(snapSource, /Y\(\[v\.top,v\.bottom\],l\),Y\(\[v\.centerY\],u\)/);
   assert.doesNotMatch(appRuntime, /ne=\(0,Z\.useCallback\)\(\(\)=>\{j\.current\.size>0&&te\(F\.current,!0\)\}/);
 });
@@ -221,6 +228,19 @@ test("empty media upload placeholders stay draggable on the canvas", () => {
   assert.match(appRuntime, /Math\.hypot\(e\.clientX-t,e\.clientY-n\)>4\)return;v\(\)/);
   assert.match(appRuntime, /Math\.hypot\(e\.clientX-t,e\.clientY-n\)>4\)return;ce\(\)/);
   assert.doesNotMatch(appRuntime, /node-preview-placeholder nodrag nopan/);
+});
+
+test("canvas node previews reuse the last blob when remounted after leaving the viewport", () => {
+  const appRuntime = readRuntimeAsset("App-");
+  const previewSource = readRuntimeAsset("useConnectionDropMenu-");
+  assert.match(appRuntime, /onlyRenderVisibleElements:!0/);
+  assert.match(appRuntime, /var yoSrcCache=new Map/);
+  assert.match(appRuntime, /yoSrcCache\.set\(`\$\{i\|\|""\}/);
+  assert.match(appRuntime, /cachedSrc:yoSrcCache\.get\(`\$\{i\|\|""\}/);
+  assert.match(appRuntime, /if\(!u&&e\.cachedSrc&&!o\)/);
+  assert.match(appRuntime, /t\.src===n\|\|t\.release\(\)/);
+  assert.match(previewSource, /var x=32\*1024\*1024,S=32\*1024\*1024,C=128,w=3e5/);
+  assert.match(previewSource, /e\[0\]===`\/`/);
 });
 
 test("media nodes keep the full preview while dragging", () => {
@@ -365,11 +385,14 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.match(appSource, /ai-canvas\.mascot\.skin/);
   assert.match(appSource, /installAiCanvasRuntimeMascotSkinSwitcher/);
   assert.match(appSource, /installAiCanvasRuntimeMascotToggle/);
-  assert.match(appSource, /setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
+  assert.match(appSource, /readVisible: shouldShowAiCanvasRuntimeMascot/);
+  assert.match(appSource, /disposeMascotSkinSwitcher\?\.setVisible\?\.\(visible\)/);
   assert.match(appSource, /installAiCanvasRuntimeEdgeDisconnect/);
   assert.match(appSource, /localStorage\.getItem\(AI_CANVAS_MASCOT_VISIBLE_STORAGE_KEY\) === "true"/);
   assert.match(appSource, /开启桌宠/);
   assert.match(appSource, /关闭桌宠/);
+  assert.match(appSource, /注意开启桌宠需要消耗资源，电脑配置不高不建议开启/);
+  assert.match(appSource, /button\.dataset\.tooltipPos = "bottom"/);
   assert.match(appSource, /normalizeAiCanvasRuntimeMascotSkin\(localStorage\.getItem\(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY\)\)/);
   assert.match(skinSource, /切换桌宠/);
   assert.match(skinSource, /AI_CANVAS_MASCOT_SKINS = \["cloud", "cat", "dog", "bunny", "fox", "puff"\]/);
@@ -396,6 +419,9 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.match(skinSource, /function isHostMascotMutation/);
   assert.match(skinSource, /if \(icon\.getAttribute\("data-host-mascot-skin"\) === skin\) return/);
   assert.match(skinSource, /observer\.disconnect\(\)/);
+  assert.match(skinSource, /readVisible/);
+  assert.match(skinSource, /if \(disposed \|\| !isMascotVisible\(\) \|\| !isCustomMascotSkin\(skin\) \|\| !renderer\)/);
+  assert.match(skinSource, /dispose\.setVisible = \(nextVisible\) => \{/);
   assert.match(skinSource, /if \(records\.every\(isHostMascotMutation\)\) return/);
   assert.match(skinSource, /if \(typeof globalThis\.queueMicrotask === "function"\) globalThis\.queueMicrotask\(run\)/);
   assert.doesNotMatch(skinSource, /queueMicrotask\?\.[\s\S]{0,80}\?\? sync\(\)/);

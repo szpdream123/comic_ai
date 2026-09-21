@@ -465,7 +465,7 @@
 }
 
 .new-canvas-root .sidebar-floating .sidebar-btn-v3[data-host-mascot-toggle]::after {
-  content: attr(data-tooltip);
+  content: attr(aria-label);
 }
 
 .new-canvas-root .sidebar-floating .sidebar-btn-v3[data-tooltip^="任务中心"] {
@@ -556,6 +556,8 @@
 .app-tooltip,
 .app-tooltip[data-open="true"] {
   transition: none !important;
+  white-space: normal !important;
+  text-overflow: unset !important;
 }
 
 /* Agent mode is rendered by the standalone runtime bundle. Keep its menu
@@ -2435,6 +2437,12 @@ html.canvas-interacting .react-flow__node.dragging .node,
 html.canvas-interacting .react-flow__node.dragging {
   transition: none !important;
   animation: none !important;
+}
+
+html.canvas-interacting .react-flow__edges,
+html.canvas-interacting .react-flow__connectionline,
+html.canvas-interacting .react-flow__minimap {
+  pointer-events: none !important;
 }
 
 /* Keep asset-manager node image/video previews compact. */

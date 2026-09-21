@@ -103,7 +103,10 @@ export function installCanvasSelectEnhancer(root) {
   if (!root || root.__canvasSelectObserver || typeof MutationObserver === "undefined") return () => {};
   const enhance = () => enhanceCanvasSelects(root);
   enhance();
-  const observer = new MutationObserver(enhance);
+  const observer = new MutationObserver(() => {
+    if (root.ownerDocument?.documentElement?.classList?.contains("canvas-interacting")) return;
+    enhance();
+  });
   observer.observe(root, { childList: true, subtree: true });
   root.__canvasSelectObserver = observer;
   return () => {

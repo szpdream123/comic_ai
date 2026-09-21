@@ -1113,6 +1113,11 @@ test("AI Canvas runtime skips document clone while a node is dragging", () => {
   assert.match(runtimeAssetSource, /e\.onDocumentChange\?\.\(void 0,\{nodeDragActive:!0\}\)/);
   assert.match(runtimeAssetSource, /let d=\(t\.nodes\|\|\[\]\)\.some\(e=>e\?\.dragging===!0\);if\(d\)/);
   assert.match(runtimeAppSource, /onlyRenderVisibleElements:!0,autoPanOnNodeDrag:!1,fitView:!0/);
+  assert.match(runtimeAppSource, /var yoSrcCache=new Map/);
+  assert.match(runtimeAppSource, /yoSrcCache\.set\(`\$\{i\|\|""\}/);
+  assert.match(runtimeAppSource, /cachedSrc:yoSrcCache\.get\(`\$\{i\|\|""\}/);
+  assert.match(runtimeAppSource, /if\(!u&&e\.cachedSrc&&!o\)/);
+  assert.match(runtimeAppSource, /t\.src===n\|\|t\.release\(\)/);
 });
 
 test("new Canvas mounts the standalone React Flow runtime directly in the page", () => {
@@ -1178,6 +1183,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /data-host-mascot-toggle/);
   assert.match(appSource, /开启桌宠/);
   assert.match(appSource, /关闭桌宠/);
+  assert.match(appSource, /注意开启桌宠需要消耗资源，电脑配置不高不建议开启/);
   assert.match(appSource, /setMascotVisible\(visible\)/);
   assert.match(appSource, /setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
   assert.match(appSource, /function readAiCanvasRuntimeMascotSkin/);
@@ -1185,7 +1191,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /normalizeAiCanvasRuntimeMascotSkin\(localStorage\.getItem\(AI_CANVAS_MASCOT_SKIN_STORAGE_KEY\)\)/);
   assert.match(appSource, /installAiCanvasRuntimeMascotSkinSwitcher/);
   assert.match(appSource, /disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher/);
-  assert.match(appSource, /disposeMascotToggle = installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, \{[\s\S]*?setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
+  assert.match(appSource, /disposeMascotToggle = installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, \{[\s\S]*?setMascotVisible: \(visible\) => \{\s*configBridge\.setMascotVisible\(visible\);\s*disposeMascotSkinSwitcher\?\.setVisible\?\.\(visible\);/);
   assert.match(appSource, /previousState\?\.configHydrated !== false && nextState\?\.configHydrated !== false/);
   assert.match(appSource, /createAiCanvasRuntimeCatalogBridge/);
   assert.match(appSource, /const catalogBridge = createAiCanvasRuntimeCatalogBridge\(runtimeStore, context\)/);
@@ -1244,8 +1250,8 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.doesNotMatch(appSource, /\[aria-label="调用 Skill"\][\s\S]{0,80}trigger\?\.click/);
   assert.match(appSource, /disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost\(surface, runtimeStore\)/);
   assert.match(appSource, /disposeSkillPicker = installAiCanvasRuntimeSkillPicker\(surface, runtimeStore, runtimeContext\)/);
-  assert.match(appSource, /disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher\(surface, \{[\s\S]*?readSkin: readAiCanvasRuntimeMascotSkin[\s\S]*?persistSkin: persistAiCanvasRuntimeMascotSkin/);
-  assert.match(appSource, /disposeMascotToggle = installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, \{[\s\S]*?setMascotVisible: \(visible\) => configBridge\.setMascotVisible\(visible\)/);
+  assert.match(appSource, /disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher\(surface, \{[\s\S]*?readSkin: readAiCanvasRuntimeMascotSkin[\s\S]*?persistSkin: persistAiCanvasRuntimeMascotSkin[\s\S]*?readVisible: shouldShowAiCanvasRuntimeMascot/);
+  assert.match(appSource, /disposeMascotToggle = installAiCanvasRuntimeMascotToggle\(surface, runtimeStore, \{[\s\S]*?setMascotVisible: \(visible\) => \{\s*configBridge\.setMascotVisible\(visible\);\s*disposeMascotSkinSwitcher\?\.setVisible\?\.\(visible\);/);
   assert.match(appSource, /renderEpisodePromptSkillModal/);
   assert.match(appSource, /data-host-skill-picker="true"/);
   assert.match(appSource, /data-host-skill-action=/);

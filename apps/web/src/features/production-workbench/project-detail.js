@@ -141,11 +141,11 @@ const DEFAULT_WORKBENCH_THEME_ID = "starlit";
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
+  { id: "new-canvas", label: "新画布", icon: "wand" },
   { id: "project", label: "项目", icon: "clapperboard" },
   { id: "prompts", label: "提示词", icon: "sparkles" },
   { id: "skills", label: "Skill", icon: "sparkles" },
   { id: "tools", label: "画布", icon: "wand" },
-  { id: "new-canvas", label: "新画布", icon: "wand" },
   { id: "director", label: "导演台", icon: "camera" },
   { id: "script", label: "剧本", icon: "book" },
   { id: "toolbox", label: "工具箱", icon: "toolbox" },
