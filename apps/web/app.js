@@ -3,7 +3,7 @@ import {
   consumeFirstLoginOnboarding,
   markFirstLoginOnboarding,
 } from "./src/features/production-workbench/first-login-onboarding.js";
-import { applyAiCanvasRuntimeNodeModel, hydrateAiCanvasRuntimeSkillRows, normalizeAiCanvasRuntimeGrouping, normalizeAiCanvasRuntimeSkill } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
+import { applyAiCanvasRuntimeNodeModel, hydrateAiCanvasRuntimeSkillRows, normalizeAiCanvasRuntimeGrouping, normalizeAiCanvasRuntimeSkill, resolveAiCanvasRuntimeNodeMediaKind, toAiCanvasRuntimeSlashModelId } from "./src/features/new-canvas/ai-canvas-runtime-adapter.js";
 import { clearAiCanvasRuntimeMediaCache, installAiCanvasRuntimeMediaCache } from "./src/features/new-canvas/canvas-media-cache.js";
 import { installAiCanvasRuntimeMascotSkinSwitcher, normalizeAiCanvasRuntimeMascotSkin } from "./src/features/new-canvas/canvas-mascot-skin.js";
 import { matchCanvasRuntimeCatalogModel, resolveCanvasRuntimeNodeCreditCost } from "./src/features/production-workbench/generation-control-menu.js";
@@ -700,6 +700,42 @@ const AI_CANVAS_RUNTIME_NATIVE_NODE_TYPES = new Set([
   "plugin-node",
 ]);
 
+function isAiCanvasRuntimeGeneratingStatus(status) {
+  return ["loading", "running", "queued", "processing", "pending", "submitted"].includes(
+    String(status ?? "").trim().toLowerCase(),
+  );
+}
+
+function preserveAiCanvasRuntimeGeneratingNodes(liveNodes = [], nextNodes = []) {
+  const liveById = new Map(
+    (Array.isArray(liveNodes) ? liveNodes : [])
+      .filter((node) => node && typeof node === "object")
+      .map((node) => [String(node.id ?? ""), node]),
+  );
+  return (Array.isArray(nextNodes) ? nextNodes : []).map((node) => {
+    const nodeId = String(node?.id ?? "").trim();
+    const live = nodeId ? liveById.get(nodeId) : null;
+    const liveStatus = String(live?.data?.status ?? "").trim().toLowerCase();
+    const nextStatus = String(node?.data?.status ?? "").trim().toLowerCase();
+    const hostIdle = !nextStatus || nextStatus === "idle" || nextStatus === "ready" || nextStatus === "empty";
+    const liveTaskId = String(
+      live?.data?.taskId ?? live?.data?.lastTaskId ?? live?.data?.generationTaskId ?? live?.data?.pendingTask?.taskId ?? "",
+    ).trim();
+    if (!live || !hostIdle || !isAiCanvasRuntimeGeneratingStatus(liveStatus) || !liveTaskId) return node;
+    return {
+      ...node,
+      data: {
+        ...(node?.data && typeof node.data === "object" ? node.data : {}),
+        status: live.data.status,
+        ...(live.data?.taskId ? { taskId: live.data.taskId } : {}),
+        ...(live.data?.lastTaskId ? { lastTaskId: live.data.lastTaskId } : {}),
+        ...(live.data?.generationTaskId ? { generationTaskId: live.data.generationTaskId } : {}),
+        ...(live.data?.pendingTask ? { pendingTask: live.data.pendingTask } : {}),
+      },
+    };
+  });
+}
+
 function inferAiCanvasRuntimeNodeType(node) {
   const type = String(node?.type ?? node?.data?.type ?? "").trim();
   if (AI_CANVAS_RUNTIME_NATIVE_NODE_TYPES.has(type)) return type;
@@ -743,7 +779,10 @@ function normalizeAiCanvasRuntimeNode(node, index = 0, options = {}) {
   const generating = ["loading", "running", "queued", "processing", "pending", "submitted"].includes(rawStatus);
   const staleGenerating = options.recoverStaleGenerating === true
     && generating
-    && !String(data.taskId ?? data.lastTaskId ?? data.generationTaskId ?? data.pendingTask?.taskId ?? "").trim();
+    && (
+      Boolean(mediaUrl)
+      || !String(data.taskId ?? data.lastTaskId ?? data.generationTaskId ?? data.pendingTask?.taskId ?? "").trim()
+    );
   const status = staleGenerating
     ? (mediaUrl ? "success" : "idle")
     : generating
@@ -807,6 +846,19 @@ function normalizeAiCanvasRuntimeEdge(edge, index = 0) {
   };
 }
 
+function normalizeAiCanvasRuntimeDramaAssets(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const list = (key) => (Array.isArray(source[key]) ? source[key] : [])
+    .filter((item) => item && typeof item === "object" && String(item.id ?? "").trim() && String(item.name ?? "").trim());
+  return {
+    version: Number(source.version ?? 2) || 2,
+    characters: list("characters"),
+    scenes: list("scenes"),
+    props: list("props"),
+    ...(Array.isArray(source.actions) ? { actions: list("actions") } : {}),
+  };
+}
+
 function normalizeAiCanvasRuntimeDocument(document, canvasProjectId = "", options = {}) {
   const source = document && typeof document === "object" ? document : {};
   const nodes = (Array.isArray(source.nodes) ? source.nodes : [])
@@ -824,6 +876,9 @@ function normalizeAiCanvasRuntimeDocument(document, canvasProjectId = "", option
       .filter((edge) => edge && nodeIds.has(edge.source) && nodeIds.has(edge.target))
       .filter(Boolean),
     groups: grouping.groups,
+    ...(source.dramaAssets && typeof source.dramaAssets === "object"
+      ? { dramaAssets: normalizeAiCanvasRuntimeDramaAssets(source.dramaAssets) }
+      : {}),
   };
 }
 
@@ -928,6 +983,9 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
   const persistableCanvasRuntimeDocument = (value, options = {}) => {
     const source = value && typeof value === "object" ? value : {};
     const { updatedAt: _updatedAt, createdAt: _createdAt, viewport: _viewport, ...envelope } = source;
+    const dramaAssets = source.dramaAssets && typeof source.dramaAssets === "object"
+      ? normalizeAiCanvasRuntimeDramaAssets(source.dramaAssets)
+      : null;
     return cloneValue({
       ...envelope,
       ...persistableAiCanvasRuntimeProjectMeta(source, envelope),
@@ -935,6 +993,7 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       nodes: (Array.isArray(source.nodes) ? source.nodes : []).map((node) => omitRuntimeEphemeralNodeFields(node, options)),
       edges: (Array.isArray(source.edges) ? source.edges : []).map((edge) => omitRuntimeEphemeralEdgeFields(edge, options)),
       groups: Array.isArray(source.groups) ? source.groups : [],
+      ...(dramaAssets ? { dramaAssets } : {}),
     });
   };
   const arePersistableCanvasRuntimeDocumentsEqual = (left, right, options = {}) => {
@@ -998,6 +1057,8 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
     const savedEdges = Array.isArray(source.edges) ? source.edges : [];
     const liveGroups = Array.isArray(state.groups) ? state.groups : [];
     const savedGroups = Array.isArray(source.groups) ? source.groups : [];
+    const liveDramaAssets = state.dramaAssets && typeof state.dramaAssets === "object" ? state.dramaAssets : null;
+    const savedDramaAssets = source.dramaAssets && typeof source.dramaAssets === "object" ? source.dramaAssets : null;
     return persistableCanvasRuntimeDocument({
       ...envelope,
       ...persistableAiCanvasRuntimeProjectMeta({
@@ -1009,10 +1070,12 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       nodes: liveNodes.length > 0 || savedNodes.length === 0 ? liveNodes : savedNodes,
       edges: liveEdges.length > 0 || savedEdges.length === 0 ? liveEdges : savedEdges,
       groups: liveGroups.length > 0 || savedGroups.length === 0 ? (state.groups ?? source.groups ?? []) : savedGroups,
+      ...(liveDramaAssets || savedDramaAssets ? { dramaAssets: liveDramaAssets ?? savedDramaAssets } : {}),
     });
   };
   const applyHostProjectState = (next = {}) => {
     const liveNodes = store.getState()?.nodes;
+    const previousProjectId = String(currentProjectId ?? "").trim();
     const liveNodeDragActive = nodeDragActive || (
       Array.isArray(liveNodes) ? liveNodes : []
     ).some((node) => node?.dragging === true);
@@ -1051,9 +1114,16 @@ function createAiCanvasRuntimeHostProjectGuard(store, context = {}) {
       ...(documentProvided && !saveEnabled ? { projectLoadStatus: "loading" } : {}),
     };
     if (documentProvided && !nodeDragActive) {
-      patch.nodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
+      const incomingNodes = Array.isArray(document.nodes) ? cloneValue(document.nodes) : [];
+      patch.nodes = String(currentProjectId ?? "").trim() === previousProjectId
+        ? preserveAiCanvasRuntimeGeneratingNodes(
+            Array.isArray(liveNodes) ? liveNodes : [],
+            incomingNodes,
+          )
+        : incomingNodes;
       patch.edges = Array.isArray(document.edges) ? cloneValue(document.edges) : [];
       patch.groups = Array.isArray(document.groups) ? cloneValue(document.groups) : [];
+      patch.dramaAssets = normalizeAiCanvasRuntimeDramaAssets(document.dramaAssets);
     }
     store.setState(patch);
     if (documentProvided && !nodeDragActive) {
@@ -1753,6 +1823,60 @@ function resolveAiCanvasRuntimeSelectedModel(runtimeStore, node = {}) {
     ?? matchCanvasRuntimeCatalogModel(models, data.modelId);
 }
 
+function resolveAiCanvasRuntimeDisplayedModel(runtimeStore, node = {}) {
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  const nodeType = String(node?.type ?? data?.type ?? "").trim();
+  const displayedValue = String(data.model ?? "").trim() || readAiCanvasRuntimePreferredModel(nodeType);
+  if (!displayedValue || String(data.workflowId ?? "").trim()) return null;
+  if (String(data.model ?? "").trim() && String(data.provider ?? "").trim()) {
+    return { model: String(data.model).trim(), provider: String(data.provider).trim() };
+  }
+  const state = runtimeStore?.getState?.() ?? {};
+  const models = Array.isArray(state?.config?.generalModels) ? state.config.generalModels : [];
+  const catalogModel = matchCanvasRuntimeCatalogModel(models, displayedValue);
+  const catalogId = String(catalogModel?.id ?? "").trim();
+  if (catalogId && (displayedValue === catalogId || displayedValue === `general/${catalogId}`)) {
+    return { model: `general/${catalogId}`, provider: "general" };
+  }
+  if (displayedValue.includes("/")) {
+    const provider = displayedValue.slice(0, displayedValue.indexOf("/")).trim();
+    return provider ? { model: displayedValue, provider } : null;
+  }
+  const slash = toAiCanvasRuntimeSlashModelId(
+    displayedValue,
+    resolveAiCanvasRuntimeNodeMediaKind(nodeType, data),
+  );
+  return slash?.model && slash?.provider ? slash : null;
+}
+
+function installAiCanvasRuntimeDisplayedModelSubmit(surface, runtimeStore) {
+  const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
+  if (!root || typeof runtimeStore?.getState !== "function") return () => {};
+
+  const onPointerDown = (event) => {
+    const submit = event.target?.closest?.(".prompt-submit-btn");
+    if (!submit || !root.contains(submit)) return;
+    const state = runtimeStore.getState?.() ?? {};
+    const nodeId = String(state.activeNodeId ?? "").trim();
+    const node = (Array.isArray(state.nodes) ? state.nodes : []).find((item) => String(item?.id ?? "") === nodeId);
+    if (!node) return;
+    const data = node.data && typeof node.data === "object" ? node.data : {};
+    if (String(data.model ?? "").trim() && String(data.provider ?? "").trim()) return;
+    if (String(data.workflowId ?? "").trim()) return;
+    const displayed = resolveAiCanvasRuntimeDisplayedModel(runtimeStore, node);
+    if (!displayed?.model || !displayed?.provider) return;
+    state.updateNodeDataTransient?.(nodeId, {
+      model: displayed.model,
+      provider: displayed.provider,
+    });
+  };
+
+  root.addEventListener("pointerdown", onPointerDown, true);
+  return () => {
+    root.removeEventListener("pointerdown", onPointerDown, true);
+  };
+}
+
 function installAiCanvasRuntimePromptCreditCost(surface, runtimeStore) {
   const root = surface?.querySelector?.(".new-canvas-root") ?? surface;
   const doc = surface?.ownerDocument ?? globalThis.document;
@@ -2220,6 +2344,7 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
   let librarySkills = [];
   let mineSkills = [];
   let loadToken = 0;
+  let lockedFrame = null;
 
   const findNativeSkillList = () => root.querySelector?.("#chat-skill-suggestions")
     ?? root.querySelector?.('[role="listbox"][aria-label="Skill 引用"]');
@@ -2227,6 +2352,8 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
   const findInputBox = () => findComposer()?.closest?.(".chat-panel-input-box")
     ?? root.querySelector?.(".chat-panel-input-box");
   const findOverlay = () => root.querySelector?.("[data-host-skill-picker]");
+  const findPanel = () => findInputBox()?.closest?.(".chat-panel")
+    ?? root.querySelector?.(".chat-panel");
   const hostApi = () => context.api ?? context.creatorApi ?? globalThis.__COMIC_AI_CANVAS_HOST_API__;
   const collectSkills = () => [
     ...excludeProjectWorkflowPlazaSkills(officialSkills, "official"),
@@ -2267,7 +2394,8 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
 
   const renderOverlay = () => {
     const inputBox = findInputBox();
-    if (!inputBox) return;
+    const panel = findPanel();
+    if (!inputBox || !panel) return;
     const markup = renderEpisodePromptSkillModal({
       show: true,
       variant: "plaza",
@@ -2299,11 +2427,12 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
       let overlay = findOverlay();
       if (!overlay) {
         overlay = doc.createElement("div");
-        inputBox.append(overlay);
-      } else if (overlay.parentElement !== inputBox) {
-        inputBox.append(overlay);
+        panel.append(overlay);
+      } else if (overlay.parentElement !== panel) {
+        panel.append(overlay);
       }
       overlay.outerHTML = markup;
+      positionOverlay({ preserve: Boolean(lockedFrame) });
     } finally {
       nesting = false;
     }
@@ -2341,8 +2470,36 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     }
   };
 
+  const positionOverlay = ({ preserve = false } = {}) => {
+    const overlay = findOverlay();
+    const inputBox = findInputBox();
+    const panel = findPanel();
+    if (!overlay || !inputBox || !panel) return;
+    const panelRect = panel.getBoundingClientRect();
+    const inputRect = inputBox.getBoundingClientRect();
+    if (!panelRect.width || !inputRect.height) return;
+    const gap = 8;
+    const side = 12;
+    const width = Math.max(0, panelRect.width - side * 2);
+    const frame = preserve && lockedFrame
+      ? lockedFrame
+      : {
+        top: Math.max(gap, inputRect.top - panelRect.top - gap - Math.min(28 * 16, Math.max(0, inputRect.top - panelRect.top - gap * 2))),
+        height: Math.min(28 * 16, Math.max(0, inputRect.top - panelRect.top - gap * 2)),
+      };
+    if (!preserve || !lockedFrame) lockedFrame = frame;
+    overlay.style.setProperty("top", `${frame.top}px`, "important");
+    overlay.style.setProperty("left", `${side}px`, "important");
+    overlay.style.setProperty("right", "auto", "important");
+    overlay.style.setProperty("bottom", "auto", "important");
+    overlay.style.setProperty("width", `${width}px`, "important");
+    overlay.style.setProperty("height", `${frame.height}px`, "important");
+    overlay.style.setProperty("max-height", `${frame.height}px`, "important");
+  };
+
   const closePicker = () => {
     open = false;
+    lockedFrame = null;
     draftIds = [];
     query = "";
     removeOverlay();
@@ -2375,7 +2532,16 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
       const skillId = String(target.dataset.episodeSkillId ?? target.dataset.skillId ?? "").trim();
       if (!collectSkills().some((skill) => skill.id === skillId)) return;
       draftIds = togglePlazaSkillId(draftIds, skillId);
-      renderOverlay();
+      const overlay = findOverlay();
+      const selected = new Set(draftIds);
+      overlay?.querySelectorAll?.(".plaza-skill-picker-item").forEach((item) => {
+        const id = String(item.querySelector?.("[data-episode-skill-id]")?.dataset?.episodeSkillId ?? "").trim();
+        const active = selected.has(id);
+        item.classList.toggle("active", active);
+        item.querySelector?.('[role="option"]')?.setAttribute?.("aria-selected", active ? "true" : "false");
+      });
+      const count = overlay?.querySelector?.("[data-episode-skill-selected-count]");
+      if (count) count.textContent = `已选 ${draftIds.length} 项`;
       return;
     }
     if (action === "confirm-host-skills") {
@@ -2446,6 +2612,7 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
       openedViaSlash = false;
       if (open) {
         open = false;
+        lockedFrame = null;
         draftIds = [];
         query = "";
         removeOverlay();
@@ -2456,6 +2623,7 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     if (suppressReopen) return;
     if (!open) {
       open = true;
+      lockedFrame = null;
       draftIds = [];
       sourceTab = "official";
       query = readAiCanvasRuntimeComposerSlashQuery(findComposer());
@@ -2522,6 +2690,10 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
   root.addEventListener("keydown", onKeyDown, true);
   root.addEventListener("keydown", onComposerSubmitKey, true);
   root.addEventListener("pointerdown", onPointerDown, true);
+  const onViewportChange = () => {
+    if (open) positionOverlay();
+  };
+  root.ownerDocument?.defaultView?.addEventListener?.("resize", onViewportChange);
   const observer = new MutationObserver(() => sync());
   observer.observe(root, { childList: true, subtree: true });
   sync();
@@ -2536,6 +2708,7 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     root.removeEventListener("keydown", onKeyDown, true);
     root.removeEventListener("keydown", onComposerSubmitKey, true);
     root.removeEventListener("pointerdown", onPointerDown, true);
+    root.ownerDocument?.defaultView?.removeEventListener?.("resize", onViewportChange);
     open = false;
     removeOverlay();
   };
@@ -3088,6 +3261,23 @@ async function authorizeAiCanvasRuntimePromptAttachments(conversationId, files =
   return await authorize(id, candidates);
 }
 
+async function authorizeAiCanvasRuntimeUploadedFiles(conversationId, files = []) {
+  const id = String(conversationId ?? "").trim();
+  const items = (Array.isArray(files) ? files : []).filter(Boolean);
+  if (!id || !items.length) return [];
+  const readable = [];
+  for (const [index, file] of items.entries()) {
+    if (isAiCanvasRuntimeImageAttachment(file) || isAiCanvasRuntimeVideoAttachment(file)) {
+      readable.push(file);
+      continue;
+    }
+    const grantFile = await normalizeAiCanvasRuntimeGrantFile(file, index);
+    if (grantFile) readable.push(grantFile);
+  }
+  if (!readable.length) return [];
+  return authorizeAiCanvasRuntimePromptAttachments(id, readable);
+}
+
 async function submitAiCanvasRuntimeAgentPrompt(runtimeStore, input = {}, context = {}) {
   await hydrateAiCanvasRuntimePromptSkills(runtimeStore, input, context);
   const skillTokens = plazaSkillTokensForAiCanvasRuntimePrompt(input, runtimeStore, context);
@@ -3288,7 +3478,7 @@ function resolveAiCanvasRuntimeGeneratingNodeId(runtimeWindow, context = {}, tas
   const unbound = generating.filter((node) =>
     !String(node?.data?.taskId ?? node?.data?.lastTaskId ?? node?.data?.generationTaskId ?? node?.data?.pendingTask?.taskId ?? "").trim()
   );
-  const pick = (unbound.length ? unbound : generating).at(-1);
+  const pick = unbound.at(-1);
   return String(pick?.id ?? "").trim();
 }
 
@@ -3322,6 +3512,45 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
     }
     return null;
   };
+  const persistTerminalNode = (task) => {
+    const taskId = String(task?.taskId ?? task?.generationTaskId ?? task?.id ?? "").trim();
+    if (!taskId) return;
+    const store = context.runtimeStore;
+    const nodes = Array.isArray(store?.getState?.()?.nodes) ? store.getState().nodes : [];
+    const node = nodes.find((item) =>
+      String(item?.data?.taskId ?? item?.data?.lastTaskId ?? item?.data?.generationTaskId ?? item?.data?.pendingTask?.taskId ?? "").trim() === taskId
+    );
+    if (!node?.id) return;
+    const status = String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase();
+    const succeeded = status === "completed" || status === "succeeded";
+    const media = resolveAiCanvasAssistantTaskMedia(task);
+    const type = String(node?.type ?? node?.data?.type ?? "").trim();
+    const isVideo = media.kind === "video" || type === "ai-video" || type === "source-video" || type === "video";
+    const patch = succeeded && media.url
+      ? {
+          status: "success",
+          taskId: "",
+          lastTaskId: taskId,
+          generationTaskId: taskId,
+          pendingTask: undefined,
+          failureMessage: "",
+          ...(isVideo ? { videoUrl: media.url } : { imageUrl: media.url }),
+        }
+      : {
+          status: "error",
+          taskId: "",
+          lastTaskId: taskId,
+          generationTaskId: taskId,
+          pendingTask: undefined,
+          failureMessage: String(task?.failure?.displayMessage ?? task?.displayMessage ?? task?.error ?? "生成任务失败，请重新生成。").trim(),
+        };
+    const state = store?.getState?.() ?? {};
+    const update = state.updateNodeData ?? state.updateNodeDataTransient;
+    if (typeof update !== "function") return;
+    if (state.updateNodeData) state.commitToHistory?.();
+    update(node.id, patch);
+    void Promise.resolve(state.saveCurrentProjectSilent?.() ?? state.saveCurrentProject?.()).catch(() => undefined);
+  };
   const notifyWaiters = (task) => {
     const taskId = String(task?.taskId ?? task?.generationTaskId ?? task?.id ?? "").trim();
     if (!taskId || !isAiCanvasAssistantTaskTerminal(task)) return;
@@ -3329,6 +3558,7 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
     const isSuccess = status === "completed" || status === "succeeded";
     if (isSuccess && !resolveAiCanvasAssistantTaskMedia(task).url) return;
     terminalTasks.set(taskId, task);
+    persistTerminalNode(task);
     const pending = waiters.get(taskId);
     if (!pending?.size) return;
     waiters.delete(taskId);
@@ -4183,6 +4413,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     let disposeHeaderChrome = () => {};
     let disposeFooterZoomControls = () => {};
     let disposePromptCreditCost = () => {};
+    let disposeDisplayedModelSubmit = () => {};
     let disposeSkillPicker = () => {};
     let disposeMascotSkinSwitcher = () => {};
     let disposeMascotToggle = () => {};
@@ -4192,6 +4423,11 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         ...runtimeContext,
       });
     return projectBridgePromise.then((projectBridge) => mountAiCanvasRuntime(surface, runtimeContext).then(async (runtimeHandle) => {
+      const hostApi = globalThis.__COMIC_AI_CANVAS_HOST_API__;
+      if (hostApi && typeof hostApi === "object") {
+        hostApi.prepareReadableAttachment = normalizeAiCanvasRuntimeGrantFile;
+        hostApi.authorizeUploadedFiles = authorizeAiCanvasRuntimeUploadedFiles;
+      }
       hostProjectGuard.enableSaves?.();
       await ensureAiCanvasRuntimeDefaultConversation(runtimeStore, runtimeContext);
       openAiCanvasRuntimeAssistant(runtimeStore);
@@ -4199,6 +4435,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       disposeHeaderChrome = installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, runtimeContext);
       disposeFooterZoomControls = installAiCanvasRuntimeFooterZoomControls(surface);
       disposePromptCreditCost = installAiCanvasRuntimePromptCreditCost(surface, runtimeStore);
+      disposeDisplayedModelSubmit = installAiCanvasRuntimeDisplayedModelSubmit(surface, runtimeStore);
       disposeSkillPicker = installAiCanvasRuntimeSkillPicker(surface, runtimeStore, runtimeContext);
       disposeMascotSkinSwitcher = installAiCanvasRuntimeMascotSkinSwitcher(surface, {
         readSkin: readAiCanvasRuntimeMascotSkin,
@@ -4260,6 +4497,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
           disposeHeaderChrome();
           disposeFooterZoomControls();
           disposePromptCreditCost();
+          disposeDisplayedModelSubmit();
           disposeSkillPicker();
           disposeMascotSkinSwitcher();
           disposeMascotToggle();
@@ -4283,6 +4521,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       unsubscribeAssistantPreference();
       disposeHeaderChrome();
       disposeFooterZoomControls();
+      disposePromptCreditCost();
+      disposeDisplayedModelSubmit();
+      disposeSkillPicker();
       disposeMascotSkinSwitcher();
       disposeMascotToggle();
       disposeEdgeDisconnect();
@@ -4295,6 +4536,9 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       unsubscribeAssistantPreference();
       disposeHeaderChrome();
       disposeFooterZoomControls();
+      disposePromptCreditCost();
+      disposeDisplayedModelSubmit();
+      disposeSkillPicker();
       mediaCacheBridge.dispose();
       taskCenterBridge.dispose();
       hostProjectGuard.dispose();

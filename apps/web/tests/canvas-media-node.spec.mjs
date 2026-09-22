@@ -144,6 +144,26 @@ test("Canvas media fragments expose waveform, seek, frame capture, and fullscree
   assert.match(renderCanvasMediaNodeBody({ type: "source-audio", data: { audioUrl: "/voice.wav" } }), /data-canvas-audio-body/);
 });
 
+test("failed video and audio nodes show the task failure message instead of an empty slot", () => {
+  const message = "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。";
+  const video = renderCanvasVideoNodeBody({
+    id: "video-failed",
+    type: "ai-video",
+    data: { status: "failed", failureMessage: message },
+  });
+  const audio = renderCanvasMediaNodeBody({
+    type: "ai-audio",
+    data: { status: "failed", mediaKind: "audio", failureMessage: message },
+  });
+
+  assert.match(video, /生视频失败/);
+  assert.match(video, /内容安全策略/);
+  assert.doesNotMatch(video, /暂无视频/);
+  assert.match(audio, /生音频失败/);
+  assert.match(audio, /内容安全策略/);
+  assert.doesNotMatch(audio, /暂无音频/);
+});
+
 test("Canvas video regeneration hides the previous result while the new video is preparing", () => {
   const html = renderCanvasVideoNodeBody({
     id: "video-regenerating",
@@ -153,7 +173,7 @@ test("Canvas video regeneration hides the previous result while the new video is
       videoUrl: "/previous-video.mp4",
     },
   });
-  assert.match(html, /正在准备视频/);
+  assert.match(html, /正在生成视频/);
   assert.doesNotMatch(html, /data-canvas-video-player|previous-video\.mp4/);
 });
 
@@ -429,6 +449,19 @@ test("Canvas host renders enlarged upload images and AI image click previews", (
   assert.match(graphSource, /type === "source-image"[\s\S]*?renderCanvasSourceMediaNodeBody\(node, "image"/);
   assert.match(graphSource, /\["send", "ai-image"\]\.includes\(type\)/);
   assert.match(graphSource, /function renderCanvasImageGenerationX6Node[\s\S]*?data-action="toggle-canvas-image-fullscreen"/);
+});
+
+test("failed source media nodes show the task failure message instead of an empty upload slot", () => {
+  const graphSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  const renderer = graphSource.match(/function renderCanvasSourceMediaNodeBody[\s\S]*?function renderCanvasGenericX6Node/)?.[0] ?? "";
+
+  assert.match(renderer, /generationFailed && !uploading && !generating/);
+  assert.match(renderer, /renderCanvasX6GenerationState\(node, status\)/);
+  assert.match(renderer, /is-failed/);
+  assert.match(renderer, /has-generation-state/);
 });
 
 test("Canvas host media actions use node-id lookup, Blob capture, and page overlay state", () => {

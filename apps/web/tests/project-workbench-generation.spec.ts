@@ -45249,6 +45249,65 @@ describe("production workbench project tab", () => {
     assert.deepEqual(payload.parameters.audioFilePaths, ["https://example.test/voice.mp3"]);
   });
 
+  it("keeps the canvas video node generating when the target already has an active task", async () => {
+    const activeTaskId = "d116b3b9-5d9b-4e9b-9094-598eb47a4121";
+    const canvasDocument = {
+      version: 1,
+      canvasProjectId: "canvas-project-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{
+        id: "video-send",
+        type: "ai-video",
+        position: { x: 120, y: 80 },
+        data: {
+          mediaKind: "video",
+          status: "ready",
+          modelCode: "happy-horse",
+          prompt: "猫在乱跳",
+          ports: { inputs: [{ id: "in_image", kind: "image" }], outputs: [{ id: "out_video", kind: "video" }] },
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async runCanvasNode() {
+          const error = new Error("当前节点已有视频生成任务进行中，请等待完成后再试。");
+          error.status = 409;
+          error.errorCode = "generation_target_busy";
+          error.taskId = activeTaskId;
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedCanvasNodeId: "video-send",
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasProjectView: "detail",
+        canvasProjects: [{ id: "canvas-project-main", title: "画布项目", createdAt: "2026/09/22", status: "草稿" }],
+        canvasDocumentsByProject: { "canvas-project-main": canvasDocument },
+        creditBalance: 99999,
+        taskCenterTasksById: {},
+        episodeGenerationConfig: {
+          creditBalance: 99999,
+          models: [{ modelCode: "happy-horse", modelLabel: "Happy Horse", mediaType: "video" }],
+        },
+        canvasDocument,
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "run-canvas-node", nodeId: "video-send" } });
+
+    const node = workbench.ui.canvasDocument.nodes.find((item) => item.id === "video-send");
+    assert.equal(node.data.status, "running");
+    assert.equal(node.data.taskId, activeTaskId);
+    assert.equal(workbench.ui.canvasGeneratingNodeId, "video-send");
+    assert.equal(workbench.ui.taskCenterTasksById[activeTaskId].targetId, "video-send");
+    assert.equal(workbench.ui.taskCenterTasksById[activeTaskId].status, "running");
+  });
+
   it("maps canvas video image inputs to the selected video generation type", async () => {
     const runCanvasVideoMode = async (videoGenerationMode, modelCode) => {
       const createVideoTaskCalls = [];

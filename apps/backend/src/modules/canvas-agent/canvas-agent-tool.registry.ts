@@ -682,6 +682,39 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
       };
     },
   });
+  registry.register({
+    id: "canvas.read_node",
+    description: "Read the current text of a canvas node previously referenced in this conversation. Use it whenever a later turn needs that node's content, including pasted text and uploaded document nodes. Do not claim the file is unavailable without calling this tool.",
+    effect: "read",
+    requiredCapability: "canvas:view",
+    inputSchema: {
+      type: "object",
+      properties: { nodeId: { type: "string", minLength: 1 } },
+      required: ["nodeId"],
+      additionalProperties: false,
+    },
+    execute: async (input, context) => {
+      const nodeId = String(input.nodeId ?? "").trim();
+      if (!context.referencedNodeIds?.includes(nodeId)) {
+        throw new Error("canvas_agent_node_not_referenced");
+      }
+      const canvas = await deps.readCanvas({ canvasId: context.canvasId, actor: context.actor });
+      const document = readRecord(canvas.document) ?? canvas;
+      const nodes = Array.isArray(document.nodes) ? document.nodes : [];
+      const node = nodes.map(readRecord).find((item) => readStringValue(item?.id) === nodeId);
+      if (!node) throw new Error("canvas_agent_node_not_found");
+      const data = readRecord(node.data) ?? {};
+      return {
+        status: "succeeded",
+        output: {
+          nodeId,
+          type: readStringValue(node.type),
+          title: readStringValue(data.title ?? data.label ?? data.name).slice(0, 160),
+          text: readStringValue(data.text ?? data.prompt ?? data.content).slice(0, 80_000),
+        },
+      };
+    },
+  });
   if (deps.context) {
     registry.register({
       id: "file_grant.resolve",

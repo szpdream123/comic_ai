@@ -130,7 +130,7 @@ export class CanvasAgentExecutor {
       const mediaModelSwitchGuidance = capabilityProfile === "media_generation_only"
         ? mediaModelSwitchGuidanceFor(userMessageText)
         : "";
-      const referencedNodeIds = capabilityProfile === "media_generation_only" ? [] : latestUserReferencedNodeIds(context);
+      const referencedNodeIds = capabilityProfile === "media_generation_only" ? [] : conversationReferencedNodeIds(context);
       const referencedFileGrantIds = taskUserContent
         ? fileGrantIdsFromContent(taskUserContent)
         : latestUserFileGrantIds(context);
@@ -170,7 +170,7 @@ export class CanvasAgentExecutor {
       const visualStyles = resolveVisualStyles(modelChoiceMessages);
       const modelInput = {
         mode: current.mode,
-        context,
+        context: referencedNodeIds.length ? { ...(context as Record<string, unknown>), referencedNodes: referencedNodeIds.map((nodeId) => ({ nodeId })) } : context,
         ...(capabilityProfile === "media_generation_only" ? { visualStyles, visualStyleInstruction: "Use these resolved image/video styles in every generation prompt. Use the resolved visualStyles as the source of truth, including the selected project style. Explicit style changes override old character briefs and reference art styles. Do not reuse a reference from a conflicting style; ask whether to replace it or create a matching reference first. Never claim you inspected a video's visual style unless a vision-capable tool actually returned that evidence." } : {}),
         ...(capabilityProfile === "media_generation_only" ? { generationModels: preferredModels, generationModelInstruction: "These are the resolved user-selected models. Use these exact codes for generation.create and the same models when describing generation or retries." } : {}),
         tools: toolsForCapabilityProfile(this.deps.tools.listForModel(current.mode), capabilityProfile),
@@ -850,7 +850,7 @@ export class CanvasAgentExecutor {
     try {
       const referencedNodeIds = capabilityProfile === "media_generation_only"
         ? []
-        : await loadLatestUserReferencedNodeIds(this.deps.db, task.conversationId);
+        : await loadConversationReferencedNodeIds(this.deps.db, task.conversationId);
       result = await this.deps.tools.execute(tool.id, executionInput, {
         canvasId: task.canvasId,
         conversationId: task.conversationId,
@@ -969,7 +969,7 @@ export class CanvasAgentExecutor {
   }
 }
 
-const canvasAgentToolCallInstruction = "The latest complete canvas state is already available in context.canvas; use it directly and do not request canvas.read. In B or C mode, when the latest user request asks to change the canvas, emit the required tool_call instead of a final response that asks for confirmation or promises a future tool call. The runtime presents approval controls after the tool_call. Only return final after tools succeed or when the requested change cannot be performed. For an attached video, use video.inspect when deterministic metadata is useful, then perform visual semantic understanding directly with the current task model and attached video input; never select or delegate to another model for that understanding. When the latest user message contains fileGrantIds from @-referenced canvas nodes, pass those same IDs to generation.create when generating image or video references. The tool maps image grants to referenceImages and a video grant to sourceVideo. Pass generation.create.targetNodeId only when the user explicitly asks to regenerate or replace that compatible existing media node. Referencing a node as generation input does not make it the output target; omit targetNodeId when a new node is intended. In Plan or Expert mode, do not perform side effects.";
+const canvasAgentToolCallInstruction = "The latest complete canvas state is already available in context.canvas; use it directly and do not request canvas.read. In B or C mode, when the latest user request asks to change the canvas, emit the required tool_call instead of a final response that asks for confirmation or promises a future tool call. The runtime presents approval controls after the tool_call. Only return final after tools succeed or when the requested change cannot be performed. For an attached video, use video.inspect when deterministic metadata is useful, then perform visual semantic understanding directly with the current task model and attached video input; never select or delegate to another model for that understanding. When the latest user message contains fileGrantIds from @-referenced canvas nodes, pass those same IDs to generation.create when generating image or video references. The tool maps image grants to referenceImages and a video grant to sourceVideo. Pass generation.create.targetNodeId only when the user explicitly asks to regenerate or replace that compatible existing media node. Referencing a node as generation input does not make it the output target; omit targetNodeId when a new node is intended. context.referencedNodes lists every canvas node referenced earlier in this conversation. When a later request needs one of those nodes, including pasted text or an uploaded document, call canvas.read_node with its nodeId before answering. context.conversationDocuments contains the full text of every document already sent in this conversation, including files sent before the current skill. They are authorized and readable. When the user asks to analyze, continue, or use an earlier file or attachment, use that text immediately. Do not ask the user to reattach, reauthorize, or paste it. Do not say the file, grant, or text is missing when conversationDocuments lists it. Active context.fileGrants are also already authorized. Do not claim a sent file is unavailable without checking conversationDocuments, fileGrants, and canvas.read_node. In Plan or Expert mode, do not perform side effects.";
 const textModelSwitchGuidance = "无法帮您切换模型，请手动在右上角切换。当前是文本模型+其它模型的集合，并不是某一个模型。";
 
 function compactCanvasReadMessagesForModel(context: unknown): unknown {
@@ -1079,15 +1079,25 @@ function assertToolAllowedForCapabilityProfile(
 }
 
 function latestUserReferencedNodeIds(context: unknown) {
+  return referencedNodeIdsFromMessages(context);
+}
+
+function conversationReferencedNodeIds(context: unknown) {
+  return referencedNodeIdsFromMessages(context, { all: true });
+}
+
+function referencedNodeIdsFromMessages(context: unknown, options: { all?: boolean } = {}) {
   if (!context || typeof context !== "object") return [];
   const messages = (context as { messages?: unknown }).messages;
   if (!Array.isArray(messages)) return [];
+  const ids: string[] = [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "user") continue;
-    return referencedNodeIdsFromContent((message as { content?: unknown }).content);
+    ids.push(...referencedNodeIdsFromContent((message as { content?: unknown }).content));
+    if (!options.all) break;
   }
-  return [];
+  return [...new Set(ids)];
 }
 
 function latestUserFileGrantIds(context: unknown) {
@@ -1138,12 +1148,12 @@ function latestUserContentValue<T>(
   return fallback;
 }
 
-async function loadLatestUserReferencedNodeIds(db: SqlDatabase, conversationId: string) {
+async function loadConversationReferencedNodeIds(db: SqlDatabase, conversationId: string) {
   const result = await db.query<{ content_json: Record<string, unknown> }>(
-    "SELECT content_json FROM canvas_agent_messages WHERE conversation_id=$1 AND role='user' ORDER BY sequence DESC LIMIT 1",
+    "SELECT content_json FROM canvas_agent_messages WHERE conversation_id=$1 AND role='user' ORDER BY sequence DESC LIMIT 80",
     [conversationId],
   );
-  return referencedNodeIdsFromContent(result.rows[0]?.content_json);
+  return [...new Set(result.rows.flatMap((row) => referencedNodeIdsFromContent(row.content_json)))];
 }
 
 function referencedNodeIdsFromContent(content: unknown) {

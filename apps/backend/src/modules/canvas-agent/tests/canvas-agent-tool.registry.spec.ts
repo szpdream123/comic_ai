@@ -721,6 +721,31 @@ test("media tool requires an explicit model code", () => {
   );
 });
 
+test("canvas.read_node rereads a previously referenced text node and rejects others", async () => {
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({
+      document: {
+        nodes: [
+          { id: "text-1", type: "source-text", data: { title: "第一集.txt", text: "第一集正文" } },
+          { id: "text-2", type: "source-text", data: { title: "未引用", text: "不能读取" } },
+        ],
+      },
+    }),
+    patchCanvas: async () => ({ revision: 2 }),
+    generationIntake: { create: async () => ({ generationTaskId: "generation-1" }) },
+  });
+  const scope = {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "read-node",
+    referencedNodeIds: ["text-1"],
+  };
+  const result = await registry.execute("canvas.read_node", { nodeId: "text-1" }, scope);
+  assert.equal(result.output.text, "第一集正文");
+  await assert.rejects(
+    registry.execute("canvas.read_node", { nodeId: "text-2" }, scope),
+    /canvas_agent_node_not_referenced/,
+  );
+});
+
 test("registry exposes actor-scoped history, asset, and preset tools when platform services are supplied", async () => {
   const registry = createDefaultCanvasAgentToolRegistry({
     readCanvas: async () => ({}),
@@ -733,7 +758,7 @@ test("registry exposes actor-scoped history, asset, and preset tools when platfo
   });
   assert.deepEqual(registry.listForModel("expert").map((tool) => tool.id), [
     "canvas.read", "canvas.read_history", "asset.search", "preset.list",
-    "expert.canvas_structure", "expert.workflow_risk", "expert.asset_reuse",
+    "expert.canvas_structure", "expert.workflow_risk", "expert.asset_reuse", "canvas.read_node",
   ]);
   const history = await registry.execute("canvas.read_history", { nodeKey: "node-1" }, {
     canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-1",
@@ -896,7 +921,7 @@ test("expert mode only exposes read tools and denies every side effect", () => {
     generationIntake: { create: async () => ({ generationTaskId: "generation-1" }) },
   });
   assert.deepEqual(registry.listForModel("expert").map((tool) => tool.id), [
-    "canvas.read", "expert.canvas_structure", "expert.workflow_risk",
+    "canvas.read", "expert.canvas_structure", "expert.workflow_risk", "canvas.read_node",
   ]);
 
   const policy = new CanvasAgentPolicyService({

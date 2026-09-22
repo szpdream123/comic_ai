@@ -6757,6 +6757,12 @@
   to { transform: rotate(360deg); }
 }
 
+.canvas-x6-source-media-preview.has-generation-state {
+  display: grid;
+  align-content: center;
+  padding: 8px;
+}
+
 .canvas-x6-source-media-preview strong {
   color: #dce7eb;
   font-size: 12px;
@@ -9987,6 +9993,14 @@
 .new-canvas-root .canvas-audio-empty,
 .new-canvas-root .canvas-video-empty {
   color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-audio-empty.is-failed,
+.new-canvas-root .canvas-video-empty.is-failed {
+  align-content: center;
+  justify-items: stretch;
+  padding: 8px;
+  color: var(--new-canvas-foreground) !important;
 }
 
 /* Keep every generating image surface on the same themed canvas overlay. */

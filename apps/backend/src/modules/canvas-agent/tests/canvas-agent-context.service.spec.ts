@@ -54,6 +54,9 @@ test("Canvas Agent context compacts long conversations without loading 1000 mess
       if (sql.includes("FROM canvas_agent_file_grants file_grant")) {
         return { rows: [] as T[] };
       }
+      if (sql.includes("jsonb_typeof(content_json->'attachments')")) {
+        return { rows: [{ content_json: { attachments: [{ name: "第一集.txt", analysisText: "第一集正文" }] } }] as T[] };
+      }
       if (sql.includes("SELECT id FROM canvas_agent_conversations")) {
         return { rows: [{ id: "conversation-1" }] as T[] };
       }
@@ -106,6 +109,7 @@ test("Canvas Agent context compacts long conversations without loading 1000 mess
   assert.equal(context.messages[0]?.sequence, 113);
   assert.equal(context.messages.at(-1)?.sequence, 120);
   assert.deepEqual(context.fileGrants, []);
+  assert.deepEqual(context.conversationDocuments, [{ name: "第一集.txt", text: "第一集正文" }]);
   assert.equal(storedSummary?.throughSequence, 112);
   assert.equal(storedSummary?.messageCount, 112);
   assert.equal(Array.isArray(storedSummary?.items) ? storedSummary.items.length : 0, 80);
@@ -124,6 +128,9 @@ test("media-generation-only context does not load Canvas knowledge or prompt pre
       }
       if (sql.includes("SELECT id FROM canvas_agent_conversations")) {
         return { rows: [{ id: "conversation-1" }] as T[] };
+      }
+      if (sql.includes("jsonb_typeof(content_json->'attachments')")) {
+        return { rows: [] as T[] };
       }
       if (sql.includes("FROM canvas_agent_messages")) {
         return { rows: [{ role: "user", content_json: { text: "生成一张图" }, sequence: 1 }] as T[] };
@@ -153,6 +160,6 @@ test("media-generation-only context does not load Canvas knowledge or prompt pre
   assert.equal(canvasLoads, 0);
   assert.equal(memoryLoads, 0);
   assert.equal(preferenceLoads, 0);
-  assert.deepEqual(Object.keys(context).sort(), ["fileGrants", "messages"]);
+  assert.deepEqual(Object.keys(context).sort(), ["conversationDocuments", "fileGrants", "messages"]);
   assert.ok(queries.some((sql) => sql.includes("budget_json->>'capabilityProfile'")));
 });

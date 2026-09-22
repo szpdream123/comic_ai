@@ -888,13 +888,19 @@ export function mergeTeamLibraryDramaAssets(currentAssets = {}, assets = []) {
     const parentIndexFor = (item) => {
       const linkedName = String(item.characterReferenceName ?? "").trim();
       if (linkedName) {
-        const linkedIndex = indexByKey.get(teamLibraryNameKey(item.kind, linkedName));
+        const linkedIndex = indexByKey.get(teamLibraryNameKey(
+          item.kind === "action" ? "character" : item.kind,
+          linkedName,
+        ));
         if (linkedIndex !== undefined) return linkedIndex;
       }
       const name = String(item.name ?? "").trim();
       const marker = name.lastIndexOf("-");
       if (marker <= 0) return undefined;
-      return indexByKey.get(teamLibraryNameKey(item.kind, name.slice(0, marker)));
+      return indexByKey.get(teamLibraryNameKey(
+        item.kind === "action" ? "character" : item.kind,
+        name.slice(0, marker),
+      ));
     };
     let changed = false;
     for (const item of mappedList) {
@@ -943,7 +949,7 @@ export function mapTeamLibraryAssetsToDramaAssets(assets = []) {
     const linkedName = tags.find((tag) => tag.startsWith("角色参考:"))?.slice("角色参考:".length).trim() ?? "";
     const referenceImages = previewUrl ? [{
       id: `${id}-preview`,
-      kind: linkedName ? "reference" : "primary",
+      kind: "primary",
       imageUrl: previewUrl,
       prompt: String(asset.prompt ?? asset.description ?? "").trim(),
     }] : [];
@@ -958,8 +964,8 @@ export function mapTeamLibraryAssetsToDramaAssets(assets = []) {
       referenceImages,
     };
     if (category === "action") actions.push({ ...item, kind: "action", characterReferenceName: linkedName || name });
-    else if (category === "scene") scenes.push(item);
-    else if (category === "prop") props.push(item);
+    else if (category === "scene") scenes.push({ ...item, kind: "scene", referenceImages });
+    else if (category === "prop") props.push({ ...item, kind: "prop", referenceImages });
     else characters.push(item);
   }
   return { characters, scenes, props, actions };
@@ -1391,8 +1397,10 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
         const scenes = merged.scenes;
         const props = merged.props;
         const actions = merged.actions;
+        const incoming = Array.isArray(assets) ? assets.length : 0;
         if (
-          characters === currentAssets.characters
+          incoming === 0
+          && characters === currentAssets.characters
           && scenes === currentAssets.scenes
           && props === currentAssets.props
           && actions === currentAssets.actions
