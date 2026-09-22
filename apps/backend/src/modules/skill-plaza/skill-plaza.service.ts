@@ -583,7 +583,7 @@ export function createSkillPlazaService(deps: {
       [input.skillId, input.userId ?? null],
     );
     if (!row) throw new SkillPlazaError(404, "skill_not_found", "Skill 不存在或不可见");
-    return hydrateSkillDetail(row, input.userId);
+    return hydrateSkillDetail(row, input.userId, { forceFiles: true });
   }
 
   async function resolveWorkflowSkill(input: { userId: string; skillId: string; now?: Date }) {

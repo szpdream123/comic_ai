@@ -49,13 +49,14 @@ test("workbench rail omits the community tab", () => {
   assert.doesNotMatch(html, /data-action="open-community"/);
 });
 
-test("workbench exposes legacy and new Canvas rail entries", () => {
+test("workbench exposes the Canvas rail entry", () => {
   const html = renderProjectDetail({
     state: { project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" } },
     session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1", phone: "13800138000" } },
     ui: { activeNavTab: "home", canvasProjectView: "list" },
   });
   assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="tools"/);
+  assert.doesNotMatch(html, /<span class="rail-label">画布<\/span>/);
   assert.match(html, /data-action="set-nav-tab"\s+data-tab="new-canvas"/);
 });
 
@@ -376,19 +377,19 @@ test("Canvas remains available when the legacy feature flag is disabled", () => 
   });
   assert.doesNotMatch(html, /data-tab="tools"/);
   assert.doesNotMatch(html, /data-tab="new-canvas"/);
-  assert.equal(deriveInitialNavTabForTest("#tools-canvas", session), "tools");
-  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "tools");
+  assert.equal(deriveInitialNavTabForTest("#tools-canvas", session), "new-canvas");
+  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "new-canvas");
 
   const workbench = {
     session,
-    ui: { activeNavTab: "tools", canvasProjectView: "detail" },
+    ui: { activeNavTab: "home", canvasProjectView: "list" },
   };
   syncWorkbenchRouteStateForTest(workbench, "#tools-canvas");
-  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
   assert.equal(workbench.ui.canvasProjectView, "detail");
 
   syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
-  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
   assert.equal(workbench.ui.canvasProjectView, "detail");
 });
 
@@ -399,19 +400,20 @@ test("legacy and new Canvas paths restore their navigation state", () => {
     user: { id: "user-1", phone: "13800000000" },
   };
   assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/new-canvas/", hash: "" }), "new-canvas");
-  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/canvas", hash: "" }), "tools");
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/canvas", hash: "" }), "new-canvas");
   assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "new-canvas");
+  assert.equal(deriveInitialNavTabForTest("#tools-canvas", session), "new-canvas");
 
   const workbench = {
     session,
-    ui: { activeNavTab: "tools", canvasProjectView: "list", selectedCanvasNodeId: "node-1" },
+    ui: { activeNavTab: "home", canvasProjectView: "list", selectedCanvasNodeId: "node-1" },
   };
   syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
   assert.equal(workbench.ui.activeNavTab, "new-canvas");
   assert.equal(workbench.ui.canvasProjectView, "detail");
 
   syncWorkbenchRouteStateForTest(workbench, "#tools");
-  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
   assert.equal(workbench.ui.canvasProjectView, "list");
 });
 
@@ -539,7 +541,7 @@ test("opening a skill detail pushes the public skill path", async () => {
 });
 
 test("Canvas detail uses the upstream runtime host instead of the legacy X6 controls", () => {
-  for (const activeNavTab of ["tools", "new-canvas"]) {
+  for (const activeNavTab of ["new-canvas", "tools"]) {
     const html = renderProjectDetail({
       state: {},
       session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1" } },

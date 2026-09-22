@@ -2754,7 +2754,7 @@ test("navigation tabs render before lazy surface requests finish", async () => {
 
   try {
     const navigation = handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "set-nav-tab", tab: "tools" },
+      dataset: { action: "set-nav-tab", tab: "new-canvas" },
     });
     const navigationResult = await Promise.race([
       navigation.then(() => "returned"),
@@ -2762,7 +2762,7 @@ test("navigation tabs render before lazy surface requests finish", async () => {
     ]);
 
     assert.equal(navigationResult, "returned");
-    assert.equal(workbench.ui.activeNavTab, "tools");
+    assert.equal(workbench.ui.activeNavTab, "new-canvas");
     assert.deepEqual(calls, []);
 
     while (pending.length) {

@@ -56,7 +56,7 @@ async function withWorkbench(run) {
     });
     await settle();
     const host = { isConnected: true, dataset: { canvasProjectId: "canvas-refresh-test" }, remove() { counts.removals += 1; } };
-    Object.assign(workbench.ui, { activeNavTab: "tools", canvasProjectView: "detail", selectedCanvasProjectId: "canvas-refresh-test" });
+    Object.assign(workbench.ui, { activeNavTab: "new-canvas", canvasProjectView: "detail", selectedCanvasProjectId: "canvas-refresh-test" });
     workbench.newCanvasMount = host;
     workbench.newCanvasInstance = { async update() { counts.updates += 1; } };
     await run({ workbench, support, announcements, counts, chrome, overlays, host, root });
@@ -165,7 +165,7 @@ test("restoring a running canvas resumes task polling and applies the finished r
     const timers = [];
     window.setTimeout = (callback) => { timers.push(callback); return timers.length; };
     window.clearTimeout = () => {};
-    window.location.hash = "#tools-canvas";
+    window.location.hash = "#new-canvas-canvas";
     window.location.search = "?canvasProjectId=canvas-refresh-test";
     setCanvasDocument(workbench, [{ id: "image-node", type: "image", data: {
       mediaKind: "image", status: "running", taskId: "running-task", lastTaskId: "running-task",
@@ -203,7 +203,7 @@ test("late shell responses still render the current page after leaving the canva
 
 test("canvas route restoration updates the mounted surface without detaching its styles", async () => {
   await withWorkbench(async ({ workbench, counts, host }) => {
-    window.location.hash = "#tools-canvas";
+    window.location.hash = "#new-canvas-canvas";
     window.location.search = "?canvasProjectId=canvas-refresh-test";
     const renders = counts.fullRenders;
     await refreshProductionWorkbenchForTest(workbench);

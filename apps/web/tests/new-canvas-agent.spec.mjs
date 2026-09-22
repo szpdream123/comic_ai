@@ -37,6 +37,101 @@ test("Agent Center keeps package upload behind the Tauri IPC capability check", 
   assert.match(source, /智能体上传需在桌面客户端完成/);
 });
 
+test("browser AI assistant paperclip grants local files via HTML file input", () => {
+  const main = readRuntimeAsset("main-upstream-");
+  const chat = readRuntimeAsset("ChatPanel-");
+  assert.match(chat, /onAuthorizeLocalFiles:d/);
+  assert.match(chat, /icon:`mdi:paperclip`/);
+  assert.match(chat, /l\(H\)\.then\(e=>\{I\(e\.length>0\?a\(`已授权 \{count\} 个文件`/);
+  assert.match(main, /async function iT\(e=`授权当前对话读取本地文件`\)\{if\(!J\(\)\)\{/);
+  assert.match(main, /r\.type=`file`,r\.multiple=!0,r\.accept=rT\.map\(e=>`\.\$\{e\}`\)\.join\(`\,`\)/);
+  assert.match(main, /return t\.slice\(0,10\)\.flatMap\(e=>\{let n=String\(e\?\.name\?\?``\)\.trim\(\)\|\|`未命名文件`/);
+  assert.match(main, /file:e,fileName:n,size:Number\(e\.size\?\?0\)\|\|0,extension:r/);
+  assert.doesNotMatch(main, /本地文件授权仅在 Tauri 桌面环境可用/);
+  assert.match(main, /let r=Array\.isArray\(t\)\?t:t&&typeof t\.length==`number`\?Array\.from\(t\):\[\],i=r\.length\?r\.filter\(Boolean\)\.map\(e=>\{/);
+});
+
+test("browser AI assistant send injects authorized local files into the user message", () => {
+  const chat = readRuntimeAsset("ChatPanel-");
+  const controller = readRuntimeAsset("conversationExecutionController-");
+  const main = readRuntimeAsset("main-upstream-");
+  assert.match(chat, /if\(!\(!r&&!\(H&&tt\.length\)\|\|!H\)\)/);
+  assert.match(chat, /disabled:\(!a\.trim\(\)&&!\(u&&u\.length\)\)\|\|m/);
+  assert.match(chat, /let tt=\(e\?t\?\.localFileGrants\?\?\[\]:H\?v\(H\):\[\]\)\.filter\(e=>!e\.composerHidden\)/);
+  assert.match(main, /composerHidden:!!e\.composerHidden/);
+  assert.match(main, /xT\.hideComposer=function\(e\)/);
+  assert.match(controller, /let k=Qe\(t\),h=k\.map\(e=>`【附件：\$\{e\.displayName\}】`\)\.filter\(e=>!o\.includes\(e\)\)\.join\(``\),v=\[o,h\]\.filter\(Boolean\)\.join\(`\\n`\)/);
+  assert.match(controller, /d=\{id:fp\(\),conversationId:t,role:`user`,content:v,/);
+  assert.match(controller, /_p\(\{text:g\|\|v,/);
+  assert.match(controller, /【已授权本地文件】/);
+  assert.match(controller, /Qe\.hideComposer&&Qe\.hideComposer\(t\)/);
+  assert.doesNotMatch(controller, /content:o,timestamp:Date\.now\(\),status:`done`\}/);
+});
+
+test("Canvas Agent follows an explicit Skill instead of the built-in episode/shotlist pipeline", () => {
+  const executor = readRuntimeAsset("agentRoundExecutor-");
+  const main = readRuntimeAsset("main-upstream-");
+  const controller = readRuntimeAsset("conversationExecutionController-");
+  assert.match(executor, /用户已引用或已加载 Skill 时，按该 Skill 的阶段与产出顺序完成任务/);
+  assert.match(executor, /不要改走画布内置剧集\/分镜固定流水线/);
+  assert.match(executor, /未引用也未加载 Skill 时，才可使用画布内置剧集、分集与分镜工具完成任务/);
+  assert.match(executor, /对用户的可见回复一律使用简体中文/);
+  assert.match(executor, /用户已用 \/Skill 或 @skill 指定时，直接使用该 skillId/);
+  assert.match(executor, /每个 Skill 只调用一次 skill_load；同一 skillId 禁止再次加载/);
+  assert.match(executor, /skill_load 返回的附属资料相对路径来自该 Skill 包/);
+  assert.match(executor, /Skill 规定的全部阶段完成前，禁止只输出计划或摘要后停止/);
+  assert.match(executor, /skill_load 成功后必须立刻按当前阶段继续/);
+  assert.match(executor, /禁止把“将要执行”当成完成/);
+  assert.match(executor, /禁止用英文自我独白复述步骤/);
+  assert.match(executor, /function shouldContinueUnfinishedSkill/);
+  assert.match(executor, /function filterRepeatedAgentReads/);
+  assert.match(executor, /function isRepeatReadCall/);
+  assert.match(executor, /function unfinishedSkillContinuePrompt/);
+  assert.match(executor, /function inferRequiredSkillNodeTypes/);
+  assert.match(executor, /function missingRequiredSkillNodeTypes/);
+  assert.match(executor, /不要按文件名猜测/);
+  assert.match(executor, /剧本\/说明\/清单等文本 → ai-text/);
+  assert.match(executor, /角色\/场景\/道具等视觉素材 → ai-image/);
+  assert.match(executor, /分镜\/镜头\/视频提示词 → ai-video/);
+  assert.match(executor, /旁白\/对白\/音效 → ai-audio/);
+  assert.match(executor, /不要按文件名判断/);
+  assert.match(executor, /刚读资料的正文是分镜\/镜头\/视频提示词就立刻 canvas_create_nodes 批量建 ai-video/);
+  assert.match(executor, /禁止再 canvas_query/);
+  assert.match(executor, /function skillIsActive/);
+  assert.match(executor, /n>=0&&n>t&&n>a/);
+  assert.doesNotMatch(executor, /也禁止再读取或查询/);
+  assert.doesNotMatch(executor, /function skillStageRequiresNodeType/);
+  assert.match(executor, /图片、视频、音频节点禁止 canvas_read_node/);
+  assert.match(controller, /NODE_NOT_TEXT/);
+  assert.match(controller, /prompt:\{type:`string`,maxLength:4e4\}/);
+  assert.match(controller, /summarizeInput:e=>`新建 \$\{e\.nodes\.length\} 个画布节点（/);
+  assert.match(controller, /e\.nodes\.map\(e=>e\.type\)/);
+  assert.match(executor, /function lastSucceededToolIndex/);
+  assert.match(controller, /id=\$\{t\.id\} 【\$\{e\.label\|\|t\.type\}】/);
+  assert.match(executor, /e\.type===`text\.delta`\?C\+=e\.delta/);
+  assert.match(executor, /o\.onComplete\?\.\(C\)/);
+  assert.match(executor, /加载后只按当前阶段用 skill_read_file 读取该步骤文件/);
+  assert.match(controller, /function skillQueryMatches\(e,t\)/);
+  assert.match(controller, /function listInjectedSkillFiles\(e\)/);
+  assert.match(controller, /function matchInjectedSkillFile\(e,t\)/);
+  assert.match(controller, /function readInjectedSkillFile\(e,t\)/);
+  assert.match(controller, /SKILL_RESOURCE_NOT_FOUND/);
+  assert.match(controller, /可用附属资料/);
+  assert.match(executor, /用一次 skill_read_file\(\{skillId, paths:\[\.\.\.\]\}\) 批量读取/);
+  assert.match(controller, /一次可用 paths 读取多个文件/);
+  assert.match(controller, /normalizeSkillReadPaths/);
+  assert.match(controller, /paths:\{type:`array`,minItems:1,maxItems:8/);
+  assert.match(controller, /i=kt\(Po\(e\)\)\.filter\(e=>skillQueryMatches\(Ro\(e\),n\)\)/);
+  assert.match(main, /按此 Skill 的阶段与方向执行；不要改走画布内置固定流水线/);
+  assert.match(main, /function Dz\(e,t,n\)\{let r=mz\(e\);r\.loadedSkillIds\.add\(t\);let a=Math\.max\(0,n\);return r\.usedChars\+=a,\{ok:!0,allowedChars:a\}/);
+  assert.doesNotMatch(main, /本次任务的 Skill 内容预算已用尽/);
+  assert.match(controller, /按其阶段、产出顺序和方向执行当前任务；未使用 Skill 时才走画布内置固定流水线/);
+  assert.match(controller, /每个 Skill 只加载一次；之后按阶段用 skill_read_file 读取当前步骤文件/);
+  assert.match(controller, /加载成功后必须立刻继续当前阶段，禁止只输出计划后停止/);
+  assert.match(controller, /id:`skill_read_file`,[\s\S]*?isAvailable:e=>R\(e\)\|\|Io\(\)/);
+  assert.doesNotMatch(controller, /id:`skill_read_file`,[\s\S]*?isAvailable:e=>R\(e\)\|\|Ft\(\)&&Io\(\)/);
+});
+
 test("Canvas Agent reads truncated node text via canvas_read_node instead of looping 继续读", () => {
   const controller = readRuntimeAsset("conversationExecutionController-");
   const executor = readRuntimeAsset("agentRoundExecutor-");
@@ -45,9 +140,19 @@ test("Canvas Agent reads truncated node text via canvas_read_node instead of loo
   assert.match(controller, /不要在对话里写「继续读」/);
   assert.match(controller, /function collapseContinueReadLoop/);
   assert.match(controller, /content:collapseContinueReadLoop\(e\)/);
-  assert.match(executor, /canvas_read_node 按 nextOffset 续读/);
+  assert.match(controller, /图片、视频、音频节点没有可分段读取的剧本正文/);
+  assert.match(executor, /canvas_read_node 只读文本节点正文/);
   assert.match(executor, /已读取\(原著\|剧本\|节点\)/);
   assert.match(executor, /canvas_read_node\(\{nodeId:"\$\{n\.nodeId\}",offset:\$\{n\.end\}\}\)/);
+});
+
+test("Canvas Agent does not pause on model-round or tool-call budgets", () => {
+  const main = readRuntimeAsset("main-upstream-");
+  const executor = readRuntimeAsset("agentRoundExecutor-");
+  assert.match(main, /Lm=\{maxModelRounds:1\/0,maxToolCalls:1\/0/);
+  assert.match(main, /maxTotalModelRounds:1\/0,maxTotalToolCalls:1\/0/);
+  assert.doesNotMatch(executor, /已达到模型规划轮次上限，任务已暂停/);
+  assert.doesNotMatch(executor, /已达到工具调用上限，任务已暂停/);
 });
 
 test("Canvas Agent auto-resumes a failed response up to 5 times", () => {
@@ -59,6 +164,18 @@ test("Canvas Agent auto-resumes a failed response up to 5 times", () => {
   assert.match(controller, /\.catch\(r=>\{console\.error\(`\[AgentRuntime\] failed to execute chat task:`,r\),scheduleAgentAutoResume\(e,n\)\}\)/);
   assert.match(controller, /e\.pausedReason!==`user_paused`/);
   assert.doesNotMatch(controller, /scheduleAgentAutoResume\(e,n\)\}\)\}\)/);
+});
+
+test("AI assistant mention tabs stay on the clicked tab when that list is empty", () => {
+  const chat = readRuntimeAsset("ChatPanel-");
+  assert.match(chat, /activeTab:q,onTabChange:e=>\{k\(e\),V\(0\)\}/);
+  assert.doesNotMatch(chat, /Oe\[O\]>0\?O:Jt\.find\(e=>Oe\[e\]>0\)\?\?O/);
+});
+
+test("AI assistant composer placeholder explains mentions, skills, and credit use", () => {
+  const chat = readRuntimeAsset("ChatPanel-");
+  assert.match(chat, /placeholder:b\(`输入消息，@\(节点\|资产\|模型\)，\/skill。AI助手会消耗积分请注意。`\)/);
+  assert.doesNotMatch(chat, /输入消息，@n 节点 · @a 资产 · @m 模型 · \/ 调用 Skill/);
 });
 
 test("Canvas Agent drops lifetime token cap and compresses by model context", () => {

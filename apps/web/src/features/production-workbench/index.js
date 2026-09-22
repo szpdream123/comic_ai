@@ -336,7 +336,6 @@ const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const newCanvasHostActionOptions = new WeakMap();
 const PUBLIC_NAV_PATHS = {
   home: "/",
-  tools: "/canvas",
   "new-canvas": "/new-canvas",
   script: "/script",
   skills: "/skills",
@@ -347,7 +346,7 @@ const PUBLIC_NAV_PATHS = {
 };
 const PUBLIC_PATH_TOKENS = new Map([
   ["/", "home"],
-  ["/canvas", "tools"],
+  ["/canvas", "new-canvas"],
   ["/new-canvas", "new-canvas"],
   ["/script", "script"],
   ["/skills", "skills"],
@@ -357,7 +356,7 @@ const PUBLIC_PATH_TOKENS = new Map([
   ["/team", "team"],
 ]);
 const PUBLIC_NAV_SEO = Object.fromEntries(
-  ["home", "tools", "new-canvas", "script", "skills", "project", "library", "team"].map((id) => {
+  ["home", "new-canvas", "script", "skills", "project", "library", "team"].map((id) => {
     const page = PUBLIC_SEO_PAGE_BY_ID.get(id === "new-canvas" ? "tools" : id);
     return [id, page ? { ...page, title: `${page.title} | 灵曦AI` } : null];
   }),
@@ -6342,7 +6341,7 @@ export async function initProductionWorkbench({
 
   if (!deferInitialRender) {
     syncAnnouncementUnreadState(workbench);
-    const initialCanvasDetailRoute = ["tools-canvas", "new-canvas-canvas"].includes(initialRouteToken);
+    const initialCanvasDetailRoute = isCanvasDetailRouteToken(initialRouteToken);
     if (!initialCanvasDetailRoute) render(workbench);
     if (!initialCanvasDetailRoute) loadAuthenticatedWorkbenchShellData(workbench);
     await refresh(workbench, { deferProjectData: true });
@@ -10626,56 +10625,39 @@ async function addAiCanvasRuntimeEpisodesForWorkbench(workbench, episodes = []) 
   let episodeNo = projects
     .filter((project) => project.parentId === seriesId)
     .reduce((max, project) => Math.max(max, Number(project.episodeNo ?? 0) || 0), 0);
-  const createdIds = [];
+  const created = [];
   for (const item of items) {
     episodeNo += 1;
     const name = String(item?.name ?? item?.title ?? "").trim() || `第 ${episodeNo} 集`;
     const outline = String(item?.outline ?? "").trim();
-    const created = await createAiCanvasRuntimeProject(workbench, name, { select: false });
-    const createdId = String(created ?? "").trim();
-    if (!createdId) continue;
-    applyCanvasProjectPatch(workbench, {
-      id: createdId,
+    const now = Date.now();
+    created.push(createDefaultCanvasProjectRecord({
+      id: globalThis.crypto?.randomUUID?.() ?? `episode-${now}-${episodeNo}`,
       title: name,
       name,
+      createdAt: now,
       parentId: seriesId,
       episodeNo,
       ...(outline ? { episodeOutline: outline } : {}),
-    });
-    const documentsByProject = {
-      ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
-        ? workbench.ui.canvasDocumentsByProject
-        : {}),
-    };
+    }));
+  }
+  const createdIds = created.map((record) => String(record.id ?? "").trim()).filter(Boolean);
+  if (!createdIds.length) return [];
+  workbench.ui.canvasProjects = [...projects, ...created];
+  const documentsByProject = {
+    ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+      ? workbench.ui.canvasDocumentsByProject
+      : {}),
+  };
+  for (const createdId of createdIds) {
     documentsByProject[createdId] = attachCanvasProjectMetaToDocument(
       workbench,
       createdId,
       documentsByProject[createdId] ?? createStandaloneCanvasDocument({ canvasProjectId: createdId }),
     );
-    workbench.ui.canvasDocumentsByProject = documentsByProject;
-    createdIds.push(createdId);
   }
-  if (!createdIds.length) return [];
+  workbench.ui.canvasDocumentsByProject = documentsByProject;
   persistWorkbenchState(workbench);
-  if (typeof workbench.api?.saveStandaloneCanvas === "function") {
-    await Promise.all(createdIds.map(async (createdId) => {
-      const document = attachCanvasProjectMetaToDocument(
-        workbench,
-        createdId,
-        workbench.ui.canvasDocumentsByProject?.[createdId]
-          ?? createStandaloneCanvasDocument({ canvasProjectId: createdId }),
-      );
-      try {
-        await workbench.api.saveStandaloneCanvas(createdId, {
-          clientRevision: 1,
-          document,
-          events: [],
-        });
-      } catch {
-        // Keep locally attached episode metadata even if the first save fails.
-      }
-    }));
-  }
   await updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
   persistWorkbenchState(workbench);
   return createdIds;
@@ -21744,7 +21726,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-nav-tab") {
     const nextTab = target.dataset.tab ?? "home";
     const navigationRenderOptions = { preserveNavigationShell: true };
-    const normalizedTab = nextTab;
+    const normalizedTab = nextTab === "tools" ? "new-canvas" : nextTab;
     if (!isCanvasNavTab(normalizedTab)) {
       stopCanvasLiveSubscription(workbench);
     }
@@ -21856,7 +21838,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-new-canvas") {
-    workbench.ui.activeNavTab = workbench.session?.features?.newCanvas === false ? "tools" : "new-canvas";
+    workbench.ui.activeNavTab = "new-canvas";
     workbench.ui.canvasProjectView = "list";
     workbench.ui.selectedCanvasNodeId = null;
     workbench.ui.canvasEditorOpen = false;
@@ -22227,7 +22209,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     workbench.ui.homeAgentSkillDraftPlazaIds = togglePlazaSkillId(workbench.ui.homeAgentSkillDraftPlazaIds, skillId);
-    render(workbench);
+    const synced = syncEpisodePromptSkillDraft(workbench.root, {
+      skills: collectHomeAgentPlazaSkills(workbench.ui),
+      draftPlazaSkillIds: workbench.ui.homeAgentSkillDraftPlazaIds,
+      variant: "plaza",
+    });
+    if (!synced) {
+      render(workbench);
+    }
     return;
   }
 
@@ -22378,7 +22367,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (project) touchRecentCanvasProject(workbench.ui, project.id);
       workbench.ui.activeNavTab = creationMode === "free"
         ? "free-generation"
-        : workbench.session?.features?.newCanvas === false ? "tools" : "new-canvas";
+        : "new-canvas";
       workbench.ui.canvasProjectView = "detail";
       workbench.ui.selectedCanvasNodeId = null;
       workbench.ui.canvasEditorOpen = false;
@@ -59271,7 +59260,7 @@ function hydratePersistedWorkbenchState(workbench) {
     workbench.ui.selectedCanvasNodeId = persisted.selectedCanvasNodeId;
   }
   const routeToken = typeof window !== "undefined" ? readWorkbenchRouteToken(window.location) : "";
-  if (["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(routeToken)) {
+  if (isCanvasRouteToken(routeToken)) {
     workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(routeToken);
   }
   sanitizeEpisodeWorkbenchSelection(workbench, { persist: true });
@@ -59331,15 +59320,11 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.projectInteriorSection = "episodes";
     return;
   }
-  if (token === "home" || token === "director" || token === "script" || token === "skills" || token === "prompts" || token === "library" || token === "tools" || token === "tools-canvas" || token === "new-canvas" || token === "new-canvas-canvas") {
-    const isNewCanvasRoute = ["new-canvas", "new-canvas-canvas"].includes(token);
-    workbench.ui.activeNavTab = ["tools", "tools-canvas"].includes(token)
-      ? "tools"
-      : isNewCanvasRoute && workbench.session?.features?.newCanvas === false ? "tools"
-        : isNewCanvasRoute ? "new-canvas" : token;
-    if (token === "tools-canvas" || token === "new-canvas-canvas") {
+  if (token === "home" || token === "director" || token === "script" || token === "skills" || token === "prompts" || token === "library" || isCanvasRouteToken(token)) {
+    workbench.ui.activeNavTab = isCanvasRouteToken(token) ? "new-canvas" : token;
+    if (isCanvasDetailRouteToken(token)) {
       workbench.ui.canvasProjectView = "detail";
-    } else if (token === "tools" || token === "new-canvas") {
+    } else if (isCanvasListRouteToken(token)) {
       workbench.ui.canvasProjectView = "list";
     }
     workbench.ui.projectPanelMode = "library";
@@ -59393,18 +59378,17 @@ function syncCanvasRouteState(workbench, hash, locationLike = globalThis.window?
     workbench.ui.canvasSessionUiStateReady = true;
     return;
   }
-  if (!["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
+  if (!isCanvasRouteToken(token)) {
     return;
   }
-  workbench.ui.activeNavTab = ["new-canvas", "new-canvas-canvas"].includes(token)
-    && workbench.session?.features?.newCanvas !== false ? "new-canvas" : "tools";
+  workbench.ui.activeNavTab = "new-canvas";
   workbench.ui.projectPanelMode = "library";
   workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(token);
   const routeProjectId = readCanvasProjectIdFromLocation(locationLike);
   if (workbench.ui.canvasProjectView === "detail" && routeProjectId) {
     workbench.ui.selectedCanvasProjectId = routeProjectId;
   }
-  if (token === "tools" || token === "new-canvas") {
+  if (isCanvasListRouteToken(token)) {
     workbench.ui.selectedCanvasNodeId = null;
     workbench.ui.canvasEditorOpen = false;
     workbench.ui.canvasAddMenuOpen = false;
@@ -63720,15 +63704,27 @@ function normalizeRoutePath(pathname) {
 }
 
 function isCanvasNavTab(tab) {
-  return tab === "tools" || tab === "new-canvas";
+  return tab === "new-canvas" || tab === "tools";
 }
 
-function canvasListRouteToken(workbench) {
-  return workbench?.ui?.activeNavTab === "new-canvas" ? "new-canvas" : "tools";
+function isCanvasListRouteToken(token) {
+  return token === "new-canvas" || token === "tools";
 }
 
-function canvasDetailRouteToken(workbench) {
-  return workbench?.ui?.activeNavTab === "new-canvas" ? "new-canvas-canvas" : "tools-canvas";
+function isCanvasDetailRouteToken(token) {
+  return token === "new-canvas-canvas" || token === "tools-canvas";
+}
+
+function isCanvasRouteToken(token) {
+  return isCanvasListRouteToken(token) || isCanvasDetailRouteToken(token);
+}
+
+function canvasListRouteToken() {
+  return "new-canvas";
+}
+
+function canvasDetailRouteToken() {
+  return "new-canvas-canvas";
 }
 
 function freeGenerationRoute() {
@@ -63819,9 +63815,8 @@ function deriveInitialNavTab(hash, session = {}) {
   if (token === "free-generation") {
     return "free-generation";
   }
-  if (["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
-    return ["new-canvas", "new-canvas-canvas"].includes(token)
-      && session?.features?.newCanvas !== false ? "new-canvas" : "tools";
+  if (isCanvasRouteToken(token)) {
+    return "new-canvas";
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
     if (isTeamMemberSession(session)) {
@@ -64189,7 +64184,7 @@ function inferCommunityUserIdFromAuthor(author) {
 
 function deriveInitialCanvasProjectView(hash) {
   const token = String(hash || "").replace(/^#/, "");
-  return token === "tools-canvas" || token === "new-canvas-canvas" ? "detail" : "list";
+  return isCanvasDetailRouteToken(token) ? "detail" : "list";
 }
 
 function deriveInitialLibraryTeamRoute(hash) {

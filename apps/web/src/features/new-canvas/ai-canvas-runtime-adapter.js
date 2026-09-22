@@ -234,19 +234,13 @@ function extractReferencedAiCanvasSkillFiles(entryContent, files = []) {
 
 function composeAiCanvasRuntimeSkillContent(skill = {}) {
   const files = listAiCanvasRuntimeSkillFiles(skill);
-  const entryContent = resolveAiCanvasSkillEntryContent(skill, files);
-  const referenced = extractReferencedAiCanvasSkillFiles(entryContent, files)
-    .map((file) => {
-      const body = String(file.content ?? "").trim();
-      return body ? `【${file.name}】\n${body}` : "";
-    })
-    .filter(Boolean);
-  return [entryContent, ...referenced].filter(Boolean).join("\n\n");
+  return resolveAiCanvasSkillEntryContent(skill, files);
 }
 
 export function normalizeAiCanvasRuntimeSkill(skill = {}) {
   const id = String(skill.id ?? skill.skillId ?? "").trim();
   if (!id) return null;
+  const files = listAiCanvasRuntimeSkillFiles(skill);
   return {
     id,
     name: String(skill.name ?? skill.title ?? skill.displayName ?? skill.display_name ?? skill.skillName ?? "未命名 Skill").trim() || "未命名 Skill",
@@ -255,9 +249,8 @@ export function normalizeAiCanvasRuntimeSkill(skill = {}) {
     category: String(skill.category ?? "general").trim() || "general",
     source: String(skill.source ?? (skill.ownerUserId ? "mine" : "official")).trim() || "official",
     version: String(skill.version ?? "").trim() || undefined,
-    // The runtime picker expects content, while the server remains the source
-    // of truth for execution. Keep only an optional, already-sanitized body.
     content: composeAiCanvasRuntimeSkillContent(skill),
+    ...(files.length ? { files } : {}),
   };
 }
 
@@ -288,8 +281,10 @@ export async function hydrateAiCanvasRuntimeSkillRows(creatorApi, rows) {
     const id = String(skill?.id ?? skill?.skillId ?? "").trim();
     if (!id) return skill;
     const existingFiles = listAiCanvasRuntimeSkillFiles(skill);
-    if (existingFiles.some((file) => String(file.content ?? "").trim())
-      || (String(skill.content ?? "").trim() && existingFiles.length === 0)) {
+    const hasNestedContent = existingFiles.some((file) => (
+      !isAiCanvasSkillEntryFileName(file.name) && String(file.content ?? "").trim()
+    ));
+    if (hasNestedContent) {
       return skill;
     }
     try {
@@ -1005,6 +1000,9 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
             ...previous,
             ...skill,
             content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+            files: Array.isArray(skill?.files) && skill.files.length
+              ? skill.files
+              : previous?.files,
           });
         }
         return [...byId.values()];

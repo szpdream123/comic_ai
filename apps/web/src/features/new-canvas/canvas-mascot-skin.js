@@ -355,92 +355,32 @@ function isCanvasInteracting(doc) {
   return doc?.documentElement?.classList?.contains("canvas-interacting") === true;
 }
 
-function mascotAvatarMarkup(skin) {
-  const next = normalizeAiCanvasRuntimeMascotSkin(skin);
-  if (next === "puff") {
-    return `
-      <circle cx="16" cy="16" r="14.5" fill="url(#host-mascot-puff)" stroke="currentColor" stroke-opacity="0.28" stroke-width="0.75"></circle>
-      <rect x="10.25" y="12.5" width="2.8" height="6.4" rx="1.4" fill="var(--theme-bg, #111)"></rect>
-      <rect x="18.95" y="12.5" width="2.8" height="6.4" rx="1.4" fill="var(--theme-bg, #111)"></rect>
-    `;
-  }
-  if (next === "cat") {
-    return `
-      <ellipse cx="16" cy="18" rx="10.4" ry="9.2" fill="#f6c37a"></ellipse>
-      <path d="M7.4 16.2 10.2 6.8 14.1 13.4Z" fill="#f6c37a"></path>
-      <path d="M24.6 16.2 21.8 6.8 17.9 13.4Z" fill="#f6c37a"></path>
-      <circle cx="12.4" cy="17.4" r="1.55" fill="#1c1d24"></circle>
-      <circle cx="19.6" cy="17.4" r="1.55" fill="#1c1d24"></circle>
-      <circle cx="12.05" cy="17.05" r="0.42" fill="#fff"></circle>
-      <circle cx="19.25" cy="17.05" r="0.42" fill="#fff"></circle>
-    `;
-  }
-  if (next === "dog") {
-    return `
-      <ellipse cx="16" cy="17.4" rx="10.2" ry="8.8" fill="#c7925c"></ellipse>
-      <ellipse cx="7.8" cy="16.4" rx="3.1" ry="5.1" fill="#b07b48"></ellipse>
-      <ellipse cx="24.2" cy="16.4" rx="3.1" ry="5.1" fill="#b07b48"></ellipse>
-      <ellipse cx="16" cy="21.8" rx="3.6" ry="2.5" fill="#e7c39a"></ellipse>
-      <circle cx="12.6" cy="16.8" r="1.5" fill="#1c1d24"></circle>
-      <circle cx="19.4" cy="16.8" r="1.5" fill="#1c1d24"></circle>
-      <circle cx="12.25" cy="16.45" r="0.4" fill="#fff"></circle>
-      <circle cx="19.05" cy="16.45" r="0.4" fill="#fff"></circle>
-    `;
-  }
-  if (next === "bunny") {
-    return `
-      <ellipse cx="16" cy="19.2" rx="9.4" ry="8.2" fill="#f3dce4"></ellipse>
-      <ellipse cx="12.2" cy="8.2" rx="2.4" ry="6.4" fill="#f3dce4"></ellipse>
-      <ellipse cx="19.8" cy="8.2" rx="2.4" ry="6.4" fill="#f3dce4"></ellipse>
-      <ellipse cx="12.2" cy="8.6" rx="1.1" ry="4.4" fill="#efb7c8"></ellipse>
-      <ellipse cx="19.8" cy="8.6" rx="1.1" ry="4.4" fill="#efb7c8"></ellipse>
-      <circle cx="13" cy="18.6" r="1.45" fill="#1c1d24"></circle>
-      <circle cx="19" cy="18.6" r="1.45" fill="#1c1d24"></circle>
-      <circle cx="12.7" cy="18.3" r="0.38" fill="#fff"></circle>
-      <circle cx="18.7" cy="18.3" r="0.38" fill="#fff"></circle>
-    `;
-  }
-  if (next === "fox") {
-    return `
-      <ellipse cx="16" cy="18.2" rx="9.8" ry="8.4" fill="#e97a3d"></ellipse>
-      <path d="M7.6 16.8 10.8 6.6 14.6 14.2Z" fill="#e97a3d"></path>
-      <path d="M24.4 16.8 21.2 6.6 17.4 14.2Z" fill="#e97a3d"></path>
-      <ellipse cx="16" cy="22.2" rx="3.4" ry="2.3" fill="#f7d7b8"></ellipse>
-      <circle cx="12.7" cy="17.6" r="1.45" fill="#1c1d24"></circle>
-      <circle cx="19.3" cy="17.6" r="1.45" fill="#1c1d24"></circle>
-      <circle cx="12.35" cy="17.25" r="0.38" fill="#fff"></circle>
-      <circle cx="18.95" cy="17.25" r="0.38" fill="#fff"></circle>
-    `;
-  }
+const LINGXI_MARK_TEXT = "灵曦";
+let lingxiMarkSeq = 0;
+
+function mascotAvatarMarkup(id = "host-lingxi-mark") {
   return `
-    <ellipse cx="16" cy="18.4" rx="11.6" ry="7.8" fill="#eef4ff"></ellipse>
-    <circle cx="8.8" cy="17.4" r="5.4" fill="#eef4ff"></circle>
-    <circle cx="23.2" cy="17.6" r="5.1" fill="#eef4ff"></circle>
-    <circle cx="13.2" cy="12.4" r="5.0" fill="#eef4ff"></circle>
-    <circle cx="19.4" cy="12.8" r="4.6" fill="#eef4ff"></circle>
-    <circle cx="13.2" cy="16.8" r="1.7" fill="#1c1d24"></circle>
-    <circle cx="18.8" cy="16.8" r="1.7" fill="#1c1d24"></circle>
-    <circle cx="12.75" cy="16.35" r="0.45" fill="#fff"></circle>
-    <circle cx="18.35" cy="16.35" r="0.45" fill="#fff"></circle>
+    <defs>
+      <mask id="${id}">
+        <rect width="64" height="22" fill="black"></rect>
+        <text class="host-lingxi-glyph" x="32" y="16.6" text-anchor="middle" font-size="15" font-weight="800" font-family="Microsoft YaHei, PingFang SC, sans-serif">${LINGXI_MARK_TEXT}</text>
+      </mask>
+    </defs>
+    <g mask="url(#${id})">
+      <rect class="host-lingxi-ink" width="64" height="22"></rect>
+      <rect class="host-lingxi-water" x="-28" y="0" width="26" height="22"></rect>
+    </g>
   `;
 }
 
 function createMascotAvatarIcon(doc, skin) {
   const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 32 32");
+  svg.setAttribute("viewBox", "0 0 64 22");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  svg.classList.add("host-mascot-avatar-icon");
-  svg.innerHTML = `
-    <defs>
-      <radialGradient id="host-mascot-puff" cx="32%" cy="24%" r="78%">
-        <stop offset="0%" stop-color="currentColor" stop-opacity="0.98"></stop>
-        <stop offset="56%" stop-color="currentColor" stop-opacity="0.72"></stop>
-        <stop offset="100%" stop-color="var(--theme-bg, #111)" stop-opacity="0.95"></stop>
-      </radialGradient>
-    </defs>
-    ${mascotAvatarMarkup(skin)}
-  `;
+  svg.classList.add("host-mascot-avatar-icon", "host-lingxi-mark");
+  svg.setAttribute("data-host-lingxi-mark", "true");
+  svg.innerHTML = mascotAvatarMarkup(`host-lingxi-${++lingxiMarkSeq}`);
   return svg;
 }
 
@@ -483,6 +423,13 @@ function applyMascotAvatarIcon(node, skin, doc) {
       node.setAttribute("data-host-mascot-native-hidden", "true");
       node.setAttribute("hidden", "");
     }
+    icon.classList.add("host-lingxi-mark");
+    icon.setAttribute("data-host-lingxi-mark", "true");
+    icon.setAttribute("viewBox", "0 0 64 22");
+    if (icon.getAttribute("data-host-lingxi-ready") !== "1") {
+      icon.innerHTML = mascotAvatarMarkup(`host-lingxi-${++lingxiMarkSeq}`);
+      icon.setAttribute("data-host-lingxi-ready", "1");
+    }
     if (icon.getAttribute("data-host-mascot-skin") === skin) return;
     icon.setAttribute("data-host-mascot-skin", skin);
     icon.innerHTML = createMascotAvatarIcon(doc, skin).innerHTML;
@@ -494,7 +441,7 @@ function applyMascotAvatarIcon(node, skin, doc) {
   const height = node.getAttribute("height");
   if (width) next.setAttribute("width", width);
   if (height) next.setAttribute("height", height);
-  next.setAttribute("class", `${node.getAttribute("class") || ""} host-mascot-avatar-icon`.trim());
+  next.setAttribute("class", `${node.getAttribute("class") || ""} host-mascot-avatar-icon host-lingxi-mark`.trim());
   next.setAttribute("data-host-mascot-skin", skin);
   node.setAttribute("data-host-mascot-native-hidden", "true");
   node.setAttribute("hidden", "");
@@ -517,12 +464,14 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   const readSkin = typeof options.readSkin === "function" ? options.readSkin : () => AI_CANVAS_MASCOT_DEFAULT_SKIN;
   const persistSkin = typeof options.persistSkin === "function" ? options.persistSkin : () => {};
   const readVisible = typeof options.readVisible === "function" ? options.readVisible : () => true;
+  const readRunning = typeof options.readRunning === "function" ? options.readRunning : () => false;
 
   let disposed = false;
   let nesting = false;
   let pendingSync = false;
   let skin = normalizeAiCanvasRuntimeMascotSkin(readSkin());
   let visible = readVisible() !== false;
+  let taskRunning = readRunning() === true;
   let raf = 0;
   let renderer = null;
   let lastPointer = null;
@@ -573,6 +522,9 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
       root.setAttribute("data-host-mascot-skin", skin);
     }
     findMascotAvatarHosts(root).forEach((node) => applyMascotAvatarIcon(node, skin, doc));
+    root.querySelectorAll?.(".host-lingxi-mark").forEach((icon) => {
+      icon.classList.toggle("is-running", taskRunning);
+    });
   };
 
   const applySkin = (wrap, button) => {
@@ -654,7 +606,15 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
     const button = root.querySelector?.(MASCOT_BUTTON_SELECTOR);
     const wrap = resolveMascotWrap(button);
     if (!isMascotVisible() || !button || !wrap) {
-      detach();
+      nesting = true;
+      observer.disconnect();
+      try {
+        detach();
+        applyChatAvatars();
+      } finally {
+        nesting = false;
+        if (!disposed) observer.observe(root, { childList: true, subtree: true });
+      }
       return;
     }
     nesting = true;
@@ -714,6 +674,15 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   });
 
   syncSwitcherLabel();
+  const unsubscribeRunning = typeof options.subscribe === "function"
+    ? options.subscribe(() => {
+      if (disposed) return;
+      const next = readRunning() === true;
+      if (next === taskRunning) return;
+      taskRunning = next;
+      scheduleSync();
+    }) ?? (() => {})
+    : () => {};
   observer.observe(root, { childList: true, subtree: true });
   doc.addEventListener?.("pointermove", onPointerMove, { passive: true });
   doc.addEventListener?.("pointerdown", onSwitcherPointerDown, true);
@@ -722,6 +691,7 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
   const dispose = () => {
     disposed = true;
     observer.disconnect();
+    unsubscribeRunning?.();
     stopLoop();
     doc.removeEventListener?.("pointermove", onPointerMove);
     doc.removeEventListener?.("pointerdown", onSwitcherPointerDown, true);

@@ -468,6 +468,7 @@ export function syncEpisodePromptSkillDraft(root, {
     const active = plazaMode ? selectedPlazaIds.includes(skillId) : skillId === String(selectedId);
     item.classList?.toggle?.("active", active);
     item.setAttribute?.("aria-selected", active ? "true" : "false");
+    item.closest?.(".plaza-skill-picker-item")?.classList?.toggle?.("active", active);
   }
   const selectedSkills = plazaMode
     ? resolvePlazaSelectedSkills(normalizePlazaEpisodeSkills(skills), selectedPlazaIds)

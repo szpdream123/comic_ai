@@ -145,7 +145,6 @@ const NAV_TABS = [
   { id: "project", label: "项目", icon: "clapperboard" },
   { id: "prompts", label: "提示词", icon: "sparkles" },
   { id: "skills", label: "Skill", icon: "sparkles" },
-  { id: "tools", label: "画布", icon: "wand" },
   { id: "director", label: "导演台", icon: "camera" },
   { id: "script", label: "剧本", icon: "book" },
   { id: "toolbox", label: "工具箱", icon: "toolbox" },
@@ -1082,7 +1081,7 @@ export function renderProjectDetail(context = {}) {
   const detailState = getProjectDetailState(state);
   const progress = getProgress(state);
   const requestedNavTab = ui.activeNavTab ?? "home";
-  const activeNavTab = requestedNavTab;
+  const activeNavTab = requestedNavTab === "tools" ? "new-canvas" : requestedNavTab;
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
   const taskCenterActiveCount = countActiveTaskCenterTasks(ui);
 
@@ -3006,7 +3005,7 @@ export function renderWorkbenchRail(activeNavTab, session = {}, ui = {}) {
   const isAnonymous = !hasActiveSessionUser(session);
   const railTabs = NAV_TABS.filter((tab) => {
     if (isTeamMember && tab.id === "team") return false;
-    if (tab.id === "tools" || tab.id === "prompts" || tab.id === "director" || tab.id === "script") return false;
+    if (tab.id === "prompts" || tab.id === "director" || tab.id === "script") return false;
     return tab.id !== "new-canvas" || session?.features?.newCanvas !== false;
   });
   return `

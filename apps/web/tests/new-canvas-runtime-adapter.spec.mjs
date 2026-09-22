@@ -472,11 +472,17 @@ test("AI Canvas adapter hydrates plaza skills from SKILL.md and only the files i
   const skill = runtimeContext.skillCatalog[0];
   assert.equal(skill.id, "skill-1");
   assert.match(skill.content, /# 入口/);
-  assert.match(skill.content, /【guides\/scene\.md】\n场景提取正文/);
-  assert.match(skill.content, /【packs\/character\.md】\n角色提取正文/);
+  assert.equal(skill.content.includes("场景提取正文"), false);
+  assert.equal(skill.content.includes("角色提取正文"), false);
   assert.equal(skill.content.includes("unused/notes.md"), false);
   assert.equal(skill.content.includes("不应注入"), false);
   assert.equal(skill.content.includes("ignored introduction"), false);
+  assert.deepEqual(skill.files.map((file) => file.name), [
+    "SKILL.md",
+    "guides/scene.md",
+    "packs/character.md",
+    "unused/notes.md",
+  ]);
   assert.equal(normalizeAiCanvasRuntimeSkill({
     id: "local",
     files: [
@@ -484,7 +490,7 @@ test("AI Canvas adapter hydrates plaza skills from SKILL.md and only the files i
       { name: "docs/a.md", content: "A" },
       { name: "docs/b.md", content: "B" },
     ],
-  }).content, "只用 `docs/a.md`\n\n【docs/a.md】\nA");
+  }).content, "只用 `docs/a.md`");
   assert.equal(normalizeAiCanvasRuntimeSkill({
     id: "basename",
     files: [
@@ -492,8 +498,84 @@ test("AI Canvas adapter hydrates plaza skills from SKILL.md and only the files i
       { name: "guides/scene.md", content: "场景提取正文" },
       { name: "unused/notes.md", content: "不应注入" },
     ],
-  }).content, "只写文件名 `scene.md`\n\n【guides/scene.md】\n场景提取正文");
+  }).content, "只写文件名 `scene.md`");
   await handle.dispose();
+});
+
+test("AI Canvas hydrates plaza skill files even when list rows already have introduction content", async () => {
+  const detailCalls = [];
+  const creatorApi = {
+    getSkillDetail: async (skillId) => {
+      detailCalls.push(skillId);
+      return {
+        skill: {
+          id: skillId,
+          name: "灵曦skill",
+          summary: "广场摘要",
+          detail: { introduction: "# 入口\n只加载 `references/laoli-screenplay-gate.md`" },
+        },
+        files: [
+          { name: "SKILL.md", content: "# 入口\n只加载 `references/laoli-screenplay-gate.md`" },
+          { name: "references/laoli-screenplay-gate.md", content: "老李五阶门控" },
+        ],
+      };
+    },
+  };
+  const hydrated = await hydrateAiCanvasRuntimeSkillRows(creatorApi, [{
+    id: "skill-1",
+    name: "灵曦skill",
+    content: "# 入口\n只加载 `references/laoli-screenplay-gate.md`",
+  }]);
+  assert.deepEqual(detailCalls, ["skill-1"]);
+  const skill = normalizeAiCanvasRuntimeSkill(hydrated[0]);
+  assert.deepEqual(skill.files.map((file) => file.name), [
+    "SKILL.md",
+    "references/laoli-screenplay-gate.md",
+  ]);
+  assert.equal(
+    skill.files.find((file) => file.name === "references/laoli-screenplay-gate.md")?.content,
+    "老李五阶门控",
+  );
+});
+
+test("AI Canvas hydrates COS nested skill files even when SKILL.md content is already present", async () => {
+  const detailCalls = [];
+  const creatorApi = {
+    getSkillDetail: async (skillId) => {
+      detailCalls.push(skillId);
+      return {
+        skill: {
+          id: skillId,
+          name: "灵曦skill",
+          summary: "广场摘要",
+        },
+        files: [
+          { name: "SKILL.md", content: "# 入口\n只加载 `references/laoli-screenplay-gate.md`" },
+          { name: "references/laoli-screenplay-gate.md", content: "老李五阶门控 from COS" },
+          { name: "references/character.md", content: "角色三视图 from COS" },
+        ],
+      };
+    },
+  };
+  const hydrated = await hydrateAiCanvasRuntimeSkillRows(creatorApi, [{
+    id: "skill-1",
+    name: "灵曦skill",
+    content: "# 入口\n只加载 `references/laoli-screenplay-gate.md`",
+    files: [
+      { name: "SKILL.md", content: "# 入口\n只加载 `references/laoli-screenplay-gate.md`" },
+    ],
+  }]);
+  assert.deepEqual(detailCalls, ["skill-1"]);
+  const skill = normalizeAiCanvasRuntimeSkill(hydrated[0]);
+  assert.deepEqual(skill.files.map((file) => file.name), [
+    "SKILL.md",
+    "references/laoli-screenplay-gate.md",
+    "references/character.md",
+  ]);
+  assert.equal(
+    skill.files.find((file) => file.name === "references/laoli-screenplay-gate.md")?.content,
+    "老李五阶门控 from COS",
+  );
 });
 
 test("AI Canvas runtime seeds a default assistant selection from the backend text catalog", () => {
@@ -512,6 +594,7 @@ test("AI Canvas auto-invokes plaza skills only when the user did not select one"
     appSource.indexOf("function createAiCanvasRuntimeCatalogBridge"),
     appSource.indexOf("function createAiCanvasRuntimeScaleBridge"),
   );
+  assert.match(appSource, /injectRuntimeCatalogs: async \(next = \{\}\) => \{[\s\S]*?catalogBridge\.update\(next\)/);
   assert.match(catalogBridge, /userSkills: skillCatalog/);
   assert.doesNotMatch(catalogBridge, /disableModelInvocation: true/);
   assert.match(appSource, /function selectedAiCanvasRuntimeSkillIds\(input = \{\}, text = ""\)/);
@@ -713,6 +796,13 @@ test("AI Canvas adapter forwards the external project catalog to the runtime", a
   assert.deepEqual(runtimeContext.projectCatalog, [{ id: "canvas-1", title: "项目一" }]);
   assert.equal(runtimeContext.currentProjectId, "canvas-1");
   assert.equal(runtimeContext.onSwitchProject, onSwitchProject);
+});
+
+test("AI Canvas reloads assistant conversation when the host switches canvas projects", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /function ensureAiCanvasRuntimeDefaultConversation\(runtimeStore, context = \{\}\)/);
+  assert.match(appSource, /const previousProjectId = String\(\s*runtimeStore\.getState\?\.\(\)\?\.currentProjectId \?\? runtimeContext\.currentProjectId \?\? "",\s*\)\.trim\(\)/);
+  assert.match(appSource, /if \(nextProjectId && nextProjectId !== previousProjectId\) \{\s*await ensureAiCanvasRuntimeDefaultConversation\(runtimeStore, \{\s*\.\.\.runtimeContext,\s*currentProjectId: nextProjectId,/);
 });
 
 test("AI Canvas adapter exposes sync and forwards lifecycle updates", async () => {
@@ -1029,13 +1119,15 @@ test("browser AI assistant can split the current series into episode canvases", 
   assert.match(workbenchSource, /onAddEpisodes: \(episodes\) => addAiCanvasRuntimeEpisodesForWorkbench\(workbench, episodes\)/);
   assert.match(workbenchSource, /onProjectsChange: \(projects\) => \{/);
   assert.match(workbenchSource, /if \(parentId\) record\.parentId = parentId;/);
-  assert.match(workbenchSource, /await updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true \}\);\s*persistWorkbenchState\(workbench\);\s*return createdIds;/);
+  assert.match(workbenchSource, /await updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true \}\);/);
   assert.doesNotMatch(workbenchSource, /const switchId = createdIds\.at\(-1\)/);
   assert.match(appSource, /const projects = allProjects\.filter\(\(project\) => !String\(project\?\.parentId \?\? ""\)\.trim\(\)\)/);
   assert.match(appSource, /parentId: existing\?\.parentId \|\| seriesId/);
   assert.match(appSource, /projectCatalog = mergeAiCanvasRuntimeProjects\(projectCatalog, mirrored\)/);
   assert.match(workbenchSource, /documentsByProject\[createdId\] = attachCanvasProjectMetaToDocument/);
-  assert.match(workbenchSource, /await workbench\.api\.saveStandaloneCanvas\(createdId,/);
+  assert.match(workbenchSource, /id: globalThis\.crypto\?\.randomUUID\?\.\(\) \?\? `episode-\$\{now\}-\$\{episodeNo\}`/);
+  assert.doesNotMatch(workbenchSource, /const created = await createAiCanvasRuntimeProject\(workbench, name, \{ select: false \}\)/);
+  assert.doesNotMatch(workbenchSource, /await workbench\.api\.saveStandaloneCanvas\(createdId,/);
   const canvasStateSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-state.js", import.meta.url), "utf8");
   assert.match(canvasStateSource, /node\.data\?\.text \|\| node\.data\?\.output/);
 });
@@ -1078,9 +1170,9 @@ test("creating episode canvases keeps the current series canvas selected", async
   assert.equal(episodes[1].episodeNo, 2);
   assert.equal(workbench.ui.canvasDocumentsByProject[createdIds[0]].parentId, "canvas-47");
   assert.equal(workbench.ui.canvasDocumentsByProject[createdIds[1]].parentId, "canvas-47");
-  assert.equal(saved.length, 2);
-  assert.equal(saved[0].document.parentId, "canvas-47");
-  assert.equal(saved[1].document.episodeOutline, "虚空的诱惑");
+  assert.equal(saved.length, 0);
+  assert.ok(createdIds.every((id) => !id.startsWith("canvas-project-")));
+  assert.ok(episodes.every((project) => project.parentId === "canvas-47"));
 });
 
 test("browser canvas skips Tauri video editor event listen", () => {
@@ -1282,6 +1374,8 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /conversations\.find\(belongsToCurrentProject\)/);
   assert.match(appSource, /createConversation\?\.\(settledProjectId\)/);
   assert.match(appSource, /await ensureAiCanvasRuntimeDefaultConversation\(runtimeStore, runtimeContext\)/);
+  assert.match(appSource, /const previousProjectId = String\(\s*runtimeStore\.getState\?\.\(\)\?\.currentProjectId \?\? runtimeContext\.currentProjectId \?\? "",\s*\)\.trim\(\)/);
+  assert.match(appSource, /if \(nextProjectId && nextProjectId !== previousProjectId\) \{\s*await ensureAiCanvasRuntimeDefaultConversation\(runtimeStore, \{\s*\.\.\.runtimeContext,\s*currentProjectId: nextProjectId,/);
   assert.match(appSource, /function resolveAiCanvasRuntimeAgentMode\(mode\)/);
   assert.match(appSource, /value === "c" \|\| value === "autonomous"/);
   assert.match(appSource, /function plazaSkillTokensForAiCanvasRuntimePrompt\(input = \{\}, runtimeStore, context = \{\}\)/);
@@ -1493,6 +1587,14 @@ test("new canvas floating menu hosts task center and operation history", () => {
   assert.match(brandCss, /\.new-canvas-root \.canvas-history-wrap:not\(\[data-pinned="true"\]\)/);
   assert.match(brandCss, /\.new-canvas-root \.chat-panel[\s\S]*?\.new-canvas-root \.chat-panel \*[\s\S]*?backdrop-filter:\s*none !important/);
   assert.match(brandCss, /\.canvas-radial-backdrop,[\s\S]*?\.canvas-radial-menu,[\s\S]*?\.canvas-radial-hold-indicator,[\s\S]*?\.canvas-radial-editor,[\s\S]*?\[data-canvas-radial-menu\] \{[\s\S]*?display: none !important;/);
+});
+
+test("AI Canvas retries same-origin storage images and keeps generating overlay over load failures", () => {
+  const runtimeAppSource = readRuntimeAsset("App-");
+  assert.ok(runtimeAppSource.includes(String.raw`function Po(e){return/^(?:https?:|asset:|\/|\.\/|\.\.\/)/i.test(e)}`));
+  assert.ok(runtimeAppSource.includes("z&&t.status!==`loading`?(0,Q.jsxs)(`div`,{className:`flex flex-col items-center justify-center gap-2 h-full min-h-[80px] text-canvas-text-muted`"));
+  assert.ok(runtimeAppSource.includes("t.status===`loading`&&(0,Q.jsx)(Fo,{nodeId:e,fallbackLabel:r(`生成图像中...`),overlay:!0})"));
+  assert.equal(runtimeAppSource.includes(String.raw`function Po(e){return/^(?:https?:|asset:)/i.test(e)}`), false);
 });
 
 test("standalone canvas reuses cached storage images across page mounts", () => {

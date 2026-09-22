@@ -1699,6 +1699,25 @@
   backdrop-filter: none !important;
 }
 
+.new-canvas-root .chat-panel-disclaimer,
+.ai-canvas-standalone-mount .chat-panel-disclaimer {
+  display: none !important;
+}
+
+.new-canvas-root .chat-panel-input-area > div:last-child,
+.ai-canvas-standalone-mount .chat-panel-input-area > div:last-child {
+  display: none !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.new-canvas-root .chat-panel-input-area,
+.ai-canvas-standalone-mount .chat-panel-input-area {
+  padding-bottom: 12px !important;
+}
+
 .canvas-radial-backdrop,
 .canvas-radial-menu,
 .canvas-radial-hold-indicator,
@@ -2449,6 +2468,80 @@
   flex: none;
   overflow: visible;
   color: var(--theme-text, #e8e8ed);
+}
+
+.new-canvas-root .host-lingxi-mark,
+.ai-canvas-standalone-mount .host-lingxi-mark {
+  width: 56px !important;
+  height: 22px !important;
+  color: var(--theme-text, currentColor);
+}
+
+.new-canvas-root .chat-message-avatar.host-lingxi-mark,
+.ai-canvas-standalone-mount .chat-message-avatar.host-lingxi-mark {
+  width: 40px !important;
+  height: 17px !important;
+}
+
+.new-canvas-root .host-lingxi-mark.mb-5,
+.ai-canvas-standalone-mount .host-lingxi-mark.mb-5 {
+  width: 84px !important;
+  height: 34px !important;
+}
+
+.new-canvas-root .host-lingxi-glyph,
+.ai-canvas-standalone-mount .host-lingxi-glyph {
+  fill: white;
+}
+
+.new-canvas-root .host-lingxi-ink,
+.ai-canvas-standalone-mount .host-lingxi-ink {
+  fill: currentColor;
+}
+
+.new-canvas-root .host-lingxi-water,
+.ai-canvas-standalone-mount .host-lingxi-water {
+  fill: #67e8f9;
+  opacity: 0;
+}
+
+.new-canvas-root .host-lingxi-mark.is-running .host-lingxi-glyph,
+.ai-canvas-standalone-mount .host-lingxi-mark.is-running .host-lingxi-glyph {
+  fill: white;
+}
+
+.new-canvas-root .host-lingxi-mark.is-running .host-lingxi-ink,
+.ai-canvas-standalone-mount .host-lingxi-mark.is-running .host-lingxi-ink {
+  opacity: 0.34;
+}
+
+.new-canvas-root .host-lingxi-mark.is-running .host-lingxi-water,
+.ai-canvas-standalone-mount .host-lingxi-mark.is-running .host-lingxi-water {
+  opacity: 1;
+  animation: host-lingxi-stream 1.15s linear infinite;
+}
+
+@keyframes host-lingxi-water {
+  to { transform: none; }
+}
+
+@keyframes host-lingxi-stream {
+  from { transform: translateX(0); }
+  to { transform: translateX(92px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-canvas-root .host-lingxi-mark.is-running .host-lingxi-glyph,
+  .ai-canvas-standalone-mount .host-lingxi-mark.is-running .host-lingxi-glyph,
+  .new-canvas-root .host-lingxi-mark.is-running .host-lingxi-water,
+  .ai-canvas-standalone-mount .host-lingxi-mark.is-running .host-lingxi-water {
+    animation: none;
+  }
+  .new-canvas-root .host-lingxi-mark.is-running .host-lingxi-glyph,
+  .ai-canvas-standalone-mount .host-lingxi-mark.is-running .host-lingxi-glyph {
+    fill: var(--brand, currentColor);
+    opacity: 0.82;
+  }
 }
 
 html.canvas-interacting .react-flow__node.dragging .node,

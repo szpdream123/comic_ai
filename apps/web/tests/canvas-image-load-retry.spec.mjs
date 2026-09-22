@@ -30,6 +30,7 @@ test("canvas image retry uses bounded backoff and excludes inline media", () => 
   assert.equal(isRetryableCanvasImageSource("https://cdn.example/image.png"), true);
   assert.equal(isRetryableCanvasImageSource("asset://localhost/image.png"), true);
   assert.equal(isRetryableCanvasImageSource("/api/storage/objects/object-1/content?proxy=1"), true);
+  assert.equal(isRetryableCanvasImageSource("./api/storage/objects/object-1/content?proxy=1"), true);
   assert.equal(isRetryableCanvasImageSource("data:image/png;base64,abc"), false);
   assert.equal(isRetryableCanvasImageSource("blob:https://example/id"), false);
 });

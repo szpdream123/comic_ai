@@ -161,6 +161,8 @@ test("AI Canvas initializes the browser process shim before the runtime bridge i
   assert.match(bridgeBlock, /globalThis\.process \?\?= \{ env: \{ NODE_ENV: "production" \} \};[\s\S]*?import\(AI_CANVAS_RUNTIME_MODULE_URL\)/);
   assert.match(source, /action === "confirm-host-skills"[\s\S]*?injectHydratedAiCanvasRuntimeSkills/);
   assert.match(source, /async function submitAiCanvasRuntimeAgentPrompt[\s\S]*?hydrateAiCanvasRuntimePromptSkills[\s\S]*?applyAiCanvasRuntimeSkillInvocationScope/);
+  assert.match(source, /const hydrateComposerSkills = async \(\) => \{[\s\S]*?hydrateAiCanvasRuntimePromptSkills[\s\S]*?applyAiCanvasRuntimeSkillInvocationScope/);
+  assert.match(source, /sendingHydrated[\s\S]*?hydrateComposerSkills\(\)\.then/);
   assert.match(source, /root\.addEventListener\("click", onSendIntent, true\)/);
   assert.doesNotMatch(
     source.slice(source.indexOf("const loadCatalogs = async"), source.indexOf("const closePicker")),
@@ -410,6 +412,14 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.match(brandCss, /transform: scale\(1.1\)/);
   assert.match(brandCss, /top: calc\(100% \+ 2px\)/);
   assert.match(brandCss, /bottom: auto/);
+  assert.match(skinSource, /host-lingxi-mark/);
+  assert.match(skinSource, /灵曦/);
+  assert.match(skinSource, /readRunning/);
+  assert.match(skinSource, /taskRunning/);
+  assert.match(appSource, /isAiCanvasLingxiTaskRunning/);
+  assert.match(appSource, /readRunning: \(\) => isAiCanvasLingxiTaskRunning\(runtimeStore\)/);
+  assert.match(brandCss, /host-lingxi-water/);
+  assert.match(brandCss, /\.host-lingxi-mark\.is-running \.host-lingxi-glyph/);
   assert.match(skinSource, /host-mascot-avatar-icon/);
   assert.match(skinSource, /findMascotAvatarHosts/);
   assert.match(skinSource, /radialGradient\[id\^='mascot-avatar-'\]/);

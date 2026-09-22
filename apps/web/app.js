@@ -129,6 +129,23 @@ function persistAiCanvasRuntimeMascotSkin(skin) {
   } catch {}
 }
 
+const AI_CANVAS_LINGXI_TASK_RUNNING_STATUSES = new Set([
+  "queued",
+  "planning",
+  "running",
+  "waiting_tool",
+  "waiting_approval",
+  "waiting_external",
+  "cancel_requested",
+]);
+
+function isAiCanvasLingxiTaskRunning(runtimeStore) {
+  const state = runtimeStore?.getState?.() ?? {};
+  if (Number(state.taskCenterActiveCount ?? 0) > 0) return true;
+  const tasks = Array.isArray(state.agentTasks) ? state.agentTasks : [];
+  return tasks.some((task) => AI_CANVAS_LINGXI_TASK_RUNNING_STATUSES.has(String(task?.status ?? "")));
+}
+
 function createAiCanvasRuntimeConfigBridge(store, theme) {
   if (!store?.getState || !store?.setState) {
     return { update() {}, dispose() {} };
@@ -365,6 +382,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
         source: String(skill?.source ?? (skill?.ownerUserId ? "mine" : "official")).trim() || "official",
         version: String(skill?.version ?? "").trim() || undefined,
         content: typeof skill?.content === "string" ? skill.content : "",
+        ...(Array.isArray(skill?.files) && skill.files.length ? { files: skill.files } : {}),
         ...(skill?.manifest && typeof skill.manifest === "object" && !Array.isArray(skill.manifest)
           ? { manifest: skill.manifest }
           : {}),
@@ -428,6 +446,9 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
             ...previous,
             ...skill,
             content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+            files: Array.isArray(skill?.files) && skill.files.length
+              ? skill.files
+              : previous?.files,
             manifest: {
               ...(previous?.manifest && typeof previous.manifest === "object" && !Array.isArray(previous.manifest)
                 ? previous.manifest
@@ -2454,12 +2475,16 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
     return `${raw} ${String(composer.textContent ?? "")}`;
   };
 
+  let sendingHydrated = false;
+  const hydrateComposerSkills = async () => {
+    const composerText = readComposerSkillText();
+    const selectedIds = selectedAiCanvasRuntimeSkillIds({}, composerText);
+    await hydrateAiCanvasRuntimePromptSkills(runtimeStore, { plazaSkillIds: selectedIds, text: composerText }, context);
+    await applyAiCanvasRuntimeSkillInvocationScope(runtimeStore, context, selectedIds);
+  };
+
   const syncInvocationScope = () => {
-    void applyAiCanvasRuntimeSkillInvocationScope(
-      runtimeStore,
-      context,
-      selectedAiCanvasRuntimeSkillIds({}, readComposerSkillText()),
-    );
+    void hydrateComposerSkills();
   };
 
   const onComposerScopeInput = (event) => {
@@ -2468,8 +2493,20 @@ function installAiCanvasRuntimeSkillPicker(surface, runtimeStore, context = {}) 
   };
 
   const onSendIntent = (event) => {
-    if (!event.target?.closest?.(".chat-panel-send-btn, [aria-label=\"发送消息\"], [aria-label=\"将消息加入队列\"]")) return;
-    syncInvocationScope();
+    const sendButton = event.target?.closest?.(".chat-panel-send-btn, [aria-label=\"发送消息\"], [aria-label=\"将消息加入队列\"]");
+    if (!sendButton) return;
+    if (sendingHydrated) {
+      sendingHydrated = false;
+      return;
+    }
+    event.stopImmediatePropagation?.();
+    event.preventDefault?.();
+    void hydrateComposerSkills().then(() => {
+      sendingHydrated = true;
+      sendButton.click?.();
+    }).catch(() => {
+      sendingHydrated = false;
+    });
   };
 
   const onComposerSubmitKey = (event) => {
@@ -2604,6 +2641,9 @@ function mergeAiCanvasRuntimeSkillCatalog(existing = [], next = []) {
       ...previous,
       ...skill,
       content: String(skill?.content ?? "").trim() || previous?.content || skill.content,
+      files: Array.isArray(skill?.files) && skill.files.length
+        ? skill.files
+        : previous?.files,
       manifest: {
         ...(previous?.manifest && typeof previous.manifest === "object" && !Array.isArray(previous.manifest)
           ? previous.manifest
@@ -2680,6 +2720,7 @@ async function injectHydratedAiCanvasRuntimeSkills(api, rows, context = {}, runt
     .filter(Boolean);
   if (!skills.length) return;
   context.skillCatalog = skills;
+  runtimeStore?.setState?.({ userSkills: skills });
   await context.injectRuntimeCatalogs?.({ skillCatalog: skills });
 }
 
@@ -3020,8 +3061,9 @@ async function prepareAiCanvasRuntimePromptAttachments(runtimeStore, files = [])
 
 function applyAiCanvasRuntimePromptAttachmentMarkers(text, files = [], references = []) {
   let next = String(text ?? "");
+  const alreadyHasAttachmentMarker = /【附件：/.test(next);
   for (const file of Array.isArray(files) ? files : []) {
-    if (!file) continue;
+    if (!file || alreadyHasAttachmentMarker) continue;
     const name = String(file?.name ?? "未命名附件").trim() || "未命名附件";
     const marker = `【附件：${name}】`;
     if (!next.includes(marker)) next = [next, marker].filter(Boolean).join("\n");
@@ -4068,7 +4110,12 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
       api: context.api ?? context.creatorApi,
       modelCatalog: context.modelCatalog ?? context.models,
       skillCatalog: context.skillCatalog ?? context.skills,
-      injectRuntimeCatalogs: context.injectRuntimeCatalogs,
+      injectRuntimeCatalogs: async (next = {}) => {
+        catalogBridge.update(next);
+        if (typeof context.injectRuntimeCatalogs === "function") {
+          return context.injectRuntimeCatalogs(next);
+        }
+      },
       ...(context.document !== undefined || context.canvasDocument !== undefined
         ? {
             document: normalizeAiCanvasRuntimeDocument(
@@ -4157,6 +4204,8 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
         readSkin: readAiCanvasRuntimeMascotSkin,
         persistSkin: persistAiCanvasRuntimeMascotSkin,
         readVisible: shouldShowAiCanvasRuntimeMascot,
+        readRunning: () => isAiCanvasLingxiTaskRunning(runtimeStore),
+        subscribe: (listener) => runtimeStore?.subscribe?.(listener) ?? (() => {}),
       });
       disposeMascotToggle = installAiCanvasRuntimeMascotToggle(surface, runtimeStore, {
         setMascotVisible: (visible) => {
@@ -4180,10 +4229,23 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
             next.skillCatalog ?? next.skills,
           );
         }
+        const previousProjectId = String(
+          runtimeStore.getState?.()?.currentProjectId ?? runtimeContext.currentProjectId ?? "",
+        ).trim();
         catalogBridge.update(next);
         hostProjectGuard.update(next);
         projectBridge.update(next);
         applyTaskCenterActiveCount(next);
+        if (next.currentProjectId !== undefined) {
+          runtimeContext.currentProjectId = next.currentProjectId;
+        }
+        const nextProjectId = String(next.currentProjectId ?? "").trim();
+        if (nextProjectId && nextProjectId !== previousProjectId) {
+          await ensureAiCanvasRuntimeDefaultConversation(runtimeStore, {
+            ...runtimeContext,
+            currentProjectId: nextProjectId,
+          });
+        }
         return runtimeHandle?.update?.(next);
       },
       async submitAgentPrompt(input = {}) {

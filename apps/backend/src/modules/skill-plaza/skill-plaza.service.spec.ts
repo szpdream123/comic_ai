@@ -201,6 +201,18 @@ describe("skill plaza admin review", { concurrency: false }, () => {
       const detail = await service.getAdminDetail(String(created.id));
       assert.equal(detail.files[0]?.name, "SKILL.md");
       assert.equal(detail.files[0]?.content, "## 做什么\n拆分镜头");
+      const viewerId = "91000000-0000-4000-8000-000000000099";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, password_hash, status)
+         VALUES ($1, '13800139099', 'Skill 读者', 'plain:test-password', 'active')`,
+        [viewerId],
+      );
+      const publicDetail = await service.getDetail({ skillId: String(created.id), userId: viewerId });
+      assert.equal(publicDetail.files[0]?.name, "SKILL.md");
+      assert.equal(publicDetail.files[0]?.content, "## 做什么\n拆分镜头");
+      const hiddenDetail = await service.getDetail({ skillId: String(hidden.id), userId: viewerId });
+      assert.equal(hiddenDetail.files[0]?.name, "SKILL.md");
+      assert.equal(hiddenDetail.files[0]?.content, "## 做什么\n隐藏文件");
     } finally {
       await db.close();
     }

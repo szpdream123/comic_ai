@@ -53938,6 +53938,78 @@ describe("production workbench project tab", () => {
     assert.equal(skillRequests.at(-1)?.category, "recommended");
   });
 
+  it("keeps the home Agent skill picker in place when toggling a skill", async () => {
+    const makeItem = (id) => {
+      const article = {
+        classList: {
+          toggled: {},
+          toggle(name, value) {
+            this.toggled[name] = value;
+          },
+        },
+      };
+      return {
+        dataset: { episodeSkillId: id },
+        classList: {
+          toggled: {},
+          toggle(name, value) {
+            this.toggled[name] = value;
+          },
+        },
+        setAttribute() {},
+        closest(selector) {
+          return selector === ".plaza-skill-picker-item" ? article : null;
+        },
+        article,
+      };
+    };
+    const count = { textContent: "已选 0 项" };
+    const itemA = makeItem("plaza-short-drama");
+    const itemB = makeItem("plaza-official");
+    const layer = {
+      dataset: { episodeSkillVariant: "plaza" },
+      querySelectorAll(selector) {
+        return selector === "[data-episode-skill-id]" ? [itemA, itemB] : [];
+      },
+      querySelector(selector) {
+        return selector === "[data-episode-skill-selected-count]" ? count : null;
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        homeCreationMode: "agent",
+        homeAgentSkillPickerOpen: true,
+        homeAgentSkillDraftPlazaIds: [],
+        episodePlazaOfficialSkills: [
+          { id: "plaza-official", title: "官方短剧 Skill", category: "project-workflow", official: true },
+          { id: "plaza-short-drama", title: "短剧改编 Skill", category: "short-drama", official: true },
+        ],
+      }),
+      root: {
+        innerHTML: "picker-open",
+        querySelector(selector) {
+          return selector === "[data-episode-skill-picker]" ? layer : null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-home-agent-skill", episodeSkillId: "plaza-short-drama" },
+    });
+
+    assert.deepEqual(workbench.ui.homeAgentSkillDraftPlazaIds, ["plaza-short-drama"]);
+    assert.equal(workbench.root.innerHTML, "picker-open");
+    assert.equal(itemA.classList.toggled.active, true);
+    assert.equal(itemA.article.classList.toggled.active, true);
+    assert.equal(itemB.classList.toggled.active, false);
+    assert.equal(itemB.article.classList.toggled.active, false);
+    assert.equal(count.textContent, "已选 1 项");
+  });
+
   it("does not auto-select an official project-workflow skill when the picker opens", async () => {
     const workbench = {
       state: buildProjectState(),
