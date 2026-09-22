@@ -1936,6 +1936,16 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
     return true;
   }
 
+  if (error instanceof GenerationTargetBusyError) {
+    writeJson(response, envelopedError(
+      409,
+      error.code,
+      error.message,
+      error.taskId ? { taskId: error.taskId } : {},
+    ));
+    return true;
+  }
+
   if (error instanceof GenerationModelRequestValidationError) {
     writeJson(response, envelopedError(400, error.code, error.message));
     return true;
@@ -2037,6 +2047,25 @@ async function enrichCanvasAgentMessageAttachments(
       : kind === "image" ? 30 * 1024 * 1024 : 10 * 1024 * 1024;
     if (Number(object.sizeBytes ?? 0) > maxSizeBytes) {
       throw new Error("canvas_agent_attachment_too_large");
+    }
+    if (kind === "document") {
+      const grants = await context.listFileGrants({
+        canvasId: input.canvasId,
+        conversationId: input.conversationId,
+        actor: input.actor,
+        now: input.now,
+      });
+      if (!grants.some((grant) => grant.storageObjectId === object.id && grant.status === "active")) {
+        await context.createFileGrant({
+          canvasId: input.canvasId,
+          conversationId: input.conversationId,
+          storageObjectId: object.id,
+          purpose: `readable:${name}`.slice(0, 160),
+          actor: input.actor,
+          expiresAt: new Date(input.now.getTime() + 24 * 60 * 60_000 - 1_000),
+          now: input.now,
+        });
+      }
     }
     const analysisText = kind === "document"
       ? await extractCanvasAgentDocumentText(db, {

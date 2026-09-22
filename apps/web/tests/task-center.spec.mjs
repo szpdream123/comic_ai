@@ -345,6 +345,61 @@ describe("production workbench task center", () => {
     assert.equal(expandNode.data.lastTaskId, "586e7908-df8d-4a64-a954-f9c7d279db9a");
   });
 
+  it("does not project a completed canvas task onto another generating node", async () => {
+    const document = {
+      version: 1,
+      nodes: [
+        {
+          id: "node-running-a",
+          type: "ai-image",
+          data: {
+            status: "loading",
+            prompt: "角色",
+            taskId: "task-running-a",
+            lastTaskId: "task-running-a",
+          },
+        },
+        {
+          id: "node-running-b",
+          type: "ai-image",
+          data: {
+            status: "loading",
+            prompt: "分镜",
+            taskId: "task-running-b",
+            lastTaskId: "task-running-b",
+          },
+        },
+      ],
+      edges: [],
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-64",
+        canvasProjects: [{ id: "canvas-64" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-64": document },
+        canvasGenerationHistoryItems: [],
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "task-completed-c",
+      kind: "image",
+      mediaKind: "image",
+      status: "succeeded",
+      targetType: "canvas",
+      targetId: "canvas-64",
+      result: { imageUrl: "/done.png" },
+      updatedAt: "2026-09-22T09:10:00.000Z",
+    });
+
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "loading");
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.taskId, "task-running-a");
+    assert.equal(workbench.ui.canvasDocument.nodes[1].data.status, "loading");
+    assert.equal(workbench.ui.canvasDocument.nodes[1].data.taskId, "task-running-b");
+  });
+
   it("binds a canvas video task id onto the generating video node", () => {
     const document = {
       version: 1,
@@ -645,8 +700,18 @@ describe("production workbench task center", () => {
       status: "succeeded",
       kind: "image",
     });
-    assert.equal(dom.attributes.get("aria-label"), "任务中心，1 个任务进行中");
-    assert.equal(dom.getBadge()?.textContent, "1");
+    assert.equal(dom.attributes.get("aria-label"), "任务中心");
+    assert.equal(dom.getBadge(), null);
+
+    registerTaskCenterTaskForTest(workbench, "task-still-running", { status: "running", kind: "image" });
+    registerTaskCenterTaskForTest(workbench, "task-still-queued", { status: "queued", kind: "image" });
+    registerTaskCenterTaskForTest(workbench, "task-already-done", {
+      status: "completed",
+      kind: "image",
+      result: { imageUrl: "/done.png" },
+    });
+    assert.equal(dom.attributes.get("aria-label"), "任务中心，2 个任务进行中");
+    assert.equal(dom.getBadge()?.textContent, "2");
     });
 
     it("keeps the generating badge after an empty discovery and continues discovering later", async () => {

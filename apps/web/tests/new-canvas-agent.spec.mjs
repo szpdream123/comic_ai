@@ -51,6 +51,23 @@ test("browser AI assistant paperclip grants local files via HTML file input", ()
   assert.match(main, /let r=Array\.isArray\(t\)\?t:t&&typeof t\.length==`number`\?Array\.from\(t\):\[\],i=r\.length\?r\.filter\(Boolean\)\.map\(e=>\{/);
 });
 
+test("uploaded chat files are readable grants, including docx and pdf", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const main = readRuntimeAsset("main-upstream-");
+  const chat = readRuntimeAsset("ChatPanel-");
+  assert.match(appSource, /hostApi\.prepareReadableAttachment = normalizeAiCanvasRuntimeGrantFile/);
+  assert.match(appSource, /hostApi\.authorizeUploadedFiles = authorizeAiCanvasRuntimeUploadedFiles/);
+  assert.match(appSource, /async function authorizeAiCanvasRuntimeUploadedFiles\(conversationId, files = \[\]\)/);
+  assert.match(main, /r\.accept=\[\.\.\.iT_accept\(\),`docx`,`pdf`\]\.map\(e=>`\.\$\{e\}`\)\.join\(`,`\)/);
+  assert.match(main, /prepareReadableAttachment/);
+  assert.match(main, /e\.type===`application\/pdf`/);
+  assert.match(chat, /authorizeUploadedFiles/);
+  assert.match(chat, /\.docx,\.pdf/);
+  const executor = readRuntimeAsset("agentRoundExecutor-");
+  assert.match(executor, /e\.status===`succeeded`\|\|e\.status===`failed`\)&&e\.toolCall\?\.toolId===`file_read_text`/);
+  assert.match(executor, /授权 0 个文件\|已授权 0 个/);
+});
+
 test("browser AI assistant send injects authorized local files into the user message", () => {
   const chat = readRuntimeAsset("ChatPanel-");
   const controller = readRuntimeAsset("conversationExecutionController-");
@@ -60,11 +77,13 @@ test("browser AI assistant send injects authorized local files into the user mes
   assert.match(chat, /let tt=\(e\?t\?\.localFileGrants\?\?\[\]:H\?v\(H\):\[\]\)\.filter\(e=>!e\.composerHidden\)/);
   assert.match(main, /composerHidden:!!e\.composerHidden/);
   assert.match(main, /xT\.hideComposer=function\(e\)/);
-  assert.match(controller, /let k=Qe\(t\),h=k\.map\(e=>`【附件：\$\{e\.displayName\}】`\)\.filter\(e=>!o\.includes\(e\)\)\.join\(``\),v=\[o,h\]\.filter\(Boolean\)\.join\(`\\n`\)/);
+  assert.match(controller, /let k=Qe\(t\),q=k\.filter/);
+  assert.match(controller, /h=k\.map\(e=>`【附件：\$\{e\.displayName\}】`\)/);
   assert.match(controller, /d=\{id:fp\(\),conversationId:t,role:`user`,content:v,/);
   assert.match(controller, /_p\(\{text:g\|\|v,/);
   assert.match(controller, /【已授权本地文件】/);
-  assert.match(controller, /Qe\.hideComposer&&Qe\.hideComposer\(t\)/);
+  assert.doesNotMatch(controller, /hideComposer\(t\)/);
+  assert.doesNotMatch(controller, /revokeConversationGrants/);
   assert.doesNotMatch(controller, /content:o,timestamp:Date\.now\(\),status:`done`\}/);
 });
 

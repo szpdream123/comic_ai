@@ -10609,8 +10609,18 @@ async function createAiCanvasRuntimeProject(workbench, name, options = {}) {
   });
   if (options.select !== false) {
     workbench.ui.canvasProjectView = "detail";
+    workbench.ui.canvasServerRevision = 1;
+    workbench.ui.canvasLastSavedRevision = 1;
+    await flushProjectCanvasSave(workbench);
+    stopCanvasLiveSubscription(workbench);
+    stopAllCanvasAssetTransfers(workbench);
+    touchRecentCanvasProject(workbench.ui, project.id);
     syncCanvasProjectIdInLocation(project.id);
+    if (workbench.newCanvasMount?.isConnected) {
+      workbench.newCanvasMount.dataset.canvasProjectId = project.id;
+    }
     updateMountedNewCanvasSurface(workbench, { surfaceOnly: true, syncHostDocument: true });
+    syncCanvasLiveSubscription(workbench);
   }
   return project.id;
 }
@@ -19143,6 +19153,36 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       try {
         task = await submitCanvasRunIfAvailable(workbench, { ...preview, creditCost });
       } catch (error) {
+        const busyTaskId = String(error?.taskId ?? error?.details?.taskId ?? "").trim();
+        if (String(error?.errorCode ?? "") === "generation_target_busy" && busyTaskId) {
+          const busyTask = {
+            taskId: busyTaskId,
+            status: "running",
+            workflowStatus: "running",
+            kind: preview.mediaKind,
+            mediaKind: preview.mediaKind,
+            targetType: "canvas",
+            targetId: nodeId,
+            modelCode: preview.modelCode,
+            prompt: preview.prompt,
+          };
+          updateActiveCanvasDocument(workbench, updateCanvasNodeData(workbench.ui.canvasDocument, nodeId, {
+            status: "running",
+            generationProgress: 25,
+            generationStage: "queued",
+            lastTaskId: busyTaskId,
+            taskId: busyTaskId,
+            generationTaskId: busyTaskId,
+          }));
+          workbench.ui.selectedCanvasNodeId = nodeId;
+          workbench.ui.canvasGeneratingNodeId = nodeId;
+          workbench.ui.canvasRunPreview = { ...preview, creditCost, taskId: busyTaskId, task: busyTask };
+          registerTaskCenterTask(workbench, busyTask, busyTask);
+          scheduleCanvasGenerationPolling(workbench, { ...preview, taskId: busyTaskId }, { immediate: true });
+          workbench.ui.toast = "该节点已有生成任务进行中，已同步到当前节点。";
+          render(workbench);
+          return;
+        }
         if (previousBalance !== null) {
           setWorkbenchCreditBalance(workbench, previousBalance);
         }
@@ -55231,7 +55271,6 @@ function countTaskCenterActiveTasks(workbench) {
   return Object.values(workbench?.ui?.taskCenterTasksById ?? {})
     .filter((task) =>
       isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus)
-      || isTaskCenterSucceededWithoutMedia(task)
     )
     .length;
 }
@@ -55593,15 +55632,20 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
     const targetIsNode = Boolean(targetNodeId)
       && targetNodeId !== canvasProjectId
       && nodes.some((node) => String(node?.id ?? "") === targetNodeId);
-    const kindLoadingNodes = loadingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind));
     const kindUnboundLoadingNodes = unboundLoadingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind));
-    const matchedNode = (targetIsNode ? nodes.find((node) => String(node?.id ?? "") === targetNodeId) : null)
+    const targetedNode = targetIsNode ? nodes.find((node) => String(node?.id ?? "") === targetNodeId) : null;
+    const targetedTaskId = targetedNode
+      ? resolveCanvasNodeTaskId(workbench.ui.canvasDocument, targetedNode.id)
+      : null;
+    const matchedNode = (
+      targetedNode && (!targetedTaskId || targetedTaskId === taskId)
+        ? targetedNode
+        : null
+    )
       ?? (
         ["canvas", "canvas_node"].includes(targetType)
           ? kindUnboundLoadingNodes.at(-1)
             ?? unboundLoadingNodes.at(-1)
-            ?? kindLoadingNodes.at(-1)
-            ?? loadingNodes.at(-1)
             ?? null
           : null
       );
@@ -56274,7 +56318,6 @@ function bindCanvasGenerationTaskToNode(workbench, taskId, defaults = {}) {
       : ""
   )
     || generatingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind) && !resolveCanvasNodeTaskId(canvasDocument, node.id)).at(-1)?.id
-    || generatingNodes.filter((node) => canvasNodeMatchesTaskMedia(node, mediaKind)).at(-1)?.id
     || "";
   if (!nodeId || (targetType && targetType !== "canvas" && targetType !== "canvas_node")) return false;
   const nextDocument = updateCanvasNodeData(canvasDocument, nodeId, {
@@ -58134,7 +58177,7 @@ function removePromptMentionPreviewDom(workbench) {
 function positionPlazaSkillPicker(workbench) {
   const root = workbench?.root ?? null;
   const layer = root?.querySelector?.(".project-workflow-skill-picker-layer")
-    ?? root?.querySelector?.(".plaza-skill-picker-layer");
+    ?? root?.querySelector?.(".plaza-skill-picker-layer:not(.host-chat-skill-picker)");
   if (!layer) {
     return;
   }
@@ -63502,6 +63545,7 @@ function modelGenerationErrorMessage(value) {
       model_media_type_mismatch: "当前模型类型不匹配",
       insufficient_credits: "积分余额不足，请充值。",
       prompt_reverse_credit_reserve_insufficient: "积分余额预留不足，请前往充值",
+      generation_target_busy: "该节点已有生成任务进行中，请等待完成后再试。",
       generation_queue_unavailable: "生成队列未启动，请先启动 Redis、generation-outbox 和 generation-worker。",
       cumob_image_failed: "酷模返回生成失败，任务没有拿到可用图片，请稍后重试。",
       cumob_image_invalid_response: "酷模响应中没有可用图片地址，请稍后重试。",

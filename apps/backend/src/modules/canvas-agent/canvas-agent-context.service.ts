@@ -143,13 +143,17 @@ export class CanvasAgentContextService {
       id: grant.id,
       purpose: grant.purpose,
       expiresAt: grant.expiresAt,
+      readable: true,
     }));
     let context = mediaGenerationOnly
       ? { ...creative, fileGrants, messages }
       : { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     const serialized = JSON.stringify(context);
     const maxChars = this.deps.maxSerializedChars ?? 400_000;
-    if (result.rows.length <= maxMessages && serialized.length <= maxChars) return context;
+    const sentDocuments = await this.listSentDocumentTexts(input);
+    if (result.rows.length <= maxMessages && serialized.length <= maxChars) {
+      return { ...context, conversationDocuments: sentDocuments };
+    }
 
     const retainCount = Math.min(messages.length, Math.max(8, Math.floor(maxMessages / 2)));
     messages = messages.slice(-retainCount);
@@ -212,9 +216,36 @@ export class CanvasAgentContextService {
       : { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     return {
       ...context,
+      conversationDocuments: mergeConversationDocuments(sentDocuments, collectConversationDocuments([...compacted, ...messages])),
       truncated: true,
       omittedMessageCount: Number(summary.messageCount ?? compactedCount),
     };
+  }
+
+  private async listSentDocumentTexts(input: {
+    canvasId: string;
+    conversationId: string;
+    actor: CanvasAgentActor;
+    capabilityProfile?: CanvasAgentCapabilityProfile;
+  }) {
+    const mediaGenerationOnly = input.capabilityProfile === "media_generation_only";
+    const result = await this.deps.db.query<{ content_json: Record<string, unknown> }>(`
+      SELECT content_json
+      FROM canvas_agent_messages
+      WHERE conversation_id=$1 AND role='user'
+        AND jsonb_typeof(content_json->'attachments')='array'
+        AND ($2::text IS NULL OR EXISTS (
+          SELECT 1 FROM canvas_agent_tasks task
+          WHERE task.id=canvas_agent_messages.task_id
+            AND task.budget_json->>'capabilityProfile'=$2
+        ))
+      ORDER BY sequence ASC
+      LIMIT 40
+    `, [input.conversationId, mediaGenerationOnly ? "media_generation_only" : null]);
+    return collectConversationDocuments(result.rows.map((row) => ({
+      role: "user",
+      content: row.content_json,
+    })));
   }
 
   async createFileGrant(input: {
@@ -408,6 +439,36 @@ function mergeSummary(
     items,
     updatedAt: now.toISOString(),
   };
+}
+
+function mergeConversationDocuments(
+  primary: Array<{ name: string; text: string }>,
+  extra: Array<{ name: string; text: string }>,
+) {
+  const documents = new Map(primary.map((document) => [document.name, document]));
+  for (const document of extra) {
+    if (!documents.has(document.name)) documents.set(document.name, document);
+  }
+  return [...documents.values()];
+}
+
+function collectConversationDocuments(
+  messages: Array<{ role: string; content: Record<string, unknown> }>,
+) {
+  const documents = new Map<string, { name: string; text: string }>();
+  for (const message of messages) {
+    if (message.role !== "user") continue;
+    const attachments = Array.isArray(message.content.attachments) ? message.content.attachments : [];
+    for (const raw of attachments) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const attachment = raw as Record<string, unknown>;
+      const text = String(attachment.analysisText ?? "").trim();
+      const name = String(attachment.name ?? "").trim();
+      if (!text || !name || documents.has(name)) continue;
+      documents.set(name, { name, text: text.slice(0, 80_000) });
+    }
+  }
+  return [...documents.values()];
 }
 
 function summarizeContent(content: Record<string, unknown>) {

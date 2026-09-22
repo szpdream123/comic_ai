@@ -190,6 +190,7 @@ export function renderCanvasAudioNodeBody(node = {}, options = {}) {
   const playing = options.playing === true || data.audioPlaying === true;
   const status = String(options.status ?? data.status ?? (audioUrl ? "ready" : "empty")).toLowerCase();
   const loading = ["queued", "running", "processing", "loading", "uploading"].includes(status);
+  const failed = ["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status);
   const body = audioUrl
     ? `<div class="canvas-audio-waveform" data-action="seek-canvas-audio" data-node-id="${escapeAttr(nodeId)}" role="slider" tabindex="0" aria-label="${escapeAttr(`${label}播放位置`)}" aria-valuemin="0" aria-valuemax="${escapeAttr(duration)}" aria-valuenow="${escapeAttr(currentTime)}" style="--canvas-audio-progress:${roundWaveformValue(progress)}">
         <canvas data-canvas-audio-waveform width="${CANVAS_AUDIO_WAVEFORM_COLUMNS}" height="${DEFAULT_WAVEFORM_HEIGHT}" aria-hidden="true"></canvas>
@@ -197,6 +198,8 @@ export function renderCanvasAudioNodeBody(node = {}, options = {}) {
         <button type="button" data-action="toggle-canvas-audio-play" data-node-id="${escapeAttr(nodeId)}" aria-label="${playing ? "暂停音频" : "播放音频"}" aria-pressed="${playing}"><span aria-hidden="true">${playing ? "Ⅱ" : "▶"}</span></button>
         <output data-canvas-audio-time aria-label="音频播放时间">${formatCanvasMediaTime(currentTime)} / ${duration > 0 ? formatCanvasMediaTime(duration) : "--:--"}</output>
       </div>`
+    : failed && !loading
+    ? `<div class="canvas-audio-empty is-failed" role="alert">${renderCanvasMediaFailureState(node, status, "audio")}</div>`
     : `<div class="canvas-audio-empty${loading ? " is-loading" : ""}" role="status"><strong>${loading ? "正在准备音频" : "暂无音频"}</strong></div>`;
   return `<section class="canvas-audio-node-body${playing ? " is-playing" : ""}" data-canvas-audio-body data-node-id="${escapeAttr(nodeId)}" aria-label="${escapeAttr(label)}">${body}</section>`;
 }
@@ -208,9 +211,12 @@ export function renderCanvasVideoNodeBody(node = {}, options = {}) {
   const directUrl = resolveCanvasMediaUrl(resolveCanvasMediaDirectUrl(node, "video", options), "video");
   const playing = options.playing === true || data.videoPlaying === true;
   const status = String(options.status ?? data.status ?? (fullscreen.url ? "ready" : "empty")).toLowerCase();
-  const loading = ["queued", "running", "processing", "loading", "uploading"].includes(status);
+  const loading = ["queued", "running", "processing", "loading", "uploading", "pending", "submitted"].includes(status);
+  const failed = ["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status);
   const preview = loading
-    ? `<div class="canvas-video-empty is-loading" role="status"><strong>正在准备视频</strong></div>`
+    ? `<div class="canvas-video-empty is-loading canvas-image-generation-mask" role="status" aria-label="正在生成视频"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成视频</strong></div>`
+    : failed && !fullscreen.url
+    ? `<div class="canvas-video-empty is-failed" role="alert">${renderCanvasMediaFailureState(node, status, "video")}</div>`
     : fullscreen.url
     ? `<div class="canvas-video-preview" data-canvas-video-preview>
         <video data-canvas-video-player draggable="false" src="${escapeAttr(fullscreen.url)}"${directUrl && directUrl !== fullscreen.url ? ` data-canvas-video-fallback-src="${escapeAttr(directUrl)}"` : ""}${fullscreen.poster ? ` poster="${escapeAttr(fullscreen.poster)}"` : ""} playsinline preload="metadata" tabindex="-1" aria-label="${escapeAttr(fullscreen.label)}"></video>
@@ -254,6 +260,26 @@ export function renderCanvasImageFullscreen(node = {}, options = {}) {
       <button class="canvas-image-fullscreen-close" type="button" data-action="close-canvas-image-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="关闭图片预览" title="关闭图片预览">×</button>
     </div>
   </div>`;
+}
+
+function renderCanvasMediaFailureState(node = {}, status = "", mediaKind = "") {
+  const data = nodeData(node);
+  const reviewRequired = ["manual_review_required", "result_unknown"].includes(status);
+  const message = firstText(
+    data.failureMessage,
+    data.failure?.displayMessage,
+    data.failure?.providerMessage,
+    data.failure?.errorMessage,
+    "生成任务失败，请重新生成。",
+  );
+  const title = reviewRequired
+    ? "生成结果待复核"
+    : mediaKind === "video"
+      ? "生视频失败"
+      : mediaKind === "audio"
+        ? "生音频失败"
+        : "生成失败";
+  return `<section class="canvas-x6-generation-state is-failure" role="alert"><strong>${escapeAttr(title)}</strong><p>${escapeAttr(message)}</p></section>`;
 }
 
 export function renderCanvasMediaNodeBody(node = {}, options = {}) {

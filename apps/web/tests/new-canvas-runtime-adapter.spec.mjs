@@ -208,6 +208,21 @@ test("AI Canvas completed generation nodes map to success so regenerate is avail
     }],
   }).nodes[0];
   assert.equal(completedNode.data.status, "success");
+  const refreshedCompletedNode = deserializeAiCanvasDocument({
+    nodes: [{
+      id: "image-refreshed",
+      type: "ai-image",
+      data: {
+        status: "loading",
+        imageUrl: "https://example.test/done.png",
+        taskId: "task-done",
+        lastTaskId: "task-done",
+      },
+    }],
+  }).nodes[0];
+  assert.equal(refreshedCompletedNode.data.status, "loading");
+  const hostNormalized = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(hostNormalized, /recoverStaleGenerating === true[\s\S]*?Boolean\(mediaUrl\)/);
   assert.match(appSource, /recoverStaleGenerating === true/);
   assert.match(appSource, /mediaUrl \? "success" : "idle"/);
   const brandCss = readFileSync(
@@ -670,14 +685,24 @@ test("AI Canvas image and video generation registers with the project task cente
   assert.match(appSource, /const successWithMedia = mappedStatus === "completed" && Boolean\(media\.url\)/);
   assert.match(appSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__/);
   assert.match(appSource, /isSuccess && !resolveAiCanvasAssistantTaskMedia\(task\)\.url\) return/);
-  assert.match(appSource, /\(unbound\.length \? unbound : generating\)\.at\(-1\)/);
+  assert.match(appSource, /const pick = unbound\.at\(-1\)/);
   assert.match(appSource, /updateNodeDataTransient\?\.\(nodeId, \{\s*taskId,/);
+  assert.match(appSource, /const persistTerminalNode = \(task\) =>/);
+  assert.match(appSource, /isVideo \? \{ videoUrl: media\.url \} : \{ imageUrl: media\.url \}/);
+  assert.match(appSource, /persistTerminalNode\(task\)/);
+  assert.match(appSource, /saveCurrentProjectSilent\?\.\(\)/);
+  assert.match(appSource, /Boolean\(mediaUrl\)/);
   assert.match(appSource, /resolveAiCanvasRuntimeGeneratingNodeId\(runtimeWindow, context, "", mediaKind\)/);
   assert.match(adapterSource, /onGenerationTaskCreated: context\.onGenerationTaskCreated/);
   assert.match(workbenchSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__\?\.\(task\)/);
   assert.match(workbenchSource, /function isTaskCenterSucceededWithoutMedia/);
   assert.match(workbenchSource, /function bindCanvasGenerationTaskToNode/);
   assert.match(workbenchSource, /kindUnboundLoadingNodes\.at\(-1\)/);
+  assert.match(appSource, /function preserveAiCanvasRuntimeGeneratingNodes/);
+  assert.match(appSource, /!liveTaskId\) return node/);
+  assert.match(appSource, /String\(currentProjectId \?\? ""\)\.trim\(\) === previousProjectId/);
+  assert.match(workbenchSource, /targetedTaskId === taskId/);
+  assert.doesNotMatch(workbenchSource, /kindLoadingNodes\.at\(-1\)/);
 });
 
 test("AI Canvas task center button shows the same generating count as the workbench", () => {
@@ -1256,7 +1281,7 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.doesNotMatch(chatPanelSource, /icon:i\.icon/);
   assert.match(brandCss, /\.agent-mode-selector > \.agent-mode-trigger/);
   assert.match(brandCss, /\.agent-mode-selector > \.agent-mode-trigger > :first-child/);
-  assert.match(brandCss, /\.chat-panel-input-toolbar button:not\(\.agent-mode-trigger\):not\(\[role="option"\]\):not\(\.chat-skill-source-tab\)/);
+  assert.match(brandCss, /\.chat-panel-input-toolbar button:not\(\.agent-mode-trigger\):not\(\[role="option"\]\):not\(\[role="tab"\]\):not\(\.chat-skill-source-tab\)/);
   assert.match(brandCss, /\.chat-skill-source-tab/);
   assert.match(brandCss, /\.agent-mode-menu strong/);
   assert.doesNotMatch(chatPanelSource, /icon: "mdi:at"/);
@@ -1314,6 +1339,9 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /html:has\(\.ai-canvas-standalone-mount\)[\s\S]*?body\.workbench-body:has\(\.ai-canvas-standalone-mount\)[\s\S]*?position: static !important;[\s\S]*?inset: auto !important;[\s\S]*?background: var\(--theme-app-background, #08111b\) !important;/);
   assert.match(appSource, /embedded: context\.embedded !== false/);
   assert.match(appSource, /createAiCanvasRuntimeHostProjectGuard/);
+  assert.match(appSource, /function normalizeAiCanvasRuntimeDramaAssets\(value\)/);
+  assert.match(appSource, /liveDramaAssets \?\? savedDramaAssets/);
+  assert.match(appSource, /patch\.dramaAssets = normalizeAiCanvasRuntimeDramaAssets\(document\.dramaAssets\)/);
   assert.match(appSource, /saveEnabled = true;[\s\S]*?resumePendingTasks\?\.\(\)/);
   assert.match(appSource, /setChatPanelDetached\?\.\(false\)/);
   assert.match(appSource, /function openAiCanvasRuntimeAssistant\(runtimeStore\)/);
@@ -1358,10 +1386,21 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(appSource, /onOpenSkills: context\.onOpenSkills/);
   assert.match(workbenchSource, /onOpenSkills: \(options = \{\}\) => openAiCanvasRuntimeSkills\(workbench, options\)/);
   assert.match(brandCss, /\.host-chat-skill-picker\.plaza-skill-picker-layer/);
-  assert.match(brandCss, /inset: auto 12px calc\(100% \+ 8px\) 12px/);
+  assert.match(appSource, /const findPanel = \(\) => findInputBox\(\)\?\.closest\?\.\("\.chat-panel"\)/);
+  assert.match(appSource, /panel\.append\(overlay\)/);
+  assert.match(appSource, /overlay\.style\.setProperty\("height", `\$\{frame\.height\}px`, "important"\)/);
+  assert.doesNotMatch(appSource, /inputBox\.append\(overlay\)/);
+  assert.match(appSource, /lockedFrame = null/);
+  assert.match(appSource, /positionOverlay\(\{ preserve: Boolean\(lockedFrame\) \}\)/);
+  assert.match(brandCss, /\.host-chat-skill-picker\.plaza-skill-picker-layer[\s\S]*contain: layout paint !important/);
+  assert.doesNotMatch(brandCss, /inset: auto 12px calc\(100% \+ 8px\) 12px/);
   assert.match(brandCss, /#chat-skill-suggestions\[data-host-skill-picker-hidden="true"\]/);
   assert.match(appSource, /matchCanvasRuntimeCatalogModel\(models, selectedValue\)/);
   assert.match(appSource, /canvas-model-prefs/);
+  assert.match(appSource, /function resolveAiCanvasRuntimeDisplayedModel\(runtimeStore, node = \{\}\)/);
+  assert.match(appSource, /function installAiCanvasRuntimeDisplayedModelSubmit\(surface, runtimeStore\)/);
+  assert.match(appSource, /state\.updateNodeDataTransient\?\.\(nodeId, \{/);
+  assert.match(appSource, /disposeDisplayedModelSubmit = installAiCanvasRuntimeDisplayedModelSubmit\(surface, runtimeStore\)/);
   assert.match(appSource, /resolveAiCanvasRuntimeModelPricing/);
   assert.match(brandCss, /\.new-canvas-root \.prompt-footer \.prompt-credit-cost/);
   assert.match(appSource, /toolbar\.append\(controls\)/);

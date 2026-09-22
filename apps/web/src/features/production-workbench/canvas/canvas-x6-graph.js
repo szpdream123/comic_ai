@@ -989,7 +989,12 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
   const generationMask = generating
     ? `<div class="canvas-x6-source-generation-mask canvas-image-generation-mask" role="status" aria-live="polite" aria-label="${generationLabel}"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>${generationLabel}</strong><small>请稍候</small></div>`
     : "";
-  const preview = mediaUrl
+  const failurePreview = !mediaUrl && generationFailed && !uploading && !generating
+    ? renderCanvasX6GenerationState(node, status)
+    : "";
+  const preview = failurePreview
+    ? failurePreview
+    : mediaUrl
     ? mediaKind === "video"
       ? mixedUpload
         ? `<button class="canvas-x6-video-preview-trigger" type="button" data-action="toggle-canvas-video-fullscreen" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看视频" title="放大查看视频"><video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline preload="metadata"></video></button>${uploadingMask}${generationMask}`
@@ -998,8 +1003,8 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
         ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}${generationMask}`
         : `<button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看图片" title="放大查看图片"><img src="${escapeCanvasX6Html(mediaUrl)}"${imageFallbackUrl ? ` data-canvas-image-fallback-src="${escapeCanvasX6Html(imageFallbackUrl)}"` : ""} alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} /></button>${uploadingMask}${generationMask}`
     : `${uploadingMask}${generationMask}<strong>${generating ? generationLabel : emptyUploadLabel}</strong><small>${generating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
-  return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${generating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || generating ? " aria-busy=\"true\"" : ""}>
-    <div class="canvas-x6-source-media-preview"${emptyUploadAttrs}>${preview}</div>
+  return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${generating ? " is-generating" : ""}${failurePreview ? " is-failed" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || generating ? " aria-busy=\"true\"" : ""}>
+    <div class="canvas-x6-source-media-preview${failurePreview ? " has-generation-state" : ""}"${failurePreview ? "" : emptyUploadAttrs}>${preview}</div>
     <button class="canvas-x6-source-upload-action" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="${actionLabel}" title="${actionLabel}"${uploading || agentGenerating ? " disabled aria-disabled=\"true\"" : ""}>${actionLabel}</button>
     <input type="file" accept="${accept}" data-canvas-upload-input data-node-id="${escapeCanvasX6Html(nodeId)}" tabindex="-1" aria-hidden="true" hidden />
   </section>`;
@@ -1315,9 +1320,9 @@ function renderCanvasImageGenerationX6Node(node = {}) {
 
 function renderCanvasX6GenerationState(node = {}, status = "") {
   const type = String(node?.type ?? "");
-  if (!isCanvasX6GenerationNode(type)) return "";
   const data = node?.data ?? {};
-  const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
+  const failed = ["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status);
+  if (!failed && !isCanvasX6GenerationNode(type)) return "";
   if (failed) {
     const reviewRequired = ["manual_review_required", "result_unknown"].includes(status);
     const message = String(
@@ -1329,7 +1334,7 @@ function renderCanvasX6GenerationState(node = {}, status = "") {
     ).trim();
     const title = reviewRequired
       ? "生成结果待复核"
-      : type === "ai-image" || type === "send"
+      : ["ai-image", "send", "image", "source-image"].includes(type) || String(data.mediaKind ?? "") === "image"
         ? "生图失败"
         : "生成失败";
     return `<section class="canvas-x6-generation-state is-failure" role="alert">

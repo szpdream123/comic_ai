@@ -324,6 +324,11 @@ test("canvas assistant asset tab reads the same drama asset list the team librar
   assert.match(adapter, /context\.workbench\?\.assetLibraryCache\?\.clear\?\.\(\)/);
   assert.match(adapter, /dramaAssets,/);
   assert.match(adapter, /document\?\.dramaAssets/);
+  const runtimeSource = await readFile(new URL("../ai-canvas-runtime/assets/main-upstream-665b2cc.js", import.meta.url), "utf8");
+  assert.match(runtimeSource, /dramaAssets:BJ\(e\.dramaAssets\)/);
+  assert.match(runtimeSource, /t\.dramaAssets!==r\.dramaAssets/);
+  const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /liveDramaAssets \?\? savedDramaAssets/);
   assert.match(chatInput, /action: '动作'/);
 });
 

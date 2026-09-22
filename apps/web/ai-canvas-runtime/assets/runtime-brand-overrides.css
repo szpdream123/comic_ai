@@ -2119,26 +2119,35 @@
 }
 
 .new-canvas-root .chat-panel-root .host-chat-skill-picker.plaza-skill-picker-layer,
-.new-canvas-root .chat-panel-root .host-chat-skill-picker.episode-skill-picker-layer {
+.new-canvas-root .chat-panel-root .host-chat-skill-picker.episode-skill-picker-layer,
+.ai-canvas-standalone-mount .chat-panel-root .host-chat-skill-picker.plaza-skill-picker-layer,
+.ai-canvas-standalone-mount .chat-panel-root .host-chat-skill-picker.episode-skill-picker-layer {
   position: absolute !important;
-  inset: auto 12px calc(100% + 8px) 12px !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 12px !important;
   z-index: 40 !important;
-  display: block !important;
+  display: grid !important;
+  grid-template-rows: minmax(0, 1fr) !important;
   width: auto !important;
-  height: min(28rem, 52vh) !important;
-  max-height: min(28rem, 52vh) !important;
+  height: auto !important;
+  max-height: min(28rem, calc(100% - 24px)) !important;
+  margin: 0 !important;
   padding: 0 !important;
   overflow: hidden !important;
   isolation: auto !important;
   pointer-events: auto !important;
   place-items: stretch !important;
+  contain: layout paint !important;
 }
 
 .new-canvas-root .chat-panel-root .host-chat-skill-picker .episode-skill-picker-scrim {
   display: none !important;
 }
 
-.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-modal {
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-modal,
+.ai-canvas-standalone-mount .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-modal {
   position: relative !important;
   z-index: 1 !important;
   display: grid !important;
@@ -2238,13 +2247,16 @@
   font: inherit !important;
 }
 
-.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-list {
+.new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-list,
+.ai-canvas-standalone-mount .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-list {
   display: grid !important;
   align-content: start !important;
   gap: 0.15rem !important;
   min-height: 0 !important;
   padding: 0 0.45rem 0.4rem !important;
+  overflow-x: hidden !important;
   overflow-y: auto !important;
+  overscroll-behavior: contain !important;
 }
 
 .new-canvas-root .chat-panel-root .host-chat-skill-picker .plaza-skill-picker-item {

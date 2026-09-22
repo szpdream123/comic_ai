@@ -522,7 +522,14 @@ test("ChatPanel slash Skill picker is replaced by a host plaza overlay", () => {
   assert.match(appSource, /onOpenSkills: context\.onOpenSkills/);
   assert.match(workbenchSource, /async function openAiCanvasRuntimeSkills/);
   assert.match(brandCss, /\.host-chat-skill-picker\.plaza-skill-picker-layer/);
-  assert.match(brandCss, /inset: auto 12px calc\(100% \+ 8px\) 12px/);
+  assert.match(appSource, /const findPanel = \(\) => findInputBox\(\)\?\.closest\?\.\("\.chat-panel"\)/);
+  assert.match(appSource, /panel\.append\(overlay\)/);
+  assert.match(appSource, /overlay\.style\.setProperty\("height", `\$\{frame\.height\}px`, "important"\)/);
+  assert.doesNotMatch(appSource, /inputBox\.append\(overlay\)/);
+  assert.match(appSource, /lockedFrame = null/);
+  assert.match(appSource, /positionOverlay\(\{ preserve: Boolean\(lockedFrame\) \}\)/);
+  assert.match(brandCss, /\.host-chat-skill-picker\.plaza-skill-picker-layer[\s\S]*contain: layout paint !important/);
+  assert.doesNotMatch(brandCss, /inset: auto 12px calc\(100% \+ 8px\) 12px/);
 });
 
 test("canvas drawing toolbar restores the pan hand tool before drawing tools", () => {
@@ -2125,6 +2132,21 @@ test("new Canvas injects the outer project catalog and delegates runtime project
   assert.match(appSource, /\.new-canvas-root \.canvas-note-style-panel-anchor \{[\s\S]*?bottom: calc\(100% \+ 8px\) !important;[\s\S]*?transform: translateX\(-50%\) !important;/);
   assert.match(appSource, /body\.workbench-body:has\(\.ai-canvas-standalone-mount\)::after \{[\s\S]*?opacity: 0 !important;/);
   assert.match(appSource, /\.ai-canvas-standalone-mount \.app-shell--glass-frame::before,[\s\S]*?\.app-shell--glass-frame::after \{[\s\S]*?opacity: 0 !important;/);
+});
+
+test("new Canvas create project rebinds the mounted host before refreshing the surface", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const createProject = source.match(/async function createAiCanvasRuntimeProject[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(createProject, /workbench\.ui\.canvasServerRevision = 1/);
+  assert.match(createProject, /await flushProjectCanvasSave\(workbench\)/);
+  assert.match(createProject, /stopCanvasLiveSubscription\(workbench\)/);
+  assert.match(createProject, /workbench\.newCanvasMount\?\.isConnected/);
+  assert.match(createProject, /workbench\.newCanvasMount\.dataset\.canvasProjectId = project\.id/);
+  assert.match(createProject, /updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true, syncHostDocument: true \}\)/);
+  assert.match(createProject, /syncCanvasLiveSubscription\(workbench\)/);
 });
 
 test("new Canvas injects slash defaultModels into the runtime catalog and keeps applyCatalog sensitive to settings", () => {
