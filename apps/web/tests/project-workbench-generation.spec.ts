@@ -27676,6 +27676,179 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.status, "running");
   });
 
+  it("still submits the image task when conversation persistence is rejected", async () => {
+    const imageCalls = [];
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+        customEpisodes: [
+          {
+            id: "episode-2",
+            title: "真实剧集",
+            status: "Draft",
+            storyboardCount: 0,
+          },
+        ],
+        projectAssetTab: "character",
+        museScopeMode: "assets",
+        selectedEpisodeCardId: "character-2",
+        selectedEpisodeAssetId: "character-2",
+        prompt: "",
+        imageGenerationResult: null,
+        episodeBatchResults: {},
+        importedAssets: {
+          character: [
+            {
+              id: "character-2",
+              name: "任小野",
+              description: "少年角色。",
+            },
+          ],
+          scene: [],
+          prop: [],
+        },
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "生成任小野角色设定图。",
+          quickReferenceItems: [],
+          mentionReferences: [],
+          selectionContext: {
+            assetTab: "character",
+            selectedAssetId: "character-2",
+            selectedAssetName: "任小野",
+          },
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [
+            {
+              id: "episode-2",
+              title: "真实剧集",
+              status: "Draft",
+              storyboardCount: 0,
+            },
+          ],
+        },
+        shots: [],
+      },
+      api: {
+        async createImageGenerationTask(payload) {
+          imageCalls.push(payload);
+          return { taskId: "asset-image-task-after-conversation-error", status: "running" };
+        },
+        async saveAssetConversationMessages() {
+          const error = new Error("模型服务返回错误，任务没有拿到生成结果，请稍后重试。");
+          error.errorCode = "invalid_asset_conversation_target";
+          throw error;
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await generateAssetImages(workbench);
+
+    assert.equal(imageCalls.length, 1);
+    assert.equal(imageCalls[0].target.targetId, "character-2");
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-task-after-conversation-error");
+    assert.notEqual(workbench.ui.imageGenerationResult?.failureCode, "asset_conversation_persist_failed");
+  });
+
+  it("still submits the storyboard video task when conversation persistence is rejected", async () => {
+    const videoCalls = [];
+    const episodeId = "10000000-0000-4000-8000-000000000401";
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-4",
+      linkedShotId: "10000000-0000-4000-8000-000000000321",
+      description: "分镜 4",
+      previewImageUrl: "/uploads/storyboard-4.png",
+      currentImageAssetVersionId: "storyboard-4-image",
+      generationState: {
+        firstFrame: {
+          id: "storyboard-4-image",
+          name: "首帧",
+          kind: "image",
+          status: "ready",
+          url: "/uploads/storyboard-4.png",
+          preview: "/uploads/storyboard-4.png",
+        },
+      },
+    };
+    const workbench = {
+      state: {
+        project: { id: "project-1", name: "分镜项目" },
+        assetReview: { readyForGeneration: true },
+        assetCandidates: { characters: [], scenes: [], props: [] },
+        calibration: { status: "ready" },
+        shots: [{ id: storyboard.linkedShotId, title: "Shot 004", episodeId }],
+        episodes: [{ id: episodeId, title: "第1集" }],
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "分镜项目" },
+          episodes: [{ id: episodeId, title: "第1集", status: "draft" }],
+          shots: [{ id: storyboard.linkedShotId, title: "Shot 004", episodeId }],
+        },
+      },
+      api: {
+        async createVideoTask(_episodeId, payload) {
+          videoCalls.push(payload);
+          return { taskId: "storyboard-video-after-conversation-error", status: "running" };
+        },
+        async saveStoryboardConversationMessages() {
+          const error = new Error("剧本或分镜处理失败，请检查内容后重试。");
+          error.errorCode = "invalid_storyboard_conversation_target";
+          throw error;
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        selectedModelId: "minimax-h-768p",
+        prompt: "镜头推近。",
+        busy: false,
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        validationMessage: "",
+        toast: "",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: episodeId,
+        selectedStoryboardId: storyboard.id,
+        episodeStoryboardMap: {
+          [episodeId]: [storyboard],
+        },
+        videoResolution: "768P",
+        videoDurationSec: 5,
+        videoCount: 1,
+        videoAudioEnabled: false,
+        videoMusicEnabled: false,
+        videoLipSyncEnabled: false,
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await generateStoryboardVideos(workbench);
+
+    assert.equal(videoCalls.length, 1);
+    assert.equal(videoCalls[0].targetId, storyboard.linkedShotId);
+    assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-video-after-conversation-error");
+  });
+
   it("persists user and system asset conversation messages when generating images", async () => {
     const calls = [];
     const workbench = {

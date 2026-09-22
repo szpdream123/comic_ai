@@ -4,9 +4,17 @@ import { describe, it } from "node:test";
 import {
   generationFailureDisplayMessage,
   moneyPrinterGenerationFailureMessage,
+  __phoneAuthDevServerTestUtils,
 } from "../phone-auth-dev-server.ts";
 
 describe("generation failure display messages", () => {
+  it("does not describe an invalid asset conversation target as a model failure", () => {
+    assert.equal(
+      __phoneAuthDevServerTestUtils.localizeEnvelopeErrorMessage("invalid asset conversation target"),
+      "当前资产还不能写入生成记录，请先保存资产后再生成。",
+    );
+  });
+
   it("localizes MoneyPrinter provider failures before returning them to the integration client", () => {
     assert.equal(
       moneyPrinterGenerationFailureMessage({

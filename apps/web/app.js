@@ -48,7 +48,7 @@ function acquireAiCanvasRuntimeGlobalStyle() {
   }
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260921-01";
+  stylesheet.href = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260922-02";
   stylesheet.dataset.aiCanvasRuntimeGlobalStyle = "true";
   document.head?.prepend(stylesheet);
   aiCanvasRuntimeGlobalStyle = stylesheet;
@@ -717,11 +717,13 @@ function preserveAiCanvasRuntimeGeneratingNodes(liveNodes = [], nextNodes = []) 
     const live = nodeId ? liveById.get(nodeId) : null;
     const liveStatus = String(live?.data?.status ?? "").trim().toLowerCase();
     const nextStatus = String(node?.data?.status ?? "").trim().toLowerCase();
-    const hostIdle = !nextStatus || nextStatus === "idle" || nextStatus === "ready" || nextStatus === "empty";
     const liveTaskId = String(
       live?.data?.taskId ?? live?.data?.lastTaskId ?? live?.data?.generationTaskId ?? live?.data?.pendingTask?.taskId ?? "",
     ).trim();
-    if (!live || !hostIdle || !isAiCanvasRuntimeGeneratingStatus(liveStatus) || !liveTaskId) return node;
+    if (!live || !isAiCanvasRuntimeGeneratingStatus(liveStatus)) return node;
+    if (isAiCanvasRuntimeGeneratingStatus(nextStatus)) return node;
+    if (["success", "completed", "succeeded", "canceled", "cancelled"].includes(nextStatus)) return node;
+    if (!liveTaskId && !["error", "failed"].includes(nextStatus)) return node;
     return {
       ...node,
       data: {
@@ -3635,9 +3637,12 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
           })).then(() => {
             if (!nodeId) return;
             context.runtimeStore?.getState?.()?.updateNodeDataTransient?.(nodeId, {
+              status: "loading",
               taskId,
               lastTaskId: taskId,
               generationTaskId: taskId,
+              error: undefined,
+              failureMessage: "",
             });
           }).catch(() => undefined);
         }
@@ -3656,9 +3661,12 @@ function installAiCanvasAssistantTaskCenterBridge(runtimeWindow, context = {}) {
       })).then(() => {
         if (!nodeId) return;
         context.runtimeStore?.getState?.()?.updateNodeDataTransient?.(nodeId, {
+          status: "loading",
           taskId,
           lastTaskId: taskId,
           generationTaskId: taskId,
+          error: undefined,
+          failureMessage: "",
         });
       }).catch(() => undefined);
       return waitForTaskCenter(taskId, init?.signal ?? input?.signal);
@@ -3694,7 +3702,7 @@ function mountStandaloneAiCanvasRuntime(surface, context = {}) {
     const isShadowRoot = typeof ShadowRoot !== "undefined" && rootNode instanceof ShadowRoot;
     const styleRoot = isShadowRoot ? rootNode : document.head;
     const globalStylesheet = acquireAiCanvasRuntimeGlobalStyle();
-    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260921-01";
+    const stylesheetHref = "/ai-canvas-runtime/assets/runtime-brand-overrides.css?v=20260922-02";
     if (styleRoot?.querySelector && !styleRoot.querySelector(`style[data-ai-canvas-runtime-layout="true"]`)) {
       const layoutStyle = document.createElement("style");
       layoutStyle.dataset.aiCanvasRuntimeLayout = "true";
