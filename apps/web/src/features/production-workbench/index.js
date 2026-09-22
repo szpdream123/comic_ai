@@ -14,6 +14,7 @@ import {
   WORKBENCH_THEME_OPTIONS,
 } from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&canvas-inline-prompt-editor=1&skill-media-upload=8";
 import { buildProjectCreateRequest } from "./project-create-request.js";
+import { normalizeReferenceMediaUrl } from "./reference-media-identity.js";
 import {
   advanceFirstLoginGuide,
   initializeFirstLoginGuide,
@@ -14022,6 +14023,7 @@ export function resolvePromptEditorMentionReferences(workbench, prompt, mentionR
   const assets = isAssetScope(workbench)
     ? collectPromptMentionSuggestionAssets(workbench)
     : collectPromptMentionAssets(workbench);
+  const mediaBuckets = resolvePromptMentionMediaBuckets(workbench);
   const result = [];
   const seenNames = new Set();
   for (const match of String(prompt ?? "").matchAll(/【@([^】]+)】/gu)) {
@@ -14030,10 +14032,15 @@ export function resolvePromptEditorMentionReferences(workbench, prompt, mentionR
       continue;
     }
     seenNames.add(name);
-    const currentReference = references.find((item) => (
+    const numberedMatch = /^(图(?:片)?|视频|音频)\s*(\d+)$/u.exec(name);
+    const numberedKind = numberedMatch ? ({ 图: "image", 图片: "image", 视频: "video", 音频: "audio" })[numberedMatch[1]] : null;
+    const currentReference = !numberedMatch ? references.find((item) => (
       String(item?.name ?? "").trim() === name || String(item?.token ?? "").trim() === `【@${name}】`
-    )) ?? null;
-    const matchedAsset = assets.find((item) => doesPromptMentionMatchAssetName(item, name)) ?? null;
+    )) ?? null : null;
+    // A numbered token addresses the current file order, never a historical alias.
+    const matchedAsset = numberedMatch
+      ? mediaBuckets[numberedKind]?.[Number(numberedMatch[2]) - 1] ?? null
+      : assets.find((item) => doesPromptMentionMatchAssetName(item, name)) ?? null;
     const matchedReferenceAsset = currentReference
       ? assets.find((item) => isPromptMentionSameMediaAsset(item, currentReference))
       : null;
@@ -14041,7 +14048,7 @@ export function resolvePromptEditorMentionReferences(workbench, prompt, mentionR
       continue;
     }
     const assetKind = String(
-      matchedAsset?.assetKind ?? matchedAsset?.kind ?? currentReference?.assetKind ?? currentReference?.kind ?? "character",
+      matchedAsset?.assetKind ?? matchedAsset?.kind ?? numberedKind ?? currentReference?.assetKind ?? currentReference?.kind ?? "character",
     ).trim() || "character";
     const assetId = matchedAsset?.assetId ?? matchedAsset?.id ?? currentReference?.assetId ?? null;
     const matchedAssetPreview = matchedAsset
@@ -49519,7 +49526,7 @@ function dedupeOrderedGenerationReferenceItems(items = []) {
     }
     const url = resolveGenerationReferenceUrl(item);
     const id = String(item?.id ?? item?.assetId ?? item?.assetVersionId ?? item?.storageObjectId ?? "").trim();
-    const key = url || id;
+    const key = normalizeReferenceMediaUrl(url) || id;
     if (!key) {
       continue;
     }
@@ -49630,7 +49637,7 @@ function collectGenerationReferenceUrls(item) {
 }
 
 function normalizeGenerationReferenceIdentity(value) {
-  return String(value ?? "").trim().split("#")[0].split("?")[0];
+  return normalizeReferenceMediaUrl(value).split("#")[0].split("?")[0];
 }
 
 function filterOrderedGenerationReferences(items = [], mediaKind = "image") {
@@ -49699,7 +49706,7 @@ function normalizePromptByImageReferenceOrder(workbench, prompt, generationState
   const mergedGenerationState = Array.isArray(additionalReferences) && additionalReferences.length
     ? {
         ...generationState,
-        quickReferenceItems: dedupeQuickReferenceItems([
+        quickReferenceItems: dedupeOrderedGenerationReferenceItems([
           ...(generationState?.quickReferenceItems ?? []),
           ...additionalReferences,
         ]),
@@ -49709,8 +49716,20 @@ function normalizePromptByImageReferenceOrder(workbench, prompt, generationState
     workbench,
     collectOrderedGenerationReferenceItems(workbench, mergedGenerationState),
   );
+  // Removal/selection can change positions. Resolve the saved file identity
+  // before interpreting public 图N/视频N/音频N tokens in the new order.
+  const restoredPrompt = String(prompt ?? "").replace(/【@__media_reference__:([^】]+)】/gu, (token, encoded) => {
+    try {
+      const [kind, identity, originalName] = JSON.parse(decodeURIComponent(encoded));
+      const references = filterOrderedGenerationReferences(orderedReferences, kind);
+      const index = references.findIndex((item) => resolveComposerReferenceIdentity(item) === identity);
+      return index < 0 ? originalName : `【@${resolvePromptMentionMediaName(kind, index + 1)}】`;
+    } catch {
+      return token;
+    }
+  });
   let nextPrompt = replaceAssetReferenceTokensByImageFileOrder(
-    prompt,
+    restoredPrompt,
     filterOrderedGenerationReferences(orderedReferences, "image"),
   );
   for (const mediaKind of ["video", "audio"]) {
@@ -49759,6 +49778,14 @@ function removeCurrentPromptMentionsForReference(workbench, reference, mentionRe
     .join("|");
   const currentPrompt = String(getCurrentScopePrompt(workbench) ?? "");
   const nextPrompt = currentPrompt
+    .replace(/【@__media_reference__:([^】]+)】/gu, (token, encoded) => {
+      try {
+        const [kind, identity] = JSON.parse(decodeURIComponent(encoded));
+        return kind === resolveGenerationReferenceMediaKind(reference) && identity === resolveComposerReferenceIdentity(reference) ? "" : token;
+      } catch {
+        return token;
+      }
+    })
     .replace(new RegExp(`【@(?:${namePattern})】(?:的(?:场景|角色|道具)形象)?`, "gu"), "")
     .replace(/[ \t]{2,}/g, " ");
   if (nextPrompt !== currentPrompt) {
@@ -49800,11 +49827,12 @@ function replaceOrderedReferenceTokensWithOriginalNames(prompt, orderedReference
   for (const mediaKind of ["image", "video", "audio"]) {
     const references = filterOrderedGenerationReferences(orderedReferences, mediaKind);
     references.forEach((item, index) => {
-      const originalName = resolveReferenceOriginalDisplayName(item);
+      const originalName = resolveReferenceOriginalDisplayName(item) || resolvePromptMentionMediaName(mediaKind, index + 1);
       if (!originalName) {
         return;
       }
-      nextPrompt = replaceOrderedReferenceTokenWithOriginalName(nextPrompt, mediaKind, index + 1, originalName);
+      const restoreName = `__media_reference__:${encodeURIComponent(JSON.stringify([mediaKind, resolveComposerReferenceIdentity(item), originalName]))}`;
+      nextPrompt = replaceOrderedReferenceTokenWithOriginalName(nextPrompt, mediaKind, index + 1, restoreName);
     });
   }
   return nextPrompt;
@@ -49825,6 +49853,10 @@ function replaceOrderedReferenceTokenWithOriginalName(prompt, mediaKind, referen
   const suffixPattern = mediaKind === "image" ? "(?:\\s*中的(?:场景|角色|道具)形象)?" : "(?:\\s*中的[^】]*)?";
   const pattern = new RegExp(`【@${mediaPattern}\\s*${indexPattern}${suffixPattern}】`, "gu");
   return String(prompt ?? "").replace(pattern, () => `【@${tokenName}】`);
+}
+
+function resolveComposerReferenceIdentity(item) {
+  return normalizeReferenceMediaUrl(resolveGenerationReferenceUrl(item)) || String(item?.id ?? item?.assetId ?? "");
 }
 
 function resolveReferenceOriginalDisplayName(item) {
@@ -49895,15 +49927,18 @@ function replaceAssetReferenceTokensByImageFileOrder(prompt, imageReferences = [
       if (!referenceName) {
         return matched;
       }
+      if (/^(?:视频|音频)\s*\d+$/u.test(referenceName)) {
+        return matched;
+      }
       const normalizedName = normalizeAssetReferenceLookupName(referenceName);
       const explicitSuffixKind = bracketedSuffixKind || bareSuffixKind;
       const explicitAssetKind = normalizeOrderedImageReferenceAssetKind(explicitSuffixKind);
       const contextAssetKind = explicitAssetKind || resolveOrderedImageReferenceContextAssetKind(text, offset);
-      const imageIndex = (
+      const generatedImageMatch = /^(图(?:片)?)\s*(\d+)(?:\s*中的(场景|角色|道具)形象)?$/u.exec(referenceName);
+      const imageIndex = generatedImageMatch ? null : (
         contextAssetKind ? referenceIndexByName.get(`${contextAssetKind}:${normalizedName}`) : null
       ) ?? referenceIndexByName.get(normalizedName);
       if (!imageIndex) {
-        const generatedImageMatch = /^(图(?:片)?)\s*(\d+)(?:\s*中的(场景|角色|道具)形象)?$/u.exec(referenceName);
         const generatedImageIndex = Number(generatedImageMatch?.[2] ?? 0);
         if (!generatedImageMatch || !Number.isInteger(generatedImageIndex) || generatedImageIndex < 1 || generatedImageIndex > imageReferences.length) {
           return matched;
@@ -49933,13 +49968,14 @@ function replaceAssetReferenceTokensByMediaFileOrder(prompt, references = [], me
   const prefix = mediaKind === "audio" ? "音频" : "视频";
   return text.replace(/【@([^】]+)】/gu, (matched, rawName) => {
     const referenceName = String(rawName ?? "").trim();
-    const referenceIndex = referenceIndexByName.get(normalizeAssetReferenceLookupName(referenceName));
+    const generatedMatch = /^(?:图(?:片)?|视频|音频)\s*\d+$/u.test(referenceName);
+    const referenceIndex = generatedMatch ? null : referenceIndexByName.get(normalizeAssetReferenceLookupName(referenceName));
     if (referenceIndex) {
       return `【@${prefix}${referenceIndex}】`;
     }
-    const generatedMatch = new RegExp(`^${prefix}\\s*(\\d+)$`, "u").exec(referenceName);
-    const generatedIndex = Number(generatedMatch?.[1] ?? 0);
-    return generatedMatch && generatedIndex >= 1 && generatedIndex <= references.length
+    const mediaMatch = new RegExp(`^${prefix}\\s*(\\d+)$`, "u").exec(referenceName);
+    const generatedIndex = Number(mediaMatch?.[1] ?? 0);
+    return mediaMatch && generatedIndex >= 1 && generatedIndex <= references.length
       ? `【@${prefix}${generatedIndex}】`
       : matched;
   });
@@ -49994,6 +50030,8 @@ function buildImageReferenceIndexByAssetName(imageReferences = []) {
       const normalizedName = normalizeAssetReferenceLookupName(name);
       if (normalizedName && !indexByName.has(normalizedName)) {
         indexByName.set(normalizedName, index + 1);
+      } else if (normalizedName && indexByName.get(normalizedName) !== index + 1) {
+        indexByName.set(normalizedName, 0);
       }
       [item?.role, item?.assetKind, item?.matchedAssetKind, item?.kind]
         .map((kind) => String(kind ?? "").trim())
@@ -50002,6 +50040,8 @@ function buildImageReferenceIndexByAssetName(imageReferences = []) {
           const typedName = `${kind}:${normalizedName}`;
           if (normalizedName && !indexByName.has(typedName)) {
             indexByName.set(typedName, index + 1);
+          } else if (normalizedName && indexByName.get(typedName) !== index + 1) {
+            indexByName.set(typedName, 0);
           }
         });
     }
@@ -50495,17 +50535,26 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
   const bindBodyMentions = (prompt) => {
     if (storyboardOnly) return prompt;
     const buckets = resolvePromptMentionAssetBuckets(workbench);
+    const images = filterOrderedGenerationReferences(references ?? [], "image");
     const result = bindStoryboardBodyAssetMentions({
       prompt,
       sourcePrompt: composerPrompt,
       imageCount: filterOrderedGenerationReferences(references ?? [], "image").length,
       normalizeName: normalizeAssetReferenceLookupName,
-      assets: ["scene", "character", "prop"].flatMap((kind) => (buckets[kind] ?? []).map((asset) => ({
+      assets: [...["scene", "character", "prop"].flatMap((kind) => (buckets[kind] ?? []).map((asset) => ({
         kind,
         id: String(asset.assetId ?? asset.id ?? ""),
         url: normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(asset)),
         names: [asset.name, asset.label, ...(asset.mentionAliases ?? [])].map((name) => String(name ?? "").trim()).filter(Boolean),
-      }))),
+        imageIndex: images.findIndex((image) => (
+          normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(asset)) === normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(image))
+        )) + 1,
+      }))), ...enrichGenerationReferenceNamesFromAssets(workbench, references ?? [])
+        .filter((reference) => resolveGenerationReferenceMediaKind(reference) !== "image")
+        .map((reference) => ({
+          kind: resolveGenerationReferenceMediaKind(reference),
+          names: collectGenerationReferenceNames(reference),
+        }))],
       selectedAssets: (selectedStoryboard.references ?? []).map((asset) => ({
         id: String(asset.assetId ?? asset.id ?? ""),
         url: normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(asset)),
@@ -50532,13 +50581,13 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
     quickReferenceItems: references,
   }));
 
+  clearEpisodeWorkbenchAttachmentComposer(workbench);
   const normalizedPromptText = normalizePromptByImageReferenceOrder(
     workbench,
     composerPrompt,
     createEmptyGenerationState(),
     references,
   );
-  clearEpisodeWorkbenchAttachmentComposer(workbench);
   setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(bindBodyMentions(normalizedPromptText), references));
   if (!storyboardOnly) {
     appendStoryboardMentionAudioAttachments(workbench, composerPrompt);
@@ -50748,20 +50797,28 @@ function collectStoryboardMentionImageReferences(workbench, description) {
   assets.forEach((asset) => {
     [asset?.name, asset?.label, ...(asset?.mentionAliases ?? [])].forEach((name) => {
       const normalizedName = normalizeAssetReferenceLookupName(name);
-      if (normalizedName && !assetsByName.has(normalizedName)) {
-        assetsByName.set(normalizedName, asset);
+      if (normalizedName) {
+        assetsByName.set(normalizedName, [...(assetsByName.get(normalizedName) ?? []), asset]);
       }
       const typedName = `${asset.assetKind}:${normalizedName}`;
-      if (normalizedName && !assetsByName.has(typedName)) {
-        assetsByName.set(typedName, asset);
+      if (normalizedName) {
+        assetsByName.set(typedName, [...(assetsByName.get(typedName) ?? []), asset]);
       }
     });
   });
   return mentionEntries.flatMap(({ name: mentionName, assetKind: mentionAssetKind }) => {
     const normalizedMentionName = normalizeAssetReferenceLookupName(mentionName);
-    const asset = (
+    const candidates = (
       mentionAssetKind ? assetsByName.get(`${mentionAssetKind}:${normalizedMentionName}`) : null
-    ) ?? assetsByName.get(normalizedMentionName) ?? null;
+    ) ?? assetsByName.get(normalizedMentionName) ?? [];
+    const selectedReferences = getSelectedStoryboard(getActiveStoryboards(workbench), workbench.ui.selectedStoryboardId)?.references ?? [];
+    const selected = candidates.filter((candidate) => selectedReferences.some((reference) => (
+      String(reference.assetId ?? reference.id) === String(candidate.assetId ?? candidate.id) ||
+      (resolveGenerationReferenceUrl(candidate) && normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(reference)) === normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(candidate)))
+    )));
+    const identity = (candidate) => normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(candidate)) || String(candidate.assetId ?? candidate.id);
+    const resolved = new Set(selected.map(identity)).size === 1 ? selected : candidates;
+    const asset = new Set(resolved.map(identity)).size === 1 ? resolved[0] : null;
     const previewUrl = resolveGenerationReferenceUrl(asset);
     if (!asset || !previewUrl) {
       return [];
@@ -57489,6 +57546,11 @@ function isRemovedComposerAttachment(item, attachmentId, removedReference) {
 }
 
 function isSameGenerationReference(left, right) {
+  const leftFileUrl = normalizeReferenceMediaUrl(resolveGenerationReferenceUrl(left));
+  const rightFileUrl = normalizeReferenceMediaUrl(resolveGenerationReferenceUrl(right));
+  if (leftFileUrl && rightFileUrl) {
+    return leftFileUrl === rightFileUrl;
+  }
   const leftIds = collectGenerationReferenceIds(left);
   const rightIds = new Set(collectGenerationReferenceIds(right));
   if (leftIds.some((id) => rightIds.has(id))) {

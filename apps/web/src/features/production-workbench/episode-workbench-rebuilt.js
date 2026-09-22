@@ -7,6 +7,7 @@ import { resolveApiUrl } from "../../shared/creator-api.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 import { renderImageStyleCreateModal, renderSelectionPickerModal, syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
 import { EPISODE_PROMPT_PLACEHOLDER } from "./episode-prompt-placeholder.js";
+import { normalizeReferenceMediaUrl } from "./reference-media-identity.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
@@ -3423,7 +3424,9 @@ function resolveComposerReferenceKeys(item) {
   ];
   const preview = resolveReferencePreview(item);
   if (preview) {
-    keys.push(`url:${preview}`);
+    // Different versions of one asset are distinct pictures; address variants
+    // of one storage object are the same picture in both tray and submission.
+    return [`url:${normalizeReferenceMediaUrl(preview)}`];
   }
   return keys.filter(Boolean);
 }

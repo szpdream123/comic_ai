@@ -2,11 +2,12 @@ const TABLE_LABEL = /视频(场景|角色|道具)对照表\s*[:：]/gu;
 const ASSET_KINDS = { 场景: "scene", 角色: "character", 道具: "prop" };
 
 // Import-only: the existing composer pipeline owns image collection and numbering.
-// This compiler reuses the resolved table, never generates a new attachment order.
+// This compiler reuses resolved attachments, never generates a new attachment order.
 export function bindStoryboardBodyAssetMentions({ prompt, sourcePrompt = prompt, imageCount = 0, assets = [], selectedAssets = [], normalizeName = (name) => name.trim() }) {
   const text = String(prompt ?? "");
   const rows = readAssetTable(text);
-  if (!rows.length) return { prompt: text, warning: "" };
+  const requiredNames = readRequiredAssetNames(String(sourcePrompt ?? ""));
+  if (!rows.length && !requiredNames.length) return { prompt: text, warning: "" };
   const sourceRows = readAssetTable(String(sourcePrompt ?? ""));
   const bindings = new Map();
   const unresolved = new Set();
@@ -33,10 +34,25 @@ export function bindStoryboardBodyAssetMentions({ prompt, sourcePrompt = prompt,
     if (bindings.has(row.name) && bindings.get(row.name) !== token) ambiguous.add(row.name);
     bindings.set(row.name, token);
   }
+  for (const name of requiredNames) {
+    if (bindings.has(name)) continue;
+    const candidates = assets.filter((asset) => asset.names.some((alias) => normalizeName(alias) === normalizeName(name)));
+    if (candidates.length && candidates.every((asset) => asset.kind === "audio" || asset.kind === "video")) continue;
+    const selected = candidates.filter((asset) => selectedAssets.some((item) => (
+      (asset.id && item.id === asset.id) || (asset.url && item.url === asset.url)
+    )));
+    const selectedIdentities = new Set(selected.map((asset) => asset.url || asset.id));
+    const resolved = selectedIdentities.size === 1 ? selected : candidates;
+    const identities = new Set(resolved.map((asset) => asset.url || asset.id));
+    const indexes = new Set(resolved.map((asset) => asset.imageIndex).filter((index) => index >= 1 && index <= imageCount));
+    if (identities.size > 1 || indexes.size > 1) ambiguous.add(name);
+    else if (indexes.size !== 1) unresolved.add(name);
+    bindings.set(name, indexes.size === 1 ? `【@图${[...indexes][0]}】` : "");
+  }
   for (const name of [...unresolved, ...ambiguous]) bindings.set(name, "");
 
   // Longest known name wins, including undeclared names, to avoid turning 苏晚晚
-  // into a 苏晚 token followed by 晚. Only table-declared names get replacements.
+  // into a 苏晚 token followed by 晚. Only declared or explicitly mentioned names get replacements.
   const names = [...new Set([...bindings.keys(), ...assets.flatMap((asset) => asset.names)])]
     .filter(Boolean)
     .sort((left, right) => right.length - left.length);
@@ -55,10 +71,33 @@ export function bindStoryboardBodyAssetMentions({ prompt, sourcePrompt = prompt,
     }) + (tableStart >= 0 ? line.slice(tableStart) : "");
   }).join("");
   const warning = [
-    unresolved.size ? `以下资产未匹配到可用图片，正文保留原文：${[...unresolved].join("、")}` : "",
-    ambiguous.size ? `以下资产名称存在歧义，正文保留原文，请手动选择 @ 引用：${[...ambiguous].join("、")}` : "",
+    unresolved.size ? `以下资产未匹配到可用图片，已保留原名称：${[...unresolved].join("、")}。请补充图片，或在对话框中手动输入 @ 选择引用` : "",
+    ambiguous.size ? `以下资产名称存在歧义，已保留原名称：${[...ambiguous].join("、")}。请在对话框中手动选择 @ 引用` : "",
   ].filter(Boolean).join("；");
   return { prompt: compiled, warning };
+}
+
+function readRequiredAssetNames(prompt) {
+  const names = new Set();
+  let inAssetList = false;
+  for (const line of prompt.split(/\r?\n|<br\s*\/?>/iu)) {
+    if (/^\s*(?:出场资产锁|所需资产)\s*[:：]\s*$/u.test(line)) {
+      inAssetList = true;
+      continue;
+    }
+    if (/视频(?:场景|角色|道具)对照表\s*[:：]/u.test(line)) continue;
+    if (/^\s*(?:光影基调池|物理状态遗留|主光方向|光质与光比|色温逻辑|阴影策略)\s*[:：]/u.test(line)) inAssetList = false;
+    if (inAssetList) {
+      const entry = /^\s*(?:【@([^】]+)】|([^:：<>【】]+))\s*[:：]\s*(.+)$/u.exec(line);
+      if (!entry) inAssetList = false;
+      else names.add(String(entry[1] ?? entry[2]).replace(/^@/u, "").trim());
+    }
+    for (const match of line.matchAll(/【@([^】]+)】|(?:^|[=＝:：,，;；、!?！？\s(（"'“”‘’「」『』])@([^\s@【】,，。；;：:!?！？()（）"'“”‘’「」『』]+)/gu)) {
+      const name = String(match[1] ?? match[2]).trim();
+      if (!/^(?:图(?:片)?|视频|音频)\s*\d+(?:\s*中的(?:场景|角色|道具)形象)?$/u.test(name)) names.add(name);
+    }
+  }
+  return [...names].filter(Boolean);
 }
 
 function readAssetTable(prompt) {
