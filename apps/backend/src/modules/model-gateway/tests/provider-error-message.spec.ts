@@ -134,6 +134,26 @@ describe("provider error message", () => {
     );
   });
 
+  it("classifies a polled image failure reason instead of the generic fallback", () => {
+    const providerStatus = {
+      model: "gpt-image-2-pro",
+      providerStatus: "failed",
+      providerMessage: "content policy rejected the prompt",
+      providerRawResponse: {
+        status: "failed",
+        failure_reason: "content policy rejected the prompt",
+      },
+    };
+    assert.equal(
+      translateProviderErrorMessage(providerStatus, {
+        failureCode: "provider_failed",
+        mediaType: "image",
+        phase: "poll",
+      }),
+      "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。",
+    );
+  });
+
   it("keeps unknown provider errors behind a safe fallback", () => {
     assert.equal(
       translateProviderErrorMessage("opaque upstream failure text"),

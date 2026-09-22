@@ -2284,6 +2284,8 @@ function localizeEnvelopeErrorMessage(message: string): string {
   if (/default .* prompt|prompt template/i.test(value)) return "默认提示词模板缺失，请联系管理员配置。";
   if (/canvas/i.test(value)) return "画布操作失败，请刷新后重试。";
   if (/storyboard|script/i.test(value)) return "剧本或分镜处理失败，请检查内容后重试。";
+  if (/invalid asset conversation target/i.test(value)) return "当前资产还不能写入生成记录，请先保存资产后再生成。";
+  if (/\binvalid\b/i.test(value) && /\btarget\b/i.test(value)) return "请求目标不合法，请刷新后重试。";
   return translateProviderErrorMessage(value) || "操作失败，请稍后重试。";
 }
 
@@ -38602,6 +38604,7 @@ export function createPhoneAuthDevServer(
 export type { Server };
 
 export const __phoneAuthDevServerTestUtils = {
+  localizeEnvelopeErrorMessage,
   appendCanvasGenerationSkillReference,
   appendImageStylePromptForGeneration,
   copyEpisodeExportSourceObjectToFile,

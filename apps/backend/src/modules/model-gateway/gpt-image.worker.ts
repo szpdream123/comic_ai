@@ -1352,7 +1352,7 @@ export async function processGptImagePollJob(
         row,
         snapshot,
         failureCode,
-        providerStatus: poll.redactedResponse,
+        providerStatus: providerPollFailureStatus(poll.redactedResponse, failureCode),
         now: input.now,
       });
     }
@@ -3318,6 +3318,31 @@ function buildProviderErrorMessage(error: unknown) {
     mediaType: "image",
     phase: "submit",
   });
+}
+
+function providerPollFailureStatus(
+  providerStatus: Record<string, unknown>,
+  failureCode: string,
+): Record<string, unknown> {
+  const rawResponse = readProviderRawResponse(providerStatus);
+  const classified = ModelError.fromUnknown(
+    {
+      ...providerStatus,
+      ...(rawResponse === undefined ? {} : { providerRawResponse: rawResponse }),
+    },
+    {
+      failureCode,
+      mediaType: "image",
+      phase: "poll",
+      providerDiagnostics: readObject(providerStatus.providerDiagnostics) || null,
+    },
+  );
+  return {
+    ...providerStatus,
+    failureCode,
+    providerMessage: classified.displayMessage,
+    displayMessage: classified.displayMessage,
+  };
 }
 
 function readErrorStorageObjectId(error: unknown): string | undefined {

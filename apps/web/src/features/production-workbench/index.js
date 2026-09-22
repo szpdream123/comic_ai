@@ -51273,7 +51273,11 @@ export async function generateStoryboardImages(workbench, options = {}) {
   let composerClearedAfterSubmit = false;
 
   try {
-    await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
+    try {
+      await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
+    } catch {
+      // Conversation history is not a gate for the model request.
+    }
     const payload = buildImageGenerationPayload(workbench);
     collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
       mediaKind: "image",
@@ -51308,7 +51312,11 @@ export async function generateStoryboardImages(workbench, options = {}) {
     };
     if (isStoryboardGenerator) {
       applyStoryboardGeneratorTaskResult(workbench, result, selectedStoryboard.id, submission);
-      await persistStoryboardConversationEntry(workbench, submittedResult, { includeUserRequest: false });
+      try {
+        await persistStoryboardConversationEntry(workbench, submittedResult, { includeUserRequest: false });
+      } catch {
+        // Conversation history is not a gate for the model request.
+      }
     } else {
       workbench.ui.imageGenerationResult = submittedResult;
       if (isStoryboardGenerationComposerDraftUnchanged(workbench, selectedStoryboard.id, composerDraft)) {
@@ -51436,7 +51444,11 @@ export async function generateStoryboardVideos(workbench) {
   }
   let clearedComposerDraft = null;
   try {
-    await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
+    try {
+      await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
+    } catch {
+      // Conversation history is not a gate for the model request.
+    }
     clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
     clearedComposerDraft = captureStoryboardGenerationComposerDraft(
       workbench,
@@ -54542,7 +54554,11 @@ async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, n
       lastSubmission: submission,
     }));
     workbench.ui.videoGenerationResult = submission;
-    await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
+    try {
+      await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
+    } catch {
+      // Conversation history is not a gate for the model request.
+    }
     const task = await createVideoTaskWithReferenceFallback(workbench, workbench.ui.selectedEpisodeId, {
       ...payload,
       targetType: "storyboard",
@@ -54778,29 +54794,8 @@ export async function generateAssetImages(workbench) {
     try {
       await persistAssetConversationEntry(workbench, runningResult, { includeUserRequest: true });
       render(workbench);
-    } catch (error) {
-      const failedResult = {
-        ...runningResult,
-        ...submission,
-        status: "failed",
-        failureCode: "asset_conversation_persist_failed",
-        failure: {
-          displayMessage: friendlyError(error),
-        },
-        quickReferenceItems: submission.quickReferenceItems,
-        attachmentItems: submission.attachmentItems,
-        fixedImages: [],
-        selectionContext: submission.selectionContext,
-      };
-      workbench.ui.imageGenerationResult = failedResult;
-      workbench.ui.episodeBatchResults = {
-        ...(workbench.ui.episodeBatchResults ?? {}),
-        [asset.id]: failedResult,
-      };
-      workbench.ui.generationPollingActive = false;
-      appendAssetConversationHistoryEntry(workbench, failedResult);
-      render(workbench);
-      throw error;
+    } catch {
+      // Conversation history is not a gate for the model request.
     }
 
     const payload = buildImageGenerationPayload(workbench);
@@ -55580,8 +55575,20 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
     const targetedTaskId = targetedNode
       ? resolveCanvasNodeTaskId(workbench.ui.canvasDocument, targetedNode.id)
       : null;
+    const targetedBusy = Boolean(
+      targetedNode
+      && generatingStatuses.includes(String(targetedNode?.data?.status ?? "").trim().toLowerCase())
+      && targetedTaskId
+      && targetedTaskId !== taskId
+    );
+    const targetedSettledOtherTask = Boolean(
+      targetedNode
+      && targetedTaskId
+      && targetedTaskId !== taskId
+      && ["completed", "succeeded", "success"].includes(String(targetedNode?.data?.status ?? "").trim().toLowerCase())
+    );
     const matchedNode = (
-      targetedNode && (!targetedTaskId || targetedTaskId === taskId)
+      targetedNode && !targetedBusy && !targetedSettledOtherTask
         ? targetedNode
         : null
     )
@@ -55592,12 +55599,18 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
             ?? null
           : null
       );
-    if (
-      matchedNode &&
-      ["canvas", "canvas_node"].includes(targetType) &&
-      [...generatingStatuses, ...terminalStatuses].includes(
-        String(matchedNode.data?.status ?? "").trim().toLowerCase(),
+    const matchedStatus = String(matchedNode?.data?.status ?? "").trim().toLowerCase();
+    const canProjectOntoMatched = Boolean(matchedNode) && (
+      generatingStatuses.includes(matchedStatus)
+      || terminalStatuses.includes(matchedStatus)
+      || (
+        targetIsNode
+        && ["error", "success", "idle", "ready", "empty"].includes(matchedStatus)
       )
+    );
+    if (
+      canProjectOntoMatched &&
+      ["canvas", "canvas_node"].includes(targetType)
     ) {
       canvasTargets.push({
         nodeId: String(matchedNode.id),
@@ -56264,10 +56277,16 @@ function bindCanvasGenerationTaskToNode(workbench, taskId, defaults = {}) {
     || "";
   if (!nodeId || (targetType && targetType !== "canvas" && targetType !== "canvas_node")) return false;
   const nextDocument = updateCanvasNodeData(canvasDocument, nodeId, {
+    status: "loading",
     taskId: normalizedTaskId,
     lastTaskId: normalizedTaskId,
     generationTaskId: normalizedTaskId,
+    error: undefined,
+    failureMessage: "",
+    failureCode: null,
+    failure: null,
   });
+  if (workbench.ui) workbench.ui.canvasGeneratingNodeId = nodeId;
   updateActiveCanvasDocument(workbench, nextDocument, { immediateSave: true });
   updateMountedNewCanvasSurface(workbench, { nodeOnly: true, nodeId, document: nextDocument });
   return true;

@@ -494,8 +494,8 @@
   display: none !important;
 }
 
-/* Keep the output-history modal centered; motion scale must not replace the
-   Tailwind -translate-x/y-1/2 that places left/top 50% at the viewport center. */
+/* Keep the output-history modal centered and compact; the 720px width utility
+   is not in the compiled runtime CSS, so unconstrained content stretches it. */
 .new-canvas-root [data-resource-video-boundary].fixed.left-1\/2.top-1\/2,
 .ai-canvas-standalone-mount [data-resource-video-boundary].fixed.left-1\/2.top-1\/2 {
   left: 50% !important;
@@ -503,6 +503,19 @@
   right: auto !important;
   bottom: auto !important;
   translate: -50% -50% !important;
+  width: min(520px, calc(100vw - 48px)) !important;
+  max-width: min(520px, calc(100vw - 48px)) !important;
+  max-height: min(56vh, 460px) !important;
+  height: auto !important;
+}
+
+.new-canvas-root .character-library-panel,
+.ai-canvas-standalone-mount .character-library-panel {
+  width: min(880px, calc(100vw - 48px)) !important;
+  min-width: 0 !important;
+  max-width: min(880px, calc(100vw - 48px)) !important;
+  height: min(620px, calc(100vh - 96px)) !important;
+  max-height: min(620px, calc(100vh - 96px)) !important;
 }
 
 .new-canvas-root .sidebar-floating .sidebar-logo-wrap {

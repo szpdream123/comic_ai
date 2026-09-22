@@ -686,7 +686,7 @@ test("AI Canvas image and video generation registers with the project task cente
   assert.match(appSource, /globalThis\.__COMIC_AI_NOTIFY_ASSISTANT_TASK_WAITERS__/);
   assert.match(appSource, /isSuccess && !resolveAiCanvasAssistantTaskMedia\(task\)\.url\) return/);
   assert.match(appSource, /const pick = unbound\.at\(-1\)/);
-  assert.match(appSource, /updateNodeDataTransient\?\.\(nodeId, \{\s*taskId,/);
+  assert.match(appSource, /updateNodeDataTransient\?\.\(nodeId, \{\s*status: "loading",\s*taskId,/);
   assert.match(appSource, /const persistTerminalNode = \(task\) =>/);
   assert.match(appSource, /isVideo \? \{ videoUrl: media\.url \} : \{ imageUrl: media\.url \}/);
   assert.match(appSource, /persistTerminalNode\(task\)/);
@@ -699,9 +699,13 @@ test("AI Canvas image and video generation registers with the project task cente
   assert.match(workbenchSource, /function bindCanvasGenerationTaskToNode/);
   assert.match(workbenchSource, /kindUnboundLoadingNodes\.at\(-1\)/);
   assert.match(appSource, /function preserveAiCanvasRuntimeGeneratingNodes/);
-  assert.match(appSource, /!liveTaskId\) return node/);
+  assert.match(appSource, /!live \|\| !isAiCanvasRuntimeGeneratingStatus\(liveStatus\)/);
+  assert.match(appSource, /isAiCanvasRuntimeGeneratingStatus\(nextStatus\)/);
+  assert.match(appSource, /\["success", "completed", "succeeded", "canceled", "cancelled"\]\.includes\(nextStatus\)/);
+  assert.match(appSource, /!liveTaskId && !\["error", "failed"\]/);
   assert.match(appSource, /String\(currentProjectId \?\? ""\)\.trim\(\) === previousProjectId/);
-  assert.match(workbenchSource, /targetedTaskId === taskId/);
+  assert.match(workbenchSource, /targetedBusy/);
+  assert.match(workbenchSource, /status: "loading"/);
   assert.doesNotMatch(workbenchSource, /kindLoadingNodes\.at\(-1\)/);
 });
 

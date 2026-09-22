@@ -260,6 +260,11 @@ test("output history modal stays centered and top chrome menus keep the AI assis
   assert.doesNotMatch(historySource, /fixed inset-x-0 bottom-0 mx-auto w-full max-w-\[720px\] max-h-\[75vh\] border border-b-0 rounded-t-2xl/);
   const brandCss = readFileSync(new URL("../ai-canvas-runtime/assets/runtime-brand-overrides.css", import.meta.url), "utf8");
   assert.match(brandCss, /\[data-resource-video-boundary\]\.fixed\.left-1\\\/2\.top-1\\\/2[\s\S]*translate:\s*-50% -50%\s*!important/);
+  assert.match(brandCss, /\[data-resource-video-boundary\]\.fixed\.left-1\\\/2\.top-1\\\/2[\s\S]*width:\s*min\(520px,\s*calc\(100vw - 48px\)\)\s*!important/);
+  assert.match(brandCss, /\[data-resource-video-boundary\]\.fixed\.left-1\\\/2\.top-1\\\/2[\s\S]*max-height:\s*min\(56vh,\s*460px\)\s*!important/);
+  assert.match(brandCss, /\.character-library-panel\s*\{[\s\S]*width:\s*min\(880px,\s*calc\(100vw - 48px\)\)\s*!important/);
+  assert.match(brandCss, /\.character-library-panel\s*\{[\s\S]*height:\s*min\(620px,\s*calc\(100vh - 96px\)\)\s*!important/);
+  assert.match(brandCss, /\.character-library-panel\s*\{[\s\S]*min-width:\s*0\s*!important/);
   assert.match(storeSource, /setAssetsPanelOpen:\(t,n=`modal`\)=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!0,assetsPanelMode:n,characterLibraryOpen:!1,characterActionLibraryOpen:!1,historyPanelOpen:!1,dramaAssetsPanelOpen:!1\}:\{assetsPanelOpen:!1/);
   assert.match(storeSource, /setCharacterLibraryOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!0,characterActionLibraryOpen:!1,historyPanelOpen:!1,dramaAssetsPanelOpen:!1\}:\{characterLibraryOpen:!1/);
   assert.match(storeSource, /setHistoryPanelOpen:t=>e\(t\?\{settingsOpen:!1,assetsPanelOpen:!1,characterLibraryOpen:!1,characterActionLibraryOpen:!1,historyPanelOpen:!0,dramaAssetsPanelOpen:!1\}:\{historyPanelOpen:!1\}/);

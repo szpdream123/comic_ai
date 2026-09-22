@@ -437,6 +437,87 @@ describe("production workbench task center", () => {
     assert.equal(workbench.ui.canvasDocument.nodes[0].data.taskId, undefined);
     assert.equal(workbench.ui.canvasDocument.nodes[1].data.taskId, "2266c439-37d1-40b1-9bfb-de2808ca2c71");
     assert.equal(workbench.ui.canvasDocument.nodes[1].data.lastTaskId, "2266c439-37d1-40b1-9bfb-de2808ca2c71");
+    assert.equal(workbench.ui.canvasDocument.nodes[1].data.status, "loading");
+    assert.equal(workbench.ui.canvasGeneratingNodeId, "video-39");
+  });
+
+  it("marks a failed canvas node as generating when a new task is bound", () => {
+    const document = {
+      version: 1,
+      nodes: [{
+        id: "image-15",
+        type: "ai-image",
+        data: {
+          status: "error",
+          prompt: "角色:洛雨漓",
+          imageUrl: "/failed-preview.png",
+          failureMessage: "模型任务失败：参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。",
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      ui: {
+        selectedCanvasProjectId: "canvas-64",
+        canvasProjects: [{ id: "canvas-64" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-64": document },
+      },
+      newCanvasInstance: { update: async () => true },
+      newCanvasMount: { isConnected: true, dataset: { canvasProjectId: "canvas-64" } },
+    };
+    const bound = bindCanvasGenerationTaskToNodeForTest(workbench, "bbdddf3f-fd26-48a6-9216-da6a6b06f01a", {
+      kind: "image",
+      mediaKind: "image",
+      targetType: "canvas_node",
+      targetId: "image-15",
+    });
+    assert.equal(bound, true);
+    const node = workbench.ui.canvasDocument.nodes[0];
+    assert.equal(node.data.status, "loading");
+    assert.equal(node.data.taskId, "bbdddf3f-fd26-48a6-9216-da6a6b06f01a");
+    assert.equal(node.data.failureMessage, "");
+    assert.equal(workbench.ui.canvasGeneratingNodeId, "image-15");
+  });
+
+  it("projects a running canvas task onto the failed target node", async () => {
+    const document = {
+      version: 1,
+      nodes: [{
+        id: "image-15",
+        type: "ai-image",
+        data: {
+          status: "error",
+          prompt: "角色:洛雨漓",
+          imageUrl: "/failed-preview.png",
+          failureMessage: "模型任务失败：参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。",
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-64",
+        canvasProjects: [{ id: "canvas-64" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-64": document },
+        canvasGenerationHistoryItems: [],
+      },
+    };
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "bbdddf3f-fd26-48a6-9216-da6a6b06f01a",
+      kind: "image",
+      mediaKind: "image",
+      status: "running",
+      targetType: "canvas_node",
+      targetId: "image-15",
+      updatedAt: "2026-09-22T18:37:19.000Z",
+    });
+    const node = workbench.ui.canvasDocument.nodes[0];
+    assert.equal(node.data.status, "running");
+    assert.equal(node.data.taskId, "bbdddf3f-fd26-48a6-9216-da6a6b06f01a");
+    assert.equal(workbench.ui.canvasGeneratingNodeId, "image-15");
   });
 
   it("projects a completed canvas video onto the bound video node", async () => {
