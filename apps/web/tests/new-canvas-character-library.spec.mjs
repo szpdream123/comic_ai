@@ -101,6 +101,7 @@ test("character library loads official and team character assets inside the same
   assert.match(html, /data-character-category="character"/);
   assert.match(html, /data-character-category="scene"/);
   assert.match(html, /data-character-category="prop"/);
+  assert.match(html, /data-character-category="action"/);
   assert.match(html, /data-character-category="voice"/);
   assert.match(html, /全部/);
   assert.match(html, /资产分页/);
@@ -310,6 +311,20 @@ test("character library styles wrap asset cards and keep details in a bounded mo
   assert.match(css, /\.canvas-character-library-detail-dialog\s*\{[\s\S]*?width:\s*min\(900px, 100%\)/);
   assert.doesNotMatch(css, /\.canvas-character-library-readonly/);
   assert.match(css, /@media \(max-width:\s*760px\)[\s\S]*?\.canvas-character-library-backdrop\s*\{[\s\S]*?position:\s*fixed/);
+});
+
+test("canvas assistant asset tab reads the same drama asset list the team library fills", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const adapter = await readFile(new URL("../src/features/new-canvas/ai-canvas-runtime-adapter.js", import.meta.url), "utf8");
+  const chatInput = await readFile(new URL("../../../.tmp/ai-canvas-tauri-upstream-2/src/components/chat/ChatInput.tsx", import.meta.url), "utf8");
+  assert.match(adapter, /publishTeamCharacterLibrary\(assets\)/);
+  assert.match(adapter, /dramaAssets:\s*\{/);
+  assert.match(chatInput, /resolveDramaMentionItems\(dramaAssets, modelQuery\)/);
+  assert.match(chatInput, /label: t\('资产库'\)/);
+  assert.match(adapter, /context\.workbench\?\.assetLibraryCache\?\.clear\?\.\(\)/);
+  assert.match(adapter, /dramaAssets,/);
+  assert.match(adapter, /document\?\.dramaAssets/);
+  assert.match(chatInput, /action: '动作'/);
 });
 
 test("new canvas host mounts, dispatches, and disposes the character library controller", async () => {

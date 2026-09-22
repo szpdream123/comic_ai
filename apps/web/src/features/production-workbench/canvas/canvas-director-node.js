@@ -43,7 +43,7 @@ export function normalizeCanvasDirectorCapture(input = {}) {
 export function canvasDirectorCaptureUrl(capture = {}) {
   const storageObjectId = text(capture.storageObjectId);
   return storageObjectId
-    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
     : "";
 }
 

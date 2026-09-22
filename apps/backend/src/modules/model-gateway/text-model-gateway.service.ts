@@ -512,8 +512,9 @@ function prepareProviderChatCompletionRequest(
   providerModel: string,
   providerProtocol?: string,
 ): TextGatewayChatCompletionRequest {
+  const { thinking: _thinking, ...openAiRequest } = request;
   const prepared = {
-    ...request,
+    ...openAiRequest,
     model: providerModel,
     stream: true,
     stream_options: {

@@ -20,8 +20,7 @@ describe("Canvas Agent runtime composition", () => {
   it("uses the tool grant id when resolving an authorized media attachment", () => {
     const source = readFileSync(join(process.cwd(), "apps/backend/src/modules/canvas-agent/canvas-agent-runtime.factory.ts"), "utf8");
 
-    assert.match(source, /grantId:\s*request\.grantId/);
-    assert.doesNotMatch(source, /grantId:\s*request\.fileGrantId/);
+    assert.match(source, /request\.grantId \?\? request\.fileGrantId/);
     assert.match(source, /createSkillPlazaService/);
     assert.match(source, /findAccessibleSkillIdByName/);
     assert.match(source, /resolvePlazaSkill/);

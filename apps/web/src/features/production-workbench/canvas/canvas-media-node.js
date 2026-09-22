@@ -286,13 +286,20 @@ export function resolveCanvasMediaNodeSource(node = {}, mediaKind = "", options 
   const data = nodeData(node);
   const assets = Array.isArray(options.assets) ? options.assets : [];
   const identity = resolveCanvasMediaStableIdentity(data, assets);
+  const directUrl = resolveCanvasMediaUrl(resolveCanvasMediaDirectUrl(node, mediaKind, options), mediaKind);
+  if (isRemoteCanvasMediaUrl(directUrl)) return directUrl;
   if (identity.storageObjectId) {
     const contentUrl = `/api/storage/objects/${encodeURIComponent(identity.storageObjectId)}/content`;
     if (options.thumbnail === true && mediaKind !== "audio") return `${contentUrl}?thumbnail=1`;
-    return options.proxy === false ? contentUrl : `${contentUrl}?proxy=1`;
+    return contentUrl;
   }
-  const directUrl = resolveCanvasMediaDirectUrl(node, mediaKind, options);
-  return resolveCanvasMediaUrl(directUrl, mediaKind);
+  return directUrl;
+}
+
+function isRemoteCanvasMediaUrl(value) {
+  const url = String(value ?? "").trim();
+  if (!/^https?:\/\//i.test(url)) return false;
+  return !/\/api\/storage\/objects\//i.test(url);
 }
 
 export function resolveCanvasMediaDirectUrl(node = {}, mediaKind = "", options = {}) {

@@ -37,7 +37,7 @@ export function canvasAssetsFromGenerationHistory(payload) {
           ?? metadata.url,
       );
       const storageProxyUrl = storageObjectId
-        ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+        ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
         : "";
       const url = text(
         normalizedKind === "video"

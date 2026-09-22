@@ -127,10 +127,13 @@ export function createCanvasAgentWorkerRuntime(input: {
     canvasId: string;
     conversationId: string;
     actor: CanvasAgentActor;
-    grantId: string;
+    grantId?: string;
+    fileGrantId?: string;
   }) => {
+    const grantId = String(request.grantId ?? request.fileGrantId ?? "").trim();
+    if (!grantId) return null;
     const grant = await context.resolveFileGrant({
-      grantId: request.grantId,
+      grantId,
       canvasId: request.canvasId,
       conversationId: request.conversationId,
       actor: request.actor,

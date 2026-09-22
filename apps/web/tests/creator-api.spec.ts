@@ -2371,7 +2371,7 @@ test("uploadFile uses single-put COS uploads for videos and forwards progress", 
   }
 });
 
-test("uploadFile prefers same-origin proxy uploads on localhost even when COS credentials exist", async () => {
+test("uploadFile uses COS direct upload on localhost when COS credentials exist", async () => {
   const previousWindow = globalThis.window;
   const previousCos = globalThis.COS;
   globalThis.window = {
@@ -2380,38 +2380,26 @@ test("uploadFile prefers same-origin proxy uploads on localhost even when COS cr
       hostname: "127.0.0.1",
       origin: "http://127.0.0.1:4310",
     },
+    document: { head: { append() {} }, createElement() { return {}; } },
   };
 
-  class FakeXmlHttpRequest {
-    headers = {};
-    upload = {};
-    status = 200;
-
-    open() {}
-
-    setRequestHeader(key, value) {
-      this.headers[key] = value;
-    }
-
-    getResponseHeader(name) {
-      return name.toLowerCase() === "etag" ? "etag-proxy-1" : null;
-    }
-
-    send() {
-      queueMicrotask(() => this.onload?.());
+  class FailingXmlHttpRequest {
+    open() {
+      throw new Error("blob_proxy_should_not_be_called");
     }
   }
 
-  class FailingCOS {
+  class FakeCOS {
     constructor() {}
 
-    putObject() {
-      throw new Error("cos_should_not_be_called");
+    putObject(input, callback) {
+      queueMicrotask(() => callback(null, { ETag: '"etag-localhost-cos-1"' }));
     }
   }
 
-  globalThis.XMLHttpRequest = FakeXmlHttpRequest;
-  globalThis.COS = FailingCOS;
+  globalThis.XMLHttpRequest = FailingXmlHttpRequest;
+  globalThis.COS = FakeCOS;
+  globalThis.window.COS = FakeCOS;
 
   try {
     const { creatorApi } = await import("../src/shared/creator-api.js");
@@ -2439,7 +2427,7 @@ test("uploadFile prefers same-origin proxy uploads on localhost even when COS cr
         objectKey: "objects/cover.png",
         contentType: "image/png",
         sizeBytes: 12,
-        etag: "etag-proxy-1",
+        etag: "etag-localhost-cos-1",
       },
       urls: {
         sourceUrl: "https://cos.example.test/cover.png",
@@ -2456,7 +2444,7 @@ test("uploadFile prefers same-origin proxy uploads on localhost even when COS cr
       { projectId: "project-1" },
     );
 
-    assert.equal(result.upload.eTag, "etag-proxy-1");
+    assert.equal(result.upload.eTag, "etag-localhost-cos-1");
   } finally {
     globalThis.window = previousWindow;
     if (previousCos === undefined) {

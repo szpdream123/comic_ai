@@ -355,6 +355,17 @@ function isCanvasInteracting(doc) {
   return doc?.documentElement?.classList?.contains("canvas-interacting") === true;
 }
 
+function isLingxiRunningSurface(icon) {
+  if (icon.closest?.(".chat-panel-header, .chat-panel-header-brand-center")) return true;
+  const bubble = icon.closest?.(".chat-message-assistant");
+  if (!bubble) return false;
+  return Boolean(
+    bubble.querySelector?.(
+      ".agent-task-timeline, .chat-message-status-streaming, [role='status']",
+    ),
+  );
+}
+
 const LINGXI_MARK_TEXT = "灵曦";
 let lingxiMarkSeq = 0;
 
@@ -523,7 +534,7 @@ export function installAiCanvasRuntimeMascotSkinSwitcher(surface, options = {}) 
     }
     findMascotAvatarHosts(root).forEach((node) => applyMascotAvatarIcon(node, skin, doc));
     root.querySelectorAll?.(".host-lingxi-mark").forEach((icon) => {
-      icon.classList.toggle("is-running", taskRunning);
+      icon.classList.toggle("is-running", taskRunning && isLingxiRunningSurface(icon));
     });
   };
 

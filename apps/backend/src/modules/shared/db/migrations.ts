@@ -169,6 +169,7 @@ const DECOUPLE_SCRIPTS_FROM_PROJECTS_RELATIVE_PATH = ["packages", "db", "migrati
 const DECOUPLE_CANVASES_FROM_PROJECTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-decouple-canvases-from-projects.sql"];
 const GENERATION_TASK_SNAPSHOT_TIMEOUTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-zzz-normalize-generation-task-snapshot-timeouts.sql"];
 const BANANAROUTER_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "20260728-add-bananarouter-models.sql"];
+const TEAM_ASSET_ACTION_CATEGORY_RELATIVE_PATH = ["packages", "db", "migrations", "20261112-team-asset-action-category.sql"];
 
 export async function loadCurrentSchemaSql(rootDir = process.cwd()) {
   return readFile(join(rootDir, ...CURRENT_SCHEMA_RELATIVE_PATH), "utf8");
@@ -854,6 +855,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20261111-retire-workflow-prompt-marketplace-categories.sql",
       sql: await readFile(join(rootDir, "packages/db/migrations/20261111-retire-workflow-prompt-marketplace-categories.sql"), "utf8"),
+    },
+    {
+      name: "20261112-team-asset-action-category.sql",
+      sql: await readFile(join(rootDir, ...TEAM_ASSET_ACTION_CATEGORY_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

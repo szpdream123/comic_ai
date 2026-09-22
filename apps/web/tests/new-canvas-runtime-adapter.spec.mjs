@@ -21,7 +21,10 @@ import {
   normalizeAiCanvasRuntimeGrouping,
   normalizeAiCanvasRuntimeProjectDefaultModels,
   resolveAiCanvasRuntimeNodeMediaKind,
+  mapTeamLibraryAssetsToDramaAssets,
+  mergeTeamLibraryDramaAssets,
   serializeAiCanvasDocument,
+  syncCanvasCharacterLibraryToTeam,
   toAiCanvasRuntimeSlashModelId,
 } from "../src/features/new-canvas/ai-canvas-runtime-adapter.js";
 import {
@@ -1398,7 +1401,13 @@ test("new Canvas mounts the standalone React Flow runtime directly in the page",
   assert.match(mainUpstreamSource, /file:t\.file,displayName:t\.fileName/);
   assert.match(mainUpstreamSource, /e&&typeof e==`object`&&typeof e\.arrayBuffer==`function`/);
   assert.match(mainUpstreamSource, /e=await aT\(r\.file\?\?r\.path,hT,i\.signal\)/);
+  assert.match(mainUpstreamSource, /if\(s===`image`\)\{let r=Number\(e\?\.size\?\?0\)\|\|0;if\(r>iT_limit\(s\)\)throw Error\(`图片超过 8MB 限制`\);[\s\S]{0,520}__COMIC_AI_CANVAS_HOST_API__\?\.uploadFile/);
+  assert.match(mainUpstreamSource, /图片上传未返回可访问地址/);
+  assert.doesNotMatch(mainUpstreamSource, /已授权\$\{s===`image`\?`图片`/);
+  assert.doesNotMatch(mainUpstreamSource, /data:\$\{u\};base64/);
   assert.match(mainUpstreamSource, /ST as Qi/);
+  assert.match(conversationControllerSource, /imageGrants:q/);
+  assert.match(conversationControllerSource, /uploadAgentImageGrants/);
   assert.match(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`,/);
   assert.match(conversationControllerSource, /id:`file_read_text`[\s\S]{0,520}isAvailable:\(\)=>typeof window<`u`,/);
   assert.match(conversationControllerSource, /id:`file_write_text`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`&&`__TAURI__`in window/);
@@ -1504,6 +1513,10 @@ test("homepage Agent attachments auto-authorize web files without inlining text"
   assert.match(mainUpstreamSource, /file:t\.file,displayName:t\.fileName/);
   assert.match(mainUpstreamSource, /e&&typeof e==`object`&&typeof e\.arrayBuffer==`function`/);
   assert.match(mainUpstreamSource, /e=await aT\(r\.file\?\?r\.path,hT,i\.signal\)/);
+  assert.match(mainUpstreamSource, /if\(s===`image`\)\{let r=Number\(e\?\.size\?\?0\)\|\|0;if\(r>iT_limit\(s\)\)throw Error\(`图片超过 8MB 限制`\);[\s\S]{0,520}__COMIC_AI_CANVAS_HOST_API__\?\.uploadFile/);
+  assert.match(mainUpstreamSource, /图片上传未返回可访问地址/);
+  assert.doesNotMatch(mainUpstreamSource, /已授权\$\{s===`image`\?`图片`/);
+  assert.doesNotMatch(mainUpstreamSource, /data:\$\{u\};base64/);
   assert.match(mainUpstreamSource, /ST as Qi/);
   assert.match(mainUpstreamSource, /var pT=10,mT=2\*1024\*1024,hT=256\*1024/);
   assert.match(conversationControllerSource, /id:`file_list_grants`[\s\S]{0,420}isAvailable:\(\)=>typeof window<`u`,/);
@@ -1627,6 +1640,180 @@ test("standalone Canvas context menu omits local folder actions", () => {
   const appAssetSource = readRuntimeAsset("App-");
   assert.doesNotMatch(appAssetSource, /创建文件夹/);
   assert.match(appAssetSource, /打开项目文件夹失败/);
+});
+
+test("adding a canvas character to the library uploads it to team assets", async () => {
+  const uploads = [];
+  const adapter = createAiCanvasRuntimeAdapter({
+    creatorApi: {
+      async getLibraryAssets() {
+        return { assets: [], entitlement: { hasTeamAssetLibrary: true } };
+      },
+      async uploadTeamAsset(_file, input) {
+        uploads.push(input);
+        return {
+          asset: {
+            id: "team-generated",
+            category: input.category,
+            name: input.assetName,
+            previewUrl: "/api/storage/objects/11111111-1111-4111-8111-111111111111/content",
+            prompt: input.assetPrompt,
+            tags: input.tags ?? [],
+          },
+        };
+      },
+    },
+  });
+  const portrait = "data:image/png;base64,iVBORw0KGgo=";
+  const originalSaveCharacterCard = async (_scope, character) => {
+    storeState.dramaAssets.characters = [character];
+    return true;
+  };
+  const storeState = {
+    dramaAssets: { characters: [], scenes: [], props: [], actions: [] },
+    globalCharacters: [],
+    saveCharacterCard: originalSaveCharacterCard,
+  };
+  const previousRuntime = globalThis.__COMIC_AI_CANVAS_RUNTIME__;
+  globalThis.__COMIC_AI_CANVAS_RUNTIME__ = {
+    useAppStore: {
+      getState: () => storeState,
+      setState(patch) {
+        Object.assign(storeState, patch);
+      },
+      subscribe() {
+        return () => {};
+      },
+    },
+  };
+  try {
+    const handle = await adapter.mount({}, { canvasProjectId: "canvas-1" });
+    const saved = await storeState.saveCharacterCard("project", {
+      id: "local-generated",
+      kind: "character",
+      name: "生成图像",
+      summary: "角色背景与核心特征",
+      referenceImages: [{ imageUrl: portrait, label: "主视觉", prompt: "主视觉" }],
+    });
+    assert.equal(saved, true);
+    assert.equal(uploads.length, 1);
+    assert.equal(uploads[0].category, "character");
+    assert.equal(uploads[0].assetName, "生成图像");
+    assert.equal(uploads[0].assetPrompt, "主视觉");
+    await handle.dispose();
+    assert.equal(storeState.saveCharacterCard, originalSaveCharacterCard);
+  } finally {
+    globalThis.__COMIC_AI_CANVAS_RUNTIME__ = previousRuntime;
+  }
+});
+
+test("team library sync appends a new reference when the character name already exists", async () => {
+  const uploads = [];
+  const library = {
+    character: [{
+      id: "team-hero",
+      category: "character",
+      name: "任小野",
+      previewUrl: "/hero.png",
+      tags: [],
+    }],
+    scene: [],
+    prop: [],
+    action: [],
+  };
+  const api = {
+    async getLibraryAssets({ category }) {
+      return { assets: library[category] ?? [], entitlement: { hasTeamAssetLibrary: true } };
+    },
+    async uploadTeamAsset(_file, input) {
+      uploads.push(input);
+      const asset = {
+        id: `team-${uploads.length}`,
+        category: input.category,
+        name: input.assetName,
+        previewUrl: `/uploaded-${uploads.length}.png`,
+        prompt: input.assetPrompt,
+        tags: input.tags ?? [],
+      };
+      library[input.category].push(asset);
+      return { asset };
+    },
+  };
+  const portrait = "data:image/png;base64,iVBORw0KGgo=";
+  const standing = "data:image/png;base64,iVBORw0KGgoAAA==";
+
+  const first = await syncCanvasCharacterLibraryToTeam(api, {
+    characters: [{
+      id: "local-hero",
+      kind: "character",
+      name: "任小野",
+      referenceImages: [{ imageUrl: portrait, label: "正面", prompt: "正面" }],
+      actions: [{ name: "站立", prompt: "站立参考", media: [{ imageUrl: standing }] }],
+    }],
+  });
+  assert.deepEqual(uploads.map((item) => [item.assetName, item.category]), [
+    ["任小野-正面", "character"],
+    ["任小野-站立", "action"],
+  ]);
+  assert.deepEqual(uploads[0].tags, ["角色参考:任小野", "角色参考:任小野:正面"]);
+  assert.equal(first.filter((asset) => asset.name === "任小野").length, 1);
+
+  const second = await syncCanvasCharacterLibraryToTeam(api, {
+    characters: [{
+      id: "local-hero",
+      kind: "character",
+      name: "任小野",
+      referenceImages: [{ imageUrl: portrait, label: "正面" }],
+      actions: [{ name: "站立", media: [{ imageUrl: standing }] }],
+    }],
+  });
+  assert.equal(uploads.length, 2);
+  assert.equal(second.filter((asset) => asset.name === "任小野").length, 1);
+  assert.equal(library.character.filter((asset) => asset.name.startsWith("任小野")).length, 2);
+  assert.equal(library.action.filter((asset) => asset.name === "任小野-站立").length, 1);
+});
+
+test("assistant asset library exposes team characters, scenes, and props by image url", () => {
+  const mapped = mapTeamLibraryAssetsToDramaAssets([
+    { id: "team-hero", category: "character", name: "生成图像", previewUrl: "/hero.png", tags: [] },
+    { id: "team-scene", category: "scene", name: "庭院", previewUrl: "/yard.png" },
+    { id: "team-prop", category: "prop", name: "折扇", sourceUrl: "/fan.png" },
+  ]);
+  assert.equal(mapped.characters[0].imageUrl, "/hero.png");
+  assert.equal(mapped.scenes[0].imageUrl, "/yard.png");
+  assert.equal(mapped.props[0].imageUrl, "/fan.png");
+  assert.equal(mapped.characters[0].referenceImages[0].imageUrl, "/hero.png");
+});
+
+test("assistant asset library keeps team action images as character references", () => {
+  const mapped = mapTeamLibraryAssetsToDramaAssets([
+    { id: "team-hero", category: "character", name: "任小野", previewUrl: "/hero.png", tags: [] },
+    { id: "team-action", category: "action", name: "任小野-站立", previewUrl: "/stand.png", tags: ["角色参考:任小野"], prompt: "站立" },
+    { id: "team-scene", category: "scene", name: "城门", previewUrl: "/gate.png" },
+  ]);
+  assert.deepEqual(mapped.characters.map((item) => item.name), ["任小野"]);
+  assert.deepEqual(mapped.actions.map((item) => [item.name, item.kind, item.characterReferenceName]), [
+    ["任小野-站立", "action", "任小野"],
+  ]);
+  assert.equal(mapped.actions[0].imageUrl, "/stand.png");
+  assert.equal(mapped.scenes[0].name, "城门");
+  assert.equal(mapped.props.length, 0);
+  const merged = mergeTeamLibraryDramaAssets({
+    characters: [{ id: "local-hero", kind: "character", name: "任小野", referenceImages: [{ id: "local", imageUrl: "/local.png" }] }],
+    scenes: [],
+    props: [],
+  }, [
+    { id: "team-hero", category: "character", name: "任小野", previewUrl: "/hero.png" },
+    { id: "team-action", category: "character", name: "任小野-站立", previewUrl: "/stand.png", tags: ["角色参考:任小野"] },
+  ]);
+  assert.equal(merged.characters.length, 1);
+  assert.deepEqual(merged.characters[0].referenceImages.map((item) => item.imageUrl), ["/local.png", "/stand.png"]);
+  const actionLibrary = mergeTeamLibraryDramaAssets({ characters: [], scenes: [], props: [], actions: [] }, [
+    { id: "team-action", category: "action", name: "站立", previewUrl: "/stand.png", tags: ["角色参考:任小野"] },
+  ]);
+  assert.equal(actionLibrary.actions.length, 1);
+  assert.equal(actionLibrary.actions[0].kind, "action");
+  assert.equal(actionLibrary.characters.length, 0);
 });
 
 test("deferred media loading does not strip AI Canvas prompt dialog thumbnails", () => {

@@ -372,9 +372,10 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         const upload = payload?.upload ?? payload;
         const storageObjectId = String(upload?.storageObjectId ?? "").trim();
         const url = String(
-          storageObjectId
-            ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
-            : upload?.previewUrl ?? upload?.publicUrl ?? "",
+          upload?.publicUrl ?? upload?.sourceUrl ?? payload?.urls?.sourceUrl
+            ?? (storageObjectId
+              ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+              : upload?.previewUrl ?? ""),
         ).trim();
         if (!url) throw new Error("canvas_media_upload_missing");
         const artifactId = `upload:${storageObjectId || Date.now()}`;
@@ -1117,7 +1118,7 @@ function applyDerivationNodeState(workbench, derivation, task = null) {
   const artifact = derivation?.output_artifact ?? derivation?.outputArtifact ?? null;
   const artifactUrl = String(artifact?.url ?? artifact?.thumbnail_url ?? artifact?.thumbnailUrl ?? "").trim()
     || (artifact?.storage_object_id || artifact?.storageObjectId
-      ? `/api/storage/objects/${encodeURIComponent(String(artifact.storage_object_id ?? artifact.storageObjectId))}/content?proxy=1`
+      ? `/api/storage/objects/${encodeURIComponent(String(artifact.storage_object_id ?? artifact.storageObjectId))}/content`
       : "");
   const patch = status === "completed"
     ? {
@@ -1410,9 +1411,10 @@ async function submitLocalCrop(workbench, state, rerender) {
     const upload = uploadedPayload?.upload ?? uploadedPayload;
     const storageObjectId = String(upload?.storageObjectId ?? "").trim();
     const previewUrl = String(
-      storageObjectId
-        ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
-        : upload?.previewUrl ?? upload?.publicUrl ?? createObjectUrl(blob) ?? "",
+      upload?.publicUrl ?? upload?.sourceUrl ?? uploadedPayload?.urls?.sourceUrl
+        ?? (storageObjectId
+          ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+          : upload?.previewUrl ?? createObjectUrl(blob) ?? ""),
     ).trim();
     if (!previewUrl) throw new Error("canvas_crop_upload_missing");
     const canvasDocument = workbench.ui?.canvasDocument;
@@ -1722,9 +1724,10 @@ async function uploadLocalMedia(workbench, blob, fileName, canvasId) {
   const upload = uploadedPayload?.upload ?? uploadedPayload;
   const storageObjectId = String(upload?.storageObjectId ?? "").trim();
   const previewUrl = String(
-    storageObjectId
-      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
-      : upload?.previewUrl ?? upload?.publicUrl ?? createObjectUrl(blob) ?? "",
+    upload?.publicUrl ?? upload?.sourceUrl ?? uploadedPayload?.urls?.sourceUrl
+      ?? (storageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+        : upload?.previewUrl ?? createObjectUrl(blob) ?? ""),
   ).trim();
   if (!previewUrl) throw new Error("canvas_media_upload_missing");
   return {
@@ -2009,8 +2012,8 @@ function mediaArtifactsForCanvas(ui, excludeNodeId = "") {
     .filter((asset) => asset.mediaKind === "image")
     .map((asset) => ({
       artifactId: String(asset.artifactId ?? asset.id ?? ""),
-      url: asset.thumbnailUrl ?? asset.url ?? (asset.storageObjectId
-        ? `/api/storage/objects/${encodeURIComponent(asset.storageObjectId)}/content?proxy=1`
+      url: asset.url ?? asset.thumbnailUrl ?? (asset.storageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(asset.storageObjectId)}/content`
         : ""),
       title: asset.title ?? asset.prompt ?? "图片结果",
       source: {
@@ -2155,7 +2158,7 @@ function resolveMediaArtifactSourceUrl(source) {
     source?.url
       || source?.previewUrl
       || (source?.storageObjectId
-        ? `/api/storage/objects/${encodeURIComponent(source.storageObjectId)}/content?proxy=1`
+        ? `/api/storage/objects/${encodeURIComponent(source.storageObjectId)}/content`
         : "")
       || "",
   ).trim();

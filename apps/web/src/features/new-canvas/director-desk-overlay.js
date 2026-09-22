@@ -64,11 +64,12 @@ export async function uploadCanvasDirectorPanorama(workbench, file) {
   });
   const storageObjectId = String(result?.upload?.storageObjectId ?? result?.storageObject?.id ?? "").trim();
   const uploadSessionId = String(result?.upload?.uploadSessionId ?? "").trim();
-  const url = storageObjectId
-    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
-    : uploadSessionId
-      ? `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/content`
-      : String(result?.upload?.publicUrl ?? result?.upload?.sourceUrl ?? "").trim();
+  const url = String(result?.upload?.publicUrl ?? result?.upload?.sourceUrl ?? result?.urls?.sourceUrl ?? "").trim()
+    || (storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+      : uploadSessionId
+        ? `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/content`
+        : "");
   if (!url) throw new Error("canvas_director_panorama_upload_url_missing");
   return { url };
 }

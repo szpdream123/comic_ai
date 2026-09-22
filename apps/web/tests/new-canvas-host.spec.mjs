@@ -416,6 +416,10 @@ test("canvas mascot hover switcher can replace the puff with a 3D cloud skin", a
   assert.match(skinSource, /灵曦/);
   assert.match(skinSource, /readRunning/);
   assert.match(skinSource, /taskRunning/);
+  assert.match(skinSource, /function isLingxiRunningSurface/);
+  assert.match(skinSource, /taskRunning && isLingxiRunningSurface\(icon\)/);
+  assert.match(skinSource, /\.chat-panel-header/);
+  assert.match(skinSource, /\.agent-task-timeline, \.chat-message-status-streaming, \[role='status'\]/);
   assert.match(appSource, /isAiCanvasLingxiTaskRunning/);
   assert.match(appSource, /readRunning: \(\) => isAiCanvasLingxiTaskRunning\(runtimeStore\)/);
   assert.match(brandCss, /host-lingxi-water/);

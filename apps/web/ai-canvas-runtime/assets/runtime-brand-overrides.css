@@ -650,7 +650,9 @@
 .new-canvas-root .chat-panel-agents-btn,
 .ai-canvas-standalone-mount .chat-panel-agents-btn,
 .new-canvas-root .chat-panel-sub-agents-btn,
-.ai-canvas-standalone-mount .chat-panel-sub-agents-btn {
+.ai-canvas-standalone-mount .chat-panel-sub-agents-btn,
+.new-canvas-root .chat-panel-memory-btn,
+.ai-canvas-standalone-mount .chat-panel-memory-btn {
   display: none !important;
 }
 

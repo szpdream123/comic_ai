@@ -993,9 +993,6 @@ async function loadCosBrowserSdk() {
 }
 
 function uploadPreparedFile(prepared, file, options = {}) {
-  if (prepared?.upload?.url && shouldUsePreparedUploadProxy(options)) {
-    return uploadPreparedFileWithXhr(prepared, file, options);
-  }
   if (prepared?.credentials?.tmpSecretId) {
     return uploadPreparedFileWithCos(prepared, file, options);
   }
@@ -1003,27 +1000,6 @@ function uploadPreparedFile(prepared, file, options = {}) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   throw new Error("upload_target_missing");
-}
-
-function shouldUsePreparedUploadProxy(options = {}) {
-  if (shouldUseSameOriginUploadProxy()) {
-    return true;
-  }
-  return false;
-}
-
-function shouldUseSameOriginUploadProxy() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  const protocol = String(window.location?.protocol ?? "").toLowerCase();
-  const hostname = String(window.location?.hostname ?? "").toLowerCase();
-  return (
-    protocol === "file:" ||
-    hostname === "127.0.0.1" ||
-    hostname === "localhost" ||
-    hostname === "::1"
-  );
 }
 
 function getTeamAssetUploadLimits(category) {
@@ -2440,13 +2416,16 @@ export const creatorApi = {
       onProgress: input.onProgress,
       signal: input.signal,
     });
-    return postJson("/api/creator/team-assets/upload", {
+    const created = await postJson("/api/creator/team-assets/upload", {
       category,
       assetName: input.assetName ?? file?.name?.replace?.(/\.[^.]+$/, "") ?? "未命名资产",
       ...(input.assetPrompt ? { assetPrompt: input.assetPrompt } : {}),
+      ...(Array.isArray(input.tags) ? { tags: input.tags } : {}),
       uploadSessionId: uploaded.upload?.uploadSessionId,
       storageObjectId: uploaded.upload?.storageObjectId,
     });
+    clearReadRequestCaches();
+    return created;
   },
 
   updateTeamAsset(assetId, input = {}) {

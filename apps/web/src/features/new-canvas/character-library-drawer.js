@@ -6,6 +6,7 @@ const LIBRARY_CATEGORIES = [
   { id: "character", label: "角色" },
   { id: "scene", label: "场景" },
   { id: "prop", label: "道具" },
+  { id: "action", label: "动作" },
   { id: "voice", label: "音色" },
 ];
 const TEAM_LIBRARY_CATEGORIES = [{ id: "all", label: "全部" }, ...LIBRARY_CATEGORIES];

@@ -2246,8 +2246,8 @@ function localizeEnvelopeErrorMessage(message: string): string {
   if (/request conflict|revision conflict/i.test(value)) return "请求发生冲突，请刷新后重试。";
   if (/still processing/i.test(value)) return "请求仍在处理中，请稍后刷新。";
   if (/video_to_director_result_(?:invalid|empty)/i.test(value)) return "模型返回的导演台解析结果格式异常，请重新解析。";
-  if (/required/i.test(value)) return "缺少必要参数，请检查后重试。";
-  if (/invalid/i.test(value)) return "请求参数不合法，请检查后重试。";
+  if (/^[a-z0-9_.:-]+$/i.test(value) && /required/i.test(value)) return "缺少必要参数，请检查后重试。";
+  if (/^[a-z0-9_.:-]+$/i.test(value) && /invalid/i.test(value)) return "请求参数不合法，请检查后重试。";
   if (/upload/i.test(value)) return "上传处理失败，请检查文件后重试。";
   if (/delete/i.test(value)) return "删除失败，请稍后重试。";
   if (/database_url/i.test(value)) return "数据库连接配置缺失，请联系管理员处理。";
@@ -4658,9 +4658,17 @@ function buildCreatorUploadObjectKey(input: {
   ].join("/");
 }
 
+const TEAM_ASSET_LIBRARY_CATEGORIES = [
+  { id: "character", label: "角色" },
+  { id: "scene", label: "场景" },
+  { id: "prop", label: "道具" },
+  { id: "action", label: "动作" },
+  { id: "voice", label: "音色" },
+];
+
 function parseTeamAssetCategory(value: unknown) {
   const category = String(value ?? "").trim();
-  return ["character", "scene", "prop", "voice"].includes(category)
+  return TEAM_ASSET_LIBRARY_CATEGORIES.some((item) => item.id === category)
     ? category
     : null;
 }
@@ -36145,12 +36153,7 @@ export function createPhoneAuthDevServer(
                 status: 200,
                 body: {
                   scope: "team",
-                  categories: [
-                    { id: "character", label: "角色" },
-                    { id: "scene", label: "场景" },
-                    { id: "prop", label: "道具" },
-                    { id: "voice", label: "音色" },
-                  ],
+                  categories: TEAM_ASSET_LIBRARY_CATEGORIES,
                   folders: [],
                   assets: [],
                   entitlement: {
@@ -36226,12 +36229,7 @@ export function createPhoneAuthDevServer(
               status: 200,
               body: {
                 scope: "team",
-                categories: [
-                  { id: "character", label: "角色" },
-                  { id: "scene", label: "场景" },
-                  { id: "prop", label: "道具" },
-                  { id: "voice", label: "音色" },
-                ],
+                categories: TEAM_ASSET_LIBRARY_CATEGORIES,
                 folders: folderRows.rows.map((row) => row.folder_name),
                 assets: rows.rows.map(teamAssetRow),
                 entitlement: { hasTeamAssetLibrary: true, blockReason: null },
@@ -36414,8 +36412,13 @@ export function createPhoneAuthDevServer(
             const assetPrompt = readString(body.assetPrompt) || null;
             const uploadSessionId = readString(body.uploadSessionId);
             const storageObjectId = readString(body.storageObjectId);
+            const hasTags = body.tags !== undefined;
+            const assetTags = hasTags ? normalizeTeamAssetTags(body.tags) : [];
             if (!category || !assetName || !isUuid(uploadSessionId) || !isUuid(storageObjectId)) {
               return writeJson(response, envelopedError(400, "invalid_team_asset_input", "Team asset category, name and completed upload are required"));
+            }
+            if (hasTags && (!Array.isArray(body.tags) || assetTags.length > 12 || assetTags.some((tag) => tag.length > 32))) {
+              return writeJson(response, envelopedError(400, "team_asset_tags_invalid", "Team asset tags must be an array of up to 12 tags with 32 characters each"));
             }
             if (await hasTeamAssetNameConflict(db, {
               adminUserId: actor.userId,
@@ -36457,9 +36460,9 @@ export function createPhoneAuthDevServer(
                   id, admin_user_id, asset_name, asset_prompt, asset_category,
                   asset_status, asset_url, resource_type, resource_size,
                   created_at, updated_at, created_by_name, updated_by_name,
-                  is_admin_created, created_user_id, storage_object_id
+                  is_admin_created, created_user_id, storage_object_id, tags_json
                 )
-                VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9, $10, $10, $11, $12, $13)
+                VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9, $10, $10, $11, $12, $13, $14::jsonb)
                 RETURNING *
               `,
               [
@@ -36476,6 +36479,7 @@ export function createPhoneAuthDevServer(
                 !actor.teamMember,
                 actor.teamMember?.id ?? actor.userId,
                 uploaded.storageObject.id,
+                JSON.stringify(assetTags),
               ],
             );
             return writeJson(response, { status: 200, body: { asset: teamAssetRow(inserted!) } });

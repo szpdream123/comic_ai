@@ -8942,7 +8942,7 @@ function normalizeStoryboardPromptSkills(items = [], source = "") {
         String(item?.previewUrl ?? "").trim() ||
         String(item?.preview ?? "").trim() ||
         (item?.coverStorageObjectId ?? item?.cover_storage_object_id
-          ? `/api/storage/objects/${encodeURIComponent(String(item.coverStorageObjectId ?? item.cover_storage_object_id))}/content?proxy=1`
+          ? `/api/storage/objects/${encodeURIComponent(String(item.coverStorageObjectId ?? item.cover_storage_object_id))}/content`
           : ""),
       category: "storyboard",
       priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
@@ -9000,7 +9000,7 @@ function normalizeEpisodeBatchImageStyleSkills(items = [], source = "") {
         preview: /^https?:\/\//i.test(coverImageUrl)
           ? coverImageUrl
           : coverStorageObjectId
-            ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+            ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content`
             : coverImageUrl,
         coverStorageObjectId,
         ...(promptContent ? { prompt_content: promptContent, promptContent } : {}),
@@ -11801,7 +11801,7 @@ export function createDirectorPanoramaUploadId() {
 export function resolveDirectorPanoramaUploadUrl(result) {
   const storageObjectId = String(result?.upload?.storageObjectId ?? result?.storageObject?.id ?? "").trim();
   if (storageObjectId) {
-    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`);
+    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`);
   }
   const uploadSessionId = String(result?.upload?.uploadSessionId ?? "").trim();
   if (uploadSessionId) {
@@ -20077,6 +20077,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.activeNavTab = "library";
     const requestedScope = target.dataset.assetScope === "team" ? "team" : "official";
     workbench.ui.libraryTeamAssetScope = requestedScope;
+    if (requestedScope === "team") workbench.assetLibraryCache?.clear?.();
     if (
       (workbench.ui.libraryTeamAssetScope === "official" || !workbench.ui.libraryTeamAssetScope) &&
       !isApiBackedLibraryCategory(workbench.ui.libraryCategory)
@@ -21362,11 +21363,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         const storageObjectId = String(upload.storageObjectId ?? uploaded?.storageObject?.id ?? "").trim();
         if (!mediaUrl || !storageObjectId) throw new Error(`效果媒体“${mediaFile.name}”上传后未返回后台地址`);
         if (hasImage) {
-          effectImageUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+          effectImageUrl = mediaUrl;
           effectVideoUrl = "";
           coverStorageObjectId = storageObjectId;
         } else {
-          effectVideoUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+          effectVideoUrl = mediaUrl;
           effectImageUrl = "";
           previewStorageObjectId = storageObjectId;
         }
@@ -31334,7 +31335,7 @@ async function handleNewCanvasHostChange(workbench, target) {
   }
   if (target?.matches?.("[data-canvas-global-asset-category]")) {
     const category = String(target.value ?? "").trim();
-    workbench.ui.canvasGlobalAssetCategory = ["character", "scene", "prop", "voice"].includes(category)
+    workbench.ui.canvasGlobalAssetCategory = ["character", "scene", "prop", "action", "voice"].includes(category)
       ? category
       : "character";
     render(workbench);
@@ -31350,7 +31351,7 @@ async function handleNewCanvasHostChange(workbench, target) {
     const [file] = [...(target.files ?? [])];
     target.value = "";
     if (!file) return false;
-    const category = ["character", "scene", "prop", "voice"].includes(workbench.ui.canvasGlobalAssetCategory)
+    const category = ["character", "scene", "prop", "action", "voice"].includes(workbench.ui.canvasGlobalAssetCategory)
       ? workbench.ui.canvasGlobalAssetCategory
       : "character";
     await runAction(workbench, "正在上传全局资产...", async () => {
@@ -33996,7 +33997,7 @@ function persistableCanvasObjectUrl(upload) {
   }
   const storageObjectId = String(upload?.storageObjectId ?? "").trim();
   if (storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
   }
   return publicUrl;
 }
@@ -45581,7 +45582,7 @@ function normalizeReplayImageReferences(parameters) {
     }
     const storageObjectId = String(candidate.storageObjectId ?? "").trim();
     const sourceUrl = storageObjectId
-      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
       : String(candidate.url ?? candidate.previewUrl ?? candidate.sourceUrl ?? "").trim();
     const url = resolveApiUrl(sourceUrl);
     if (!url || seen.has(url)) {
@@ -47516,7 +47517,7 @@ function resolveCanvasSpecialImageUrl(node) {
   const data = node?.data ?? {};
   const storageObjectId = String(data.storageObjectId ?? "").trim();
   if (storageObjectId) {
-    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`);
+    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`);
   }
   const value = data.imageUrl ?? data.previewUrl ?? data.resultUrl ?? data.url ?? data.assetUrl ?? data.thumbnailUrl ?? "";
   return value ? resolveApiUrl(String(value)) : "";
@@ -49661,7 +49662,7 @@ function resolveGenerationReferenceUrl(item) {
     "",
   ).trim();
   if (storageObjectId) {
-    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`);
+    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`);
   }
   const directUrl = (
     readGenerationString(item?.url) ||
@@ -49677,7 +49678,7 @@ function resolveGenerationReferenceUrl(item) {
   );
   const providerContentMatch = directUrl.match(/\/v1\/(?:images|videos)\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
   return providerContentMatch?.[1]
-    ? resolveApiUrl(`/api/storage/objects/${encodeURIComponent(providerContentMatch[1])}/content?proxy=1`)
+    ? resolveApiUrl(`/api/storage/objects/${encodeURIComponent(providerContentMatch[1])}/content`)
     : directUrl;
 }
 
@@ -64403,7 +64404,7 @@ function mapEpisodeStoryboardContract(storyboard) {
   const previewImageStorageObjectId = storyboard?.previewImageStorageObjectId ?? storyboard?.currentImageStorageObjectId ?? storyboard?.currentImage?.storageObjectId ?? null;
   const resolvedPreviewImageUrl = previewImageUrl ?? (
     previewImageStorageObjectId
-      ? resolveApiUrl(`/api/storage/objects/${encodeURIComponent(previewImageStorageObjectId)}/content?proxy=1`)
+      ? resolveApiUrl(`/api/storage/objects/${encodeURIComponent(previewImageStorageObjectId)}/content`)
       : null
   );
   const previewVideo =
@@ -64906,6 +64907,7 @@ async function loadEpisodeAssetImportScopeRecords(workbench, scope, assetKind) {
       ? resolveAssetImportLibraryRecords(workbench, assetKind, { source: "official" })
       : [];
   }
+  if (scope === "team") workbench.assetLibraryCache?.clear?.();
   const payload = await workbench.api.getLibraryAssets({
     scope,
     category: assetKind,
@@ -66145,7 +66147,7 @@ function shouldPrefetchReusableAssetLibrary(workbench) {
 }
 
 function isApiBackedLibraryCategory(category) {
-  return ["character", "scene", "prop", "voice", "image", "video"].includes(category);
+  return ["character", "scene", "prop", "action", "voice", "image", "video"].includes(category);
 }
 
 function libraryAssetScopeLabel(scope) {
@@ -66361,7 +66363,7 @@ async function submitResultImageAnnotation(workbench, submitButton) {
     const upload = uploaded?.upload ?? uploaded?.storageObject ?? {};
     const storageObjectId = String(upload.storageObjectId ?? upload.id ?? "").trim();
     if (!storageObjectId) throw new Error("result_annotation_upload_missing");
-    const sourceUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+    const sourceUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
     let persistedUrl = sourceUrl;
     let assetVersionId = null;
     if (state.scope === "composer") {

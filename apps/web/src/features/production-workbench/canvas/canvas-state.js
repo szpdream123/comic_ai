@@ -1695,7 +1695,7 @@ function resolveCanvasTaskMediaUrl(task, mediaKind) {
       ?? "",
   ).trim();
   return storageObjectId
-    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
     : "";
 }
 

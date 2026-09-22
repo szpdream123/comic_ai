@@ -58,7 +58,7 @@ function resolveStorageObjectId(value) {
 
 function storageProxyUrl(storageObjectId) {
   const id = text(storageObjectId);
-  return id ? `/api/storage/objects/${encodeURIComponent(id)}/content?proxy=1` : "";
+  return id ? `/api/storage/objects/${encodeURIComponent(id)}/content` : "";
 }
 
 function resolveNodeMediaUrl(node, kind = mediaKind(node)) {
@@ -917,7 +917,7 @@ export function createCanvasVideoEditorController({ surface, workbench, render }
       const task = await waitForCanvasVideoGeneration(workbench.api, taskId, controller.signal);
       const media = generationTaskMedia(task);
       if (!media) throw new Error("AI 转场生成完成但未返回视频素材");
-      const sourceUrl = media.url || (media.storageObjectId ? `/api/storage/objects/${encodeURIComponent(media.storageObjectId)}/content?proxy=1` : "");
+      const sourceUrl = media.url || (media.storageObjectId ? `/api/storage/objects/${encodeURIComponent(media.storageObjectId)}/content` : "");
       if (!sourceUrl) throw new Error("AI 转场视频地址无效");
       const generatedDuration = Math.max(0.1, number(task.result?.durationSeconds ?? task.durationSeconds, duration));
       const generatedClip = normalizeCanvasVideoEditorClip({
@@ -999,7 +999,7 @@ export function createCanvasVideoEditorController({ surface, workbench, render }
           const artifact = result?.artifact ?? result?.data?.artifact;
           const storageObjectId = text(artifact?.storageObjectId);
           const url = text(artifact?.url || artifact?.sourceUrl || artifact?.previewUrl)
-            || (storageObjectId ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1` : "");
+            || (storageObjectId ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content` : "");
           if (!url) throw new Error("服务端未返回视频文件");
           downloadCanvasVideoEditorRemoteArtifact({ ...artifact, url }, { title: editor.title });
           editor.exportStatus = "succeeded";

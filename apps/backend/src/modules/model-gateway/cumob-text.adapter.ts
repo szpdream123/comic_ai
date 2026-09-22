@@ -22,6 +22,7 @@ export class CumobTextAdapter {
   }): Promise<AsyncIterable<TextGatewayChatCompletionChunk>> {
     const request = { ...input.request };
     delete request.max_tokens;
+    delete request.thinking;
     const response = await (this.config.fetcher ?? fetch)(
       resolveCumobChatEndpoint(input.baseURL),
       {
@@ -44,7 +45,8 @@ export class CumobTextAdapter {
     );
 
     if (!response.ok) {
-      throw cumobTextError(`cumob_text_${response.status}`, response.status);
+      const responseBody = await response.text().catch(() => "");
+      throw cumobTextError(`cumob_text_${response.status}`, response.status, responseBody);
     }
     if (!response.body) {
       throw cumobTextError("cumob_text_empty_response");
@@ -161,20 +163,26 @@ function cumobTextStreamError(value: unknown) {
   const providerErrorCode = [record.code, record.type]
     .map((candidate) => String(candidate ?? "").trim())
     .find((candidate) => /^[a-z0-9_.:-]{1,120}$/i.test(candidate));
+  const providerMessage = [record.message, record.error, record.msg]
+    .map((candidate) => String(candidate ?? "").trim())
+    .find(Boolean);
   const status = [record.status, record.statusCode, record.code]
     .map((candidate) => Number(candidate))
     .find((candidate) => Number.isInteger(candidate) && candidate >= 400 && candidate <= 599);
-  return Object.assign(new Error(providerErrorCode || "cumob_text_stream_error"), {
+  return Object.assign(new Error(providerMessage || providerErrorCode || "cumob_text_stream_error"), {
     failureCode: "cumob_text_stream_error",
     ...(providerErrorCode ? { providerErrorCode } : {}),
+    ...(providerMessage ? { providerMessage, responseBodyPreview: providerMessage.slice(0, 500) } : {}),
     ...(status ? { status } : {}),
   });
 }
 
-function cumobTextError(failureCode: string, status?: number) {
-  return Object.assign(new Error(failureCode), {
+function cumobTextError(failureCode: string, status?: number, responseBody?: string) {
+  const preview = String(responseBody ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
+  return Object.assign(new Error(preview || failureCode), {
     failureCode,
     ...(status ? { status } : {}),
+    ...(preview ? { providerMessage: preview, responseBodyPreview: preview } : {}),
   });
 }
 

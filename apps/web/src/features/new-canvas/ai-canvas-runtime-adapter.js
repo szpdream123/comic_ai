@@ -739,6 +739,331 @@ function dataUrlToFile(dataUrl, fileName) {
   return new File([bytes], resolvedName, { type });
 }
 
+const TEAM_LIBRARY_CHARACTER_KINDS = new Set(["character", "scene", "prop", "action"]);
+const TEAM_LIBRARY_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+function readTeamLibraryAssetList(payload) {
+  const body = payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+    ? payload.data
+    : payload?.body && typeof payload.body === "object"
+      ? payload.body
+      : payload;
+  const assets = body?.assets ?? payload?.assets;
+  return Array.isArray(assets) ? assets : [];
+}
+
+function readTeamLibraryAsset(payload) {
+  return payload?.asset ?? payload?.body?.asset ?? payload?.data?.asset ?? null;
+}
+
+function teamLibraryAssetId(asset) {
+  return String(asset?.id ?? asset?.assetId ?? "").trim();
+}
+
+function teamLibraryAssetName(asset) {
+  return String(asset?.name ?? asset?.assetName ?? asset?.label ?? "").trim();
+}
+
+function normalizeTeamLibraryCategory(value, fallback = "character") {
+  const category = String(value ?? "").trim();
+  return TEAM_LIBRARY_CHARACTER_KINDS.has(category) ? category : fallback;
+}
+
+function teamLibraryNameKey(category, name) {
+  return `${normalizeTeamLibraryCategory(category)}:${String(name ?? "").trim().toLocaleLowerCase()}`;
+}
+
+function extensionForImageType(type) {
+  if (type === "image/jpeg") return ".jpg";
+  if (type === "image/webp") return ".webp";
+  return ".png";
+}
+
+function sniffImageType(bytes) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  return "";
+}
+
+function fileFromBytes(bytes, fileName, type) {
+  if (typeof File !== "function" || !bytes?.byteLength) return null;
+  const resolvedType = TEAM_LIBRARY_IMAGE_TYPES.has(type) ? type : "image/png";
+  const resolvedName = `${String(fileName ?? "asset").replace(/\.[^.]+$/, "") || "asset"}${extensionForImageType(resolvedType)}`;
+  return new File([bytes], resolvedName, { type: resolvedType });
+}
+
+async function fileFromImageSource(source, fileName) {
+  const value = String(source ?? "").trim();
+  if (!value || /^(?:blob|asset):/i.test(value)) return null;
+  if (value.startsWith("data:")) return dataUrlToFile(value, fileName);
+  if (typeof fetch !== "function") return null;
+  const response = await fetch(resolveApiUrl(value), { credentials: "include" });
+  if (!response.ok) throw new Error("team_library_image_unavailable");
+  const typeHeader = String(response.headers?.get?.("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const type = TEAM_LIBRARY_IMAGE_TYPES.has(typeHeader) ? typeHeader : sniffImageType(bytes);
+  return fileFromBytes(bytes, fileName, type);
+}
+
+function teamLibraryStorageContentUrl(value) {
+  const storageObjectId = String(value?.storageObjectId ?? value?.storage_object_id ?? "").trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(storageObjectId)) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
+  }
+  const source = String(
+    value?.imageUrl
+    ?? value?.url
+    ?? value?.previewUrl
+    ?? value?.sourceUrl
+    ?? value?.thumbnailUrl
+    ?? "",
+  ).trim();
+  const match = source.match(/\/api\/storage\/objects\/([0-9a-f-]{36})\/content/i);
+  return match ? `/api/storage/objects/${encodeURIComponent(match[1])}/content` : "";
+}
+
+function teamLibraryImageSource(value) {
+  if (!value || typeof value !== "object") return "";
+  return teamLibraryStorageContentUrl(value) || String(
+    value.imageUrl
+    ?? value.url
+    ?? value.previewUrl
+    ?? value.sourceUrl
+    ?? value.thumbnailUrl
+    ?? "",
+  ).trim();
+}
+
+function teamLibraryMediaKey(source) {
+  return String(source ?? "").trim();
+}
+
+function collectCharacterLibraryMedia(character) {
+  const references = Array.isArray(character?.referenceImages) ? character.referenceImages : [];
+  const actions = Array.isArray(character?.actions) ? character.actions : [];
+  const media = [];
+  const seen = new Set();
+  const push = (item) => {
+    const source = teamLibraryMediaKey(item?.source);
+    if (!source || seen.has(source)) return;
+    seen.add(source);
+    media.push({ ...item, source });
+  };
+  for (const reference of references) {
+    const source = teamLibraryImageSource(reference);
+    if (!source) continue;
+    push({
+      source,
+      name: String(reference?.label ?? reference?.usage ?? reference?.name ?? "形象参考").trim() || "形象参考",
+      prompt: String(reference?.prompt ?? character?.summary ?? character?.identity ?? "").trim(),
+      category: normalizeTeamLibraryCategory(character?.kind),
+      role: "reference",
+    });
+  }
+  for (const action of actions) {
+    const actionMedia = Array.isArray(action?.media) ? action.media : [];
+    for (const item of actionMedia) {
+      const source = teamLibraryImageSource(item);
+      if (!source || String(item?.kind ?? "").trim() === "video") continue;
+      push({
+        source,
+        name: String(action?.name ?? character?.name ?? "动作").trim() || "动作",
+        prompt: String(action?.prompt ?? item?.prompt ?? "").trim(),
+        category: "action",
+        role: "action",
+        actionName: String(action?.name ?? "动作").trim() || "动作",
+      });
+    }
+  }
+  return media;
+}
+
+export function mergeTeamLibraryDramaAssets(currentAssets = {}, assets = []) {
+  const mapped = mapTeamLibraryAssetsToDramaAssets(assets);
+  const current = currentAssets && typeof currentAssets === "object" ? currentAssets : {};
+  const mergeList = (currentList, mappedList) => {
+    const list = Array.isArray(currentList) ? currentList.map((item) => ({ ...item })) : [];
+    const indexByKey = new Map(list.map((item, index) => [teamLibraryNameKey(item?.kind, item?.name), index]));
+    const parentIndexFor = (item) => {
+      const linkedName = String(item.characterReferenceName ?? "").trim();
+      if (linkedName) {
+        const linkedIndex = indexByKey.get(teamLibraryNameKey(item.kind, linkedName));
+        if (linkedIndex !== undefined) return linkedIndex;
+      }
+      const name = String(item.name ?? "").trim();
+      const marker = name.lastIndexOf("-");
+      if (marker <= 0) return undefined;
+      return indexByKey.get(teamLibraryNameKey(item.kind, name.slice(0, marker)));
+    };
+    let changed = false;
+    for (const item of mappedList) {
+      const parentIndex = parentIndexFor(item);
+      if (parentIndex !== undefined && parentIndex !== indexByKey.get(teamLibraryNameKey(item.kind, item.name))) {
+        const parent = list[parentIndex];
+        const references = Array.isArray(parent.referenceImages) ? parent.referenceImages : [];
+        if (!references.some((reference) => reference?.id === item.referenceImages?.[0]?.id || reference?.imageUrl === item.imageUrl)) {
+          list[parentIndex] = {
+            ...parent,
+            referenceImages: [...references, ...(item.referenceImages ?? [])],
+          };
+          changed = true;
+        }
+        continue;
+      }
+      const key = teamLibraryNameKey(item.kind, item.name);
+      if (indexByKey.has(key)) continue;
+      indexByKey.set(key, list.length);
+      list.push(item);
+      changed = true;
+    }
+    return changed ? list : currentList ?? [];
+  };
+  return {
+    ...current,
+    characters: mergeList(current.characters, mapped.characters),
+    scenes: mergeList(current.scenes, mapped.scenes),
+    props: mergeList(current.props, mapped.props),
+    actions: mergeList(current.actions, mapped.actions),
+  };
+}
+
+export function mapTeamLibraryAssetsToDramaAssets(assets = []) {
+  const characters = [];
+  const scenes = [];
+  const props = [];
+  const actions = [];
+  for (const asset of Array.isArray(assets) ? assets : []) {
+    const id = teamLibraryAssetId(asset);
+    const name = teamLibraryAssetName(asset);
+    if (!id || !name) continue;
+    const category = normalizeTeamLibraryCategory(asset.category ?? asset.assetCategory ?? asset.kind);
+    const previewUrl = String(asset.previewUrl ?? asset.sourceUrl ?? "").trim();
+    const tags = Array.isArray(asset.tags) ? asset.tags.map((tag) => String(tag ?? "").trim()) : [];
+    const linkedName = tags.find((tag) => tag.startsWith("角色参考:"))?.slice("角色参考:".length).trim() ?? "";
+    const referenceImages = previewUrl ? [{
+      id: `${id}-preview`,
+      kind: linkedName ? "reference" : "primary",
+      imageUrl: previewUrl,
+      prompt: String(asset.prompt ?? asset.description ?? "").trim(),
+    }] : [];
+    const item = {
+      id,
+      name,
+      kind: category,
+      imageUrl: previewUrl,
+      imageNodeId: null,
+      teamLibraryAssetId: id,
+      characterReferenceName: linkedName && linkedName !== name ? linkedName : "",
+      referenceImages,
+    };
+    if (category === "action") actions.push({ ...item, kind: "action", characterReferenceName: linkedName || name });
+    else if (category === "scene") scenes.push(item);
+    else if (category === "prop") props.push(item);
+    else characters.push(item);
+  }
+  return { characters, scenes, props, actions };
+}
+
+function teamLibraryReferenceTag(characterName) {
+  return `角色参考:${String(characterName ?? "").trim()}`.slice(0, 32);
+}
+
+function teamLibraryAssetSources(asset) {
+  return [asset?.previewUrl, asset?.sourceUrl, asset?.imageUrl, asset?.url]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+}
+
+function uniqueTeamLibraryAssetName(category, baseName, usedNames) {
+  const root = String(baseName ?? "").trim().slice(0, 100) || "角色参考";
+  let candidate = root.slice(0, 120);
+  let suffix = 2;
+  while (usedNames.has(teamLibraryNameKey(category, candidate))) {
+    const marker = `-${suffix}`;
+    candidate = `${root.slice(0, Math.max(1, 120 - marker.length))}${marker}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+export async function syncCanvasCharacterLibraryToTeam(api, input = {}) {
+  if (typeof api?.getLibraryAssets !== "function" || typeof api?.uploadTeamAsset !== "function") return [];
+  const requestedCharacters = Array.isArray(input.characters) ? input.characters.filter(Boolean) : [];
+  const requestedNames = new Set(requestedCharacters.map((character) => teamLibraryNameKey(character.kind, character.name)).filter((key) => !key.endsWith(":")));
+  const saved = [];
+  const usedNames = new Set();
+  const knownSources = new Set();
+  const knownReferenceTags = new Set();
+  const assetsByKey = new Map();
+  for (const category of ["character", "scene", "prop", "action"]) {
+    const payload = await api.getLibraryAssets({ scope: "team", category });
+    if (payload?.entitlement?.hasTeamAssetLibrary === false) return [];
+    for (const asset of readTeamLibraryAssetList(payload)) {
+      const key = teamLibraryNameKey(asset.category ?? category, teamLibraryAssetName(asset));
+      usedNames.add(key);
+      if (!assetsByKey.has(key)) assetsByKey.set(key, asset);
+      for (const source of teamLibraryAssetSources(asset)) knownSources.add(source);
+      const ownerName = (Array.isArray(asset.tags) ? asset.tags : [])
+        .map((tag) => String(tag ?? "").trim())
+        .find((tag) => tag.startsWith("角色参考:"))
+        ?.slice("角色参考:".length)
+        .trim();
+      const ownerKey = ownerName ? teamLibraryNameKey(asset.category ?? category, ownerName) : key;
+      for (const tag of Array.isArray(asset.tags) ? asset.tags : []) knownReferenceTags.add(`${ownerKey}:${String(tag ?? "").trim()}`);
+      if (!requestedNames.size || requestedNames.has(key)) saved.push(asset);
+    }
+  }
+  for (const character of requestedCharacters) {
+    const name = String(character?.name ?? "").trim();
+    const category = normalizeTeamLibraryCategory(character?.kind);
+    const key = teamLibraryNameKey(category, name);
+    if (!name) continue;
+    const referenceTag = teamLibraryReferenceTag(name);
+    const media = collectCharacterLibraryMedia(character).filter((item) => {
+      const itemCategory = item.role === "action" || item.category === "action" ? "action" : category;
+      const itemKey = teamLibraryNameKey(itemCategory, `${name}-${item.name}`);
+      return !knownSources.has(item.source)
+        && !knownReferenceTags.has(`${key}:${referenceTag}:${item.name}`)
+        && !usedNames.has(itemKey);
+    });
+    if (!media.length) continue;
+    const primary = assetsByKey.get(key) ?? null;
+    let createdPrimary = false;
+    for (const item of media) {
+      const isAction = item.role === "action" || item.category === "action";
+      const isPrimary = !isAction && !primary && !createdPrimary;
+      const itemCategory = isPrimary ? category : normalizeTeamLibraryCategory(item.category, isAction ? "action" : category);
+      const itemName = isPrimary
+        ? name
+        : uniqueTeamLibraryAssetName(itemCategory, `${name}-${item.name}`, usedNames);
+      const itemKey = teamLibraryNameKey(itemCategory, itemName);
+      if (usedNames.has(itemKey)) continue;
+      const file = await fileFromImageSource(item.source, itemName);
+      if (!file) continue;
+      const itemTag = `${referenceTag}:${item.name}`.slice(0, 32);
+      const payload = await api.uploadTeamAsset(file, {
+        category: itemCategory,
+        assetName: itemName,
+        ...(item.prompt ? { assetPrompt: item.prompt } : {}),
+        ...(!isPrimary ? { tags: [referenceTag, itemTag] } : {}),
+      });
+      const asset = readTeamLibraryAsset(payload);
+      if (!asset) continue;
+      usedNames.add(itemKey);
+      knownSources.add(item.source);
+      knownReferenceTags.add(`${key}:${itemTag}`);
+      for (const source of teamLibraryAssetSources(asset)) knownSources.add(source);
+      if (isPrimary) {
+        createdPrimary = true;
+        assetsByKey.set(key, asset);
+      }
+      saved.push(asset);
+    }
+  }
+  return saved;
+}
+
 function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) {
   const defaultPurpose = String(dependencies.uploadPurpose ?? "canvas-assets").trim() || "canvas-assets";
   const resolveCanvasId = (value) => normalizeId(value) ?? canvasProjectId;
@@ -831,7 +1156,7 @@ function createCreatorApiBridge(creatorApi, canvasProjectId, dependencies = {}) 
     const thumbnail = /^https?:\/\//i.test(coverImageUrl)
       ? coverImageUrl
       : coverStorageObjectId
-        ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content?proxy=1`
+        ? `/api/storage/objects/${encodeURIComponent(coverStorageObjectId)}/content`
         : coverImageUrl;
     return {
       id,
@@ -1056,6 +1381,108 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
         store?.setState?.({ customStyles: styles });
         store?.getState?.()?.loadCustomStyles?.();
       }).catch(() => {});
+      const publishTeamCharacterLibrary = (assets) => {
+        const store = globalThis.__COMIC_AI_CANVAS_RUNTIME__?.useAppStore;
+        const current = store?.getState?.();
+        if (!current || typeof store?.setState !== "function") return;
+        const currentAssets = current.dramaAssets && typeof current.dramaAssets === "object" ? current.dramaAssets : {};
+        const merged = mergeTeamLibraryDramaAssets(currentAssets, assets);
+        const characters = merged.characters;
+        const scenes = merged.scenes;
+        const props = merged.props;
+        const actions = merged.actions;
+        if (
+          characters === currentAssets.characters
+          && scenes === currentAssets.scenes
+          && props === currentAssets.props
+          && actions === currentAssets.actions
+        ) return;
+        const dramaAssets = {
+          ...currentAssets,
+          characters,
+          scenes,
+          props,
+          actions,
+        };
+        store.setState({ dramaAssets });
+        if (typeof context.syncDocument === "function") {
+          const hostDocument = deserializeAiCanvasDocument(context.document ?? context.canvasDocument ?? document);
+          void context.syncDocument({
+            ...hostDocument,
+            dramaAssets,
+          }, { scheduleSave: true }).catch(() => {});
+        }
+      };
+      const loadTeamCharacterLibrary = async () => {
+        const assets = await syncCanvasCharacterLibraryToTeam(creatorApiBridge);
+        publishTeamCharacterLibrary(assets);
+        return assets;
+      };
+      let teamCharacterSyncToken = 0;
+      const persistTeamCharacterLibrary = (characters) => {
+        const token = ++teamCharacterSyncToken;
+        return syncCanvasCharacterLibraryToTeam(creatorApiBridge, { characters }).then((assets) => {
+          if (token !== teamCharacterSyncToken) return assets;
+          publishTeamCharacterLibrary(assets);
+          context.workbench?.assetLibraryCache?.clear?.();
+          return assets;
+        });
+      };
+      const runtimeStore = globalThis.__COMIC_AI_CANVAS_RUNTIME__?.useAppStore;
+      const originalSaveCharacterCard = runtimeStore?.getState?.()?.saveCharacterCard;
+      if (typeof originalSaveCharacterCard === "function" && typeof runtimeStore?.setState === "function") {
+        runtimeStore.setState({
+          saveCharacterCard: async (scope, character) => {
+            const saved = await originalSaveCharacterCard(scope, character);
+            if (saved) {
+              await persistTeamCharacterLibrary([character]);
+            }
+            return saved;
+          },
+        });
+      }
+      const teamCharacterSignature = (list) => JSON.stringify((Array.isArray(list) ? list : []).map((character) => ({
+        id: character?.id,
+        name: character?.name,
+        kind: character?.kind,
+        updatedAt: character?.updatedAt,
+        references: (character?.referenceImages ?? []).map((item) => item?.id ?? item?.imageUrl ?? item?.url ?? ""),
+        actions: (character?.actions ?? []).map((action) => ({
+          id: action?.id,
+          name: action?.name,
+          updatedAt: action?.updatedAt,
+          media: (action?.media ?? []).map((item) => item?.id ?? item?.url ?? item?.imageUrl ?? ""),
+        })),
+      })));
+      const persistedDramaAssets = document?.dramaAssets && typeof document.dramaAssets === "object"
+        ? document.dramaAssets
+        : null;
+      if (persistedDramaAssets && runtimeStore?.setState) {
+        runtimeStore.setState({
+          dramaAssets: {
+            characters: Array.isArray(persistedDramaAssets.characters) ? persistedDramaAssets.characters : [],
+            scenes: Array.isArray(persistedDramaAssets.scenes) ? persistedDramaAssets.scenes : [],
+            props: Array.isArray(persistedDramaAssets.props) ? persistedDramaAssets.props : [],
+            actions: Array.isArray(persistedDramaAssets.actions) ? persistedDramaAssets.actions : [],
+          },
+        });
+      }
+      let lastUpstreamCharacterSignature = teamCharacterSignature([
+        ...(runtimeStore?.getState?.()?.dramaAssets?.characters ?? []),
+        ...(runtimeStore?.getState?.()?.globalCharacters ?? []),
+      ]);
+      void loadTeamCharacterLibrary().catch(() => {});
+      const unsubscribeTeamCharacterLibrary = runtimeStore?.subscribe?.((state, previous) => {
+        if (state?.dramaAssets === previous?.dramaAssets && state?.globalCharacters === previous?.globalCharacters) return;
+        const characters = [
+          ...(Array.isArray(state?.dramaAssets?.characters) ? state.dramaAssets.characters : []),
+          ...(Array.isArray(state?.globalCharacters) ? state.globalCharacters : []),
+        ];
+        const signature = teamCharacterSignature(characters);
+        if (signature === lastUpstreamCharacterSignature) return;
+        lastUpstreamCharacterSignature = signature;
+        void persistTeamCharacterLibrary(characters).catch(() => {});
+      });
       const catalogsReady = catalogPromise.then(async (resolved) => {
         if (disposed) return catalog;
         catalog.models = resolved.models;
@@ -1125,6 +1552,10 @@ export function createAiCanvasRuntimeAdapter(dependencies = {}) {
         async dispose() {
           if (disposed) return;
           disposed = true;
+          unsubscribeTeamCharacterLibrary?.();
+          if (typeof originalSaveCharacterCard === "function" && runtimeStore?.getState?.()?.saveCharacterCard) {
+            runtimeStore.setState({ saveCharacterCard: originalSaveCharacterCard });
+          }
           await runtimeHandle?.dispose?.();
         },
         async submitPrompt(input = {}) {

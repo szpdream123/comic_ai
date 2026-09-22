@@ -2651,7 +2651,7 @@ ALTER TABLE "tasks" ADD CONSTRAINT "tasks_status_check" CHECK (status = ANY (ARR
 
 ALTER TABLE "team_assets" ADD CONSTRAINT "team_assets_active_url_check" CHECK (asset_status <> 'active'::text OR asset_url ~ '^https://'::text);
 
-ALTER TABLE "team_assets" ADD CONSTRAINT "team_assets_asset_category_check" CHECK (asset_category = ANY (ARRAY['character'::text, 'scene'::text, 'prop'::text, 'voice'::text]));
+ALTER TABLE "team_assets" ADD CONSTRAINT "team_assets_asset_category_check" CHECK (asset_category = ANY (ARRAY['character'::text, 'scene'::text, 'prop'::text, 'voice'::text, 'action'::text]));
 
 ALTER TABLE "team_assets" ADD CONSTRAINT "team_assets_asset_status_check" CHECK (asset_status = ANY (ARRAY['active'::text, 'generating'::text, 'archived'::text, 'failed'::text]));
 

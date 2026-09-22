@@ -10,6 +10,7 @@ const defaultCategories = [
 
 const teamCategories = [
   ...defaultCategories,
+  { id: "action", label: "动作" },
   { id: "voice", label: "音色" },
 ];
 
@@ -33,6 +34,15 @@ const teamLocalUploadConfigs = {
     rejectMessage: "请选择 PNG、JPG 或 WEBP 图片。",
   },
   prop: {
+    mediaType: "image",
+    actionLabel: "上传图片",
+    helperText: "支持 PNG、JPG、WEBP",
+    accept: "image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp",
+    extensions: ["png", "jpg", "jpeg", "webp"],
+    mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+    rejectMessage: "请选择 PNG、JPG 或 WEBP 图片。",
+  },
+  action: {
     mediaType: "image",
     actionLabel: "上传图片",
     helperText: "支持 PNG、JPG、WEBP",
@@ -1006,7 +1016,7 @@ function renderAssetCard(asset, options = {}) {
   const category = asset.category ?? options.selectedCategory ?? "character";
   const categoryClass = assetCategoryClass(category);
   const selected = options.selected === true;
-  const canOpenDetail = ["character", "scene", "prop"].includes(category);
+  const canOpenDetail = ["character", "scene", "prop", "action"].includes(category);
   const isAudioAsset = categoryClass === "audio" || categoryClass === "voice";
   const referenceClasses = characterReferenceClassNames(asset, category);
   const cardClasses = [
@@ -1108,7 +1118,7 @@ function resolveDetailAsset(assets, assetId) {
     return null;
   }
   const asset = assets.find((item) => item.id === assetId);
-  if (!asset || !["character", "scene", "prop"].includes(asset.category ?? "character")) {
+  if (!asset || !["character", "scene", "prop", "action"].includes(asset.category ?? "character")) {
     return null;
   }
   return asset;
@@ -1718,6 +1728,7 @@ function categoryLabel(category) {
       character: "角色",
       scene: "场景",
       prop: "道具",
+      action: "动作",
       voice: "音色",
       style: "风格",
       topic: "题材",
