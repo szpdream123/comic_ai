@@ -9451,6 +9451,70 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("accepts stored hash UUIDs throughout storyboard conversation and video submission while enforcing access", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138006");
+      const outsiderCookie = await login(server.origin, "13800138007");
+      await seedGenerationAccessForPhone(db, "13800138006");
+      const headers = { "content-type": "application/json", cookie };
+      const created = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST", headers: { ...headers, "idempotency-key": "stored-uuid-project" },
+        body: JSON.stringify({ name: "Stored UUID regression", scriptInput: "Episode 1", aspectRatio: "16:9", resolution: "720p" }),
+      });
+      assert.equal(created.status, 200);
+      const projectId = (await created.json()).project.id;
+      const ownerId = await readProjectOwnerUserId(db, projectId);
+      const fixtures = [
+        ["d06b9788-482d-7575-3bad-c1ea290c2781", "5cd3dd65-5ca0-6a8d-525b-cb992b23b1ca"],
+        [randomUUID(), randomUUID()],
+      ];
+      for (const [index, [episodeId, shotId]] of fixtures.entries()) {
+        await db.query("INSERT INTO episodes (id, project_id, title, sequence, status, created_by_user_id) VALUES ($1,$2,'UUID regression',$3,'draft',$4)", [episodeId, projectId, index + 1, ownerId]);
+        await db.query("INSERT INTO shots (id, project_id, episode_id, title, content_status, image_status, video_status, created_by_user_id) VALUES ($1,$2,$3,'UUID regression','draft','draft','not_ready',$4)", [shotId, projectId, episodeId, ownerId]);
+        const base = `${server.origin}/api/episodes/${episodeId}/storyboards/${shotId}/conversation`;
+        const body = JSON.stringify({ mediaMode: "video", messages: [{ turnId: "uuid-turn", messageKey: "uuid-turn:user", messageType: "user_request", payload: { mediaKind: "video", promptPreview: "UUID regression" } }] });
+        const saved = await fetch(`${base}/messages`, { method: "POST", headers, body });
+        assert.equal(saved.status, 200, JSON.stringify(await saved.json()));
+        for (const selector of [shotId, "storyboard-1", "1"]) {
+          const loaded = await fetch(`${server.origin}/api/episodes/${episodeId}/storyboards/${selector}/conversation?mediaMode=video`, { headers });
+          const envelope = await loaded.json();
+          assert.equal(loaded.status, 200, JSON.stringify(envelope));
+          assert.equal(envelope.data.messages.length, 1);
+          assert.equal(envelope.data.messages[0].payload.promptPreview, "UUID regression");
+        }
+        for (const [method, suffix] of [["GET", "?mediaMode=video"], ["POST", "/messages"], ["DELETE", "/messages/uuid-turn?mediaMode=video"]]) {
+          const denied = await fetch(`${base}${suffix}`, { method, headers: { ...headers, cookie: outsiderCookie }, ...(method === "POST" ? { body } : {}) });
+          assert.ok([403, 404].includes(denied.status), `${method}: ${denied.status}`);
+        }
+        const video = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/video-tasks`, {
+          method: "POST", headers: { ...headers, "idempotency-key": `stored-uuid-video-${index}` },
+          body: JSON.stringify({ targetType: "storyboard", targetId: shotId, prompt: "UUID regression", model: "video_mock_1", parameters: { durationSec: 5 } }),
+        });
+        const videoEnvelope = await video.json();
+        assert.equal(video.status, 200, JSON.stringify(videoEnvelope));
+        assert.ok(videoEnvelope.data.taskId);
+        const persistedTask = await db.query<{ target_entity_id: string }>("SELECT target_entity_id FROM tasks WHERE id = $1", [videoEnvelope.data.taskId]);
+        assert.equal(persistedTask.rows[0].target_entity_id, shotId);
+        const deleted = await fetch(`${base}/messages/uuid-turn?mediaMode=video`, { method: "DELETE", headers });
+        assert.equal(deleted.status, 200, JSON.stringify(await deleted.json()));
+        const reloaded = await fetch(`${base}?mediaMode=video`, { headers });
+        assert.equal((await reloaded.json()).data.messages.length, 0);
+      }
+      const [episodeId, shotId] = fixtures[0];
+      for (const [badEpisode, badShot] of [["not-a-uuid", shotId], [episodeId, "not-a-uuid"], [episodeId, `${shotId}extra`], [episodeId, "storyboard-0"]]) {
+        const invalid = await fetch(`${server.origin}/api/episodes/${badEpisode}/storyboards/${badShot}/conversation/messages`, { method: "POST", headers, body: "{}" });
+        assert.equal(invalid.status, 400);
+        assert.equal((await invalid.json()).errorCode, "invalid_storyboard_conversation_target");
+      }
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("persists and reloads asset conversation history by selected asset id", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

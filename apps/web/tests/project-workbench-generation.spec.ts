@@ -25736,6 +25736,41 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(leakedHistoryHtml, /避免场景过于相似/);
   });
 
+  it("persists selected storyboard images for stored hash UUIDs", async () => {
+    const episodeId = "d06b9788-482d-7575-3bad-c1ea290c2781";
+    const shotId = "5cd3dd65-5ca0-6a8d-525b-cb992b23b1ca";
+    const storageObjectId = "20000000-0000-4000-8000-000000000001";
+    for (const storyboardId of [shotId, `storyboard-${shotId}`]) {
+      const storyboard = { ...addStoryboard([])[0], id: storyboardId, linkedShotId: shotId, episodeId };
+      storyboard.generationState.lastSubmission = {
+        storyboardId, mediaKind: "image", taskId: "hash-image-task", status: "completed",
+        sourceSurface: "storyboard-generator-modal",
+        fixedImages: [{ id: storageObjectId, storageObjectId, url: "/uploads/hash-image.png" }],
+      };
+      const calls = [];
+      const workbench = {
+        state: { ...buildProjectState(), projectDetail: { project: { id: "project-1" }, episodes: [{ id: episodeId }], shots: [] } },
+        session: { user: { phone: "+86 13800138000" } },
+        api: { async setStoryboardImage(...args) {
+          calls.push(args);
+          return { storyboard: { currentImageFileId: storageObjectId }, file: { previewUrl: "/uploads/hash-image.png", storageObjectId } };
+        } },
+        root: { innerHTML: "" },
+        ui: buildProjectUi({
+          projectPanelMode: "episode-workbench", selectedEpisodeId: episodeId, selectedStoryboardId: storyboardId,
+          storyboards: [storyboard], episodeStoryboardMap: { [episodeId]: [storyboard] },
+          assetGeneratorTarget: "storyboard", assetGeneratorModal: "storyboard", assetGeneratorStoryboardId: storyboardId,
+          storyboardConversationHistory: {},
+        }),
+      };
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-storyboard-generator-image", storyboardId, taskId: "hash-image-task" } });
+      assert.deepEqual(calls, [[episodeId, shotId, { sourceUrl: "/uploads/hash-image.png", previewUrl: "/uploads/hash-image.png", storageObjectId }]]);
+      const updated = workbench.ui.episodeStoryboardMap[episodeId][0];
+      assert.equal(updated.currentImageAssetVersionId, storageObjectId);
+      assert.equal(updated.previewImageUrl, "/uploads/hash-image.png");
+    }
+  });
+
   it("sets a completed storyboard generator image as the storyboard", async () => {
     const episodeId = "10000000-0000-4000-8000-000000000001";
     const shotId = "10000000-0000-4000-8000-000000000002";
