@@ -4,6 +4,9 @@ import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { CanvasAgentActor } from "../canvas-agent.types.ts";
+import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
+import { createCanvasAgentWorkerRuntime, quoteCanvasAgentGeneration } from "../canvas-agent-runtime.factory.ts";
+import type { CanvasAgentToolRegistry } from "../canvas-agent-tool.registry.ts";
 import {
   CanvasAgentStateConflictError,
   CanvasAgentStepSkipError,
@@ -16,6 +19,78 @@ import {
 } from "../canvas-agent-task.service.ts";
 
 describe("Canvas Agent step skip", { concurrency: false }, () => {
+  it("binds approval to persisted generation input and real credits, rejects stale quotes before spending, and replays once", async () => {
+    const fixture = await createFixture();
+    try {
+      const unavailableInput = { kind: "image", request: { model: "approval-image", prompt: "报价缺失时的独立片段", parameters: {} } };
+      const unavailableStep = await createCanvasAgentStep(fixture.db, {
+        taskId: fixture.taskId, kind: "tool", toolId: "generation.create", callId: "unavailable-image",
+        effect: "media_generation", input: unavailableInput, now: fixture.now,
+      });
+      const unavailableApproval = await requestCanvasAgentApproval(fixture.db, {
+        taskId: fixture.taskId, stepId: unavailableStep.id, actor: fixture.actor,
+        effect: "media_generation", reason: "generation_confirmation_required", now: fixture.now,
+      });
+      const modelId = randomUUID();
+      await fixture.db.query(`INSERT INTO ai_model_configs (
+        id,model_code,display_name,provider_name,provider_model,provider_protocol,invocation_mode,media_type,
+        task_modes_json,capabilities_json,parameter_schema_json,default_params_json,provider_config_json,pricing_json,limits_json,ui_config_json,status
+      ) VALUES ($1,'approval-image','Approval image','test','approval-image','openai_images','sync','image',
+        '["image.generate"]','{}','{}','{"resolution":"2K"}','{}','{"baseCredits":3}','{}','{}','active')`, [modelId]);
+      // Restoring the model does not make a previously unavailable quote valid.
+      await assert.rejects(decideCanvasAgentApproval(fixture.db, {
+        taskId: fixture.taskId, approvalId: unavailableApproval.id, actor: fixture.actor, decision: "approved", now: fixture.now,
+      }), CanvasAgentStateConflictError);
+      assert.equal((await fixture.db.query<{ status: string }>("SELECT status FROM canvas_agent_approvals WHERE id=$1", [unavailableApproval.id])).rows[0]?.status, "pending");
+      const input = { kind: "image", request: { model: "approval-image", prompt: "人物站在书店窗前", parameters: {} } };
+      const step = await createCanvasAgentStep(fixture.db, {
+        taskId: fixture.taskId, kind: "tool", toolId: "generation.create", callId: "approved-image",
+        effect: "media_generation", input, now: fixture.now,
+      });
+      const approval = await requestCanvasAgentApproval(fixture.db, {
+        taskId: fixture.taskId, stepId: step.id, actor: fixture.actor,
+        effect: "media_generation", reason: "generation_confirmation_required", now: fixture.now,
+      });
+      const events = await fixture.db.query<{ event_json: { input: unknown; quote: Record<string, unknown> } }>(
+        "SELECT event_json FROM canvas_agent_events WHERE task_id=$1 AND event_type='approval.requested' AND event_json->>'stepId'=$2", [fixture.taskId, step.id]);
+      assert.deepEqual(events.rows[0]?.event_json.input, input);
+      assert.equal(events.rows[0]?.event_json.quote.status, "available");
+      assert.equal(events.rows[0]?.event_json.quote.estimatedCredits, 3);
+      assert.deepEqual(events.rows[0]?.event_json.quote.parameters, { resolution: "2K" });
+      assert.equal((await fixture.db.query("SELECT id FROM credit_reservations")).rows.length, 0);
+      await fixture.db.query("UPDATE ai_model_configs SET pricing_json=$2::jsonb WHERE id=$1", [modelId, JSON.stringify({ baseCredits: 4 })]);
+      await requestCanvasAgentApproval(fixture.db, {
+        taskId: fixture.taskId, stepId: step.id, actor: fixture.actor,
+        effect: "media_generation", reason: "generation_confirmation_required", now: fixture.now,
+      });
+      const saved = await fixture.db.query<{ checkpoint_json: { generationApprovalQuote: { estimatedCredits: number } } }>(
+        "SELECT checkpoint_json FROM canvas_agent_steps WHERE id=$1", [step.id]);
+      assert.equal(saved.rows[0]?.checkpoint_json.generationApprovalQuote.estimatedCredits, 3);
+      await decideCanvasAgentApproval(fixture.db, { taskId: fixture.taskId, approvalId: approval.id, actor: fixture.actor, decision: "approved", now: fixture.now });
+      await assert.rejects(decideCanvasAgentApproval(fixture.db, { taskId: fixture.taskId, approvalId: approval.id, actor: fixture.actor, decision: "approved", now: fixture.now }), CanvasAgentStateConflictError);
+      await fixture.db.query(`INSERT INTO user_memberships (id,user_id,membership_tier,purchase_at,expires_at,gift_credits,status)
+        VALUES ($1,$2,'professional',$3,$4,0,'active')`, [randomUUID(), fixture.actor.ownerUserId, fixture.now, new Date(fixture.now.getTime() + 86400000)]);
+      await grantCredits(fixture.db, { userId: fixture.actor.ownerUserId, amount: 100, sourceType: "test", sourceId: randomUUID(), reason: "approval test", createdByUserId: fixture.actor.ownerUserId, now: fixture.now });
+      const runtime = createCanvasAgentWorkerRuntime({ db: fixture.db, env: { ...process.env, BULLMQ_WORKERS_ENABLED: "true", BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true" }, workerId: "approval-test", now: () => fixture.now });
+      const registry = Reflect.get(runtime.executor, "deps").tools as CanvasAgentToolRegistry;
+      const context = { canvasId: fixture.canvasId, conversationId: fixture.conversationId, agentTaskId: fixture.taskId, agentStepId: step.id, actor: fixture.actor, callId: "approved-image", capabilityProfile: "media_generation_only" as const };
+      await assert.rejects(registry.execute("generation.create", unavailableInput, {
+        ...context, agentStepId: unavailableStep.id, callId: "unavailable-image",
+      }), /canvas_agent_generation_quote_unavailable/);
+      assert.equal((await fixture.db.query("SELECT id FROM tasks WHERE task_type='episode_generate_image'")).rows.length, 0);
+      await assert.rejects(registry.execute("generation.create", input, context), /generation_quote_stale/);
+      assert.equal((await fixture.db.query("SELECT id FROM credit_reservations")).rows.length, 0);
+      await fixture.db.query("UPDATE ai_model_configs SET pricing_json=$2::jsonb WHERE id=$1", [modelId, JSON.stringify({ baseCredits: 3 })]);
+      const generated = await registry.execute("generation.create", input, context);
+      const replayed = await registry.execute("generation.create", input, context);
+      assert.equal(generated.generationTaskId, replayed.generationTaskId);
+      assert.equal((await fixture.db.query("SELECT id FROM credit_reservations WHERE task_id=$1", [generated.generationTaskId])).rows.length, 1);
+      assert.deepEqual(await quoteCanvasAgentGeneration(fixture.db, { kind: "image", request: { model: "missing-model" } }), { status: "unavailable", reason: "canvas_agent_generation_model_not_configured" });
+    } finally {
+      await fixture.db.close();
+    }
+  });
+
   it("cancels the generic workflow when an approval is rejected", async () => {
     const fixture = await createFixture();
     try {
@@ -172,7 +247,7 @@ async function createFixture() {
     },
     baseRevision: 1, userMessage: { text: "skip" }, now,
   });
-  return { db, actor, taskId: task.id, now, later: new Date("2026-07-27T00:00:01.000Z") };
+  return { db, actor, canvasId, conversationId, taskId: task.id, now, later: new Date("2026-07-27T00:00:01.000Z") };
 }
 
 function uniquePhone() {

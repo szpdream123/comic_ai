@@ -351,6 +351,41 @@ async function resolveRuntimeActor(
   };
 }
 
+export async function quoteCanvasAgentGeneration(db: SqlDatabase, input: Record<string, unknown>) {
+  const request = asRecord(input.request);
+  const modelCode = readString(request.model ?? request.modelCode);
+  const kind = input.kind;
+  if (!modelCode || !["image", "video", "audio"].includes(String(kind))) {
+    return { status: "unavailable", reason: "canvas_agent_generation_model_required" };
+  }
+  const model = await findActiveAiModelConfigByCode(db, modelCode);
+  if (!model) return { status: "unavailable", reason: "canvas_agent_generation_model_not_configured" };
+  const policy = await findActiveAiModelDispatchPolicyByModelCode(db, modelCode);
+  const generationRequest = model.providerProtocol === "san_bao" ? normalizeSanBaoGenerationRequest(request) : request;
+  try {
+    const execution = resolveGenerationModelExecution({
+      kind: kind as "image" | "video" | "audio", modelCode, modelConfig: model,
+      dispatchPolicy: policy, parameters: asRecord(generationRequest.parameters), fallbackQueueName: "",
+    });
+    return {
+      status: "available", model: modelCode,
+      estimatedCredits: generationCredits(model.pricing, { ...model.defaultParams, ...execution.parameters }, kind as "image" | "video" | "audio"),
+      parameters: execution.parameters,
+      modelFingerprint: generationApprovalModelFingerprint(model),
+    };
+  } catch (error) {
+    return { status: "unavailable", reason: error instanceof Error ? error.message : "canvas_agent_generation_quote_unavailable" };
+  }
+}
+
+function generationApprovalModelFingerprint(model: { id: unknown; providerModel: unknown; capabilities: unknown; pricing: unknown; defaultParams: unknown; parameterSchema: unknown; providerProtocol: unknown }) {
+  return createHash("sha256").update(JSON.stringify({
+    id: model.id, providerModel: model.providerModel, capabilities: model.capabilities,
+    pricing: model.pricing, defaultParams: model.defaultParams,
+    parameterSchema: model.parameterSchema, providerProtocol: model.providerProtocol,
+  })).digest("hex");
+}
+
 class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
   constructor(private readonly deps: { db: SqlDatabase; env: NodeJS.ProcessEnv; now: () => Date }) {}
 
@@ -415,6 +450,19 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     `, [input.ownerUserId, now]);
     if (!membership) throw new Error("membership_required");
     const estimatedCredits = generationCredits(model.pricing, { ...model.defaultParams, ...executionParameters }, input.kind);
+    const approvalStep = await queryOne<{ checkpoint_json: Record<string, unknown> }>(this.deps.db,
+      "SELECT checkpoint_json FROM canvas_agent_steps WHERE id=$1 AND task_id=$2 AND approval_id IS NOT NULL",
+      [input.agentStepId, input.agentTaskId]);
+    const approvedQuote = asRecord(asRecord(approvalStep?.checkpoint_json).generationApprovalQuote);
+    if (approvedQuote.status === "unavailable") {
+      throw new Error("canvas_agent_generation_quote_unavailable");
+    }
+    if (approvedQuote.status === "available" && (
+      approvedQuote.model !== modelCode || approvedQuote.estimatedCredits !== estimatedCredits
+      || approvedQuote.modelFingerprint !== generationApprovalModelFingerprint(model)
+    )) {
+      throw new Error("generation_quote_stale");
+    }
     const snapshot = await createGenerationModelConfigSnapshotForTask(this.deps.db, model);
     const generationTaskId = randomUUID();
     const { nodeKey, scopeTargetId } = resolveCanvasAgentGenerationTargets(input);

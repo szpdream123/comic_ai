@@ -20,6 +20,9 @@ import { renderNewCanvasChromeRail, renderNewCanvasUtilityMenu } from "./canvas-
 import { renderCanvasStyleGuide } from "./canvas-style-guide.js";
 import { confirmCanvasAction } from "./canvas-ui-controls.js";
 import { describeGenerationProgress } from "./free-conversation-progress.js";
+import { renderFreeConversationStoryboard } from "./free-conversation-storyboard.js";
+import { findCreativeDocument, openCreativeDocument, renderCreativeDocumentCard, renderCreativeStage, creativeDocumentNextStep } from "./free-conversation-documents.js";
+import { renderFreeConversationApprovalDetails } from "./free-conversation-approval.js";
 import {
   excludeProjectWorkflowPlazaSkills,
   normalizePlazaSkillIds,
@@ -61,8 +64,8 @@ const TERMINAL_STATUSES = new Set([
 const LEGACY_CANVAS_AGENT_PANEL_WIDTH = 480;
 const DEFAULT_CANVAS_AGENT_PANEL_WIDTH = 600;
 const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
-const DEFAULT_MEDIA_COMPOSER_HEIGHT = 224;
-const MEDIA_COMPOSER_MIN_HEIGHT = 176;
+const DEFAULT_MEDIA_COMPOSER_HEIGHT = 280;
+const MEDIA_COMPOSER_MIN_HEIGHT = 224;
 const MEDIA_COMPOSER_MAX_HEIGHT = 560;
 const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260810-2";
 const AGENT_ATTACHMENT_UPLOAD_CONCURRENCY = 2;
@@ -362,6 +365,7 @@ export function renderCanvasAgentPanel(ui = {}) {
   if (!mediaOnly) return "";
   const pendingApproval = findPendingApproval(agent.events, agent.skippedStepIds);
   const approvalPresentation = pendingApproval ? resolveAgentApprovalPresentation(agent.events, pendingApproval) : null;
+  if (approvalPresentation?.effect === "media_generation") approvalPresentation.generationDetails = renderFreeConversationApprovalDetails(approvalPresentation, agent);
   const active = Boolean(agent.taskId)
     && !TERMINAL_STATUSES.has(agent.status)
     && !(
@@ -443,6 +447,7 @@ function renderMediaOnlyAgentPanel({
           </section>
         </div>
         ${pendingApproval ? renderAgentApprovalCard(pendingApproval, busy) : ""}
+        ${renderCreativeStage(agent.messages)}
         <form class="home-agent-composer canvas-agent-media-composer is-focus-composer" data-free-generation-form style="--canvas-agent-media-composer-height: ${Math.min(MEDIA_COMPOSER_MAX_HEIGHT, Math.max(MEDIA_COMPOSER_MIN_HEIGHT, Math.round(Number(agent.mediaComposerHeight) || DEFAULT_MEDIA_COMPOSER_HEIGHT)))}px">
           <div class="canvas-agent-media-composer-resize" data-agent-media-composer-resize role="separator" aria-orientation="horizontal" aria-label="拖动调整输入框高度" tabindex="0" title="拖动调整输入框高度"><span aria-hidden="true"></span></div>
           ${renderFreeConversationPlazaSelection(agent, busy)}
@@ -1154,6 +1159,11 @@ export function createCanvasAgentController({
     template.innerHTML = renderCanvasAgentPanel(ui);
     const next = template.content.firstElementChild;
     if (!next) return false;
+    for (const plan of current.querySelectorAll?.("details.plan[open]") ?? []) {
+      const entryId = plan.closest("[data-agent-timeline-entry]")?.dataset.agentTimelineEntry;
+      const entry = Array.from(next.querySelectorAll("[data-agent-timeline-entry]")).find(item => item.dataset.agentTimelineEntry === entryId);
+      entry?.querySelector("details.plan")?.setAttribute("open", "");
+    }
     if (current.querySelector?.(".canvas-agent-config-disclosure[open]")) next.querySelector?.(".canvas-agent-config-disclosure")?.setAttribute("open", "");
     if (liveOnly && mediaOnly) {
       const currentTimeline = current.querySelector?.(".canvas-agent-timeline");
@@ -1174,9 +1184,18 @@ export function createCanvasAgentController({
       }
       const currentApproval = current.querySelector?.(".canvas-agent-approval");
       const nextApproval = next.querySelector?.(".canvas-agent-approval");
-      if (currentApproval && nextApproval) currentApproval.replaceWith(nextApproval);
+      if (currentApproval && nextApproval) {
+        if (currentApproval.querySelector("[data-approval-id]")?.dataset.approvalId === nextApproval.querySelector("[data-approval-id]")?.dataset.approvalId
+          && currentApproval.querySelector("details[open]")) nextApproval.querySelector("details")?.setAttribute("open", "");
+        if (currentApproval.outerHTML !== nextApproval.outerHTML) currentApproval.replaceWith(nextApproval);
+      }
       else if (currentApproval) currentApproval.remove();
       else if (nextApproval) current.querySelector?.("[data-free-generation-form]")?.insertAdjacentElement?.("beforebegin", nextApproval);
+      const currentStage = current.querySelector?.(".canvas-agent-creative-stage");
+      const nextStage = next.querySelector?.(".canvas-agent-creative-stage");
+      if (currentStage && nextStage && currentStage.outerHTML !== nextStage.outerHTML) currentStage.replaceWith(nextStage);
+      else if (currentStage && !nextStage) currentStage.remove();
+      else if (!currentStage && nextStage) current.querySelector?.("[data-free-generation-form]")?.insertAdjacentElement?.("beforebegin", nextStage);
       const currentError = current.querySelector?.(".canvas-agent-error");
       const currentNote = current.querySelector?.(".canvas-agent-submission-note");
       const nextNote = next.querySelector?.(".canvas-agent-submission-note");
@@ -1277,6 +1296,7 @@ export function createCanvasAgentController({
     });
   };
   let disposed = false;
+  let closeCreativeDocument = null;
   const refreshedCanvasEventKeys = new Set();
   const registeredGenerationTaskIds = new Set();
   const canvasRefreshRetryTimers = new Set();
@@ -2464,6 +2484,10 @@ export function createCanvasAgentController({
     async handleAction(target) {
       const action = String(target?.dataset?.agentAction ?? "");
       if (!action) return false;
+      if (["new-conversation", "select-agent-conversation", "delete-conversation"].includes(action)) {
+        closeCreativeDocument?.();
+        closeCreativeDocument = null;
+      }
       if (action !== "save-conversation-title" && agent.titleSavePromise) {
         await agent.titleSavePromise;
       }
@@ -2662,11 +2686,38 @@ export function createCanvasAgentController({
         });
         return true;
       }
+      if (action === "next-creative-document" && mediaOnly) {
+        const doc = findCreativeDocument(agent.messages, String(target.dataset.documentId ?? ""), target.dataset.documentVersion);
+        const next = doc && creativeDocumentNextStep(doc);
+        if (!next || agent.busyAction) return true;
+        agent.generationKind = "agent";
+        agent.promptCreativeDocumentId = "";
+        agent.promptDraft = agent.promptDraft?.trim() ? `${agent.promptDraft}\n${next.prompt}` : next.prompt;
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-field="promptDraft"]')?.focus?.());
+        return true;
+      }
+      if (action === "open-creative-document" && mediaOnly) {
+        const doc = findCreativeDocument(agent.messages, String(target.dataset.documentId ?? ""), target.dataset.documentVersion);
+        if (!doc) return true;
+        closeCreativeDocument?.();
+        const conversationId = agent.conversationId;
+        closeCreativeDocument = openCreativeDocument(doc, {
+          host: surface.querySelector?.("[data-canvas-agent-panel]"),
+          canEdit: !agent.busyAction,
+          onEdit: () => {
+            if (disposed || agent.conversationId !== conversationId) return;
+            void this.handleAction({ dataset: { agentAction: "continue-creative-document", documentId: doc.documentId, documentTitle: doc.title, documentVersion: String(doc.version) } });
+          },
+        });
+        return true;
+      }
       if (action === "continue-creative-document") {
         const title = String(target.dataset.documentTitle ?? "文档").trim().slice(0, 160);
         const documentId = String(target.dataset.documentId ?? "").trim().slice(0, 160);
         if (!documentId) return true;
-        const prompt = `继续编辑《${title}》：`;
+        const version = Number(target.dataset.documentVersion);
+        const prompt = Number.isInteger(version) && version > 0 ? `基于《${title}》第 ${version} 版继续编辑：` : `继续编辑《${title}》：`;
         agent.promptCreativeDocumentId = documentId;
         if (!String(agent.promptDraft ?? "").trim()) agent.promptDraft = prompt;
         syncPanel();
@@ -3637,6 +3688,7 @@ export function createCanvasAgentController({
     },
     dispose() {
       disposed = true;
+      closeCreativeDocument?.();
       if (progressClock) clearInterval(progressClock);
       stopPolling();
       disposePromptEditor();
@@ -4493,7 +4545,7 @@ function renderAgentTimeline(agent, canvasDocument = null, active = false, optio
         ${renderAgentModelChoices(entry, availableModelChoices, options)}
         ${entry.attachments?.length ? renderAgentMessageAttachments(entry.attachments, options.fileGrants) : ""}
         ${entry.media ? renderAgentMedia(entry.media, entry.messageId, entry.canvasNodeId, { ...options, generationHistory }) : ""}
-        ${entry.creative ? renderAgentCreativeCard(entry.creative, Boolean(agent.busyAction), entry.taskId, entry.creativeQuestionActionable) : ""}
+        ${entry.creative ? renderFreeConversationStoryboard(renderAgentCreativeCard(entry.creative, Boolean(agent.busyAction), entry.taskId, entry.creativeQuestionActionable), options.mediaOnly) : ""}
         ${entry.metadata?.length ? `<div class="canvas-agent-event-meta">${entry.metadata.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
         ${entry.citations?.length ? `<ol class="canvas-agent-citations" aria-label="引用来源">${entry.citations.map((citation) => renderAgentCitation(citation)).join("")}</ol>` : ""}
         <div class="canvas-agent-message-footer">
@@ -4570,6 +4622,7 @@ function resolveAgentTaskFailure(events = [], options = {}) {
   const message = String(event.message ?? "").trim();
   if (isHumanReadableAgentText(message)) return options.mediaOnly ? sanitizeMediaOnlyAgentCopy(message) : message;
   const code = String(event.errorCode ?? event.failureCode ?? "").trim();
+  if (options.mediaOnly && code === "generation_quote_stale") return "模型或积分配置已更新，请重新确认生成方案。";
   const labels = {
     "402 Insufficient Balance": "模型服务余额不足",
     provider_failed: "图片模型服务暂时不可用",
@@ -4659,12 +4712,12 @@ function renderAgentCreativeCard(creative, busy, taskId = "", questionActionable
     return `<section class="canvas-agent-creative-card skill"><strong>已启用技能</strong><span>${escapeHtml(creative.title)}</span></section>`;
   }
   if (creative.type === "plan") {
-    return `<section class="canvas-agent-creative-card plan" aria-label="创作计划">
-      <header><strong>${escapeHtml(creative.title || "创作计划")}</strong><span>计划</span></header>
+    return `<details class="canvas-agent-creative-card plan" aria-label="创作计划">
+      <summary><strong>${escapeHtml(creative.title || "创作计划")}</strong><span>查看计划</span></summary>
       ${creative.goal ? `<p>${escapeHtml(creative.goal)}</p>` : ""}
       ${creative.constraints ? `<small>${escapeHtml(creative.constraints)}</small>` : ""}
       ${creative.steps.length ? `<ol>${creative.steps.map((step) => `<li data-plan-step-status="${escapeAttr(step.status)}"><i aria-hidden="true"></i><span>${escapeHtml(step.title)}</span><small>${escapeHtml(step.status === "completed" ? "已完成" : step.status === "running" ? "进行中" : "待开始")}</small></li>`).join("")}</ol>` : ""}
-    </section>`;
+    </details>`;
   }
   if (creative.type === "question") {
     return `<section class="canvas-agent-creative-card question" aria-label="Agent 需要你的选择">
@@ -4673,11 +4726,7 @@ function renderAgentCreativeCard(creative, busy, taskId = "", questionActionable
     </section>`;
   }
   if (creative.type === "document") {
-    return `<section class="canvas-agent-creative-card document" aria-label="创作文档">
-      <header><strong>${escapeHtml(creative.title)}</strong><span>版本 ${escapeHtml(creative.version)}</span></header>
-      <div class="canvas-agent-creative-document-markdown">${renderCanvasMarkdownPreview(creative.content)}</div>
-      <footer><button type="button" data-agent-action="continue-creative-document" data-document-id="${escapeAttr(creative.documentId)}" data-document-title="${escapeAttr(creative.title)}" ${busy ? "disabled" : ""}>继续编辑</button></footer>
-    </section>`;
+    return renderCreativeDocumentCard(creative, busy);
   }
   return "";
 }
@@ -5184,6 +5233,8 @@ export function resolveAgentApprovalPresentation(events = [], approvalEvent = nu
     detail: metadata[1],
     summary: String(event.reason ?? agentEventSummary(approvalEvent) ?? "").trim(),
     toolId: String(stepEvent?.event?.toolId ?? ""),
+    ...(event.input ? { input: event.input } : {}),
+    ...(event.quote ? { quote: event.quote } : {}),
   };
 }
 
@@ -5195,11 +5246,11 @@ function renderAgentApprovalCard(approval, busy) {
     <div class="canvas-agent-approval-head">
       <span class="canvas-agent-approval-badge">待确认 · ${escapeHtml(approval.label)}</span>
     </div>
-    <p>${escapeHtml(summary)}</p>
+    ${approval.generationDetails || `<p>${escapeHtml(summary)}</p>`}
     ${approval.effect === "media_generation" ? "" : `<small>${escapeHtml(approval.detail)}</small>`}
     <div class="canvas-agent-approval-actions">
-      <button type="button" class="danger" data-agent-action="reject" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy ? "disabled" : ""}>拒绝</button>
-      <button type="button" data-agent-action="approve" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy ? "disabled" : ""}>确认执行</button>
+      <button type="button" class="danger" data-agent-action="reject" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy ? "disabled" : ""}>取消</button>
+      <button type="button" data-agent-action="approve" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy || approval.quote?.status === "unavailable" ? "disabled" : ""}>确认执行</button>
     </div>
   </section>`;
 }

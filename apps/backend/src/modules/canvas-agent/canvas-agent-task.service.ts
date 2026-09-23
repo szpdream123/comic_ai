@@ -957,6 +957,24 @@ export async function requestCanvasAgentApproval(
   const approvalId = randomUUID();
   await db.query("BEGIN");
   try {
+    let generationPresentation: Record<string, unknown> = {};
+    if (input.effect === "media_generation") {
+      const step = await queryOne<{ input_json: Record<string, unknown>; checkpoint_json: Record<string, unknown> }>(db,
+        "SELECT input_json, checkpoint_json FROM canvas_agent_steps WHERE id=$1 AND task_id=$2 AND tool_id='generation.create' FOR UPDATE",
+        [input.stepId, input.taskId]);
+      if (step) {
+        // Resolve lazily: runtime composition also depends on this task service.
+        const { quoteCanvasAgentGeneration } = await import("./canvas-agent-runtime.factory.ts");
+        const savedQuote = step.checkpoint_json?.generationApprovalQuote;
+        const quote = savedQuote && typeof savedQuote === "object"
+          ? savedQuote : await quoteCanvasAgentGeneration(db, step.input_json);
+        await db.query(
+          "UPDATE canvas_agent_steps SET checkpoint_json=COALESCE(checkpoint_json,'{}'::jsonb) || $2::jsonb WHERE id=$1",
+          [input.stepId, JSON.stringify({ generationApprovalQuote: quote })],
+        );
+        generationPresentation = { input: step.input_json, quote };
+      }
+    }
     const approval = await queryOne<{ id: string }>(
       db,
       `
@@ -993,7 +1011,7 @@ export async function requestCanvasAgentApproval(
     await appendCanvasAgentEvent(db, {
       taskId: input.taskId,
       eventType: "approval.requested",
-      event: { approvalId: approval!.id, stepId: input.stepId, effect: input.effect, reason: input.reason },
+      event: { approvalId: approval!.id, stepId: input.stepId, effect: input.effect, reason: input.reason, ...generationPresentation },
       now: input.now,
     });
     await incrementCanvasAgentMetrics(db, {
@@ -1030,6 +1048,11 @@ export async function decideCanvasAgentApproval(
             decision_reason=$6, decided_at=$7, updated_at=$7
         WHERE id=$1 AND task_id=$2 AND status='pending'
           AND (expires_at IS NULL OR expires_at > $7)
+          AND ($3 <> 'approved' OR NOT EXISTS (
+            SELECT 1 FROM canvas_agent_steps step
+            WHERE step.id=canvas_agent_approvals.step_id
+              AND step.checkpoint_json->'generationApprovalQuote'->>'status'='unavailable'
+          ))
         RETURNING step_id
       `,
       [

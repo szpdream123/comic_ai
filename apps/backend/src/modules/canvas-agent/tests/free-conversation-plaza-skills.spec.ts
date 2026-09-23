@@ -34,6 +34,33 @@ test("unrecognized slash tokens keep their existing fallback", async () => {
   assert.doesNotMatch(String(messages[0].content), /Plaza skill/);
 });
 
+test("free conversation uses the actual selected storyboard skill with readable document workflow in both gateway protocols", async () => {
+  for (const jsonSchema of [true, false]) {
+    const resolved: string[] = [];
+    const messages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+      ...messageInput, modelCapabilities: { jsonSchema },
+      context: { messages: [{ role: "user", content: { text: "整理分镜提示词，先不生成视频", plazaSkillIds: ["director"] } }] },
+      resolvePlazaSkill: async ({ skillId }) => {
+        resolved.push(String(skillId));
+        return { id: "director", title: "项目分镜导演", content: "逐镜保持场景连续性，JSON 输出 shot_no 和 duration_seconds。" };
+      },
+    });
+    assert.deepEqual(resolved, ["director"]);
+    const system = String(messages[0].content);
+    assert.match(system, /逐镜保持场景连续性/);
+    assert.match(system, /compose readable Markdown in creative.document/);
+    assert.match(system, /素材清单/);
+    assert.match(system, /分镜提示词/);
+    assert.match(system, /Account for every storyboard shot/);
+    assert.match(system, /This guidance does not authorize any extra paid media/);
+    assert.match(system, /authorized generation quote may be explained/);
+  }
+  const canvas = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+    ...messageInput, capabilityProfile: "canvas", context: { messages: [{ role: "user", content: { text: "读取画布" } }] },
+  });
+  assert.doesNotMatch(String(canvas[0].content), /For a script-to-storyboard or video creation request/);
+});
+
 async function contextForTask(contents: Record<string, unknown>[], latest: Record<string, unknown> | null = { text: "蓝色" }) {
   const service = new CanvasAgentContextService({
     db: { async query(sql: string, params: unknown[] = []) {

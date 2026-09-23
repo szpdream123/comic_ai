@@ -909,7 +909,7 @@ test("media-only Agent renders a standalone conversation workspace with history 
   assert.doesNotMatch(html, /data-conversation-id="free-conversation"[^>]*disabled/);
   assert.match(html, /aria-label="生成记录"/);
   assert.match(html, /class="home-agent-composer canvas-agent-media-composer is-focus-composer"/);
-  assert.match(html, /--canvas-agent-media-composer-height: 224px/);
+  assert.match(html, /--canvas-agent-media-composer-height: 280px/);
   assert.match(html, /data-agent-media-composer-resize[^>]*aria-label="拖动调整输入框高度"/);
   assert.match(html, /class="home-agent-composer-content canvas-agent-media-composer-content"/);
   assert.match(html, /class="home-agent-composer-footer canvas-agent-generation-config"/);
