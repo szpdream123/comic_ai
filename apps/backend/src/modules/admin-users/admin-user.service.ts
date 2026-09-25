@@ -1359,22 +1359,8 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           logs.request_format,
           logs.request_body_json AS request_body_json,
           requests.payload_redacted_json AS business_request_body_json,
-          CASE
-            WHEN COALESCE(logs.request_format, '') <> 'generation_task'
-              THEN logs.request_body_json
-            ELSE requests.payload_redacted_json
-          END AS prepared_provider_request_body_json,
-          CASE
-            WHEN requests.external_submission_started_at IS NULL THEN NULL
-            ELSE COALESCE(
-              requests.response_redacted_json->'redactedRequest',
-              CASE
-                WHEN COALESCE(logs.request_format, '') <> 'generation_task'
-                  THEN logs.request_body_json
-                ELSE NULL
-              END
-            )
-          END AS provider_request_body_json,
+          NULL::jsonb AS prepared_provider_request_body_json,
+          NULL::jsonb AS provider_request_body_json,
           model.provider_config_json AS provider_request_url_config_json,
           requests.response_redacted_json AS provider_response_redacted_json,
           requests.task_center_diagnostics_json AS provider_diagnostics_json,
@@ -2284,6 +2270,15 @@ function modelRequestLogFromRow(
   row: AdminUserModelRequestLogRow,
 ): AdminUserModelRequestLogItem {
   const modelType = normalizeAdminModelType(row.media_type);
+  // Reuse the fetched source bodies instead of transferring two more full copies from PostgreSQL.
+  const preparedProviderRequestBody = row.request_format === "generation_task"
+    ? row.business_request_body_json
+    : row.request_body_json;
+  const providerRequestBody = !row.external_submission_started_at
+    ? null
+    : row.provider_response_redacted_json?.redactedRequest !== undefined
+      ? row.provider_response_redacted_json.redactedRequest
+      : row.request_format !== "generation_task" ? row.request_body_json : null;
   return {
     id: row.id,
     providerRequestId: row.provider_request_id,
@@ -2303,11 +2298,11 @@ function modelRequestLogFromRow(
     businessRequestBody: compactAdminModelRequestRecord(row.business_request_body_json ?? (
       row.request_format === "generation_task" ? row.request_body_json ?? {} : {}
     )),
-    providerRequestBody: row.provider_request_body_json
-      ? compactAdminModelRequestRecord(row.provider_request_body_json)
+    providerRequestBody: providerRequestBody
+      ? compactAdminModelRequestRecord(providerRequestBody)
       : null,
-    preparedProviderRequestBody: row.prepared_provider_request_body_json
-      ? compactAdminModelRequestRecord(row.prepared_provider_request_body_json)
+    preparedProviderRequestBody: preparedProviderRequestBody
+      ? compactAdminModelRequestRecord(preparedProviderRequestBody)
       : null,
     providerRequestUrl: resolveProviderRequestUrl(row.provider_request_url_config_json),
     providerResponseBody: readProviderResponseBody(

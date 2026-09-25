@@ -3637,7 +3637,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
 
       const response = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?page=1&pageSize=15&modelType=text`, {
-        headers: { cookie },
+        headers: { cookie, "accept-encoding": "gzip" },
       });
       const payload = await response.json();
 
@@ -3663,6 +3663,19 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(payload.meta.pageSize, 15);
       assert.equal(payload.meta.total, 1);
       assert.equal(payload.meta.totalPages, 1);
+      assert.equal(response.headers.get("content-encoding"), "gzip");
+      assert.match(response.headers.get("vary") ?? "", /Accept-Encoding/i);
+      assert.match(response.headers.get("server-timing") ?? "", /total;dur=/);
+      const uncompressedResponse = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?page=1&pageSize=15&modelType=text`, {
+        headers: { cookie, "accept-encoding": "gzip;q=0, identity" },
+      });
+      assert.equal(uncompressedResponse.headers.get("content-encoding"), null);
+      assert.deepEqual(await uncompressedResponse.json(), payload);
+      const brotliResponse = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?page=1&pageSize=15&modelType=text`, {
+        headers: { cookie, "accept-encoding": "br, gzip" },
+      });
+      assert.equal(brotliResponse.headers.get("content-encoding"), "br");
+      assert.deepEqual(await brotliResponse.json(), payload);
     } finally {
       await server.close();
     }

@@ -23686,6 +23686,27 @@ export function createPhoneAuthDevServer(
         if ("status" in result && "body" in result) {
           return writeJson(response, result);
         }
+        const vary = response.getHeader("vary");
+        response.setHeader("vary", vary ? `${vary}, Accept-Encoding` : "Accept-Encoding");
+        const acceptEncoding = String(request.headers["accept-encoding"] ?? "");
+        const encoding = acceptsContentEncoding(acceptEncoding, "br") ? "br"
+          : acceptsContentEncoding(acceptEncoding, "gzip") ? "gzip" : null;
+        if (encoding) {
+          const json = JSON.stringify(result);
+          const body = encoding === "br"
+            ? await brotliCompress(json, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+            : await gzip(json, { level: 1 });
+          response.statusCode = 200;
+          response.setHeader("content-type", "application/json; charset=utf-8");
+          response.setHeader("content-encoding", encoding);
+          const startedAt = jsonResponseStartedAt.get(response);
+          if (startedAt && !response.hasHeader("server-timing")) {
+            const totalMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+            response.setHeader("server-timing", `total;dur=${totalMs.toFixed(1)}`);
+          }
+          response.end(body);
+          return;
+        }
         return writeJson(response, {
           status: 200,
           body: result,

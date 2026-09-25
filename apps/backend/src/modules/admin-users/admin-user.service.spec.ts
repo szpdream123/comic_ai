@@ -1199,7 +1199,14 @@ test("admin manual credit grant can add available credits while wallet credits a
 
 test("admin user service lists model request logs by user", async () => {
   const db = await createMigratedTestDb();
-  const service = createAdminUserService({ db });
+  let transferredBytes = 0;
+  const service = createAdminUserService({ db: {
+    async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+      const result = await db.query<T>(sql, params);
+      transferredBytes += Buffer.byteLength(JSON.stringify(result.rows));
+      return result;
+    },
+  } });
 
   try {
     await seedCreditScopeFixture(db);
@@ -1349,6 +1356,25 @@ test("admin user service lists model request logs by user", async () => {
       failureCode: "provider_submission_failed",
       errorMessage: "供应商返回失败",
     });
+
+    const largeRequest = { model: "deepseek-chat", prompt: "完整提示词".repeat(20_000) };
+    await db.query("UPDATE user_model_request_logs SET request_body_json = $1::jsonb WHERE id = $2", [
+      JSON.stringify(largeRequest), "99000000-0000-4000-8000-000000002102",
+    ]);
+    await db.query("UPDATE provider_requests SET response_redacted_json = $1::jsonb WHERE id = $2", [
+      JSON.stringify({ redactedRequest: largeRequest, providerRawResponse: { answer: "完整返回" } }),
+      "99000000-0000-4000-8000-000000002101",
+    ]);
+    transferredBytes = 0;
+    const largeResult = await service.listUserModelRequestLogs({
+      userId: "93000000-0000-4000-8000-000000002001", modelType: "text",
+    });
+    assert.deepEqual(largeResult.data[0]?.requestBody, largeRequest);
+    assert.deepEqual(largeResult.data[0]?.preparedProviderRequestBody, largeRequest);
+    assert.deepEqual(largeResult.data[0]?.providerRequestBody, largeRequest);
+    assert.deepEqual(largeResult.data[0]?.providerResponseBody, { answer: "完整返回" });
+    assert.ok(transferredBytes < Buffer.byteLength(JSON.stringify(largeRequest)) * 3,
+      `duplicate request bodies inflated database transfer to ${transferredBytes} bytes`);
 
     await db.query(
       `
