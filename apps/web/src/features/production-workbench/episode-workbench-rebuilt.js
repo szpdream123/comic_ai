@@ -1945,6 +1945,7 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
   ) {
     return renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo);
   }
+  generationResult = generationResult ?? lastSubmission;
   const quickReferenceItems =
     generationResult?.quickReferenceItems ??
     selectedStoryboard?.generationState?.quickReferenceItems ??
