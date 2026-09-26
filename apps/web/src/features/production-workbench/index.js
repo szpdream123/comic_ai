@@ -10779,6 +10779,26 @@ async function importAiCanvasRuntimeProject(workbench) {
 }
 
 function getAiCanvasRuntimeProjectBridge(workbench) {
+  const openAfterCanvasSave = async (tab) => {
+    if (workbench.ui.canvasSaveStatus === "error") workbench.ui.canvasSaveStatus = "pending";
+    // A request can finish before its follow-up save acquires the next lock.
+    // Drain both document and position queues before allowing the host to unmount.
+    do {
+      const positionSave = workbench.canvasPositionSaveInFlight;
+      try {
+        await Promise.all([workbench.canvasSaveLock, positionSave]);
+      } catch (error) {
+        // Position saves clear their own error state; retain the full draft for retry.
+        if (positionSave && workbench.ui.canvasSaveStatus !== "conflict") {
+          workbench.ui.canvasSaveStatus = "pending";
+        }
+        throw error;
+      }
+      await flushProjectCanvasSave(workbench);
+    } while (workbench.canvasSaveLock || workbench.canvasSaveInFlight
+      || workbench.canvasPositionSaveInFlight || workbench.canvasSaveTimer);
+    return handleAction(workbench, { dataset: { action: "set-nav-tab", tab } });
+  };
   return {
     projectCatalog: buildAiCanvasRuntimeProjectCatalog(workbench),
     currentProjectId: workbench.ui?.selectedCanvasProjectId,
@@ -10836,8 +10856,8 @@ function getAiCanvasRuntimeProjectBridge(workbench) {
     onDuplicateProject: (projectId) => duplicateAiCanvasRuntimeProject(workbench, projectId),
     onExportProject: (projectId) => exportAiCanvasRuntimeProject(workbench, projectId),
     onImportProject: () => importAiCanvasRuntimeProject(workbench),
-    onOpenHome: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "home" } }),
-    onOpenProjects: () => handleAction(workbench, { dataset: { action: "set-nav-tab", tab: "new-canvas" } }),
+    onOpenHome: () => openAfterCanvasSave("home"),
+    onOpenProjects: () => openAfterCanvasSave("new-canvas"),
     onOpenSkills: (options = {}) => openAiCanvasRuntimeSkills(workbench, options),
     onOpenTaskCenter: () => handleAction(workbench, { dataset: { action: "open-task-center" } }),
     onOpenOperationRecords: () => handleAction(workbench, { dataset: { action: "set-canvas-sidebar-mode", canvasSidebarMode: "history" } }),

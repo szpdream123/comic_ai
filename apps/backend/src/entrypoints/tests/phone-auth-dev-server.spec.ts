@@ -36,6 +36,7 @@ import {
   runWithDatabaseContext,
 } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
+import { findCanvasByCanvasProjectId, saveCanvasByCanvasProjectId } from "../../modules/project/creator-canvas-record.service.ts";
 import { createGeoContentService } from "../../modules/geo/geo-content.service.ts";
 import { createHomeRecommendationService } from "../../modules/home-recommendations/home-recommendation.service.ts";
 import { signComicAiIntegrationRequest } from "../../modules/integrations/comic-ai-integration-hmac.ts";
@@ -15257,6 +15258,157 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("allows canvas autosave and concurrent video intake without a PostgreSQL deadlock", { timeout: 90_000 }, async () => {
+    const fixture = await createDeadlockIntakeFixture();
+    const canvasLocked = Promise.withResolvers<void>();
+    const workflowInserting = Promise.withResolvers<void>();
+    const competingIntakeStarted = Promise.withResolvers<void>();
+    const sqlErrors: string[] = [];
+    let held = false;
+    let intakeLockAttempts = 0;
+    fixture.intercept = async (sql, params, next) => {
+      try {
+        if (!held && /FROM creator_canvas_projects[\s\S]*FOR UPDATE/i.test(sql)) {
+          const result = await next();
+          held = true;
+          canvasLocked.resolve();
+          await workflowInserting.promise;
+          return result;
+        }
+        if (sql.startsWith("SELECT id FROM users WHERE id = $1 FOR ") && ++intakeLockAttempts === 2) {
+          competingIntakeStarted.resolve();
+        }
+        if (/INSERT\s+INTO\s+workflows/i.test(sql)) {
+          workflowInserting.resolve();
+          await competingIntakeStarted.promise;
+        }
+        return await next();
+      } catch (error) {
+        sqlErrors.push(String((error as { code?: string }).code));
+        throw error;
+      }
+    };
+    try {
+      // Separate transaction contexts and barriers exercise the real FK lock interaction.
+      const saving = runWithDatabaseContext(() => saveCanvasByCanvasProjectId(fixture.wrappedDb, {
+        canvasProjectId: fixture.canvas.canvasProjectId,
+        userId: fixture.userId,
+        clientRevision: fixture.canvas.serverRevision,
+        document: { ...fixture.canvas.document, viewport: { ...fixture.canvas.document.viewport, x: 19 } },
+        now: new Date(),
+      }));
+      await canvasLocked.promise;
+      const key = randomUUID();
+      const generating = fixture.submit(key);
+      await workflowInserting.promise;
+      const [saved, generated, competing] = await Promise.all([saving, generating, fixture.submit(key)]);
+      assert.equal(generated.status, 200, JSON.stringify(generated.body));
+      assert.equal(competing.status, 200, JSON.stringify(competing.body));
+      assert.deepEqual(competing.body.data, generated.body.data);
+      assert.equal(saved.serverRevision, fixture.canvas.serverRevision + 1);
+      assert.deepEqual(sqlErrors, []);
+      const replays = await Promise.all([fixture.submit(key), fixture.submit(key)]);
+      for (const replay of replays) {
+        assert.equal(replay.status, 200);
+        assert.deepEqual(replay.body.data, generated.body.data);
+      }
+      assert.equal(fixture.providerCalls, 1);
+      await fixture.assertCounts(1);
+    } finally {
+      workflowInserting.resolve();
+      competingIntakeStarted.resolve();
+      await fixture.server.close();
+    }
+  });
+
+  for (const code of ["40P01", "40001"]) {
+    it(`retries video intake ${code} with one reservation and provider submission`, async () => {
+      const fixture = await createDeadlockIntakeFixture();
+      let attempts = 0;
+      fixture.intercept = async (sql, params, next) => {
+        // Fail after workflow, task, credit reservation and queued snapshot writes.
+        if (/INSERT\s+INTO\s+ai_generation_task_snapshots/i.test(sql) && ++attempts === 1) {
+          await next();
+          throw Object.assign(new Error("injected transaction abort"), { code });
+        }
+        return next();
+      };
+      try {
+        const key = randomUUID();
+        const generated = await fixture.submit(key);
+        assert.equal(generated.status, 200, JSON.stringify(generated.body));
+        assert.equal(attempts, 2);
+        assert.equal(fixture.providerCalls, 1);
+        await fixture.assertCounts(1);
+        assert.deepEqual((await fixture.submit(key)).body.data, generated.body.data);
+        assert.equal(fixture.providerCalls, 1);
+      } finally {
+        await fixture.server.close();
+      }
+    });
+  }
+
+  it("bounds video intake retries and excludes nontransaction errors and failed rollback", async () => {
+    const fixture = await createDeadlockIntakeFixture();
+    try {
+      for (const scenario of [
+        { code: "40P01", rollbackFails: false, attempts: 3 },
+        { code: "40001", rollbackFails: false, attempts: 3 },
+        { code: "23503", rollbackFails: false, attempts: 1 },
+        { code: "ECONNRESET", rollbackFails: false, attempts: 1 },
+        { code: "40P01", rollbackFails: true, attempts: 1 },
+      ]) {
+        let attempts = 0;
+        fixture.intercept = async (sql, params, next) => {
+          if (/INSERT\s+INTO\s+ai_generation_task_snapshots/i.test(sql)) {
+            attempts += 1;
+            await next();
+            throw Object.assign(new Error("injected intake failure"), { code: scenario.code });
+          }
+          if (sql === "ROLLBACK" && scenario.rollbackFails) {
+            await next(); // Release the actual test connection before simulating a lost acknowledgement.
+            throw new Error("injected rollback failure");
+          }
+          return next();
+        };
+        assert.equal((await fixture.submit(randomUUID())).status, 500);
+        assert.equal(attempts, scenario.attempts, JSON.stringify(scenario));
+        assert.equal(fixture.providerCalls, 0);
+        await fixture.assertCounts(0);
+      }
+    } finally {
+      await fixture.server.close();
+    }
+  });
+
+  it("does not repeat video intake after a committed transaction fails during dispatch", async () => {
+    const fixture = await createDeadlockIntakeFixture();
+    let intakeWrites = 0;
+    let injected = false;
+    fixture.intercept = async (sql, params, next) => {
+      if (/INSERT\s+INTO\s+workflows/i.test(sql)) intakeWrites += 1;
+      // claimQueuedTask runs only after intake COMMIT, before calling the adapter.
+      if (!injected && /UPDATE tasks[\s\S]*locked_by/i.test(sql)) {
+        injected = true;
+        throw Object.assign(new Error("injected post-commit failure"), { code: "40P01" });
+      }
+      return next();
+    };
+    try {
+      const key = randomUUID();
+      const generated = await fixture.submit(key);
+      assert.equal(injected, true);
+      assert.equal(generated.status, 500);
+      assert.equal(intakeWrites, 1);
+      assert.equal(fixture.providerCalls, 0);
+      await fixture.assertCounts(1);
+      assert.equal((await fixture.submit(key)).status, 200);
+      assert.equal(intakeWrites, 1);
+    } finally {
+      await fixture.server.close();
+    }
+  });
+
   it("rolls back the complete generation intake when the initial outbox write fails", async () => {
     const db = await createMigratedTestDb();
     let failInitialOutbox = false;
@@ -18887,6 +19039,102 @@ describe("phone auth dev server", { concurrency: false }, () => {
   });
 
 });
+
+async function createDeadlockIntakeFixture() {
+  const db = await createMigratedTestDb();
+  const state = {
+    providerCalls: 0,
+    intercept: async (sql: string, params: unknown[], next: () => Promise<any>): Promise<any> => next(),
+  };
+  const wrappedDb = {
+    query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+      return state.intercept(sql, params, () => db.query<T>(sql, params));
+    },
+    close: () => db.close(),
+  };
+  const server = createPhoneAuthDevServer({
+    db: wrappedDb,
+    storageRuntime: {
+      mode: "cos", provider: "tencent_cos", bucket: "deadlock-test",
+      adapter: { async createSignedReadUrl(input) { return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt }; } },
+    },
+    env: {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+      BULLMQ_WORKERS_ENABLED: "false",
+      VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+    },
+    fetchImpl: (async (url, init) => {
+      assert.equal(init?.method, "POST");
+      state.providerCalls += 1;
+      return Response.json({ data: { task_id: `lock-test-provider-${state.providerCalls}`, status: "queued" } });
+    }) as typeof fetch,
+    repairScheduler: { enabled: false },
+  });
+  try {
+    await server.listen(0);
+    const phone = "13800138000";
+    const cookie = await login(server.origin, phone);
+    const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+    await seedActiveGenerationMembership(db, { userId });
+    await grantCredits(db, {
+      userId, amount: 1000, sourceType: "test_credit_seed", sourceId: randomUUID(),
+      reason: "deadlock regression fixture", createdByUserId: userId, now: new Date(),
+    });
+    const created = await fetch(`${server.origin}/api/creator/canvases`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": randomUUID(), cookie },
+      body: JSON.stringify({ title: "Deadlock regression" }),
+    });
+    const createdBody = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(createdBody));
+    const canvas = await findCanvasByCanvasProjectId(db, { canvasProjectId: createdBody.data.project.id, userId });
+    assert.ok(canvas);
+    return Object.assign(state, {
+      db, wrappedDb, server, userId, canvas,
+      async submit(key: string) {
+        const response = await fetch(`${server.origin}/api/canvas/${canvas.canvasProjectId}/assistant/videos/generations`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "idempotency-key": key, cookie },
+          body: JSON.stringify({
+            model: "seedance-i2v-pro", prompt: "camera slowly pushes in",
+            durationSec: 5, resolution: "1080p", aspectRatio: "16:9",
+            firstFrame: { url: "https://input.example.test/first-frame.png" },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        return { status: response.status, body: await response.json() };
+      },
+      async assertCounts(expected: number) {
+        const result = await db.query<{
+          workflows: number; tasks: number; snapshots: number; reservations: number; idempotency: number;
+          reserved: number; allocated: number; available: number; reservation_entries: number;
+        }>(`SELECT
+          (SELECT count(*)::int FROM workflows WHERE canvas_project_id = $1) AS workflows,
+          (SELECT count(*)::int FROM tasks) AS tasks,
+          (SELECT count(*)::int FROM ai_generation_task_snapshots) AS snapshots,
+          (SELECT count(*)::int FROM credit_reservations) AS reservations,
+          (SELECT count(*)::int FROM idempotency_records WHERE response_resource_type = 'generation_task') AS idempotency,
+          (SELECT count(*)::int FROM credit_ledger_entries WHERE entry_type = 'reservation') AS reservation_entries,
+          credit_balance_cached::int AS available,
+          credit_reserved_cached::int AS reserved,
+          (SELECT COALESCE(sum(amount_reserved), 0)::int FROM credit_reservations) AS allocated
+          FROM users WHERE id = $2`, [canvas.canvasProjectId, userId]);
+        const row = result.rows[0];
+        assert.deepEqual({ workflows: row.workflows, tasks: row.tasks, snapshots: row.snapshots,
+          reservations: row.reservations, idempotency: row.idempotency },
+        { workflows: expected, tasks: expected, snapshots: expected, reservations: expected, idempotency: expected });
+        assert.equal(row.reserved, row.allocated);
+        assert.equal(row.reserved > 0, expected > 0);
+        assert.equal(row.available + row.reserved, 1000);
+        assert.equal(row.reservation_entries, expected);
+      },
+    });
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
+}
 
 async function login(origin: string, phone: string) {
   return loginAsAccount(origin, phone, defaultPasswordFromPhone(normalizeCnPhone(phone)));

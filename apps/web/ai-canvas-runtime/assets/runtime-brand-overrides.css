@@ -10,6 +10,64 @@
 }
 
 /* Keep the brand trigger at the left, followed by the project controls. */
+.new-canvas-root .app-header .app-header-home {
+  order: -1;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px !important;
+  min-height: 36px !important;
+  min-width: 0 !important;
+  margin-right: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--theme-border, #7770c7);
+  border-radius: 9px;
+  color: var(--theme-text, #f5f7fb);
+  background: var(--theme-hover, rgba(119, 112, 199, .12));
+  font: inherit;
+  font-size: 14px !important;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.app-header .app-header-home:hover:not(:disabled) {
+  background: var(--theme-selected, rgba(119, 112, 199, .24));
+  border-color: #7770c7;
+}
+
+.app-header .app-header-home:focus-visible {
+  outline: 2px solid #a49aff;
+  outline-offset: 3px;
+}
+
+.app-header .app-header-home:disabled {
+  opacity: .6;
+  cursor: progress;
+}
+
+.app-header .app-header-home svg { flex: none; }
+
+.new-canvas-root .app-header .app-header-home span { font-size: 14px !important; }
+
+.app-header .app-header-home-error {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border: 1px solid var(--theme-border, #7770c7);
+  border-radius: 10px;
+  background: var(--theme-bg, #17171f);
+  color: var(--theme-text, #f5f7fb);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .app-header .app-brand {
   order: 0;
   position: static;
@@ -174,6 +232,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 !important;
+}
+
+@media (max-width: 1100px) {
+  .app-header [data-host-header-chrome] .app-header-help { display: none; }
+  .app-header [contenteditable="true"] { max-width: 100px !important; }
+}
+
+@media (max-width: 600px) {
+  .new-canvas-root .app-header .app-header-home { padding: 0 8px; margin-right: 6px; }
+  .app-header .app-header-brand { gap: 4px; padding-right: 6px; }
+  .app-header [contenteditable="true"] { max-width: 64px !important; }
 }
 
 /* Canvas selection is a bounded dropdown below the compact header. */

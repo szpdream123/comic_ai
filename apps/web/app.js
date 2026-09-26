@@ -268,7 +268,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
     }
     return Object.fromEntries(Object.entries(profile).map(([key, value]) => [key, normalizeExecutionProfile(value)]));
   };
-  const createBackendMediaExecutionProfile = (mediaKind) => ({
+  const createBackendMediaExecutionProfile = (mediaKind, parameterSchema = {}) => ({
     preset: "custom",
     protocol: {
       version: 2,
@@ -294,7 +294,11 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
               resolution: "{{resolution}}",
               generateAudio: "{{generateAudio}}",
             }
-            : {}),
+            : {
+              ["ratio" in parameterSchema && !("aspectRatio" in parameterSchema) ? "ratio" : "aspectRatio"]: "{{aspectRatio}}",
+              ["resolution" in parameterSchema ? "resolution" : "imageSize" in parameterSchema ? "imageSize" : "quality" in parameterSchema ? "quality" : "resolution"]: "{{imageSize}}",
+              ...(("resolution" in parameterSchema || "imageSize" in parameterSchema) && "quality" in parameterSchema ? { quality: "{{imageQuality}}" } : {}),
+            }),
         },
       },
       response: {
@@ -344,7 +348,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
         category: ["image", "video", "audio", "text"].includes(category) ? category : "text",
         providerConfigId: backendProviderId,
         executionProfile: category === "image" || category === "video"
-          ? createBackendMediaExecutionProfile(category)
+          ? createBackendMediaExecutionProfile(category, schema)
           : undefined,
         inputModalities: Array.isArray(model?.inputModalities) ? model.inputModalities : undefined,
         capabilities: model?.capabilities && typeof model.capabilities === "object" ? sanitizeCatalogValue(model.capabilities) : {},
@@ -1469,6 +1473,7 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
   let disposed = false;
   let openMenu = "";
   let actionProjectId = "";
+  let returningHome = false;
 
   const closeMenus = () => {
     openMenu = "";
@@ -1554,7 +1559,7 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
 
   const bindHeader = (header) => {
     if (!header) return;
-    const brand = header.querySelector(":scope > div:first-child");
+    const brand = header.querySelector("[data-host-header-brand]") ?? header.querySelector(":scope > div:first-child");
     if (brand && !brand.dataset.hostHeaderBrand) {
       brand.dataset.hostHeaderBrand = "true";
       brand.classList.add("app-brand", "app-header-brand");
@@ -1572,6 +1577,17 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
         chevron.innerHTML = '<path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />';
         brand.append(chevron);
       }
+    }
+    if (!header.querySelector("[data-host-header-home]")) {
+      const home = doc.createElement("button");
+      home.type = "button";
+      home.className = "app-header-home";
+      home.dataset.hostHeaderHome = "true";
+      home.dataset.hostHeaderAction = "open-projects";
+      home.title = "退出当前画布，返回全部画布";
+      home.disabled = returningHome;
+      home.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg><span>返回画布</span>';
+      header.prepend(home);
     }
     if (!header.querySelector("[data-host-header-chrome]")) {
       const extras = doc.createElement("div");
@@ -1608,6 +1624,11 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
     const target = event.target?.closest?.("[data-host-header-action], [data-host-header-trigger], [data-host-header-brand], [data-host-header-menu]");
     if (!target) {
       closeMenus();
+      return;
+    }
+    // Keep native click (including keyboard activation) for exit navigation.
+    if (target.closest?.('[data-host-header-action="open-home"], [data-host-header-action="open-projects"]')) {
+      event.stopPropagation();
       return;
     }
     if (target.closest?.("[data-host-header-brand]")) {
@@ -1686,6 +1707,46 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
     }
   };
 
+  const onHomeClick = async (event) => {
+    const action = event.target?.closest?.('[data-host-header-action="open-home"], [data-host-header-action="open-projects"]')?.dataset.hostHeaderAction;
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (disposed || returningHome) return;
+    returningHome = true;
+    closeMenus();
+    root.querySelector("[data-host-header-home-error]")?.remove();
+    const home = root.querySelector("[data-host-header-home]");
+    if (home) {
+      home.disabled = true;
+      home.setAttribute("aria-busy", "true");
+    }
+    try {
+      // Flush the runtime snapshot first, then let the host persist it before routing.
+      await currentState().saveCurrentProjectSilent?.();
+      if (!disposed) {
+        if (action === "open-projects") await context.onOpenProjects?.();
+        else await context.onOpenHome?.();
+      }
+    } catch (error) {
+      if (!disposed) {
+        const notice = doc.createElement("div");
+        notice.dataset.hostHeaderHomeError = "true";
+        notice.className = "app-header-home-error";
+        notice.setAttribute("role", "alert");
+        notice.textContent = `返回${action === "open-projects" ? "画布" : "主页"}失败，请重试：${error?.message || "画布保存失败"}`;
+        root.querySelector(".app-header")?.append(notice);
+      }
+    } finally {
+      returningHome = false;
+      const button = root.querySelector("[data-host-header-home]");
+      if (button) {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
+    }
+  };
+
   let syncing = false;
   const sync = () => {
     if (disposed || syncing) return;
@@ -1700,6 +1761,7 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
   };
 
   root.addEventListener("pointerdown", onPointerDown, true);
+  root.addEventListener("click", onHomeClick, true);
   const observer = typeof MutationObserver === "function"
     ? new MutationObserver(() => sync())
     : null;
@@ -1715,7 +1777,9 @@ function installAiCanvasRuntimeHeaderChrome(surface, runtimeStore, context = {})
     observer?.disconnect?.();
     unsubscribe?.();
     root.removeEventListener("pointerdown", onPointerDown, true);
+    root.removeEventListener("click", onHomeClick, true);
     closeMenus();
+    root.querySelectorAll?.("[data-host-header-home], [data-host-header-home-error]").forEach((node) => node.remove());
     root.querySelectorAll?.("[data-host-header-chrome]").forEach((node) => node.remove());
   };
 }

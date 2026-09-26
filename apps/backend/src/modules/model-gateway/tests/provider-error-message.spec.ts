@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { ModelError, translateProviderErrorMessage } from "../provider-error-message.ts";
+import { ModelError, translateProviderErrorMessage, translateProviderErrorMessageField } from "../provider-error-message.ts";
 import {
   providerResponseDiagnostics,
   providerResponseError,
@@ -152,6 +152,24 @@ describe("provider error message", () => {
       }),
       "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。",
     );
+  });
+
+  it("shows explicit supplier reasons, sanitizes them, and survives repeated translation", () => {
+    for (const reason of ["image_provider_503", "Input data is suspected of being involved in IP infringement"]) {
+      const display = translateProviderErrorMessage(reason);
+      assert.equal(translateProviderErrorMessageField("providerMessage", display), display);
+    }
+    for (const reason of ["Reference duration exceeds 12 seconds", "分辨率 720P 不支持此模式"]) {
+      const display = translateProviderErrorMessage({ providerMessage: reason }, { mediaType: "video" });
+      assert.equal(display, `供应商返回：${reason}`);
+      assert.equal(translateProviderErrorMessage(display, { mediaType: "video" }), display);
+      assert.equal(translateProviderErrorMessageField("providerMessage", reason), display);
+    }
+    const display = translateProviderErrorMessage({ providerMessage: 'Rejected api_key=secret-value Bearer secret-token https://provider.test/file?token=signed-secret' });
+    assert.match(display, /Rejected/);
+    assert.doesNotMatch(display, /secret-value|secret-token|signed-secret|provider\.test/);
+    assert.doesNotMatch(translateProviderErrorMessage({ providerMessage: 'Rejected credentials: {"api_key":"fake-sensitive-value", "token":"private-token"}' }), /fake-sensitive-value|private-token/);
+    assert.doesNotMatch(translateProviderErrorMessage({ providerMessage: '<html><body>private upstream page</body></html>' }), /private upstream/);
   });
 
   it("keeps unknown provider errors behind a safe fallback", () => {

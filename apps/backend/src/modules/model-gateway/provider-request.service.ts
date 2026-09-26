@@ -1117,7 +1117,7 @@ async function updateProviderRequestTerminalStatus(
   const needsStageFallback = input.status === "failed"
     && !(typeof input.redactedResponse.localStage === "string" && input.redactedResponse.localStage.trim());
   const terminalDiagnostics = {
-    ...input.redactedResponse,
+    ...withStoredProviderRawResponse(input.redactedResponse),
     ...(needsStageFallback
       ? {
           localStage: "provider_request_terminal_status",

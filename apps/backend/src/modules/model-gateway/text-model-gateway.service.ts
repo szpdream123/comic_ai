@@ -164,6 +164,12 @@ export class TextModelGatewayService {
       model.providerModel,
       model.providerProtocol,
     );
+    // Preserve the default removal of vendor-specific fields for other routes.
+    // DeepSeek's official Chat API supports this explicit opt-out of thinking.
+    if (request.thinking?.type === "disabled" && model.providerProtocol === "openai_compatible_chat"
+      && /^https:\/\/api\.deepseek\.com(?:\/|$)/i.test(model.baseURL)) {
+      upstreamRequest.thinking = { type: "disabled" };
+    }
     const auditRequest = redactTextGatewayVideoUrls(upstreamRequest);
     await recordProviderRequestRedactedBody(this.config.db, {
       providerRequestId: started.id,

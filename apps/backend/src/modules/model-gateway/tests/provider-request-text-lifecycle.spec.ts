@@ -17,6 +17,27 @@ import { attachProviderRawResponse, compactProviderAuditValue, providerResponseD
 import { completeUserModelRequestLog, createUserModelRequestLog } from "../user-model-request-log.service.ts";
 
 describe("provider request text lifecycle", () => {
+  it("persists the final raw failure response instead of losing its non-enumerable attachment", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const prepared = await createStartedRequest(db, "raw-failure");
+      const raw = { status: "failed", error: "Input data is suspected of being involved in IP infringement" };
+      const failed = await markProviderRequestFailed(db, {
+        providerRequestId: prepared.request.id, failureCode: "provider_failed",
+        redactedResponse: attachProviderRawResponse({ providerStatus: "failed", providerMessage: raw.error }, raw),
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+      assert.deepEqual(failed.redactedResponse?.providerRawResponse, raw);
+      assert.match(String(failed.redactedResponse?.providerMessage), /知识产权/);
+      const unknown = await createStartedRequest(db, "raw-unknown-failure");
+      const unknownFailure = await markProviderRequestFailed(db, {
+        providerRequestId: unknown.request.id, failureCode: "provider_failed",
+        redactedResponse: { providerStatus: "failed", providerMessage: "Reference duration exceeds 12 seconds" },
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+      assert.equal(unknownFailure.redactedResponse?.providerMessage, "供应商返回：Reference duration exceeds 12 seconds");
+    } finally { await db.close(); }
+  });
   it("marks a streaming provider request as succeeded with redacted usage", async () => {
     const db = await createMigratedTestDb();
 
@@ -429,6 +450,19 @@ describe("provider request text lifecycle", () => {
       assert.equal(initial.attemptId, null);
 
       const attemptId = "60000000-0000-4000-8000-000000000399";
+      // The log's attempt_id is a foreign key: bind it to a real worker attempt.
+      const workflow = await db.query<{ id: string }>(`
+        INSERT INTO workflows (id, workflow_type, status, input_snapshot_json)
+        VALUES ('40000000-0000-4000-8000-000000000399', 'episode_image_generation', 'running', '{}'::jsonb) RETURNING id
+      `);
+      const task = await db.query<{ id: string }>(`
+        INSERT INTO tasks (id, workflow_id, task_type, status, queue_name, input_snapshot_json, target_entity_type, target_entity_id)
+        VALUES ('50000000-0000-4000-8000-000000000399', $1, 'episode_generate_image', 'running', 'generation-submit-image', '{}'::jsonb, 'asset', $1) RETURNING id
+      `, [workflow.rows[0].id]);
+      await db.query(`
+        INSERT INTO task_attempts (id, workflow_id, task_id, attempt_number, status)
+        VALUES ($1, $2, $3, 1, 'running')
+      `, [attemptId, workflow.rows[0].id, task.rows[0].id]);
       const rebound = await createUserModelRequestLog(db, {
         ...baseLog,
         attemptId,

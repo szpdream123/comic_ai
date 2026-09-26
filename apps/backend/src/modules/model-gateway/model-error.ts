@@ -379,6 +379,12 @@ const modelErrorRules: readonly ModelErrorRule[] = [
     retryable: true,
     pattern: /generation failed|provider failed|api error/i,
   },
+  {
+    code: "model_ip_infringement",
+    displayMessage: "供应商拒绝生成：输入内容疑似涉及知识产权侵权，请使用拥有授权的素材和内容。",
+    retryable: false,
+    pattern: /\bIP infringement\b|intellectual property infringement|输入内容疑似涉及知识产权侵权/i,
+  },
 ];
 
 export class ModelError extends Error {
@@ -444,8 +450,10 @@ export class ModelError extends Error {
     const fallbackDisplayMessage = context.mediaType === "video"
       ? "生成失败，请修改素材或提示词后重新生成"
       : "模型服务返回错误，任务没有拿到生成结果，请稍后重试。";
+    const supplierReason = readPublicSupplierReason(value);
     const displayMessage =
       stableError?.displayMessage ??
+      (supplierReason && (!rule || rule.code === "model_provider_failed") ? supplierReason : null) ??
       rule?.displayMessage ??
       resolveHttpStatusDisplayMessage(httpStatus) ??
       readFirstPublicChineseMessage(candidates) ??
@@ -545,6 +553,30 @@ function collectModelErrorCandidates(value: unknown): string[] {
   return candidates;
 }
 
+// Only the adapter's explicit error field (or our already formatted message)
+// may become a public fallback. Never expose a whole response or request body.
+function readPublicSupplierReason(value: unknown): string | null {
+  const prefix = "供应商返回：";
+  const message = typeof value === "string" && value.startsWith(prefix)
+    ? value.slice(prefix.length)
+    : readObjectString(value, "providerMessage");
+  if (!message || /^[\[{]/.test(message) || /<[^>]+>/.test(message)) return null;
+  // Persistence may translate the factory's own public message a second time.
+  // Preserve these exact, trusted messages instead of labeling them as raw supplier text.
+  if (modelErrorRules.some(rule => rule.displayMessage === message)
+    || Object.values(stableModelErrors).some(rule => rule.displayMessage === message)
+    || [400, 401, 403, 404, 429, Number(message.match(/HTTP (\d{3})/)?.[1])]
+      .some(status => resolveHttpStatusDisplayMessage(status) === message)) return message;
+  const safe = message
+    .replace(/https?:\/\/[^\s<>"']+/gi, "[链接已隐藏]")
+    .replace(/\bBearer\s+[\w.~+\/=-]+/gi, "Bearer [已隐藏]")
+    .replace(/["']?\b(api[_-]?key|access[_-]?token|token|secret|password|authorization)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[已隐藏]")
+    .replace(/\bsk-[\w-]+/g, "[已隐藏]")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .trim().slice(0, 500);
+  return safe ? `${prefix}${safe.replace(/^供应商返回：/, "")}` : null;
+}
+
 function readProviderMessage(candidates: string[], value: unknown): string | null {
   const explicit = readFirstString(
     readObjectString(value, "providerMessage"),
@@ -613,6 +645,7 @@ function readFirstPublicChineseMessage(candidates: string[]): string | null {
   return candidates.find((candidate) => (
     /[\u3400-\u9fff]/u.test(candidate) &&
     !/[A-Za-z]/.test(candidate) &&
+    !/^[\[{]|<[^>]+>/.test(candidate) &&
     !/^[a-z0-9_:-]+$/i.test(candidate)
   )) ?? null;
 }

@@ -545,7 +545,7 @@ export function createTextModelChatGateway(deps: {
       messages,
       ...(input.tools ? { tools: input.tools } : {}),
       ...(input.toolChoice ? { tool_choice: input.toolChoice } : {}),
-      
+      ...(deps.disableThinking ? { thinking: { type: "disabled" as const } } : {}),
       ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
       ...(input.responseFormat === "json_object" ? { response_format: { type: "json_object" as const } } : {}),
     };

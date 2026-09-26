@@ -595,7 +595,8 @@ const storageMediaThumbnailCache = new Map<string, {
 }>();
 const brotliCompress = promisify(brotliCompressCallback);
 const gzip = promisify(gzipCallback);
-const staticAssetPrewarmPromise = prewarmStaticAssets().catch(() => undefined);
+// Workers import API helpers too; only an HTTP server needs to prewarm web assets.
+let staticAssetPrewarmPromise: Promise<void> | undefined;
 
 type LingxiCommunityItem = {
   id: string;
@@ -11210,10 +11211,13 @@ async function createGenerationTask(
     parameters: executionParameters,
   };
   const store = new SqlIdempotencyRecordStore(db);
+  for (let intakeAttempt = 0; ; intakeAttempt += 1) {
   let intakeTransactionOpen = true;
   await db.query("BEGIN");
   try {
-  await db.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [context.userId]);
+  // Serialize intake for this user without blocking autosave's foreign-key KEY SHARE.
+  // Workflow insertion acquires the canvas FK lock before credit reservation locks the wallet.
+  await db.query("SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE", [context.userId]);
   const started = await beginOrReplayCommand(store, {
     scopeKey: `user:${context.actor.userId}`,
     userId: context.actor.userId,
@@ -12443,9 +12447,18 @@ async function createGenerationTask(
   return { status: 200 as const, body: responseBody };
   } catch (error) {
     if (intakeTransactionOpen) {
-      await db.query("ROLLBACK").catch(() => undefined);
+      let rollbackSucceeded = false;
+      await db.query("ROLLBACK").then(() => { rollbackSucceeded = true; }).catch(() => undefined);
+      const code = (error as { code?: unknown } | null)?.code;
+      // Retry only known transaction aborts. Never replay a committed intake/provider call,
+      // or a transport error with an unknown commit outcome.
+      if (rollbackSucceeded && intakeAttempt < 2 && (code === "40P01" || code === "40001")) {
+        await new Promise((resolve) => setTimeout(resolve, 10 * (intakeAttempt + 1)));
+        continue;
+      }
     }
     throw error;
+  }
   }
 }
 
@@ -38660,6 +38673,7 @@ export function createPhoneAuthDevServer(
   return {
     origin: `http://${originHost}:0`,
     async listen(port: number) {
+      staticAssetPrewarmPromise ??= prewarmStaticAssets().catch(() => undefined);
       await staticAssetPrewarmPromise;
       await new Promise<void>((resolve, reject) => {
         httpServer.once("error", reject);

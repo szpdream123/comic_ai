@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { resolveCanvasAssistantModelId } from "../ai-canvas-runtime/assets/canvasAgentBatch.js";
+import { resolveParameterPreparation } from "../ai-canvas-runtime/assets/mediaParameterConfirmation.js";
 
 const asset = new URL("../ai-canvas-runtime/assets/conversationExecutionController-CGzzIkBM.js", import.meta.url);
 const source = readFileSync(asset, "utf8");
@@ -231,28 +232,29 @@ test("an already selected conversation model survives approval preparation witho
   const executor = readFileSync(new URL("../ai-canvas-runtime/assets/agentRoundExecutor-D3Qh0nGj.js", import.meta.url), "utf8");
   const body = executor.slice(executor.indexOf("function pn("), executor.indexOf("function mn("));
   const state = { config: { assistantImageModelId: "general/image-choice", assistantVideoModelId: "general/video-choice" } };
-  const prepare = new Function("S", "resolveCanvasAssistantModelId", `${body};return pn;`)(
-    { getState: () => state }, resolveCanvasAssistantModelId,
+  const prepare = new Function("S", "resolveCanvasAssistantModelId", "resolveParameterPreparation", `${body};return pn;`)(
+    { getState: () => state }, resolveCanvasAssistantModelId, resolveParameterPreparation,
   );
   for (const kind of ["image", "video"]) {
     for (const mode of ["collaborative", "autonomous"]) {
       const prepared = { definition: { id: "media_generate", effect: "media_generation" }, input: { kind, modelRef: `general/${kind}-choice`, prompt: "生成素材", deliveryMode: "chat" } };
       const result = prepare(prepared, "帮我生成素材", mode);
       assert.equal(result.prepared.input.modelRef, prepared.input.modelRef);
-      assert.equal(result.inputRequest, undefined, "a checked model must not open another model picker");
+      assert.equal(result.inputRequest?.kind, "media_parameters", "a checked model still needs missing parameters");
+      assert.equal(result.inputRequest.items[0].modelRef, prepared.input.modelRef);
     }
   }
   const unspecified = { definition: { id: "media_generate", effect: "media_generation" }, input: { kind: "image", modelRef: "general/model-invented-by-ai" } };
   for (const mode of ["collaborative", "autonomous"]) {
     const selected = prepare(unspecified, "生成图片", mode);
-    assert.equal(selected.inputRequest, undefined);
+    assert.equal(selected.inputRequest?.kind, "media_parameters");
     assert.equal(selected.prepared.input.modelRef, "general/image-choice");
     const explicit = prepare(unspecified, "生成图片 @model{general/explicit|指定模型}", mode);
-    assert.equal(explicit.inputRequest, undefined);
+    assert.equal(explicit.inputRequest?.kind, "media_parameters");
     assert.equal(explicit.prepared.input.modelRef, "general/explicit");
   }
   state.config = {};
-  assert.equal(prepare({ ...unspecified, input: { kind: "image" } }, "生成图片", "collaborative").inputRequest?.kind, "media_model");
+  assert.equal(prepare({ ...unspecified, input: { kind: "image" } }, "生成图片", "collaborative").inputRequest?.kind, "media_parameters");
 });
 
 test("selected conversation models still pass through the real media authorization checks", () => {

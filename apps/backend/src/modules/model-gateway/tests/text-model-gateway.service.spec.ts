@@ -17,6 +17,32 @@ import {
 } from "../text-model-gateway.service.ts";
 
 describe("text model gateway service", () => {
+  it("forwards an explicit non-thinking request only to the supported official endpoint and audits it", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      for (const [baseURL, providerProtocol, disableThinking, expected] of [
+        ["https://api.deepseek.com", "openai_compatible_chat", true, true],
+        ["https://api.deepseek.com/v1", "openai_compatible_chat", true, true],
+        ["https://api.deepseek.com", "openai_compatible_chat", false, false],
+        ["https://other.example/v1", "openai_compatible_chat", true, false],
+        ["https://api.deepseek.com.example/v1", "openai_compatible_chat", true, false],
+        ["https://api.deepseek.com", "cumob_chat", true, false],
+      ] as const) {
+        const adapter = new FakeTextAdapter([chunk("thinking-control", '{"ok":true}', "stop")]);
+        const gateway = new TextModelGatewayService({ db, adapter, cumobAdapter: adapter,
+          resolver: { async resolve() { return { id: "configured-text", label: "Text", providerName: "text",
+            providerModel: "deepseek-flash", baseURL, apiKey: "test", apiKeyEnv: "test", enabled: true, providerProtocol }; } },
+        });
+        const chat = createTextModelChatGateway({ gateway, disableThinking });
+        assert.equal(await chat.completeJson({ model: "configured-text", prompt: "Return JSON", requestKeyPrefix: randomUUID() }), '{"ok":true}');
+        assert.deepEqual(adapter.calls[0].request.thinking, expected ? { type: "disabled" } : undefined);
+        const { rows } = await db.query<{ request_body_json: Record<string, unknown> }>(
+          "SELECT request_body_json FROM user_model_request_logs ORDER BY started_at DESC LIMIT 1");
+        assert.deepEqual(rows[0].request_body_json.thinking, expected ? { type: "disabled" } : undefined);
+      }
+    } finally { await db.close(); }
+  });
+
   it("streams OpenAI-compatible chunks and marks the provider request succeeded", async () => {
     const db = await createMigratedTestDb();
     const adapter = new FakeTextAdapter([

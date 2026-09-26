@@ -133,7 +133,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
         taskId: input.externalRequestId,
         transientAuthPollCount: 0,
         providerErrorCode: findFirstString(payload, [["error", "code"], ["data", "error", "code"], ["result", "error", "code"]]) ?? null,
-        providerMessage: findFirstString(payload, [["error", "message"], ["msg"], ["message"], ["data", "message"], ["result", "message"]]) ?? null,
+        providerMessage: findFirstString(payload, [["error", "message"], ["error"], ["data", "error", "message"], ["data", "error"], ["result", "error", "message"], ["result", "error"], ["failure_reason"], ["msg"], ["message"], ["data", "message"], ["result", "message"]]) ?? null,
       }, payload),
     };
   }

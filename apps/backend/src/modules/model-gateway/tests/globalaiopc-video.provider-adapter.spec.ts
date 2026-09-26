@@ -15,6 +15,21 @@ const input = (redactedPayload: Record<string, unknown>) => ({
 });
 
 describe("GlobalAiOpc Model Center video adapter", () => {
+  it("retains the supplier's string failure reason for public error translation", async () => {
+    const reason = "Input data is suspected of being involved in IP infringement";
+    for (const error of [{ error: reason }, { data: { error: reason } }, { error: { message: reason } }]) {
+      const adapter = new GlobalAiOpcVideoProviderAdapter({
+        apiKey: "test-key", model: "wan3.0-r2v",
+        createTaskEndpoint: "https://provider.test/tasks",
+        queryTaskEndpoint: "https://provider.test/tasks/{taskId}",
+        fetchImpl: (async () => Response.json({ id: "failed-task", status: "failed", ...error })) as typeof fetch,
+      });
+      const result = await adapter.poll({ externalRequestId: "failed-task" });
+      assert.equal(result.status, "failed");
+      assert.equal(result.redactedResponse.providerMessage, reason);
+      assert.match(ModelError.displayMessage(result.redactedResponse, { mediaType: "video" }), /知识产权/);
+    }
+  });
   it("uses top-level Model Center fields and keeps full-reference media separate from frame fields", () => {
     const payload = buildGlobalAiOpcVideoPayload(input({
       prompt: "a moving shot",

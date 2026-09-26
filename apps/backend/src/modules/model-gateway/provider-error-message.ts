@@ -11,6 +11,9 @@ export function translateProviderErrorMessage(value: unknown, context: ModelErro
 
 export function translateProviderErrorMessageField(key: string | undefined, value: string): string {
   const normalizedKey = String(key ?? "").toLowerCase();
+  if (normalizedKey === "providermessage") {
+    return translateProviderErrorMessage({ providerMessage: value });
+  }
   if (
     normalizedKey.includes("message") ||
     normalizedKey.includes("preview") ||

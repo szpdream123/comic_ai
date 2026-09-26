@@ -1,5 +1,6 @@
 // Used by the shipped canvas assistant tool; model validation and generation stay
 // in the existing runtime so provider/workflow compatibility checks still apply.
+import { assertMediaParameterReceipt, assertNodeParameterReceipt, confirmedNodePatch, prepareNodeParameters } from './mediaParameterConfirmation.js';
 export function resolveCanvasAssistantModelId(state, kind) {
   const key = kind === "image" ? "assistantImageModelId" : kind === "video" ? "assistantVideoModelId" : null;
   const selected = key && state.config?.[key];
@@ -13,6 +14,10 @@ export async function runCanvasAgentBatch(context, nodeIds, store, runNode, reso
   const results = new Map();
   let completedRuns = 0;
   const snapshot = store.getState();
+  // Check the entire batch before starting any paid node, including autonomous runs.
+  if (context.taskId && prepareNodeParameters(nodeIds, '', snapshot)) {
+    assertMediaParameterReceipt(context.mediaParameterApproval, snapshot, nodeIds);
+  }
   const dependencies = new Map(nodeIds.map(id => {
     const node = snapshot.nodes.find(node => node.id === id);
     const references = [...String(node?.data?.prompt ?? "").matchAll(/@\{([^:}\r\n]+):[^}\r\n]+\}/g)]
@@ -46,8 +51,14 @@ export async function runCanvasAgentBatch(context, nodeIds, store, runNode, reso
       const kind = ["ai-image", "ai-panorama", "ai-animation"].includes(node.data.type) ? "image"
         : node.data.type === "ai-video" ? "video" : null;
       let data;
+      const approved = context.mediaParameterApproval?.items.find(item => item.id === id);
+      if (approved) {
+        assertNodeParameterReceipt(context.mediaParameterApproval, approved, state);
+        data = { ...node.data, ...confirmedNodePatch(approved) };
+        state.updateNodeDataTransient(id, confirmedNodePatch(approved));
+      }
       const selected = resolveCanvasAssistantModelId(state, kind);
-      if (!node.data.model && !node.data.workflowId && selected) {
+      if (!approved && !node.data.model && !node.data.workflowId && selected) {
         const resolved = resolveModel(selected, [node]);
         if (resolved.error) {
           results.set(id, { nodeId: id, status: "failed", message: resolved.error });
