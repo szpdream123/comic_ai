@@ -240,6 +240,7 @@ export const criticalApiRouteAuthRegistrations = [
   { id: "auth.logout", method: "POST", path: "/api/auth/logout", policy: "optional-user" },
   { id: "auth.dev.challenge", method: "GET", path: "/api/auth/dev/challenges/{challengeId}", policy: "test-only" },
   { id: "payment.provider-callback", method: "POST", path: "/api/payment-provider-callbacks/{provider}", policy: "signed-webhook" },
+  { id: "payment.provider-project-callback", method: "POST", path: "/api/payment-provider-callbacks/{provider}/{project}", policy: "signed-webhook" },
   { id: "generation.provider-webhook", method: "POST", path: "/api/provider-webhooks/generation/{provider}", policy: "signed-webhook" },
   { id: "moneyprinter.models", method: "GET", path: "/api/integrations/moneyprinter/models", policy: "signed-webhook" },
   { id: "moneyprinter.image-models", method: "GET", path: "/api/integrations/moneyprinter/image-models", policy: "signed-webhook" },

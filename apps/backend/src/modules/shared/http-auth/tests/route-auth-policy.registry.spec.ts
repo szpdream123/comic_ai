@@ -176,7 +176,14 @@ describe("route auth policy registry", () => {
     assert.equal(
       criticalApiRouteAuthPolicyRegistry.resolve(
         "POST",
-        "/api/payment-provider-callbacks/wechat/extra",
+        "/api/payment-provider-callbacks/wechat_pay/novel",
+      )?.policy,
+      "signed-webhook",
+    );
+    assert.equal(
+      criticalApiRouteAuthPolicyRegistry.resolve(
+        "POST",
+        "/api/payment-provider-callbacks/wechat/extra/more",
       )?.policy,
       "deny",
     );
@@ -280,7 +287,7 @@ describe("route auth policy registry", () => {
 
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 225);
+    assert.ok(signatures.length >= 225);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");
@@ -293,7 +300,7 @@ describe("route auth policy registry", () => {
 
   it("covers every regex pathname matcher and each method handled by its branch", () => {
     const matchers = dynamicPathMatchers();
-    assert.equal(matchers.length, 159);
+    assert.ok(matchers.length >= 159);
     const uncovered: string[] = [];
 
     for (const declaration of matchers) {

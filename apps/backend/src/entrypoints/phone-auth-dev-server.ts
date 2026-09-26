@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
@@ -1389,6 +1389,73 @@ function writeIdempotencyKeyRequired(response: ServerResponse) {
     status: 400,
     body: { error: "idempotency_key_required" },
   });
+}
+
+const forwardedPaymentCallbackHeaders = [
+  "content-type",
+  "wechatpay-serial",
+  "wechatpay-signature",
+  "wechatpay-timestamp",
+  "wechatpay-nonce",
+  "wechatpay-signature-type",
+];
+
+function forwardPaymentProjectCallback(
+  request: IncomingMessage,
+  response: ServerResponse,
+  target: string,
+) {
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    return writeJson(response, {
+      status: 500,
+      body: { error: "payment_project_callback_invalid" },
+    });
+  }
+  if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
+    return writeJson(response, {
+      status: 500,
+      body: { error: "payment_project_callback_invalid" },
+    });
+  }
+  const transport = targetUrl.protocol === "https:" ? httpsRequest : httpRequest;
+  const headers: Record<string, string> = {};
+  for (const name of forwardedPaymentCallbackHeaders) {
+    const value = request.headers[name];
+    const first = Array.isArray(value) ? value[0] : value;
+    if (first) headers[name] = first;
+  }
+  const upstream = transport(targetUrl, {
+    method: "POST",
+    headers,
+    timeout: 4_000,
+  }, (upstreamResponse) => {
+    const chunks: Buffer[] = [];
+    upstreamResponse.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    upstreamResponse.on("end", () => {
+      if (response.headersSent) return;
+      const statusCode = upstreamResponse.statusCode ?? 502;
+      response.statusCode = statusCode >= 200 && statusCode < 500 ? statusCode : 502;
+      const contentType = upstreamResponse.headers["content-type"];
+      response.setHeader("content-type", Array.isArray(contentType) ? contentType[0] : contentType || "application/json; charset=utf-8");
+      response.end(Buffer.concat(chunks));
+    });
+  });
+  upstream.on("timeout", () => upstream.destroy(new Error("payment_project_callback_timeout")));
+  upstream.on("error", () => {
+    if (!response.headersSent) {
+      writeJson(response, {
+        status: 502,
+        body: { error: "payment_project_callback_failed" },
+      });
+    }
+  });
+  request.pipe(upstream);
+  return undefined;
 }
 
 function singleValueHeaders(
@@ -27164,9 +27231,26 @@ export function createPhoneAuthDevServer(
         request.method === "POST" &&
         pathname.startsWith("/api/payment-provider-callbacks/")
       ) {
-        const provider = decodeURIComponent(
+        const callbackPath = decodeURIComponent(
           pathname.slice("/api/payment-provider-callbacks/".length),
         );
+        const [provider, project, ...extraSegments] = callbackPath.split("/").filter(Boolean);
+        if (project) {
+          if (extraSegments.length > 0 || !isPaymentProvider(provider) || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(project)) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "invalid_payment_provider" },
+            });
+          }
+          const target = runtimeEnv[`PAYMENT_PROJECT_CALLBACK_URL_${project.toUpperCase()}`]?.trim();
+          if (!target) {
+            return writeJson(response, {
+              status: 404,
+              body: { error: "payment_project_not_configured" },
+            });
+          }
+          return forwardPaymentProjectCallback(request, response, target);
+        }
         if (!isPaymentProvider(provider)) {
           return writeJson(response, {
             status: 400,
