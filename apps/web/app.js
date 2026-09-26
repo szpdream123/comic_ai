@@ -408,6 +408,19 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
       : [];
     const providers = { ...(state?.config?.providers ?? {}) };
     const defaultTextModelId = modelCatalog.find((model) => model.category === "text")?.id;
+    const assistantMediaDefaults = {};
+    let cachedModelChoices = {};
+    try {
+      cachedModelChoices = JSON.parse(localStorage.getItem("canvas-model-prefs") ?? "{}") ?? {};
+    } catch { /* A restricted or stale browser cache must not block the catalog. */ }
+    for (const [kind, key] of [["image", "assistantImageModelId"], ["video", "assistantVideoModelId"]]) {
+      if (state?.config?.[key]) continue;
+      const models = [...modelCatalog, ...existingModels].filter((model) => model.category === kind);
+      const cachedValue = String(cachedModelChoices[`ai-${kind}`] ?? "").trim();
+      const selected = models.find((model) => model.id === cachedValue.replace(/^general\//, ""));
+      const modelRef = selected ? `general/${selected.id}` : cachedValue || (models[0] && `general/${models[0].id}`);
+      if (modelRef) assistantMediaDefaults[key] = modelRef;
+    }
     if (modelCatalog.length && backendBaseUrl) {
       providers[backendProviderId] = { name: "Comic AI 后端", protocol: "backend", baseUrl: backendBaseUrl };
     }
@@ -417,6 +430,7 @@ function createAiCanvasRuntimeCatalogBridge(store, context = {}) {
           ...(state?.config ?? {}),
           providers,
           generalModels: [...modelCatalog, ...existingModels],
+          ...assistantMediaDefaults,
           // Chat rendering can show the first model before a persisted
           // assistant selection exists; execution requires that selection.
           ...(!state?.config?.assistantModelId && defaultTextModelId
