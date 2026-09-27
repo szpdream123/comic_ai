@@ -115,7 +115,12 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
   },
   model_prompt_too_long: {
     code: "model_prompt_too_long",
-    displayMessage: "提示词过长，请缩短后重试。",
+    displayMessage: "提示词超过当前模型限制，请使用「AI 精简提示词」或手动修改后再生成。",
+    retryable: false,
+  },
+  model_prompt_adaptation_pending: {
+    code: "model_prompt_adaptation_pending",
+    displayMessage: "提示词正在适配，请稍后重试；原稿已保留。",
     retryable: false,
   },
   model_parameter_invalid: {

@@ -2542,7 +2542,7 @@ describe("episode workbench asset list layout", () => {
         storyboardB.generationState,
       );
       assert.equal(target.dataset.persistedDescription, "分镜 B");
-      assert.equal(counter.textContent, "8 / 3000");
+      assert.equal(counter.textContent, "8 字符 · 原稿");
     }
   });
 
@@ -4362,7 +4362,7 @@ describe("workbench generation payloads and inspectors", () => {
       title: "风格：水墨画",
       "aria-label": "风格：水墨画",
     });
-    assert.equal(characterCounter.textContent, "52 / 5000");
+    assert.equal(characterCounter.textContent, "52 字符");
   });
 
   it("does not duplicate selected storyboard quick reference text when clicked repeatedly", () => {
@@ -9429,6 +9429,44 @@ describe("workbench generation payloads and inspectors", () => {
         .some((entry) => entry.status === "failed"),
       false,
     );
+    const retainedReference = { id: "must-retain", kind: "image", url: "https://example.com/retained.png" };
+    updatedStoryboard.generationState = { firstFrame: retainedReference, quickReferenceItems: [retainedReference] };
+    workbench.ui.prompt = "长度拒绝时不能丢失的原稿";
+    const originalScope = JSON.stringify(["project-target-busy", "episode-target-busy", "storyboard", storyboard.id, "video"]);
+    workbench.ui.promptSimplificationOriginals = { [originalScope]: "精简前必须保留的完整原稿" };
+    workbench.api.createVideoTask = async () => {
+      // The empty handoff composer expires its restore entry before this response.
+      delete workbench.ui.promptSimplificationOriginals[originalScope];
+      throw Object.assign(new Error("提示词超过当前模型限制"), { errorCode: "model_prompt_too_long", status: 400 });
+    };
+    await assert.rejects(generateStoryboardVideos(workbench));
+    assert.equal(workbench.ui.prompt, "长度拒绝时不能丢失的原稿");
+    const restored = workbench.ui.episodeStoryboardMap["episode-target-busy"][0].generationState;
+    assert.equal(restored.firstFrame.id, "must-retain");
+    assert.equal(restored.quickReferenceItems[0].id, "must-retain");
+    assert.equal(workbench.ui.promptSimplificationOriginals[originalScope], "精简前必须保留的完整原稿");
+
+    workbench.api.createVideoTask = async () => {
+      workbench.ui.prompt = "提交失败前开始的新草稿";
+      workbench.ui.promptSimplificationOriginals[originalScope] = "新草稿自己的原稿";
+      throw Object.assign(new Error("network failure"), { status: 503 });
+    };
+    await assert.rejects(generateStoryboardVideos(workbench));
+    assert.equal(workbench.ui.prompt, "提交失败前开始的新草稿");
+    assert.equal(workbench.ui.promptSimplificationOriginals[originalScope], "新草稿自己的原稿");
+
+    const otherScope = JSON.stringify(["project-target-busy", "episode-target-busy", "storyboard", "another-shot", "video"]);
+    workbench.api.createVideoTask = async () => {
+      delete workbench.ui.promptSimplificationOriginals[originalScope];
+      workbench.ui.selectedStoryboardId = "another-shot";
+      workbench.ui.prompt = "另一个分镜正在编辑的草稿";
+      workbench.ui.promptSimplificationOriginals[otherScope] = "另一个分镜的原稿";
+      throw Object.assign(new Error("network failure"), { status: 503 });
+    };
+    await assert.rejects(generateStoryboardVideos(workbench));
+    assert.equal(workbench.ui.prompt, "另一个分镜正在编辑的草稿");
+    assert.equal(workbench.ui.promptSimplificationOriginals[originalScope], undefined);
+    assert.equal(workbench.ui.promptSimplificationOriginals[otherScope], "另一个分镜的原稿");
   });
 
   it("keeps video submission snapshot aligned with the actual configured payload fields", () => {
@@ -13836,7 +13874,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.match(html, /episode-replica-center video-mode storyboard-scope/);
     assert.doesNotMatch(html, /storyboard-image-scope|asset-scope/);
     assert.match(html, /episode-replica-stage-tab active[^>]*data-action="set-video-generation-mode"/);
-    assert.match(html, /episode-replica-prompt video-mode storyboard-scope/);
+    assert.match(html, /episode-replica-prompt has-prompt-actions video-mode storyboard-scope/);
     assert.match(html, /分镜视频文案/);
     assert.match(html, /storyboard-image-ref\.png/);
     assert.doesNotMatch(html, /asset-image-ref\.png/);
@@ -24882,7 +24920,7 @@ describe("production workbench project tab", () => {
     );
     assert.doesNotMatch(html, /episode-replica-stage-nav/);
     assert.doesNotMatch(html, /episode-replica-topbar/);
-    assert.match(html, /episode-replica-prompt video-mode storyboard-scope/);
+    assert.match(html, /episode-replica-prompt has-prompt-actions video-mode storyboard-scope/);
     assert.match(html, /episode-replica-prompt-footer/);
     assert.doesNotMatch(html, /episode-replica-prompt-footer[\s\S]*?data-action="quick-append-selected-asset"/);
     assert.match(html, /<textarea id="video-prompt-input"/);
@@ -31600,7 +31638,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /分镜列表|共 0 条|10条\/页/);
     assert.match(html, /分镜：/);
     assert.match(html, /先上传参考图，输入你的想法，再用@引用素材/);
-    assert.match(html, /0 \/ 5000/);
+    assert.match(html, /data-prompt-character-count>0 字符<\/em>/);
     assert.match(html, /data-action="toggle-storyboard-select-all"[^>]*disabled/);
     assert.match(html, /data-action="open-episode-batch-actions"/);
   });
@@ -49996,6 +50034,24 @@ describe("production workbench project tab", () => {
       workbench.ui.imageGenerationResult?.quickReferenceItems?.find((item) => item.isGenerationStyleReference)?.preview,
       "https://example.com/portrait-style.png",
     );
+    // A late success must not clear the next draft or newly selected references.
+    workbench.ui.prompt = "第二次提交的正文";
+    workbench.ui.assetPromptDraft.prompt = workbench.ui.prompt;
+    workbench.api.createImageGenerationTask = async () => {
+      workbench.ui.prompt = "等待期间新写的正文";
+      workbench.ui.assetPromptDraft.prompt = workbench.ui.prompt;
+      workbench.ui.assetPromptDraft.quickReferenceItems = [{ id: "new-reference", url: "https://example.com/new.png" }];
+      return { taskId: "late-success", status: "succeeded", workflowStatus: "succeeded", result: {} };
+    };
+    await generateAssetImages(workbench);
+    assert.equal(workbench.ui.prompt, "等待期间新写的正文");
+    assert.equal(workbench.ui.assetPromptDraft.quickReferenceItems[0].id, "new-reference");
+    workbench.api.createImageGenerationTask = async () => {
+      throw Object.assign(new Error("提示词超过当前模型限制"), { code: "model_prompt_too_long", status: 400 });
+    };
+    await assert.rejects(generateAssetImages(workbench));
+    assert.equal(workbench.ui.prompt, "等待期间新写的正文");
+    assert.equal(workbench.ui.assetPromptDraft.quickReferenceItems[0].id, "new-reference");
   });
 
   it("requests latest conversation scroll as soon as asset image generation starts", async () => {
@@ -50363,7 +50419,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /class="episode-replica-stage-actions asset-scope"/);
     assert.doesNotMatch(html, /class="episode-replica-task-refs asset-inline"/);
     assert.match(html, /<textarea id="video-prompt-input" placeholder="先上传参考图，输入你的想法，再用@引用素材"><\/textarea>/);
-    assert.match(html, /0 \/ 5000/);
+    assert.match(html, /data-prompt-character-count>0 字符<\/em>/);
     assert.match(html, /placeholder="先上传参考图，输入你的想法，再用@引用素材"/);
   });
 

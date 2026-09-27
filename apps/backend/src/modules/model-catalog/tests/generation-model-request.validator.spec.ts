@@ -9,6 +9,22 @@ import {
 import { findActiveAiModelConfigByCode } from "../ai-model-config.store.ts";
 
 describe("generation model request validator", () => {
+  it("does not mistake token budgets for character limits without the model tokenizer", () => {
+    assert.doesNotThrow(() => validateGenerationModelRequest({
+      kind: "image", modelCode: "token-model",
+      modelConfig: imageModelConfig({ parameterSchema: { prompt: { maxLength: 4, limitUnit: "tokens" } } }),
+      parameters: {}, prompt: "a beautiful landscape",
+    }));
+  });
+
+  it("enforces UTF-8 byte limits instead of counting Chinese characters", () => {
+    assertValidationError(() => validateGenerationModelRequest({
+      kind: "image", modelCode: "byte-model",
+      modelConfig: imageModelConfig({ parameterSchema: { prompt: { maxLength: 5, limitUnit: "bytes" } } }),
+      parameters: {}, prompt: "你好",
+    }), "model_prompt_too_long");
+  });
+
   it("accepts parameters supported by the selected image model schema", () => {
     assert.doesNotThrow(() => {
       validateGenerationModelRequest({

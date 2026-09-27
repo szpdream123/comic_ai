@@ -1,4 +1,5 @@
 import type { AiModelConfigRecord } from "./ai-model-config.store.ts";
+import { resolveGenerationPromptLimit, generationPromptExceedsLimit } from "../../../../web/src/shared/generation-prompt-policy.js";
 
 export class GenerationModelRequestValidationError extends Error {
   constructor(
@@ -267,6 +268,7 @@ function generationTaskModeAliases(mode: string): Set<string> {
 }
 
 function validateGenerationPromptLength(modelConfig: AiModelConfigRecord, prompt: string) {
+  const limit = resolveGenerationPromptLimit(modelConfig);
   const schemaMaxLength = Number(
     modelConfig.parameterSchema.prompt &&
       typeof modelConfig.parameterSchema.prompt === "object" &&
@@ -278,7 +280,7 @@ function validateGenerationPromptLength(modelConfig: AiModelConfigRecord, prompt
   const maxLength = Number.isFinite(schemaMaxLength) && schemaMaxLength > 0
     ? schemaMaxLength
     : limitMaxLength;
-  if (Number.isFinite(maxLength) && maxLength > 0 && [...prompt].length > maxLength) {
+  if (Number.isFinite(maxLength) && maxLength > 0 && generationPromptExceedsLimit(prompt, limit)) {
     throw new GenerationModelRequestValidationError(
       "model_prompt_too_long",
       "Prompt is too long",

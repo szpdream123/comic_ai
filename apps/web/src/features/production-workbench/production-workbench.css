@@ -50353,6 +50353,95 @@ button.asset-generator-task-preview:focus-visible {
   pointer-events: none;
 }
 
+.episode-prompt-actions-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.episode-prompt-actions-toolbar .episode-replica-annotation-bar { width: auto; }
+.episode-prompt-actions-toolbar [hidden] { display: none; }
+.episode-prompt-actions-toolbar button:disabled { opacity: 0.55; cursor: not-allowed; }
+.episode-prompt-actions-toolbar button:focus-visible {
+  outline: 2px solid var(--theme-control-active-border, #b4cdff);
+  outline-offset: 3px;
+}
+.episode-workbench-screen .episode-replica-layout.assets-mode > .episode-replica-center.asset-scope .episode-replica-prompt.has-prompt-actions,
+.episode-workbench-screen .episode-replica-layout.storyboard-mode .episode-replica-prompt.has-prompt-actions {
+  grid-template-rows: auto minmax(0, 1fr) auto auto !important;
+  align-content: stretch !important;
+}
+
+.episode-prompt-count-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  padding: 0.35rem 0.8rem;
+  flex: 0 0 auto;
+}
+
+.episode-replica-textarea:has(> .episode-prompt-count-actions) {
+  display: flex;
+  flex-direction: column;
+}
+.episode-replica-textarea:has(> .episode-prompt-count-actions) > .episode-prompt-editor-host {
+  flex: 1 1 auto;
+  min-height: 3rem;
+}
+
+.episode-replica-textarea .episode-prompt-count-actions em[data-prompt-character-count] {
+  position: static;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.episode-prompt-count-actions [hidden] { display: none; }
+.episode-prompt-count-actions [role="status"] { width: 100%; font-size: 0.8rem; overflow-wrap: anywhere; }
+.episode-prompt-count-actions [role="status"]:empty { display: none; }
+
+.episode-prompt-simplification-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
+  width: min(52rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 1.25rem;
+  color: #f1f2f4;
+  background: #25262b;
+  border: 1px solid #626570;
+  border-radius: 1rem;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 40%);
+}
+.episode-prompt-simplification-dialog h2 { margin: 0 0 0.5rem; font-size: 1.25rem; line-height: 1.4; }
+.episode-prompt-simplification-dialog > p { margin: 0 0 1.25rem; color: #c3c1cc; line-height: 1.6; }
+.episode-prompt-simplification-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.episode-prompt-simplification-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.episode-prompt-simplification-comparison section { min-width: 0; padding: 0.875rem; border: 1px solid #45434f; border-radius: 0.75rem; background: rgb(0 0 0 / 10%); }
+.episode-prompt-simplification-comparison h3 { font-size: 0.9rem; overflow-wrap: anywhere; }
+.episode-prompt-simplification-comparison pre { margin-top: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; max-height: 45vh; overflow: auto; }
+.episode-prompt-simplification-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
+.episode-prompt-simplification-dialog button { color: inherit; background: #353740; border: 1px solid #777b89; padding: 0.6rem 0.9rem; border-radius: 0.5rem; cursor: pointer; }
+.episode-prompt-simplification-dialog .episode-replica-mini { min-height: 44px; font-size: 0.875rem; }
+.episode-prompt-simplification-dialog button:focus-visible { outline: 2px solid #b4cdff; outline-offset: 3px; }
+.episode-prompt-simplification-loading { width: min(28rem, calc(100vw - 2rem)); padding: 2rem 1.5rem; text-align: center; }
+.episode-prompt-simplification-loading > .episode-prompt-simplification-loading-note { margin: 0; color: #aaa6ba; font-size: 0.875rem; }
+.episode-prompt-simplification-spinner { display: inline-block; width: 2rem; height: 2rem; margin-bottom: 1.25rem; border: 3px solid #4b435e; border-top-color: #b3a0ed; border-radius: 50%; animation: episode-prompt-simplification-spin 0.85s linear infinite; }
+@keyframes episode-prompt-simplification-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .episode-prompt-simplification-spinner { animation: none; }
+}
+@media (max-width: 600px) {
+  .episode-prompt-simplification-comparison { grid-template-columns: minmax(0, 1fr); }
+  .episode-prompt-simplification-comparison pre { max-height: 25vh; }
+}
+
 .workbench-body[data-workbench-theme="daylight"] .episode-prompt-editor-host {
   border-color: rgba(28, 92, 139, 0.13);
   background: rgba(255, 255, 255, 0.88);

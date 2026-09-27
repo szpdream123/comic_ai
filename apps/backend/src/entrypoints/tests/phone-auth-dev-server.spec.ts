@@ -28,6 +28,8 @@ import {
 } from "../phone-auth-dev-server.ts";
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
+import { findActiveAiModelConfigByCode } from "../../modules/model-catalog/ai-model-config.store.ts";
+import { composeGenerationPrompt } from "../../../../web/src/shared/generation-prompt-policy.js";
 import { GlobalAiOpcVideoProviderAdapter } from "../../modules/model-gateway/globalaiopc-video.provider-adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
 import {
@@ -13947,6 +13949,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
   it("returns configured model validation errors instead of internal errors", async () => {
     const db = await createMigratedTestDb();
+    // Ordinary generation must not call a text model. Only the explicit action may.
+    const compact = "人物抬头后转身，镜头缓慢推进。";
+    let calls = 0;
+    await db.query("UPDATE ai_model_configs SET status = 'disabled' WHERE media_type = 'text'");
     await db.query(
       `
         UPDATE ai_model_configs
@@ -13959,6 +13965,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
     const server = createPhoneAuthDevServer({
       db,
+      textChatGateway: { completeJson: async () => ++calls % 2 === 1
+        ? JSON.stringify({ prompt: compact }) : JSON.stringify({ equivalent: true, lost: [], added: [] }) },
+      storageRuntime: { adapter: { async createSignedReadUrl() { throw new Error("Unexpected storage read in prompt validation test"); } } as never },
       repairScheduler: { enabled: false },
     });
 
@@ -14029,6 +14038,114 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(imageTaskResponse.status, 400);
       assert.equal(imageTaskEnvelope.errorCode, "model_prompt_too_long");
       assert.notEqual(imageTaskEnvelope.errorCode, "internal_error");
+      const localFailure = await db.query(`
+        SELECT logs.status, logs.request_body_json, requests.external_submission_started_at
+        FROM user_model_request_logs logs
+        JOIN provider_requests requests ON requests.id = logs.provider_request_id
+        WHERE logs.user_id=$1 AND logs.request_format='generation_prompt_validation'
+      `, [userId]);
+      assert.equal(localFailure.rows.length, 1);
+      assert.equal(localFailure.rows[0].status, "failed");
+      assert.equal(localFailure.rows[0].external_submission_started_at, null);
+      assert.equal(localFailure.rows[0].request_body_json.limit.maximum, 4);
+      assert.equal(Number((await db.query("SELECT count(*) FROM credit_reservations WHERE user_id=$1 AND source_type='generation_task'", [userId])).rows[0].count), 0);
+      assert.equal(calls, 0);
+      // Suggestions are free and do not create tasks. Generation still rejects
+      // the original until the user explicitly submits their chosen text.
+      await db.query(`UPDATE ai_model_configs SET parameter_schema_json=jsonb_set(parameter_schema_json,
+        '{prompt,maxLength}', '60'::jsonb) WHERE model_code='global-ai-opc-gpt-image-2'`);
+      const model = await findActiveAiModelConfigByCode(db, "global-ai-opc-gpt-image-2");
+      assert.ok(model);
+      // The editor body fits; only the private multiline style makes it overflow.
+      const styleSkillId = randomUUID();
+      const styleContent = "动漫风格\n" + "保持柔光".repeat(6);
+      await db.query(`INSERT INTO prompts (id, prompt_category, name, summary, prompt_content, status,
+        is_official, is_published, price_credits, published_at)
+        VALUES ($1, 'image_style', '预算回归风格', '', $2, 'enabled', true, true, 0, NOW())`, [styleSkillId, styleContent]);
+      const original = compact.repeat(3);
+      const requestKey = `adapted-image-${idempotencySuffix}`;
+      const body = { targetType: "episode", targetId: episodeId, prompt: original, model: model.modelCode, skillId: styleSkillId, parameters: {} };
+      const headers = { "content-type": "application/json", "idempotency-key": requestKey, cookie };
+      const stale = await fetchEpisodeImageTask(server.origin, episodeId, {
+        method: "POST", headers, body: JSON.stringify({ ...body, expectedCredits: -1 }),
+      });
+      assert.equal((await stale.json()).errorCode, "generation_quote_stale");
+      assert.equal(Number((await db.query("SELECT count(*) FROM provider_requests WHERE request_key LIKE $1", [`%:${requestKey}:%`])).rows[0].count), 0);
+      const simplifyUrl = `${server.origin}/api/episodes/${episodeId}/generation/prompt-simplification`;
+      const unauthorized = await fetch(simplifyUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      assert.equal(unauthorized.status, 401);
+      const otherCookie = await login(server.origin, "13800138027");
+      const forbidden = await fetch(simplifyUrl, { method: "POST", headers: { ...headers, cookie: otherCookie }, body: JSON.stringify(body) });
+      assert.ok([403, 404].includes(forbidden.status));
+      assert.equal(calls, 0);
+      const usageBeforeInspect = Number((await db.query("SELECT usage_count FROM prompts WHERE id=$1", [styleSkillId])).rows[0].usage_count);
+      const inspected = await fetch(simplifyUrl, { method: "POST", headers, body: JSON.stringify({ ...body,
+        inspectOnly: true, parameters: { promptComposition: { style: "伪造预算" } } }) });
+      const inspectedBody = await inspected.json();
+      assert.equal(inspected.status, 200, JSON.stringify(inspectedBody));
+      assert.ok(inspectedBody.data.promptBudget.length > 60);
+      assert.doesNotMatch(JSON.stringify(inspectedBody), /保持柔光|promptComposition/);
+      assert.equal(Number((await db.query("SELECT usage_count FROM prompts WHERE id=$1", [styleSkillId])).rows[0].usage_count), usageBeforeInspect,
+        "inspection must not record skill use");
+      assert.equal(calls, 0);
+      const suggestionResponse = await fetch(simplifyUrl, { method: "POST", headers, body: JSON.stringify(body) });
+      const suggestion = await suggestionResponse.json();
+      assert.equal(suggestionResponse.status, 200, JSON.stringify(suggestion));
+      assert.equal(suggestion.data.originalPrompt, original);
+      assert.equal(suggestion.data.prompt, compact);
+      const duplicateSuggestion = await fetch(simplifyUrl, { method: "POST", headers, body: JSON.stringify(body) });
+      assert.equal(duplicateSuggestion.status, 200);
+      assert.deepEqual((await duplicateSuggestion.json()).data, suggestion.data);
+      assert.equal(calls, 2);
+      assert.equal(Number((await db.query("SELECT count(*) FROM credit_reservations WHERE user_id=$1 AND source_type='generation_task'", [userId])).rows[0].count), 0);
+      assert.equal(Number((await db.query("SELECT count(*) FROM tasks WHERE input_snapshot_json->>'targetId'=$1", [episodeId])).rows[0].count), 0);
+      const unchosen = await fetchEpisodeImageTask(server.origin, episodeId, { method: "POST", headers, body: JSON.stringify(body) });
+      assert.equal(unchosen.status, 400);
+      assert.equal((await unchosen.json()).errorCode, "model_prompt_too_long");
+      assert.equal(calls, 2);
+      const chosenBody = { ...body, prompt: compact };
+      const accepted = await fetchEpisodeImageTask(server.origin, episodeId, { method: "POST", headers, body: JSON.stringify(chosenBody) });
+      const acceptedBody = await accepted.json();
+      assert.equal(accepted.status, 200, JSON.stringify(acceptedBody));
+      const task = (await db.query("SELECT id, input_snapshot_json FROM tasks WHERE input_snapshot_json->>'targetId'=$1", [episodeId])).rows[0];
+      assert.ok(task);
+      assert.equal(task.input_snapshot_json.prompt, composeGenerationPrompt(compact, { mediaType: "image", style: styleContent }));
+      assert.ok([...task.input_snapshot_json.prompt].length <= 60);
+      const replay = await fetchEpisodeImageTask(server.origin, episodeId, { method: "POST", headers, body: JSON.stringify(chosenBody) });
+      assert.equal(replay.status, 200);
+      assert.deepEqual((await replay.json()).data, acceptedBody.data);
+      assert.equal(Number((await db.query("SELECT count(*) FROM tasks WHERE input_snapshot_json->>'targetId'=$1", [episodeId])).rows[0].count), 1);
+      assert.equal(calls, 2);
+      // Exercise the video route as well: the whole multiline style must survive
+      // simplification budgeting and be identical in the accepted task payload.
+      const videoModels = await db.query(`UPDATE ai_model_configs SET status='active',
+        task_modes_json='[]'::jsonb, capabilities_json='{}'::jsonb,
+        parameter_schema_json='{"prompt":{"type":"string","maxLength":60}}'::jsonb,
+        limits_json='{}'::jsonb, default_params_json='{}'::jsonb, pricing_json='{"baseCredits":20}'::jsonb
+        WHERE id=(SELECT id FROM ai_model_configs WHERE media_type='video' ORDER BY model_code LIMIT 1) RETURNING model_code`);
+      assert.equal(videoModels.rows.length, 1);
+      const videoBody = { targetType: "episode", targetId: episodeId, prompt: original, model: videoModels.rows[0].model_code,
+        imageStyleSkillId: styleSkillId, parameters: { durationSec: 5 } };
+      const videoHeaders = { ...headers, "idempotency-key": `${requestKey}-video` };
+      const videoInspection = await fetch(simplifyUrl, { method: "POST", headers: videoHeaders,
+        body: JSON.stringify({ ...videoBody, inspectOnly: true }) });
+      const videoInspectionBody = await videoInspection.json();
+      assert.equal(videoInspection.status, 200, JSON.stringify(videoInspectionBody));
+      const videoBudget = videoInspectionBody.data.promptBudget;
+      assert.equal(videoBudget.length, [...composeGenerationPrompt(original, { mediaType: "video", style: styleContent })].length);
+      const videoSuggestionResponse = await fetch(simplifyUrl, { method: "POST", headers: videoHeaders, body: JSON.stringify(videoBody) });
+      const videoSuggestion = await videoSuggestionResponse.json();
+      assert.equal(videoSuggestionResponse.status, 200, JSON.stringify(videoSuggestion));
+      assert.equal(videoSuggestion.data.prompt, compact);
+      assert.ok(videoSuggestion.data.promptBudget.length <= 60);
+      const videoAccepted = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/video-tasks`, {
+        method: "POST", headers: videoHeaders, body: JSON.stringify({ ...videoBody, prompt: videoSuggestion.data.prompt }),
+      });
+      const videoTaskBody = await videoAccepted.json();
+      assert.equal(videoAccepted.status, 200, JSON.stringify(videoTaskBody));
+      const videoTask = (await db.query("SELECT input_snapshot_json FROM tasks WHERE id=$1", [videoTaskBody.data.taskId])).rows[0];
+      assert.equal(videoTask.input_snapshot_json.prompt, composeGenerationPrompt(compact, { mediaType: "video", style: styleContent }));
+      assert.equal(calls, 4, "submitting an adopted image/video draft never invokes automatic simplification");
     } finally {
       await server.close();
     }

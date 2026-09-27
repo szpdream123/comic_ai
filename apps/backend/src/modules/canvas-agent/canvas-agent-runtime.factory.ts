@@ -7,6 +7,7 @@ import { reserveCreditsInTransaction } from "../credit-billing/credit-ledger.ser
 import { findActiveAiModelConfigByCode, findActiveAiModelDispatchPolicyByModelCode } from "../model-catalog/ai-model-config.store.ts";
 import { resolveGenerationModelExecution } from "../model-catalog/generation-model-execution.resolver.ts";
 import { validateGenerationModelRequest } from "../model-catalog/generation-model-request.validator.ts";
+import { normalizeProviderPrompt, prepareGenerationPrompt } from "../model-gateway/generation-prompt-preparation.service.ts";
 import { createGenerationModelConfigSnapshotForTask, createGenerationProviderRouteIdentity } from "../model-gateway/generation-model-config-snapshot.ts";
 import { appendGenerationTaskCreatedOutboxEvent } from "../model-gateway/generation-outbox.service.ts";
 import { loadGenerationQueueConfig } from "../model-gateway/generation-queue.config.ts";
@@ -408,7 +409,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
           taskId: existing.id,
           nodeKey: existingNodeKey,
           modelCode: readString(existingSnapshot.model),
-          prompt: readString(existingSnapshot.prompt ?? existingSnapshot.text),
+          prompt: readString(existingSnapshot.originalPrompt ?? existingSnapshot.prompt ?? existingSnapshot.text),
           now: this.deps.now(),
         });
       }
@@ -435,8 +436,8 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     });
     if (!model) throw new Error("canvas_agent_generation_model_not_configured");
     const executionParameters = execution.parameters;
-    const prompt = readString(generationRequest.prompt ?? generationRequest.text ?? generationRequest.motionPrompt);
-    validateGenerationModelRequest({ kind: input.kind, modelCode, modelConfig: model, parameters: executionParameters, prompt });
+    let prompt = readString(generationRequest.prompt ?? generationRequest.text ?? generationRequest.motionPrompt);
+    validateGenerationModelRequest({ kind: input.kind, modelCode, modelConfig: model, parameters: executionParameters, prompt: "" });
     if (!queueConfig.outboxDispatcherEnabled || !queueConfig.workersEnabled) {
       throw new Error("canvas_agent_generation_queue_unavailable");
     }
@@ -463,6 +464,15 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     )) {
       throw new Error("generation_quote_stale");
     }
+    const promptPreparation = await prepareGenerationPrompt(this.deps.db, {
+      model, prompt, userId: input.ownerUserId, canvasProjectId: input.canvasId,
+      requestKey: input.idempotencyKey, env: this.deps.env, now,
+      parameters: executionParameters, firstFrameUrl: readString(generationRequest.firstFrameUrl),
+      allowRewrite: false,
+    });
+    prompt = promptPreparation.prompt;
+    validateGenerationModelRequest({ kind: input.kind, modelCode, modelConfig: model, parameters: executionParameters,
+      prompt: normalizeProviderPrompt(model, prompt, executionParameters, readString(generationRequest.firstFrameUrl)) });
     const snapshot = await createGenerationModelConfigSnapshotForTask(this.deps.db, model);
     const generationTaskId = randomUUID();
     const { nodeKey, scopeTargetId } = resolveCanvasAgentGenerationTargets(input);
@@ -472,7 +482,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
         taskId: generationTaskId,
         nodeKey,
         modelCode,
-        prompt,
+        prompt: promptPreparation.originalPrompt,
         now,
       });
     }
@@ -492,6 +502,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
         ...(!detached ? { canvasNodeId: nodeKey } : {}),
         prompt,
         text: input.kind === "audio" ? prompt : undefined,
+        ...(promptPreparation.method !== "unchanged" ? { originalPrompt: promptPreparation.originalPrompt } : {}),
         model: modelCode,
         parameters: executionParameters,
         sourceSurface: "canvas_agent",

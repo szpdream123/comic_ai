@@ -14,6 +14,8 @@ import {
   WORKBENCH_THEME_OPTIONS,
 } from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&canvas-inline-prompt-editor=1&skill-media-upload=8";
 import { buildProjectCreateRequest } from "./project-create-request.js";
+import { composeGenerationPrompt, formatGenerationPromptCount } from "../../shared/generation-prompt-policy.js";
+import { canSimplifyPrompt, createPromptSimplificationController, previewSimplifiedPrompt, withPromptSimplificationLoading } from "./episode-prompt-simplification.js";
 import { normalizeReferenceMediaUrl } from "./reference-media-identity.js";
 import {
   advanceFirstLoginGuide,
@@ -5713,6 +5715,7 @@ export async function initProductionWorkbench({
       const scrollTop = Number(target.scrollTop ?? 0);
       const beforeMentionUi = snapshotPromptMentionUi(workbench);
       setCurrentScopePrompt(workbench, target.value);
+      syncPromptSimplificationControls(workbench);
       updatePromptMentionState(workbench, target.value, selectionStart);
       collectEpisodeWorkbenchEvent(workbench, "prompt.input", {
         value: target.value,
@@ -9354,11 +9357,9 @@ function appendImageGenerationStylePrompt(prompt, style, referenceName = "") {
   if (!stylePrompt) {
     return baseLines.filter(Boolean).join("\n") || null;
   }
-  const referenceInstruction = referenceName ? `参考【@${referenceName}】不要出现参考图内容，` : "";
-  const punctuation = /[。！？.!?]$/u.test(stylePrompt) ? "" : "。";
-  return [...baseLines, `图片风格：${referenceInstruction}${stylePrompt}${punctuation}`]
-    .filter(Boolean)
-    .join("\n");
+  return composeGenerationPrompt(baseLines.filter(Boolean).join("\n"), {
+    mediaType: "image", style: stylePrompt, styleReferenceName: referenceName,
+  });
 }
 
 function isAutomaticImageStyleReference(item) {
@@ -13413,8 +13414,9 @@ function syncEpisodeWorkbenchPromptContentDom(workbench, currentContent, nextCon
   }
   const counter = currentContent.querySelector?.("[data-prompt-character-count]") ?? null;
   if (counter) {
-    counter.textContent = `${[...prompt].length} / 5000`;
+    counter.textContent = formatWorkbenchPromptCount(workbench, prompt);
   }
+  syncPromptSimplificationControls(workbench);
 }
 
 function syncEpisodeWorkbenchProjectStyleControlDom(currentPromptDock, nextPromptDock) {
@@ -13467,7 +13469,7 @@ function syncEpisodeWorkbenchGenerationStyleDom(workbench, style) {
   }
   const counter = root?.querySelector?.("[data-prompt-character-count]") ?? null;
   if (counter) {
-    counter.textContent = `${[...prompt].length} / 5000`;
+    counter.textContent = formatWorkbenchPromptCount(workbench, prompt);
   }
 }
 
@@ -13522,6 +13524,7 @@ function loadEpisodePromptEditorModule() {
 }
 
 async function syncEpisodePromptEditor(workbench, options = {}) {
+  syncPromptSimplificationControls(workbench);
   const editorHost = workbench?.root?.querySelector?.("[data-prompt-editor]") ?? null;
   if (!editorHost || workbench.ui.projectPanelMode !== "episode-workbench") {
     disposeEpisodePromptEditor(workbench);
@@ -13556,9 +13559,10 @@ async function syncEpisodePromptEditor(workbench, options = {}) {
       ),
       onChange({ initial, length, prompt }) {
         setCurrentScopePrompt(workbench, prompt);
+        syncPromptSimplificationControls(workbench);
         const counter = editorHost.closest?.(".episode-replica-textarea")?.querySelector?.("[data-prompt-character-count]");
         if (counter) {
-          counter.textContent = `${length} / 5000`;
+          counter.textContent = formatWorkbenchPromptCount(workbench, prompt);
         }
         if (!initial) {
           collectEpisodeWorkbenchEvent(workbench, "prompt.input", {
@@ -14735,6 +14739,13 @@ function syncToolboxPromptReverseKeyFrameLightbox(workbench, target, index = -1)
 
 export async function handleProductionWorkbenchAction(workbench, target) {
   let action = target.dataset.action;
+  if (action === "simplify-generation-prompt" || action === "restore-generation-prompt") {
+    syncPromptInputFromDom(workbench);
+    const controller = getPromptSimplificationController(workbench);
+    if (action === "simplify-generation-prompt") await controller.start();
+    else controller.restore();
+    return;
+  }
   const firstLoginTargetKey = String(
     target.dataset.firstLoginTarget ??
     target.closest?.("[data-first-login-target]")?.dataset?.firstLoginTarget ??
@@ -30257,6 +30268,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "generate-images") {
     syncPromptInputFromDom(workbench);
+    if (blockOverflowPromptSubmission(workbench)) return;
     if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
       const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
       if (!selectionContext.selectedAsset?.id) {
@@ -30300,6 +30312,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "generate-videos") {
     syncPromptInputFromDom(workbench);
+    if (blockOverflowPromptSubmission(workbench)) return;
     if (workbench.ui.episodeMediaMode === "lip-sync") {
       const lipSyncValidation = validateLipSyncGeneration(workbench);
       if (!lipSyncValidation.ok) {
@@ -44132,6 +44145,172 @@ function applyEpisodeGenerationTasksForWorkbench(workbench, episodeId, tasks = [
   }
 }
 
+function formatWorkbenchPromptCount(workbench, prompt) {
+  return formatGenerationPromptCount(prompt, getPromptSimplificationSnapshot(workbench).model);
+}
+
+function resolveWorkbenchPromptModel(workbench) {
+  const mediaMode = workbench.ui.episodeMediaMode;
+  const isVideo = mediaMode === "video" || mediaMode === "lip-sync";
+  const mode = mediaMode === "lip-sync" ? "lip-sync" : isVideo
+    ? (workbench.ui.videoGenerationMode ?? "reference-video")
+    : (workbench.ui.imageGenerationMode ?? "single-image");
+  const code = isVideo ? resolveConfiguredVideoModelCode(workbench, mode, "")
+    : resolveConfiguredImageModelCode(workbench, mode, "");
+  return findConfiguredGenerationModel(workbench, code);
+}
+
+function getPromptSimplificationSnapshot(workbench) {
+  const configuredModel = resolveWorkbenchPromptModel(workbench);
+  const assets = isAssetScope(workbench);
+  const generationState = getCurrentPromptGenerationState(workbench);
+  const targetId = assets
+    ? workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? ""
+    : workbench.ui.selectedStoryboardId ?? "";
+  const mediaMode = workbench.ui.episodeMediaMode ?? "image";
+  const payload = mediaMode === "video" ? buildVideoGenerationPayload(workbench)
+    : mediaMode === "image" ? buildImageGenerationPayload(workbench) : {};
+  const generationSelection = {
+    target: { kind: assets ? "asset" : "storyboard" },
+    imageStyleCode: payload.imageStyleCode,
+    imageStyleSkillId: payload.imageStyleSkillId,
+    skillId: payload.skillId,
+    storyboardPrompt: payload.storyboardPrompt,
+  };
+  // The payload builder owns style selection and reference ordering. Budget the
+  // same style locally while the server resolves any private skill/template.
+  const submissionPrompt = String(payload.prompt ?? payload.promptOverride ?? getCurrentScopePrompt(workbench) ?? "");
+  const styleHeader = mediaMode === "video" ? "视频风格：" : "图片风格：";
+  const styleStart = submissionPrompt.startsWith(styleHeader) ? 0 : submissionPrompt.lastIndexOf(`\n${styleHeader}`) + 1;
+  const styleLine = submissionPrompt.slice(styleStart).startsWith(styleHeader) ? submissionPrompt.slice(styleStart) : "";
+  const reference = styleLine?.match(/^图片风格：参考【@([^】]+)】不要出现参考图内容，/u);
+  const localComposition = { mediaType: mediaMode,
+    style: styleLine ? styleLine.slice(reference ? reference[0].length : 5) : "",
+    styleReferenceName: reference?.[1] ?? "", prefixes: [payload.storyboardPrompt].filter(Boolean) };
+  const compositionKey = JSON.stringify([workbench.ui.selectedEpisodeId, configuredModel?.modelCode, generationSelection,
+    payload.parameters, localComposition, getCurrentScopePrompt(workbench)]);
+  const resolved = workbench.promptCompositionCache;
+  const model = configuredModel ? { ...configuredModel, promptComposition: localComposition,
+    ...(resolved?.key === compositionKey && resolved.value ? { promptBudget: resolved.value } : {}) } : configuredModel;
+  return {
+    compositionKey,
+    submissionPrompt,
+    generationSelection,
+    promptStyle: { style: localComposition.style, styleReferenceName: localComposition.styleReferenceName },
+    scope: JSON.stringify([workbench.state?.project?.id, workbench.ui.selectedEpisodeId, assets ? "assets" : "storyboard", targetId, mediaMode]),
+    episodeId: workbench.ui.selectedEpisodeId,
+    mediaMode,
+    mode: mediaMode === "video" ? workbench.ui.videoGenerationMode : workbench.ui.imageGenerationMode,
+    model,
+    prompt: getCurrentScopePrompt(workbench),
+    parameters: {
+      ...(model ? configuredGenerationParametersForModel(workbench, model.modelCode) : {}),
+      ...payload.parameters,
+      mode: mediaMode === "video" ? workbench.ui.videoGenerationMode : workbench.ui.imageGenerationMode,
+      quickReferences: payload.parameters?.quickReferences ?? generationState.quickReferenceItems ?? [],
+      mentionReferences: generationState.mentionReferences ?? [],
+      referenceUploads: generationState.referenceUploads ?? [],
+      firstFrame: generationState.firstFrame ?? null,
+      lastFrame: generationState.lastFrame ?? null,
+    },
+    firstFrameUrl: resolveGenerationReferenceUrl(generationState.firstFrame),
+  };
+}
+
+function getPromptSimplificationController(workbench) {
+  if (!workbench.promptSimplificationController) {
+    workbench.promptSimplificationController = createPromptSimplificationController({
+      getSnapshot: () => getPromptSimplificationSnapshot(workbench),
+      request: (...args) => withPromptSimplificationLoading(() => workbench.api.simplifyGenerationPrompt(...args)),
+      preview: previewSimplifiedPrompt,
+      getOriginal: (scope) => workbench.ui.promptSimplificationOriginals?.[scope],
+      saveOriginal: (scope, prompt) => {
+        workbench.ui.promptSimplificationOriginals = { ...(workbench.ui.promptSimplificationOriginals ?? {}), [scope]: prompt };
+        persistWorkbenchState(workbench);
+      },
+      apply: (prompt, promptBudget) => {
+        setCurrentScopePrompt(workbench, prompt);
+        if (promptBudget) {
+          workbench.promptCompositionCache = { key: getPromptSimplificationSnapshot(workbench).compositionKey,
+            value: promptBudget, settled: true };
+        }
+        workbench.ui.validationMessage = "";
+        persistWorkbenchState(workbench);
+        renderEpisodeWorkbenchPromptDockOnly(workbench);
+      },
+      notify: (message) => {
+        if (!message) return;
+        showWorkbenchToast(workbench, message, {
+          tone: message.startsWith("精简失败") ? "error" : message.startsWith("正在") ? "warning" : "success",
+        });
+        syncWorkbenchToastOnly(workbench);
+      },
+      changed: () => syncPromptSimplificationControls(workbench),
+    });
+  }
+  return workbench.promptSimplificationController;
+}
+
+function syncPromptSimplificationControls(workbench) {
+  const snapshot = getPromptSimplificationSnapshot(workbench);
+  if (["image", "video"].includes(snapshot.mediaMode) && snapshot.episodeId && snapshot.model
+    && typeof workbench.api?.simplifyGenerationPrompt === "function"
+    && workbench.promptCompositionCache?.key !== snapshot.compositionKey) {
+    const cache = { key: snapshot.compositionKey, value: null, settled: false };
+    workbench.promptCompositionCache = cache;
+    clearTimeout(workbench.promptCompositionTimer);
+    workbench.promptCompositionTimer = setTimeout(() => { void workbench.api.simplifyGenerationPrompt(snapshot.episodeId, {
+      ...snapshot.generationSelection, model: snapshot.model.modelCode, inspectOnly: true,
+      prompt: snapshot.prompt, submissionPrompt: snapshot.submissionPrompt,
+      parameters: snapshot.parameters, firstFrameUrl: snapshot.firstFrameUrl,
+    }, { idempotencyKey: globalThis.crypto.randomUUID() }).then((response) => {
+      if (workbench.promptCompositionCache !== cache) return;
+      cache.value = (response?.data ?? response)?.promptBudget ?? null;
+      cache.settled = true;
+      syncPromptSimplificationControls(workbench);
+    }).catch(() => {
+      if (workbench.promptCompositionCache !== cache) return;
+      cache.settled = true;
+      syncPromptSimplificationControls(workbench);
+      // Final submission and simplification still resolve and validate server-side.
+    }); }, 250);
+  }
+  const controller = workbench.promptSimplificationController
+    ?? (Object.values(workbench.ui.promptSimplificationOriginals ?? {}).some((prompt) => typeof prompt === "string")
+      ? getPromptSimplificationController(workbench) : null);
+  controller?.observe();
+  const root = workbench.root;
+  const button = root?.querySelector?.('[data-action="simplify-generation-prompt"]');
+  if (button) {
+    button.hidden = false;
+    button.disabled = Boolean(controller?.pending)
+      || (workbench.promptCompositionCache?.key === snapshot.compositionKey && workbench.promptCompositionCache?.settled === false)
+      || !canSimplifyPrompt(snapshot);
+    button.title = canSimplifyPrompt(snapshot) ? "精简后预览，确认后应用" : "提示词超过当前模型上限时可精简";
+    button.textContent = controller?.pending ? "正在精简…" : "AI 精简提示词";
+  }
+  const restore = root?.querySelector?.('[data-action="restore-generation-prompt"]');
+  if (restore) {
+    restore.hidden = typeof workbench.ui.promptSimplificationOriginals?.[snapshot.scope] !== "string";
+    restore.disabled = Boolean(controller?.pending);
+  }
+  const counter = root?.querySelector?.("[data-prompt-character-count]");
+  if (counter) counter.textContent = formatWorkbenchPromptCount(workbench, snapshot.prompt);
+}
+
+function blockOverflowPromptSubmission(workbench) {
+  const snapshot = getPromptSimplificationSnapshot(workbench);
+  if (!canSimplifyPrompt(snapshot)) return false;
+  workbench.ui.validationMessage = "";
+  const validation = workbench.root?.querySelector?.(".episode-replica-prompt .episode-replica-validation");
+  if (validation) validation.textContent = "";
+  showWorkbenchToast(workbench, "提示词超过当前模型上限，请使用 AI 精简提示词或手动修改后再生成。", { tone: "warning" });
+  syncWorkbenchToastOnly(workbench);
+  syncPromptSimplificationControls(workbench);
+  workbench.root?.querySelector?.('[data-action="simplify-generation-prompt"]')?.focus?.();
+  return true;
+}
+
 function resolveConfiguredVideoModelCode(workbench, mode, fallback) {
   const config = workbench.ui.episodeGenerationConfig ?? {};
   const normalizedMode = mode || "reference-video";
@@ -50766,10 +50945,7 @@ function appendStoryboardVideoStylePrompt(workbench, prompt, fallbackStylePrompt
   if (!stylePrompt) {
     return basePrompt;
   }
-  const contentLines = basePrompt
-    .split(/\r?\n/u)
-    .filter((line) => !/^\s*视频风格：/u.test(line));
-  return [...contentLines, `视频风格：${stylePrompt}`].filter(Boolean).join("\n");
+  return composeGenerationPrompt(basePrompt, { mediaType: "video", style: stylePrompt });
 }
 
 function collectStoryboardMentionEntries(description) {
@@ -51208,6 +51384,10 @@ function clearStoryboardGenerationComposerAfterSubmit(workbench, storyboardId, l
 function captureStoryboardGenerationComposerDraft(workbench, storyboard) {
   const generationState = storyboard?.generationState ?? createEmptyGenerationState();
   const prompt = String(getCurrentScopePrompt(workbench) ?? "");
+  const promptSimplificationScope = JSON.stringify([
+    workbench.state?.project?.id, workbench.ui.selectedEpisodeId, "storyboard", storyboard?.id ?? "",
+    workbench.ui.episodeMediaMode ?? "image",
+  ]);
   const draft = {
     prompt,
     context: {
@@ -51229,6 +51409,10 @@ function captureStoryboardGenerationComposerDraft(workbench, storyboard) {
   };
   return {
     ...draft,
+    promptSimplificationOriginal: {
+      scope: promptSimplificationScope,
+      prompt: workbench.ui.promptSimplificationOriginals?.[promptSimplificationScope],
+    },
     fingerprint: createStoryboardGenerationComposerDraftFingerprint(draft),
   };
 }
@@ -51275,6 +51459,13 @@ function restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, storyb
   workbench.ui.episodeWorkbenchAttachments = draft.attachmentItems;
   workbench.ui.episodeWorkbenchSelectedAttachmentIds = draft.selectedAttachmentIds;
   workbench.ui.lipSyncAudioItems = draft.lipSyncAudioItems;
+  if (typeof draft.promptSimplificationOriginal?.prompt === "string") {
+    workbench.ui.promptSimplificationOriginals = {
+      ...(workbench.ui.promptSimplificationOriginals ?? {}),
+      [draft.promptSimplificationOriginal.scope]: draft.promptSimplificationOriginal.prompt,
+    };
+    persistWorkbenchState(workbench);
+  }
 }
 
 function restoreStoryboardGenerationComposerAfterSubmitFailureIfUnchanged(
@@ -51526,13 +51717,15 @@ export async function generateStoryboardVideos(workbench) {
     } catch {
       // Conversation history is not a gate for the model request.
     }
-    clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
-    clearedComposerDraft = captureStoryboardGenerationComposerDraft(
-      workbench,
-      getActiveStoryboards(workbench).find((item) => item.id === selectedStoryboard.id) ?? null,
-    );
-    renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
-    syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
+    if (isStoryboardGenerationComposerDraftUnchanged(workbench, selectedStoryboard.id, composerDraft)) {
+      clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
+      clearedComposerDraft = captureStoryboardGenerationComposerDraft(
+        workbench,
+        getActiveStoryboards(workbench).find((item) => item.id === selectedStoryboard.id) ?? null,
+      );
+      renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+      syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
+    }
     collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
       mediaKind: "video",
       payload,
@@ -54842,6 +55035,12 @@ export async function generateAssetImages(workbench) {
   }
 
   const submission = createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, "image");
+  const currentDraftFingerprint = () => JSON.stringify([
+    workbench.ui.selectedEpisodeId, workbench.ui.selectedEpisodeAssetId, workbench.ui.selectedEpisodeCardId,
+    workbench.ui.museScopeMode, workbench.ui.episodeMediaMode, getCurrentScopePrompt(workbench), workbench.ui.assetPromptDraft,
+  ]);
+  const submittedDraftFingerprint = currentDraftFingerprint();
+  const submittedPayload = buildImageGenerationPayload(workbench);
   if (typeof workbench.api?.createImageGenerationTask === "function") {
     stopGenerationPolling(workbench);
     workbench.ui.generationPollingActive = true;
@@ -54875,7 +55074,7 @@ export async function generateAssetImages(workbench) {
       // Conversation history is not a gate for the model request.
     }
 
-    const payload = buildImageGenerationPayload(workbench);
+    const payload = submittedPayload;
     collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
       mediaKind: "image",
       payload: {
@@ -54953,14 +55152,16 @@ export async function generateAssetImages(workbench) {
       ...(workbench.ui.episodeBatchResults ?? {}),
       [asset.id]: submittedResult,
     };
-    setCurrentScopePrompt(workbench, "");
-    workbench.ui.assetPromptDraft = {
-      ...(workbench.ui.assetPromptDraft ?? {}),
-      scopeMode: "assets",
-      prompt: "",
-      quickReferenceItems: [],
-      mentionReferences: [],
-    };
+    if (currentDraftFingerprint() === submittedDraftFingerprint) {
+      setCurrentScopePrompt(workbench, "");
+      workbench.ui.assetPromptDraft = {
+        ...(workbench.ui.assetPromptDraft ?? {}),
+        scopeMode: "assets",
+        prompt: "",
+        quickReferenceItems: [],
+        mentionReferences: [],
+      };
+    }
     workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
     if (Number.isFinite(Number(result?.creditBalance))) {
       workbench.ui.creditBalance = Number(result.creditBalance);
@@ -59295,6 +59496,10 @@ function hydratePersistedWorkbenchState(workbench) {
     return;
   }
 
+  if (persisted.promptSimplificationOriginals && typeof persisted.promptSimplificationOriginals === "object") {
+    workbench.ui.promptSimplificationOriginals = persisted.promptSimplificationOriginals;
+  }
+
   if (Array.isArray(persisted.storyboards)) {
     workbench.ui.storyboards = persisted.storyboards;
   }
@@ -59851,6 +60056,7 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     : resolvePersistedEpisodeWorkbenchId(workbench);
   return {
     selectedEpisodeId,
+    promptSimplificationOriginals: workbench.ui.promptSimplificationOriginals ?? {},
     selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
     storyboardPage: clampStoryboardWorkbenchPage(
       workbench.ui.storyboardPage,
@@ -60809,7 +61015,7 @@ function updateStoryboardDescriptionFromInput(workbench, target) {
   const storyboardId = target?.dataset?.storyboardId ?? "";
   const counter = target?.closest?.(".episode-replica-shot-card")?.querySelector?.(".count");
   if (counter) {
-    counter.textContent = `${[...String(target?.value ?? "")].length} / 3000`;
+    counter.textContent = `${[...String(target?.value ?? "")].length} 字符 · 原稿`;
   }
   if (!storyboardId) {
     return;
@@ -63576,7 +63782,8 @@ function modelGenerationErrorMessage(value) {
       model_reference_unavailable: "参考素材尚未准备好，请重新选择",
       model_reference_mime_not_allowed: "当前模型不支持该参考素材格式",
       model_reference_too_large: "参考素材不可大于20M",
-      model_prompt_too_long: "提示词过长，请缩短后重试",
+      model_prompt_too_long: "提示词超过当前模型限制，原稿已保留，请调整分镜或选择其他模型",
+      model_prompt_adaptation_pending: "提示词正在适配，请稍后重试；原稿已保留",
       model_not_configured: "模型不可用，请切换模型",
       model_provider_unsupported: "当前模型暂未接入生成执行器，请切换已支持的视频模型",
       model_disabled: "当前模型维护中，请切换模型",

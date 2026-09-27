@@ -1060,7 +1060,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     };
   }
 
-  async function resolveWorkflowPromptSkill(input: {
+  async function readWorkflowPromptSkill(input: {
     userId: string;
     itemId: string;
     category: "script" | "shot" | "prop_extract" | "character_extract" | "scene_extract" | "image_style" | "storyboard" | "other";
@@ -1093,6 +1093,16 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     if (!row) {
       throw new PromptMarketplaceError(403, "workflow_prompt_skill_forbidden", "创作技能不存在、分类不匹配或不可用");
     }
+    return row;
+  }
+
+  async function resolveWorkflowPromptSkill(input: {
+    userId: string;
+    itemId: string;
+    category: "script" | "shot" | "prop_extract" | "character_extract" | "scene_extract" | "image_style" | "storyboard" | "other";
+    now: Date;
+  }) {
+    const row = await readWorkflowPromptSkill(input);
     await deps.db.query(
       "UPDATE prompts SET usage_count = usage_count + 1, updated_at = $2 WHERE id = $1",
       [row.id, input.now],
@@ -1199,6 +1209,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     useItem,
     resolveScriptConversionSkill,
     resolveWorkflowPromptSkill,
+    readWorkflowPromptSkill,
     rateItem,
   };
 }

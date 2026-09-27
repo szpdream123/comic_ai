@@ -1,5 +1,7 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
+import { formatGenerationPromptCount } from "../../shared/generation-prompt-policy.js";
+import { canSimplifyPrompt } from "./episode-prompt-simplification.js";
 import { renderAssetImportModal } from "./project-detail.js?single-episode-credits=1";
 import { buildConfiguredGenerationSettingsSections, normalizeGenerationPricingObject, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
@@ -1068,7 +1070,7 @@ export function renderStoryboardCard(storyboard, active, checked = false, assetG
                 placeholder="请输入内容"
               >${escapeHtml(desc)}</textarea>
             </label>
-            <span class="count">${[...(desc || "")].length} / 3000</span>
+            <span class="count">${[...(desc || "")].length} 字符 · 原稿</span>
           </span>
           ${showStoryboardColumn ? renderStoryboardImageColumn(storyboard, storyboardName) : ""}
           <span class="episode-replica-shot-card-column assets">
@@ -3269,8 +3271,12 @@ export function renderPromptDock({
         : "分镜：";
 
   return `
-    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${resultAnnotationTarget?.targetId ? "has-result-annotation" : ""} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
-      ${renderResultAnnotationTrigger(resultAnnotationTarget)}
+    <section class="episode-replica-prompt has-prompt-actions ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${resultAnnotationTarget?.targetId ? "has-result-annotation" : ""} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
+      <div class="episode-prompt-actions-toolbar">
+        <button type="button" class="episode-replica-annotation-trigger" data-action="restore-generation-prompt" hidden>恢复原稿</button>
+        <button type="button" class="episode-replica-annotation-trigger" data-action="simplify-generation-prompt" ${canSimplifyPrompt({ prompt: promptValue, model: selectedModel, mediaMode }) ? 'title="精简后预览，确认后应用"' : 'disabled title="提示词超过当前模型上限时可精简"'}>AI 精简提示词</button>
+        ${renderResultAnnotationTrigger(resultAnnotationTarget)}
+      </div>
       ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
       ${
@@ -3287,7 +3293,9 @@ export function renderPromptDock({
         <div class="episode-prompt-editor-host" data-prompt-editor data-animated-placeholder>
           <textarea id="video-prompt-input" placeholder="${EPISODE_PROMPT_PLACEHOLDER}">${escapeHtml(promptValue)}</textarea>
         </div>
-        <em data-prompt-character-count>${[...promptValue].length} / 5000</em>
+        <div class="episode-prompt-count-actions">
+          <em data-prompt-character-count>${escapeHtml(formatGenerationPromptCount(promptValue, selectedModel))}</em>
+        </div>
       </div>
       ${
         mentionMenuOpen
@@ -4671,6 +4679,8 @@ function buildConfiguredPromptDockModels(config, mediaType, generationMode = nul
         supportedQuality: normalizeOptionValues(model?.supportedQuality),
         supportedDurations: normalizeOptionValues(model?.supportedDurations),
         parameterSchema: normalizeParameterSchema(model?.parameterSchema),
+        limits: model?.limits,
+        mediaType: model?.mediaType,
         defaultParams: model?.defaultParams && typeof model.defaultParams === "object" ? model.defaultParams : {},
         supportedModes: normalizeOptionValues(model?.supportedModes),
         videoCategory: String(model?.videoCategory ?? "").trim(),

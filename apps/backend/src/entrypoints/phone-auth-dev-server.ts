@@ -1,4 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { measurePreparedGenerationPrompt, normalizeProviderPrompt, prepareGenerationPrompt } from "../modules/model-gateway/generation-prompt-preparation.service.ts";
+import { composeGenerationPrompt, measureGenerationPrompt, resolveGenerationPromptLimit } from "../../../web/src/shared/generation-prompt-policy.js";
 import { createReadStream, createWriteStream } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
@@ -5588,6 +5590,10 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   const defaultParams = Object.fromEntries(Object.entries(modelConfig.defaultParams).filter(([key]) =>
     Object.prototype.hasOwnProperty.call(parameterSchema, key),
   ));
+  const promptLimit = resolveGenerationPromptLimit(modelConfig);
+  if (promptLimit) {
+    parameterSchema.prompt = { ...readJsonRecord(parameterSchema.prompt), maxLength: promptLimit.maximum, limitUnit: promptLimit.unit };
+  }
   return {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
@@ -11002,7 +11008,8 @@ async function createGenerationTask(
       modelCode: requestedModelCode,
       modelConfig,
       parameters: executionParameters,
-      prompt: String(input.body.text ?? input.body.prompt ?? input.body.promptOverride ?? input.body.motionPrompt ?? ""),
+      // Validate mode/parameters before spending anything on prompt adaptation.
+      prompt: "",
     });
   }
   const referenceAssetVersionIds = input.kind === "image" || input.kind === "video"
@@ -11211,6 +11218,42 @@ async function createGenerationTask(
     parameters: executionParameters,
   };
   const store = new SqlIdempotencyRecordStore(db);
+  // Keep the command identity based on the original request. A regenerated or
+  // cached execution prompt must not change replay identity or consume credits.
+  const existingCommand = await store.findForUpdate({ scopeKey: `user:${context.actor.userId}`,
+    operationName: config.operationName, idempotencyKey: input.idempotencyKey });
+  if (existingCommand && existingCommand.expiresAt.getTime() > Date.now()) {
+    if (existingCommand.requestHash !== hashJson(idempotencySnapshot)) throw new IdempotencyConflictError();
+    if (existingCommand.responseResourceId) {
+      const replayed = await mapGenerationTaskResponse(db, {
+        taskId: existingCommand.responseResourceId, sessionToken: input.authenticated.sessionToken,
+        canvasScope: context.canvasActorScope, runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds, now: input.now,
+      });
+      return { status: 200 as const, body: replayed };
+    }
+    if (existingCommand.status === "processing") throw new IdempotencyProcessingError(existingCommand);
+  }
+  if (input.body.expectedCredits !== undefined) {
+    const expectedCredits = Number(input.body.expectedCredits);
+    if (!Number.isFinite(expectedCredits) || Math.round(expectedCredits) !== estimatedCost) {
+      throw new GenerationRequestValidationError("generation_quote_stale", "模型或积分配置已更新，请按最新报价确认后再次生成。");
+    }
+  }
+  const promptPreparation = modelConfig ? await prepareGenerationPrompt(db, {
+    model: modelConfig, prompt: String(requestPrompt), userId: context.actor.userId,
+    projectId, canvasProjectId, requestKey: input.idempotencyKey, env: input.env, now: input.now,
+    parameters, firstFrameUrl: resolveFirstFrameUrl(resolvedBody),
+    allowRewrite: false,
+  }) : null;
+  if (promptPreparation) {
+    requestSnapshot.prompt = promptPreparation.prompt;
+    if (promptPreparation.method !== "unchanged") Object.assign(requestSnapshot, { originalPrompt: promptPreparation.originalPrompt });
+  }
+  if (modelConfig) {
+    validateGenerationModelRequest({ kind: input.kind, modelCode: requestedModelCode,
+      modelConfig, parameters, prompt: normalizeProviderPrompt(modelConfig, requestSnapshot.prompt, parameters, resolveFirstFrameUrl(resolvedBody)) });
+  }
   for (let intakeAttempt = 0; ; intakeAttempt += 1) {
   let intakeTransactionOpen = true;
   await db.query("BEGIN");
@@ -12940,19 +12983,8 @@ function appendImageStylePromptForGeneration(
     || readString(reference.id)?.startsWith("batch-style-reference:")
     || readString(reference.id)?.startsWith("storyboard-generator-style:")
   ));
-  const referenceToken = styleReferenceIndex >= 0 ? `【@图${styleReferenceIndex + 1}】` : "";
-  const referenceInstruction = referenceToken ? `参考${referenceToken}不要出现参考图内容，` : "";
-  const punctuation = /[。！？.!?]$/u.test(content) ? "" : "。";
-  const formattedStyle = `图片风格：${referenceInstruction}${content}${punctuation}`;
-  const promptLines = prompt.split(/\r?\n/u);
-  const existingStyleIndex = promptLines.findIndex((line) => (
-    /^\s*图片风格：/u.test(line) && line.includes(content)
-  ));
-  if (existingStyleIndex >= 0) {
-    promptLines[existingStyleIndex] = formattedStyle;
-    return promptLines.join("\n");
-  }
-  return [prompt, formattedStyle].filter(Boolean).join("\n");
+  return composeGenerationPrompt(prompt, { mediaType: "image", style: content,
+    styleReferenceName: styleReferenceIndex >= 0 ? `图${styleReferenceIndex + 1}` : "" });
 }
 
 async function resolveVideoGenerationStyleBody(
@@ -12983,15 +13015,59 @@ async function resolveVideoGenerationStyleBody(
   if (!styleContent) return body;
   const sourcePrompt = String(body.prompt ?? body.motionPrompt ?? body.promptOverride ?? "").trim();
   if (!sourcePrompt) return body;
-  const promptLines = sourcePrompt
-    .split(/\r?\n/u)
-    .filter((line) => !/^\s*视频风格：/u.test(line) && line.trim() !== styleContent);
-  const finalPrompt = [...promptLines, `视频风格：${styleContent}`].filter(Boolean).join("\n");
+  const finalPrompt = composeGenerationPrompt(sourcePrompt, { mediaType: "video", style: styleContent });
   return {
     ...body,
     prompt: finalPrompt,
     ...(body.motionPrompt === undefined ? {} : { motionPrompt: finalPrompt }),
   };
+}
+
+// Resolve selections with the same catalog and access checks as generation.
+// Never accept a client-supplied composition or charge for resolving a skill.
+async function resolvePromptSimplificationComposition(db: Awaited<ReturnType<typeof createDevDb>>, userId: string,
+  body: Record<string, unknown>, mediaType: string, now: Date) {
+  if (mediaType === "video") {
+    const styleSkillId = readString(body.imageStyleSkillId);
+    if (styleSkillId && isUuid(styleSkillId)) {
+      try {
+        const skill = await createPromptMarketplaceService({ db }).readWorkflowPromptSkill({
+          userId, itemId: styleSkillId, category: "image_style", now,
+        });
+        return { mediaType, style: String(skill.prompt_content ?? "").trim(), prefixes: [] };
+      } catch {
+        // Match generation's existing unavailable-style fallback.
+        return { mediaType, style: "", prefixes: [] };
+      }
+    }
+    const resolved = await resolveVideoGenerationStyleBody(db, userId, { ...body, prompt: "__prompt_budget__" });
+    const prefix = "__prompt_budget__\n视频风格：";
+    const style = String(resolved.prompt).startsWith(prefix) ? String(resolved.prompt).slice(prefix.length) : "";
+    return { mediaType, style, prefixes: [] };
+  }
+  const storyboard = readJsonRecord(body.target).kind === "storyboard";
+  const prefixes: string[] = [];
+  let style = "";
+  const marketplace = createPromptMarketplaceService({ db });
+  for (const [id, category] of [
+    [readString(body.skillId), storyboard ? "storyboard" : "image_style"],
+    [storyboard ? readString(body.imageStyleSkillId) : null, "image_style"],
+  ]) {
+    if (!id) continue;
+    if (!isUuid(id)) throw new GenerationModelRequestValidationError("image_style_skill_invalid", "所选提示词技能无效，请重新选择。");
+    const skill = await marketplace.readWorkflowPromptSkill({ userId, itemId: id, category: category as "storyboard" | "image_style", now });
+    const content = String(skill.prompt_content ?? "").trim();
+    if (category === "storyboard") prefixes.push(content); else style = content;
+  }
+  if (storyboard) prefixes.push(String(body.storyboardPrompt ?? "").trim());
+  if (!style && readString(body.imageStyleCode)) {
+    const styles = await createAdminImagePromptService({ db }).listStyles({ status: "enabled", pageSize: 500 });
+    const selected = styles.data.find((item) => String(item.code ?? item.id ?? "").trim() === readString(body.imageStyleCode));
+    style = String(selected?.prompt_content ?? selected?.promptContent ?? "").trim();
+  }
+  const formatted = appendImageStylePromptForGeneration("", style, body);
+  const styleReferenceName = formatted.match(/^图片风格：参考【@([^】]+)】不要出现参考图内容，/u)?.[1] ?? "";
+  return { mediaType, prefixes, style, styleReferenceName };
 }
 
 async function createUnifiedImageGenerationTask(
@@ -13130,11 +13206,7 @@ async function createUnifiedImageGenerationTask(
   const originalPrompt = String(
     generationBody.prompt ?? generationBody.promptOverride ?? generationBody.text ?? "",
   ).trim();
-  const promptPrefix = [promptSkillContent, storyboardPromptContent]
-    .filter(Boolean)
-    .filter((part, index, parts) => parts.indexOf(part) === index)
-    .filter((part) => !originalPrompt.startsWith(part));
-  const resolvedPrompt = [...promptPrefix, originalPrompt].filter(Boolean).join("\n");
+  const resolvedPrompt = composeGenerationPrompt(originalPrompt, { prefixes: [promptSkillContent, storyboardPromptContent] });
   const finalPrompt = appendImageStylePromptForGeneration(resolvedPrompt, imageStyleContent, generationBody);
   if (finalPrompt) {
     generationBody.prompt = finalPrompt;
@@ -32943,6 +33015,65 @@ export function createPhoneAuthDevServer(
               creditFrozenUntil: context.creditFrozenUntil,
             }),
           );
+        }
+
+        if (
+          request.method === "POST" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.endsWith("/generation/prompt-simplification")
+        ) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
+          const episodeId = decodeURIComponent(pathname.split("/").at(3) ?? "");
+          if (!isUuid(episodeId)) return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在"));
+          const now = new Date();
+          const context = await getEpisodeContext(db, { episodeId, sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id, capability: capabilities.generationStart, now });
+          if (!context) return writeJson(response, envelopedError(404, "resource_not_found", "剧集不存在"));
+          let body: Record<string, unknown>;
+          try {
+            body = readJsonRecord(await readLimitedTextBody(request, 512_000));
+          } catch {
+            return writeJson(response, envelopedError(400, "prompt_simplification_input_invalid", "提示词请求无效或过大。"));
+          }
+          const prompt = typeof body.prompt === "string" ? body.prompt : "";
+          const model = await findActiveAiModelConfigByCode(db, readString(body.model));
+          if (!model || !["image", "video"].includes(model.mediaType)) {
+            return writeJson(response, envelopedError(400, "model_not_configured", "请选择可用的图片或视频模型。"));
+          }
+          if ((!prompt.trim() && body.inspectOnly !== true) || Buffer.byteLength(prompt, "utf8") > 128_000) {
+            return writeJson(response, envelopedError(400, "prompt_simplification_input_invalid", "请输入提示词；内容过长时请先拆分分镜。"));
+          }
+          try {
+            const serverComposition = await resolvePromptSimplificationComposition(db, context.actor.userId, body, model.mediaType, now);
+            // The composer may append a locally selected style even when it has
+            // no catalog id. Match that stage before the authoritative server stage.
+            const clientStyle = readJsonRecord(body.promptStyle);
+            const promptComposition = { stages: [{ mediaType: model.mediaType,
+              style: readString(clientStyle.style) ?? "", styleReferenceName: readString(clientStyle.styleReferenceName) ?? "",
+            }, serverComposition] };
+            const parameters = { ...readJsonRecord(body.parameters), promptComposition };
+            // Skill bodies can be private. Only numeric budgets leave the server.
+            const budget = (value: string) => measurePreparedGenerationPrompt(model, value, parameters, readString(body.firstFrameUrl));
+            if (body.inspectOnly === true) {
+              const measured = budget(typeof body.submissionPrompt === "string" ? body.submissionPrompt : prompt);
+              const originalLength = measureGenerationPrompt(prompt, resolveGenerationPromptLimit(model));
+              return writeJson(response, enveloped(200, { promptBudget: { ...measured,
+                additionalLength: measured.length === null || originalLength === null ? 0 : measured.length - originalLength } }));
+            }
+            const result = await prepareGenerationPrompt(db, { model, prompt, userId: context.actor.userId,
+              projectId: context.project.id, requestKey: idempotencyKey, env: runtimeEnv, now,
+              parameters, firstFrameUrl: readString(body.firstFrameUrl),
+              allowRewrite: true, complete: options.textChatGateway?.completeJson.bind(options.textChatGateway),
+            });
+            return writeJson(response, enveloped(200, { ...result, promptBudget: budget(result.prompt) }));
+          } catch (error) {
+            if (error instanceof PromptMarketplaceError) return writeJson(response, envelopedError(error.status, error.code, error.message));
+            if (error instanceof GenerationModelRequestValidationError) {
+              return writeJson(response, envelopedError(error.code === "model_prompt_adaptation_pending" ? 409 : 400, error.code, error.message));
+            }
+            throw error;
+          }
         }
 
         if (

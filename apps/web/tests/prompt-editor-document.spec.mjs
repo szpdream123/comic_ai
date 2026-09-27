@@ -330,7 +330,7 @@ test("prompt dock renders the structured editor host with a textarea fallback", 
 
   assert.match(html, /class="episode-prompt-editor-host" data-prompt-editor/);
   assert.match(html, /<textarea id="video-prompt-input" placeholder="先上传参考图，输入你的想法，再用@引用素材">镜头推进【@图1】<\/textarea>/);
-  assert.match(html, /data-prompt-character-count>9 \/ 5000/);
+  assert.match(html, /data-prompt-character-count>9 字符/);
   assert.doesNotMatch(html, /episode-replica-mention-strip/);
 });
 

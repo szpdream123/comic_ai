@@ -3378,6 +3378,14 @@ export const creatorApi = {
     );
   },
 
+  simplifyGenerationPrompt(episodeId, input, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/episodes/${encodeURIComponent(episodeId)}/generation/prompt-simplification`,
+      input,
+      { action: "episode.prompt.simplification", idempotencyKey: options.idempotencyKey, timeoutMs: 110000, signal: options.signal },
+    );
+  },
+
   createVideoTask(episodeId, input, options = {}) {
     return postJsonWithIdempotency(
       `/api/episodes/${encodeURIComponent(episodeId)}/generation/video-tasks`,

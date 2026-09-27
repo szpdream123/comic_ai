@@ -1,6 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+test("explicit prompt simplification preserves its idempotency key and unwraps the preview only", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSetTimeout = globalThis.setTimeout;
+  const timeoutDelays = [];
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    timeoutDelays.push(delay);
+    return previousSetTimeout(callback, delay, ...args);
+  };
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ requestId: "request-1", data: { prompt: "短稿", originalPrompt: "原始长稿", method: "llm" } }) };
+  };
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    const body = { model: "selected-model", prompt: "原始长稿", parameters: { mode: "first-frame" } };
+    const result = await creatorApi.simplifyGenerationPrompt("episode/1", body, { idempotencyKey: "explicit-retry-key" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/api/episodes/episode%2F1/generation/prompt-simplification");
+    assert.equal(calls[0].options.headers["idempotency-key"], "explicit-retry-key");
+    assert.deepEqual(JSON.parse(calls[0].options.body), body);
+    assert.equal(result.prompt, "短稿");
+    assert.ok(timeoutDelays.includes(110000), "the client must allow the server's two-stage 90-second budget");
+  } finally { globalThis.fetch = previousFetch; globalThis.setTimeout = previousSetTimeout; }
+});
+
 async function withWindowLocation(location, callback) {
   const previousWindow = globalThis.window;
   globalThis.window = { location };
