@@ -14146,6 +14146,37 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const videoTask = (await db.query("SELECT input_snapshot_json FROM tasks WHERE id=$1", [videoTaskBody.data.taskId])).rows[0];
       assert.equal(videoTask.input_snapshot_json.prompt, composeGenerationPrompt(compact, { mediaType: "video", style: styleContent }));
       assert.equal(calls, 4, "submitting an adopted image/video draft never invokes automatic simplification");
+      // A provider without a documented limit must accept the original body,
+      // while the user can still explicitly request a free suggestion.
+      await db.query(`UPDATE ai_model_configs SET parameter_schema_json=parameter_schema_json #- '{prompt,maxLength}',
+        limits_json=limits_json - 'maxPromptLength' WHERE model_code=$1`, [videoBody.model]);
+      const unlimitedBody = { ...videoBody, prompt: compact.repeat(200) };
+      const unlimitedHeaders = { ...headers, "idempotency-key": `${requestKey}-unknown-limit` };
+      const unknownInspection = await fetch(simplifyUrl, { method: "POST", headers: unlimitedHeaders,
+        body: JSON.stringify({ ...unlimitedBody, inspectOnly: true }) });
+      const unknownInspectionBody = await unknownInspection.json();
+      assert.equal(unknownInspection.status, 200, JSON.stringify(unknownInspectionBody));
+      assert.equal(unknownInspectionBody.data.promptBudget.length, null);
+      await db.query("UPDATE tasks SET status='failed', updated_at=NOW() WHERE id=$1", [videoTaskBody.data.taskId]);
+      const unknownAccepted = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/video-tasks`, {
+        method: "POST", headers: unlimitedHeaders, body: JSON.stringify(unlimitedBody),
+      });
+      const unknownTaskBody = await unknownAccepted.json();
+      assert.equal(unknownAccepted.status, 200, JSON.stringify(unknownTaskBody));
+      const unknownTask = (await db.query("SELECT input_snapshot_json FROM tasks WHERE id=$1", [unknownTaskBody.data.taskId])).rows[0];
+      assert.equal(unknownTask.input_snapshot_json.prompt,
+        composeGenerationPrompt(unlimitedBody.prompt, { mediaType: "video", style: styleContent }));
+      assert.equal(calls, 4, "an unknown limit must never trigger automatic simplification");
+      const reservationsBefore = Number((await db.query("SELECT count(*) FROM credit_reservations WHERE user_id=$1", [userId])).rows[0].count);
+      const tasksBefore = Number((await db.query("SELECT count(*) FROM tasks WHERE input_snapshot_json->>'targetId'=$1", [episodeId])).rows[0].count);
+      const manualUnknown = await fetch(simplifyUrl, { method: "POST", headers: unlimitedHeaders, body: JSON.stringify(unlimitedBody) });
+      const manualUnknownBody = await manualUnknown.json();
+      assert.equal(manualUnknown.status, 200, JSON.stringify(manualUnknownBody));
+      assert.equal(manualUnknownBody.data.originalPrompt, unlimitedBody.prompt);
+      assert.equal(manualUnknownBody.data.prompt, compact);
+      assert.equal(calls, 6, "manual simplification still rewrites and verifies without a known limit");
+      assert.equal(Number((await db.query("SELECT count(*) FROM credit_reservations WHERE user_id=$1", [userId])).rows[0].count), reservationsBefore);
+      assert.equal(Number((await db.query("SELECT count(*) FROM tasks WHERE input_snapshot_json->>'targetId'=$1", [episodeId])).rows[0].count), tasksBefore);
     } finally {
       await server.close();
     }

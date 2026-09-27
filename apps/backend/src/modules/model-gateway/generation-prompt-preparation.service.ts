@@ -39,15 +39,14 @@ export async function prepareGenerationPrompt(db: SqlDatabase, input: {
     allowRewrite ? composeGenerationPrompt(prompt, input.parameters?.promptComposition) : prompt,
     input.parameters, input.firstFrameUrl);
   const executionPrompt = normalize(input.prompt);
-  if (!generationPromptExceedsLimit(executionPrompt, limit)
-    && (!allowRewrite || !generationPromptExceedsLimit(input.prompt, limit))) {
+  if (!allowRewrite && !generationPromptExceedsLimit(executionPrompt, limit)) {
     // Keep mention boundaries until the adapter collects and tags references.
     // A second pass over unwrapped mentions can lose bindings next to Chinese text.
     const prompt = input.prompt;
     return { prompt, originalPrompt: input.prompt, method: prompt === input.prompt ? "unchanged" : "provider_normalized" };
   }
   const hash = createHash("sha256").update(JSON.stringify({ prompt: input.prompt, executionPrompt, limit,
-    intent: allowRewrite ? "editable_suggestion_v1" : "generation_validation",
+    intent: allowRewrite ? "editable_suggestion_v2" : "generation_validation",
     model: input.model.modelCode, projectId: input.projectId ?? null, canvasProjectId: input.canvasProjectId ?? null,
   })).digest("hex");
   const requestKey = `${allowRewrite ? "prompt-preparation" : "prompt-validation"}:${input.userId}:${input.requestKey}:${hash}`;

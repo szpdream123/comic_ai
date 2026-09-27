@@ -82,6 +82,11 @@ function collectPlazaWorkflowStagesFromText(text: string, collected: Set<PlazaWo
 function collectPlazaWorkflowStagesFromFileName(fileName: string, collected: Set<PlazaWorkflowStage>) {
   const name = String(fileName ?? "").replace(/\\/g, "/").toLowerCase();
   if (!name) return;
+  // Legacy screenplay references have names that predate the stage prefixes.
+  if (/(?:^|\/)(?:novel-to-script|laoli-screenplay-gate|adaptation-workflow|剧本|剧本大纲)\.md$/.test(name)) {
+    collected.add("script");
+    return;
+  }
   if (/(?:^|\/)(?:script|screenplay|转剧本)/.test(name)) collected.add("script");
   if (/(?:^|\/)(?:scene[-_]?extract|scenes?)(?:[-_.]|$)/.test(name) || name.includes("场景")) collected.add("scene");
   if (/(?:^|\/)(?:character[-_]?extract|characters?)(?:[-_.]|$)/.test(name) || name.includes("角色") || name.includes("人物")) collected.add("character");
@@ -139,7 +144,21 @@ export function composePlazaSkillStageInstructions(input: {
       const kind = String(file.kind ?? "instruction").trim() || "instruction";
       const name = String(file.name ?? file.fileName ?? "").trim();
       if (!(kind === "instruction" || name.toLowerCase().endsWith(".md"))) return false;
-      const loadStage = resolvePlazaSkillFileLoadStage(name);
+      // This legacy reference was misnamed; do not reinterpret user files based
+      // on that ambiguous name alone, or change workflow stage inference.
+      const legacyScreenplayRef = plazaSkillFileBaseName(name) === "分镜二轮精修.md"
+        && String(file.content ?? "").includes("IP短剧剧本精修师")
+        && String(file.content ?? "").includes("最终版标准格式短剧剧本");
+      const baseName = plazaSkillFileBaseName(name);
+      const content = String(file.content ?? "").trim();
+      const legacyScreenplayGuide = (baseName === "example.md"
+        && content.startsWith("# 详细场次示例（正文可见版）") && content.includes("正式剧本正文"))
+        || (baseName === "format-spec.md"
+          && content.startsWith("# 详细中文剧本格式规范（正文可见版）") && content.includes("正式 Word 只按以下顺序交付"))
+        || (baseName === "qa-checklist.md"
+          && content.startsWith("# 详细剧本 QA 清单（正文与内部分析分离）") && content.includes("每集表演时长"));
+      const loadStage = (legacyScreenplayRef || legacyScreenplayGuide) && !isPlazaSkillToolFile(name)
+        ? "script" : resolvePlazaSkillFileLoadStage(name);
       if (!stage) return true;
       if (loadStage === "deferred") return false;
       if (loadStage === "shared") return true;

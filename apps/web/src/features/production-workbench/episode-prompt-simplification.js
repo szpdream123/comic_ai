@@ -1,11 +1,8 @@
-import { composeGenerationPrompt, formatGenerationPromptCount, generationPromptExceedsLimit, measureGenerationPrompt, resolveGenerationPromptLimit } from "../../shared/generation-prompt-policy.js";
+import { formatGenerationPromptCount } from "../../shared/generation-prompt-policy.js";
 
 export function canSimplifyPrompt({ prompt, model, mediaMode }) {
-  const limit = resolveGenerationPromptLimit(model);
-  const length = measureGenerationPrompt(prompt, limit);
   return mediaMode !== "lip-sync" && ["image", "video"].includes(model?.mediaType)
-    && (model?.promptBudget && length !== null ? length + model.promptBudget.additionalLength > limit.maximum
-      : generationPromptExceedsLimit(composeGenerationPrompt(prompt, model?.promptComposition), limit));
+    && String(prompt ?? "").trim().length > 0;
 }
 
 // Requests and previews never write drafts. Acceptance is the sole write boundary.

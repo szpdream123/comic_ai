@@ -10,6 +10,48 @@ const model = (maximum = 60, unit = "characters", mediaType = "video") => ({
 }) as AiModelConfigRecord;
 const noCall = async () => { throw new Error("Unexpected model call"); };
 
+it("manually simplifies without inventing a limit and still verifies protected content", async () => {
+  for (const config of [{ ...model(), parameterSchema: {} }, model(5000), model(200, "tokens")]) {
+    const original = "【@图1】缓缓转身。柔和晨光。柔和晨光。";
+    const candidate = "【@图1】缓缓转身。柔和晨光。";
+    let calls = 0;
+    const result = await adaptGenerationPrompt({ model: config, prompt: original, complete: async (request) => {
+      calls++;
+      if (calls === 1) {
+        if (!resolveGenerationPromptLimit(config)) assert.doesNotMatch(request.messages[0].content, /2500|正文预算为/);
+        return JSON.stringify({ prompt: candidate });
+      }
+      return JSON.stringify({ equivalent: true, lost: [], added: [] });
+    } });
+    assert.equal(calls, 2);
+    assert.equal(result.prompt, candidate);
+    assert.equal(result.originalPrompt, original);
+  }
+  await assert.rejects(adaptGenerationPrompt({ model: { ...model(), parameterSchema: {} },
+    prompt: "【@图1】缓缓转身。柔和晨光。柔和晨光。", complete: async () => JSON.stringify({ prompt: "人物转身。" }),
+  }), { adaptationReason: "protected_content_changed" });
+});
+
+it("compares manual simplification size in the model's configured unit", async () => {
+  const original = "远处有一百万颗星星。";
+  const candidate = "远处有1000000颗星星。";
+  let calls = 0;
+  const result = await adaptGenerationPrompt({ model: model(100, "bytes"), prompt: original,
+    complete: async () => ++calls === 1 ? JSON.stringify({ prompt: candidate })
+      : JSON.stringify({ equivalent: true, lost: [], added: [] }),
+  });
+  assert.equal(result.prompt, candidate);
+  assert.equal(calls, 2, "byte reduction must still pass semantic verification");
+  for (const config of [model(100), model(100, "tokens"), { ...model(), parameterSchema: {} }]) {
+    await assert.rejects(adaptGenerationPrompt({ model: config, prompt: original,
+      complete: async () => JSON.stringify({ prompt: candidate }),
+    }), { adaptationReason: "result_expanded" });
+  }
+  await assert.rejects(adaptGenerationPrompt({ model: model(100, "bytes"), prompt: candidate,
+    complete: async () => JSON.stringify({ prompt: original }),
+  }), { adaptationReason: "result_expanded" });
+});
+
 it("simplifies against the final composed budget even when the editor text alone fits", async () => {
   for (const mediaType of ["image", "video"]) for (const unit of ["characters", "bytes"]) {
     const context = { mediaType, prefixes: ["镜头模板"], style: "日系动漫\n明亮柔光", styleReferenceName: "图1" };
@@ -60,9 +102,12 @@ it("corrects a length miss once using measured feedback and independently verifi
   assert.equal(calls, 3);
 });
 
-it("leaves an in-budget Unicode prompt and an unconfigured limit untouched", async () => {
+it("allows an irreducible Unicode prompt to remain unchanged after explicit simplification and verification", async () => {
   for (const config of [model(2), { ...model(), parameterSchema: {} }]) {
-    assert.equal((await adaptGenerationPrompt({ model: config, prompt: "猫😀", complete: noCall })).prompt, "猫😀");
+    let calls = 0;
+    assert.equal((await adaptGenerationPrompt({ model: config, prompt: "猫😀", complete: async () => ++calls === 1
+      ? JSON.stringify({ prompt: "猫😀" }) : JSON.stringify({ equivalent: true, lost: [], added: [] }) })).prompt, "猫😀");
+    assert.equal(calls, 2);
   }
 });
 
@@ -99,9 +144,8 @@ it("fails closed on malformed, overlong, or semantically incomplete adaptations"
   }
 });
 
-it("does not rewrite spoken audio text or mistake tokens for characters", async () => {
+it("does not rewrite spoken audio text", async () => {
   await assert.rejects(adaptGenerationPrompt({ model: model(4, "characters", "audio"), prompt: "请完整读出这句话", complete: noCall }), { code: "model_prompt_too_long" });
-  assert.equal((await adaptGenerationPrompt({ model: model(2, "tokens"), prompt: "a beautiful landscape", complete: noCall })).prompt, "a beautiful landscape");
 });
 
 it("measures a rewritten prompt in bytes when the selected model requires bytes", async () => {

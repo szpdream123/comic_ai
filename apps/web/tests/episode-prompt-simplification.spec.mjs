@@ -3,6 +3,16 @@ import { it } from "node:test";
 import { createPromptSimplificationController, canSimplifyPrompt, withPromptSimplificationLoading } from "../src/features/production-workbench/episode-prompt-simplification.js";
 
 const model = { modelCode: "short", mediaType: "image", parameterSchema: { prompt: { maxLength: 3 } } };
+
+it("allows explicit simplification below or without a known limit and rejects empty or audio input", () => {
+  for (const selected of [model, { ...model, parameterSchema: {} },
+    { ...model, parameterSchema: { prompt: { maxLength: 1, limitUnit: 'tokens' } } }]) {
+    assert.equal(canSimplifyPrompt({ model: selected, prompt: '猫' }), true);
+    assert.equal(canSimplifyPrompt({ model: selected, prompt: '  ' }), false);
+    assert.equal(canSimplifyPrompt({ model: selected, prompt: '猫', mediaMode: 'lip-sync' }), false);
+  }
+  assert.equal(canSimplifyPrompt({ model: { ...model, mediaType: 'audio' }, prompt: '猫' }), false);
+});
 function setup(overrides = {}) {
   let snapshot = { scope: "episode:storyboard:one:image", episodeId: "episode", model, prompt: "原始长提示词" };
   const originals = {};
@@ -124,11 +134,11 @@ it("confirmation also checks staleness and restores only the current input scope
   assert.equal(state.controller.restore(), false);
 });
 
-it("offers simplification only for actual measurable overflow, never tokens or lip sync", () => {
+it("offers manual simplification regardless of budget unit, but never lip sync", () => {
   assert.equal(canSimplifyPrompt({ model, prompt: "1234" }), true);
-  assert.equal(canSimplifyPrompt({ model, prompt: "123" }), false);
+  assert.equal(canSimplifyPrompt({ model, prompt: "123" }), true);
   assert.equal(canSimplifyPrompt({ model, prompt: "1234", mediaMode: "lip-sync" }), false);
-  assert.equal(canSimplifyPrompt({ model: { ...model, parameterSchema: { prompt: { maxLength: 3, limitUnit: "tokens" } } }, prompt: "1234" }), false);
+  assert.equal(canSimplifyPrompt({ model: { ...model, parameterSchema: { prompt: { maxLength: 3, limitUnit: "tokens" } } }, prompt: "1234" }), true);
   assert.equal(canSimplifyPrompt({ model: { ...model, parameterSchema: { prompt: { maxLength: 3, limitUnit: "bytes" } } }, prompt: "中文" }), true);
 });
 

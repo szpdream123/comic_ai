@@ -179,6 +179,8 @@ const migrations = [
   ["20261109-rename-production-agent-session-json.sql", "packages/db/migrations/20261109-rename-production-agent-session-json.sql"],
   ["20261110-rename-production-agent-session-json-constraint.sql", "packages/db/migrations/20261110-rename-production-agent-session-json-constraint.sql"],
   ["20261111-retire-workflow-prompt-marketplace-categories.sql", "packages/db/migrations/20261111-retire-workflow-prompt-marketplace-categories.sql"],
+  ["20261113-remove-undocumented-wan30-prompt-limit.sql", "packages/db/migrations/20261113-remove-undocumented-wan30-prompt-limit.sql"],
+  ["20261114-wan30-platform-prompt-limit.sql", "packages/db/migrations/20261114-wan30-platform-prompt-limit.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -263,6 +265,8 @@ const runtimeSafeMigrationNames = new Set([
   "20261109-rename-production-agent-session-json.sql",
   "20261110-rename-production-agent-session-json-constraint.sql",
   "20261111-retire-workflow-prompt-marketplace-categories.sql",
+  "20261113-remove-undocumented-wan30-prompt-limit.sql",
+  "20261114-wan30-platform-prompt-limit.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([

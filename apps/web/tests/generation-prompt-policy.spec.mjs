@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { it } from "node:test";
 import { runInNewContext } from "node:vm";
-import { composeGenerationPrompt, formatGenerationPromptCount, resolveGenerationPromptLimit, generationPromptExceedsLimit } from "../src/shared/generation-prompt-policy.js";
+import { composeGenerationPrompt, formatGenerationPromptCount, resolveGenerationPromptLimit, generationPromptExceedsLimit, measureGenerationPrompt } from "../src/shared/generation-prompt-policy.js";
 import { canSimplifyPrompt } from "../src/features/production-workbench/episode-prompt-simplification.js";
 import { renderPromptDock } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 
@@ -22,7 +22,7 @@ it("budgets the completed image/video prompt including multiline style and uniqu
   const original = "【@一个非常长的角色名称】向前走";
   const model = { mediaType: "video", parameterSchema: { prompt: { maxLength: 12 } },
     promptBudget: { length: 8, additionalLength: 8 - [...original].length } };
-  assert.equal(canSimplifyPrompt({ prompt: original, model, mediaMode: "video" }), false);
+  assert.equal(canSimplifyPrompt({ prompt: original, model, mediaMode: "video" }), true);
   assert.match(formatGenerationPromptCount(original, model), /^8 \/ 12/);
   const local = { mediaType: "video", style: "本地风格\n第二行" };
   assert.equal(composeGenerationPrompt("正文", { stages: [local, { mediaType: "video", style: "" }] }), "正文\n视频风格：本地风格\n第二行");
@@ -137,7 +137,7 @@ it("keeps simplification visible above the editor, immediately before image modi
       const button = html.match(/<button[^>]*data-action="simplify-generation-prompt"[^>]*>/)?.[0];
       assert.ok(button);
       assert.doesNotMatch(button, /hidden/);
-      assert.equal(button.includes("disabled"), prompt.length <= 10);
+      assert.equal(button.includes("disabled"), !prompt.trim());
       assert.ok(html.indexOf('class="episode-prompt-actions-toolbar"') < html.indexOf(button));
       assert.ok(html.indexOf(button) < html.indexOf('data-action="open-result-image-annotation"'));
       assert.ok(html.indexOf('data-action="open-result-image-annotation"') < html.indexOf('data-prompt-editor'));
@@ -153,10 +153,10 @@ it("shows overflow as a warning toast without leaving a footer message", () => {
   const fn = source.slice(start, source.indexOf("\n}", start) + 2);
   const toasts = [];
   let synced = 0;
-  let overLimit = true;
+  let snapshot = { prompt: "猫".repeat(4), model: { mediaType: "video", parameterSchema: { prompt: { maxLength: 3 } } } };
   const block = runInNewContext(`(${fn})`, {
-    getPromptSimplificationSnapshot: () => ({ prompt: "猫", scope: "shot-1" }),
-    canSimplifyPrompt: () => overLimit,
+    getPromptSimplificationSnapshot: () => snapshot,
+    canSimplifyPrompt, resolveGenerationPromptLimit, measureGenerationPrompt, generationPromptExceedsLimit, composeGenerationPrompt,
     formatWorkbenchPromptCount: () => "2970 / 2500 字符",
     syncPromptSimplificationControls: () => {},
     showWorkbenchToast: (_, message, options) => toasts.push({ message, tone: options.tone }),
@@ -170,8 +170,14 @@ it("shows overflow as a warning toast without leaving a footer message", () => {
   assert.equal(toasts[0].tone, "warning");
   assert.match(toasts[0].message, /提示词超过当前模型上限/);
   assert.equal(synced, 1);
-  overLimit = false;
-  assert.equal(block(workbench), false);
+  for (const model of [{ mediaType: "video" },
+    { mediaType: "video", parameterSchema: { prompt: { maxLength: 100 } } },
+    { mediaType: "video", parameterSchema: { prompt: { maxLength: 1, limitUnit: "tokens" } } },
+    { mediaType: "video", parameterSchema: { prompt: { maxLength: 3 } }, promptBudget: { additionalLength: -2 } }]) {
+    snapshot = { ...snapshot, model };
+    assert.equal(canSimplifyPrompt(snapshot), true);
+    assert.equal(block(workbench), false, "available simplification must not block a valid or unknown-budget submission");
+  }
   assert.equal(toasts.length, 1);
 });
 

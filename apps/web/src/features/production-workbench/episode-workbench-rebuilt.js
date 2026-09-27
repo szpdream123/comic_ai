@@ -3274,7 +3274,7 @@ export function renderPromptDock({
     <section class="episode-replica-prompt has-prompt-actions ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${resultAnnotationTarget?.targetId ? "has-result-annotation" : ""} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
       <div class="episode-prompt-actions-toolbar">
         <button type="button" class="episode-replica-annotation-trigger" data-action="restore-generation-prompt" hidden>恢复原稿</button>
-        <button type="button" class="episode-replica-annotation-trigger" data-action="simplify-generation-prompt" ${canSimplifyPrompt({ prompt: promptValue, model: selectedModel, mediaMode }) ? 'title="精简后预览，确认后应用"' : 'disabled title="提示词超过当前模型上限时可精简"'}>AI 精简提示词</button>
+        <button type="button" class="episode-replica-annotation-trigger" data-action="simplify-generation-prompt" ${canSimplifyPrompt({ prompt: promptValue, model: selectedModel, mediaMode }) ? 'title="精简后预览，确认后应用"' : 'disabled title="请输入图片或视频提示词后精简"'}>AI 精简提示词</button>
         ${renderResultAnnotationTrigger(resultAnnotationTarget)}
       </div>
       ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}

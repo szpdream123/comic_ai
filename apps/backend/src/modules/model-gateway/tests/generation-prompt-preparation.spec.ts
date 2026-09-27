@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { after, before, it } from "node:test";
 import { createMigratedTestDb, type TestDatabase } from "../../shared/db/test-db.ts";
 import type { AiModelConfigRecord } from "../../model-catalog/ai-model-config.store.ts";
@@ -29,6 +30,77 @@ const answers = () => {
   let calls = 0;
   return async () => ++calls === 1 ? JSON.stringify({ prompt }) : JSON.stringify({ equivalent: true, lost: [], added: [] });
 };
+
+it("prepares a manual suggestion with no known limit but never rewrites ordinary generation", async () => {
+  for (const schema of [{}, { prompt: { maxLength: 5000 } }, { prompt: { maxLength: 100, limitUnit: "tokens" } }]) {
+    const request = input();
+    request.model.parameterSchema = schema;
+    let calls = 0;
+    const complete = async () => ++calls === 1 ? JSON.stringify({ prompt }) : JSON.stringify({ equivalent: true, lost: [], added: [] });
+    const ordinary = await prepareGenerationPrompt(db, { ...request, allowRewrite: false, complete });
+    assert.equal(ordinary.prompt, request.prompt);
+    assert.equal(calls, 0);
+    const simplified = await prepareGenerationPrompt(db, { ...request, complete });
+    assert.equal(simplified.prompt, prompt);
+    assert.equal(calls, 2);
+    const replay = await prepareGenerationPrompt(db, { ...request, complete });
+    assert.equal(replay.prompt, prompt);
+    assert.equal(calls, 2);
+    assert.equal((await prepareGenerationPrompt(db, { ...request, allowRewrite: false, complete })).prompt, request.prompt);
+  }
+});
+
+it("removes only Wan 3.0's undocumented legacy cap on fresh installs and upgrades", async () => {
+  const read = async () => (await db.query(`SELECT model_code, parameter_schema_json, limits_json, pricing_json, status
+    FROM ai_model_configs WHERE model_code IN ('wan3.0-r2v','wan2.7-r2v') ORDER BY model_code`)).rows;
+  const seeded = await read();
+  const wan = seeded.find(row => row.model_code === 'wan3.0-r2v')!;
+  assert.equal(wan.parameter_schema_json.prompt.maxLength, 5000);
+  assert.equal(wan.limits_json.maxPromptLength, 5000);
+  delete wan.parameter_schema_json.prompt.maxLength;
+  delete wan.limits_json.maxPromptLength;
+  const sql = await readFile('packages/db/migrations/20261113-remove-undocumented-wan30-prompt-limit.sql', 'utf8');
+  await db.query(`UPDATE ai_model_configs SET parameter_schema_json=jsonb_set(parameter_schema_json, '{prompt,maxLength}', '2500'),
+    limits_json=jsonb_set(limits_json, '{maxPromptLength}', '2500') WHERE model_code='wan3.0-r2v'`);
+  await db.query(sql);
+  assert.deepEqual(await read(), seeded);
+  await db.query(sql);
+  assert.deepEqual(await read(), seeded);
+  await db.query(`UPDATE ai_model_configs SET parameter_schema_json=jsonb_set(parameter_schema_json, '{prompt,maxLength}', '7000'),
+    limits_json=jsonb_set(limits_json, '{maxPromptLength}', '7000') WHERE model_code='wan3.0-r2v'`);
+  const customized = await read();
+  await db.query(sql);
+  assert.deepEqual(await read(), customized);
+});
+
+it("sets the chosen Wan 3.0 platform cap to 5000 characters including composed content", async () => {
+  const rows = (await db.query(`SELECT model_code, parameter_schema_json, limits_json, pricing_json, status
+    FROM ai_model_configs ORDER BY model_code`)).rows;
+  // The preceding test customized the limit; the new migration must apply the
+  // explicitly requested platform policy to that model only.
+  const sql = await readFile('packages/db/migrations/20261114-wan30-platform-prompt-limit.sql', 'utf8');
+  await db.query(sql);
+  const updated = (await db.query(`SELECT model_code, parameter_schema_json, limits_json, pricing_json, status
+    FROM ai_model_configs ORDER BY model_code`)).rows;
+  const expected = structuredClone(rows);
+  const wan = expected.find(row => row.model_code === 'wan3.0-r2v')!;
+  Object.assign(wan.parameter_schema_json.prompt, { maxLength: 5000, limitUnit: 'characters' });
+  Object.assign(wan.limits_json, { maxPromptLength: 5000, promptLengthUnit: 'characters' });
+  assert.deepEqual(updated, expected);
+  await db.query(sql);
+  assert.deepEqual((await db.query(`SELECT model_code, parameter_schema_json, limits_json, pricing_json, status
+    FROM ai_model_configs ORDER BY model_code`)).rows, expected);
+  const model = { ...input().model, parameterSchema: wan.parameter_schema_json, limits: wan.limits_json };
+  const style = { mediaType: 'video', style: '电影写实' };
+  const overhead = [...composeGenerationPrompt('', style)].length + 1;
+  const body = '🎬'.repeat(5000 - overhead);
+  const execution = composeGenerationPrompt(body, style);
+  const request = { ...input(), model, allowRewrite: false, prompt: execution,
+    complete: async () => { throw new Error('ordinary generation must not rewrite'); } };
+  assert.equal([...execution].length, 5000);
+  assert.equal((await prepareGenerationPrompt(db, request)).prompt, execution);
+  await assert.rejects(prepareGenerationPrompt(db, { ...request, prompt: execution + '字' }), { code: 'model_prompt_too_long' });
+});
 
 it("revalidates the adopted draft with full style composition and does not replay a result for a changed style", async () => {
   const request = input();

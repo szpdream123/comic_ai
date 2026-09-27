@@ -860,6 +860,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20261112-team-asset-action-category.sql",
       sql: await readFile(join(rootDir, ...TEAM_ASSET_ACTION_CATEGORY_RELATIVE_PATH), "utf8"),
     },
+    {
+      name: "20261113-remove-undocumented-wan30-prompt-limit.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261113-remove-undocumented-wan30-prompt-limit.sql"), "utf8"),
+    },
+    {
+      name: "20261114-wan30-platform-prompt-limit.sql",
+      sql: await readFile(join(rootDir, "packages/db/migrations/20261114-wan30-platform-prompt-limit.sql"), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

@@ -14,7 +14,7 @@ import {
   WORKBENCH_THEME_OPTIONS,
 } from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&canvas-inline-prompt-editor=1&skill-media-upload=8";
 import { buildProjectCreateRequest } from "./project-create-request.js";
-import { composeGenerationPrompt, formatGenerationPromptCount } from "../../shared/generation-prompt-policy.js";
+import { composeGenerationPrompt, formatGenerationPromptCount, generationPromptExceedsLimit, measureGenerationPrompt, resolveGenerationPromptLimit } from "../../shared/generation-prompt-policy.js";
 import { canSimplifyPrompt, createPromptSimplificationController, previewSimplifiedPrompt, withPromptSimplificationLoading } from "./episode-prompt-simplification.js";
 import { normalizeReferenceMediaUrl } from "./reference-media-identity.js";
 import {
@@ -44286,7 +44286,7 @@ function syncPromptSimplificationControls(workbench) {
     button.disabled = Boolean(controller?.pending)
       || (workbench.promptCompositionCache?.key === snapshot.compositionKey && workbench.promptCompositionCache?.settled === false)
       || !canSimplifyPrompt(snapshot);
-    button.title = canSimplifyPrompt(snapshot) ? "精简后预览，确认后应用" : "提示词超过当前模型上限时可精简";
+    button.title = canSimplifyPrompt(snapshot) ? "精简后预览，确认后应用" : "请输入图片或视频提示词后精简";
     button.textContent = controller?.pending ? "正在精简…" : "AI 精简提示词";
   }
   const restore = root?.querySelector?.('[data-action="restore-generation-prompt"]');
@@ -44300,7 +44300,12 @@ function syncPromptSimplificationControls(workbench) {
 
 function blockOverflowPromptSubmission(workbench) {
   const snapshot = getPromptSimplificationSnapshot(workbench);
-  if (!canSimplifyPrompt(snapshot)) return false;
+  const limit = resolveGenerationPromptLimit(snapshot.model);
+  const length = measureGenerationPrompt(snapshot.prompt, limit);
+  const overflow = snapshot.model?.promptBudget && length !== null
+    ? length + snapshot.model.promptBudget.additionalLength > limit.maximum
+    : generationPromptExceedsLimit(composeGenerationPrompt(snapshot.prompt, snapshot.model?.promptComposition), limit);
+  if (!canSimplifyPrompt(snapshot) || !overflow) return false;
   workbench.ui.validationMessage = "";
   const validation = workbench.root?.querySelector?.(".episode-replica-prompt .episode-replica-validation");
   if (validation) validation.textContent = "";

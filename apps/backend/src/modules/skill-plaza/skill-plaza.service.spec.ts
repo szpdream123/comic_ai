@@ -574,7 +574,7 @@ describe("skill plaza admin review", { concurrency: false }, () => {
     assert.match(shot, /小说转剧本流水线/);
     assert.match(shot, /分镜手册 15秒 转场/);
     assert.match(shot, /剧本格式规范/);
-    assert.match(shot, /长篇改编工作流/);
+    assert.doesNotMatch(shot, /长篇改编工作流/);
     assert.doesNotMatch(shot, /剧本改编规范/);
     assert.doesNotMatch(shot, /校验器正则 退出码/);
     const unstaged = composePlazaSkillStageInstructions({ files });
@@ -591,5 +591,54 @@ describe("skill plaza admin review", { concurrency: false }, () => {
     assert.match(userSkill, /我的风格手册/);
     assert.match(userSkill, /对白要短/);
     assert.match(userSkill, /示例段落/);
+  });
+
+  it("isolates known legacy screenplay documents without reclassifying custom shared files", () => {
+    const references = [
+      { name: "example.md", content: "# 详细场次示例（正文可见版）\n此示例只展示输出格式和详细度，不复制人物、地点或剧情。\n正式剧本正文" },
+      { name: "format-spec.md", content: "# 详细中文剧本格式规范（正文可见版）\n正式 Word 只按以下顺序交付：\n合理服装外观" },
+      { name: "qa-checklist.md", content: "# 详细剧本 QA 清单（正文与内部分析分离）\n每集表演时长约60至90秒，正文不超过3000字" },
+    ];
+    for (const prefix of ["", "references/"]) for (const reference of references) {
+      const file = { ...reference, name: prefix + reference.name };
+      for (const stage of ["shot", "scene", "character", "prop"]) {
+        assert.equal(composePlazaSkillStageInstructions({ files: [file], stage }), "");
+      }
+      assert.ok(composePlazaSkillStageInstructions({ files: [file], stage: "script" }).includes(reference.content));
+      assert.ok(composePlazaSkillStageInstructions({ files: [file] }).includes(reference.content));
+      const custom = { ...file, content: "custom shared guidance" };
+      assert.match(composePlazaSkillStageInstructions({ files: [custom], stage: "shot" }), /custom shared guidance/);
+      assert.deepEqual(resolvePlazaSkillWorkflowStages([{ title: "通用手册", files: [file] }]),
+        resolvePlazaSkillWorkflowStages([{ title: "通用手册", files: [custom] }]));
+      assert.equal(composePlazaSkillStageInstructions({ files: [{ ...file, name: "scripts/" + reference.name }], stage: "script" }), "");
+    }
+  });
+
+  it("keeps legacy screenplay references out of the shot stage without dropping shared instructions", () => {
+    const names = ["novel-to-script.md", "laoli-screenplay-gate.md", "adaptation-workflow.md", "剧本.md", "剧本大纲.md", "分镜二轮精修.md"];
+    const files = [
+      { name: "SKILL.md", content: "shared-entry" },
+      { name: "references/format-spec.md", content: "shared-format" },
+      { name: "references/shot.md", content: "shot-fidelity" },
+      { name: "references/分镜.md", content: "shot-alias" },
+      ...names.map((name, index) => ({ name: `references/${name}`, content: `screenplay-only-${index}${name === "分镜二轮精修.md" ? " IP短剧剧本精修师 输出最终版标准格式短剧剧本" : ""}` })),
+    ];
+    const shot = composePlazaSkillStageInstructions({ files, stage: "shot" });
+    assert.match(shot, /shared-entry/);
+    assert.match(shot, /shared-format/);
+    assert.match(shot, /shot-fidelity/);
+    assert.match(shot, /shot-alias/);
+    assert.doesNotMatch(shot, /screenplay-only-/);
+    const script = composePlazaSkillStageInstructions({ files, stage: "script" });
+    const unstaged = composePlazaSkillStageInstructions({ files });
+    names.forEach((_, index) => {
+      assert.ok(script.includes(`screenplay-only-${index}`));
+      assert.ok(unstaged.includes(`screenplay-only-${index}`));
+    });
+    assert.doesNotMatch(script, /shot-fidelity|shot-alias/);
+    const customFile = { name: "references/分镜二轮精修.md", content: "custom-shot-polishing" };
+    assert.match(composePlazaSkillStageInstructions({ files: [customFile], stage: "shot" }), /custom-shot-polishing/);
+    assert.doesNotMatch(composePlazaSkillStageInstructions({ files: [customFile], stage: "script" }), /custom-shot-polishing/);
+    assert.deepEqual(resolvePlazaSkillWorkflowStages([{ title: "镜头润色", files: [customFile] }]), ["shot"]);
   });
 });
