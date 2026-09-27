@@ -3,6 +3,7 @@ import { queryOne } from "../shared/db/sql.ts";
 import { settleReservationAllocationInTransaction } from "../credit-billing/credit-ledger.service.ts";
 import { resolveGenerationBillingAmount } from "../credit-billing/team-member-generation-credit.service.ts";
 import { aggregateWorkflowStatus } from "../workflow-task/workflow-task.service.ts";
+import { GENERATION_ARTIFACT_LEASE_BUSY } from "./generation-skipped-coordinator.ts";
 import {
   parseGptImageArtifactRecoveryState,
   planGptImageArtifactRecovery,
@@ -20,6 +21,8 @@ interface GptImageArtifactRecoveryTaskRow {
   reservation_id: string | null;
   amount_reserved: number | string | null;
   provider_status_json: Record<string, unknown> | string | null;
+  locked_by: string | null;
+  locked_until: Date | string | null;
 }
 
 export async function handleGptImageArtifactQueueExhaustion(
@@ -43,6 +46,8 @@ export async function handleGptImageArtifactQueueExhaustion(
           task.status AS task_status,
           task.failure_code AS task_failure_code,
           task.current_attempt_id,
+          task.locked_by,
+          task.locked_until,
           task.input_snapshot_json,
           provider_request.id AS provider_request_id,
           reservation.id AS reservation_id,
@@ -93,6 +98,17 @@ export async function handleGptImageArtifactQueueExhaustion(
     }
 
     const providerStatus = readRecord(row.provider_status_json);
+    if (
+      (input.error as { failureCode?: string } | null)?.failureCode === GENERATION_ARTIFACT_LEASE_BUSY
+      || (row.locked_by?.startsWith("gpt-image-artifact-finalizer:")
+        && row.locked_until && new Date(row.locked_until).getTime() > input.now.getTime())
+    ) {
+      // A bounded waiter owns neither the lease nor an upload failure. The
+      // durable running task is picked up by maintenance once its lease expires.
+      // A late failure callback must also leave a successor's live lease intact.
+      await db.query("COMMIT");
+      return "retry_pending";
+    }
     const previous = parseGptImageArtifactRecoveryState(providerStatus.artifactRecovery);
     if (
       previous?.state === "manual_review"

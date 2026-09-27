@@ -14,6 +14,7 @@ import type { UploadSessionRuntime } from "../storage/upload-session.service.ts"
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
 import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
+import { assertImageArtifactLeaseActive, isImageArtifactLeaseLost } from "./gpt-image-artifact-lease.ts";
 
 export interface GptImageArtifactTaskContext {
   userId: string;
@@ -161,6 +162,7 @@ export async function persistGptImageArtifact(
       downloadUrl: urls.downloadUrl,
     };
   } catch (error) {
+    if (isImageArtifactLeaseLost(error)) throw error;
     const storageObjectId = pendingStorageObjectId ?? readErrorStorageObjectId(error);
     let failureCode = readErrorFailureCode(error);
     if (pendingStorageObjectKey && failureCode !== "provider_output_download_failed" && failureCode !== "provider_output_upload_failed") {
@@ -315,6 +317,7 @@ async function uploadProviderArtifactBytesToStorage(
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     try {
+      await assertImageArtifactLeaseActive(db);
       const attemptTimeoutMs = resolveRecoveryAttemptTimeoutMs(uploadTimeoutMs, input.recoveryDeadlineAt);
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
@@ -334,6 +337,7 @@ async function uploadProviderArtifactBytesToStorage(
         uploadResult,
       };
     } catch (error) {
+      if (isImageArtifactLeaseLost(error)) throw error;
       const transferError = annotateArtifactTransferError(
         error,
         "provider_output_upload_failed",
@@ -423,6 +427,7 @@ async function uploadProviderArtifactUrlToStorage(
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     let response: Response | null = null;
     try {
+      await assertImageArtifactLeaseActive(db);
       const fetchTimeoutMs = resolveRecoveryAttemptTimeoutMs(
         input.fetchTimeoutMs ?? 5 * 60_000,
         input.recoveryDeadlineAt,
@@ -471,6 +476,7 @@ async function uploadProviderArtifactUrlToStorage(
       if (input.mediaKind === "image") {
         assertDecodedImageContent(bytes, contentType);
       }
+      await assertImageArtifactLeaseActive(db);
       const attemptTimeoutMs = resolveRecoveryAttemptTimeoutMs(uploadTimeoutMs, input.recoveryDeadlineAt);
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
@@ -490,6 +496,7 @@ async function uploadProviderArtifactUrlToStorage(
         uploadResult,
       };
     } catch (error) {
+      if (isImageArtifactLeaseLost(error)) throw error;
       const failureCode = !response || readErrorFailureCode(error) === "provider_output_download_failed"
         ? "provider_output_download_failed"
         : "provider_output_upload_failed";

@@ -5,8 +5,11 @@ import {
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import { selectGenerationQueue, type GenerationQueueConfig } from "./generation-queue.config.ts";
-import { isGenerationArtifactStageNotReadyFailure } from "./generation-skipped-coordinator.ts";
+import { GENERATION_ARTIFACT_LEASE_BUSY, isGenerationArtifactStageNotReadyFailure } from "./generation-skipped-coordinator.ts";
 import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
+
+const artifactLeaseMaxRetries = 12;
+const artifactLeaseInitialRetryDelayMs = 30_000;
 
 type SubmitVideoResult =
   | { status: "submitted"; externalRequestId: string | null; attemptId?: string }
@@ -437,6 +440,10 @@ export async function handleGenerationFinalizeArtifactJob(
         ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
       });
+      if (result.status === "failed" && result.failureCode === GENERATION_ARTIFACT_LEASE_BUSY) {
+        await enqueueArtifactLeaseRetryJob(input);
+        return { status: "rate_limited", failureCode: result.failureCode };
+      }
       if (result.status === "failed") {
         throwIfRetryableArtifactTransferFailure(result.failureCode);
         throwIfArtifactStageNotReady(result.failureCode);
@@ -453,6 +460,10 @@ export async function handleGenerationFinalizeArtifactJob(
         ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
       });
+      if (result.status === "failed" && result.failureCode === GENERATION_ARTIFACT_LEASE_BUSY) {
+        await enqueueArtifactLeaseRetryJob(input);
+        return { status: "rate_limited", failureCode: result.failureCode };
+      }
       if (result.status === "failed") {
         throwArtifactProcessorFailure("image", result.failureCode);
       }
@@ -487,6 +498,12 @@ export async function handleGenerationFetchArtifactJob(
   }
   try {
     const result = await runFetchArtifactProcessor(input);
+    if (result.status === "failed" && result.failureCode === GENERATION_ARTIFACT_LEASE_BUSY) {
+      // Lease contention consumes no transfer retry budget and must retain a
+      // successor even when a restarted worker cannot claim the old lease yet.
+      await enqueueArtifactLeaseRetryJob(input);
+      return { status: "rate_limited", failureCode: result.failureCode, queuedPersist: false };
+    }
     if (result.status === "failed") {
       throwArtifactProcessorFailure(input.job.data.mediaType, result.failureCode);
     }
@@ -535,6 +552,10 @@ export async function handleGenerationPersistArtifactJob(
   }
   try {
     const result = await handlePersistOnlyFinalizeArtifactJob(input);
+    if (result.status === "failed" && result.failureCode === GENERATION_ARTIFACT_LEASE_BUSY) {
+      await enqueueArtifactLeaseRetryJob(input);
+      return { status: "rate_limited", failureCode: result.failureCode };
+    }
     if (result.status === "failed") {
       throw Object.assign(new Error(result.failureCode), { failureCode: result.failureCode });
     }
@@ -744,6 +765,29 @@ async function enqueueImagePollRateLimitRetryJob(
       removeOnFail: { age: 604800, count: 50000 },
     },
   );
+}
+
+async function enqueueArtifactLeaseRetryJob(input: GenerationWorkerHandlerInput<GenerationArtifactJobData>) {
+  try {
+    await enqueueFinalizeRateLimitRetryJob(input, artifactLeaseRetryDelayMs(input.job.data));
+  } catch (error) {
+    // A failed successor publication is still a lease wait, not a failed upload.
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+      failureCode: GENERATION_ARTIFACT_LEASE_BUSY,
+    });
+  }
+}
+
+function artifactLeaseRetryDelayMs(data: unknown) {
+  const retrySequence = nextRetrySequence(data);
+  if (retrySequence > artifactLeaseMaxRetries) {
+    // Stop this queue wave; durable lease maintenance owns the next takeover.
+    // This is not a failed upload and must not open artifact transfer recovery.
+    throw Object.assign(new UnrecoverableError(GENERATION_ARTIFACT_LEASE_BUSY), {
+      failureCode: GENERATION_ARTIFACT_LEASE_BUSY,
+    });
+  }
+  return artifactLeaseInitialRetryDelayMs;
 }
 
 async function enqueueFinalizeRateLimitRetryJob(

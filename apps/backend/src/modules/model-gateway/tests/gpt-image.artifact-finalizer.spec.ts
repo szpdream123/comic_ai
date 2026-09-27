@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { createImageArtifactLeaseGuard } from "../gpt-image-artifact-lease.ts";
 
 import {
   __gptImageArtifactFinalizerTestUtils,
@@ -7,6 +8,39 @@ import {
 } from "../gpt-image.artifact-finalizer.ts";
 
 describe("gpt-image artifact finalizer", () => {
+  for (const phase of ["after_download", "upload_retry"] as const) {
+    it(`does not start another PUT after lease takeover: ${phase}`, async () => {
+      let owner = "old";
+      let puts = 0;
+      const row = {
+        id: "storage", project_id: null, canvas_project_id: null, bucket: "test", object_key: "image.png",
+        content_type: "image/png", size_bytes: 8, provider: "test", status: "pending_upload",
+        metadata_json: { taskId: "task", attemptId: "attempt" }, created_by_user_id: "user", created_at: new Date(),
+      };
+      const guard = createImageArtifactLeaseGuard({ async query(sql) {
+        if (["BEGIN", "COMMIT", "ROLLBACK", "SELECT 1"].includes(sql)) return { rows: [] };
+        if (sql.includes("attempt.locked_by AS attempt_owner")) return { rows: [{ status: "running", locked_by: owner, attempt_owner: owner }] };
+        if (sql.includes("FROM storage_objects") && sql.includes("metadata_json->>'taskId'")) return { rows: [row] };
+        throw new Error(`unexpected stale side effect: ${sql}`);
+      } } as never, { taskId: "task", attemptId: "attempt", owner });
+      const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+      await assert.rejects(persistGptImageArtifact(guard.db, {
+        task: { userId: "user", projectId: null, taskId: "task", attemptId: "attempt", createdByUserId: "user" },
+        snapshot: {}, externalRequestId: "provider", now: new Date(),
+        artifact: { mediaType: "image", mimeType: "image/png", ...(phase === "upload_retry"
+          ? { b64Json: Buffer.from(bytes).toString("base64") } : { url: "https://provider.example.test/image.png" }) },
+        env: { GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3", GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0" },
+        fetchImpl: (async () => new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(bytes); controller.close(); owner = "new";
+        } }), { headers: { "content-type": "image/png", "content-length": "8" } })) as typeof fetch,
+        runtime: { bucket: "test", provider: "test", adapter: {
+          async headObject() { return { exists: false }; },
+          async putObject() { puts += 1; owner = "new"; throw new Error("simulated upload timeout"); },
+        } } as never,
+      }), { failureCode: "generation_artifact_lease_busy" });
+      assert.equal(puts, phase === "after_download" ? 0 : 1);
+    });
+  }
   it("uses a five-minute default image download timeout and keeps audio separate", () => {
     assert.equal(
       __gptImageArtifactFinalizerTestUtils.readArtifactDownloadTimeoutMs({}, "image"),

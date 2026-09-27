@@ -17,6 +17,8 @@ import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assi
 import type { AssetType } from "../project/asset.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import { runWithDatabaseContext } from "../shared/db/dev-db.ts";
+import { createImageArtifactLeaseGuard, isImageArtifactLeaseLost } from "./gpt-image-artifact-lease.ts";
 import type { UploadSessionRuntime } from "../storage/upload-session.service.ts";
 import { findStorageObjectByKey } from "../storage/storage.service.ts";
 import {
@@ -43,6 +45,7 @@ import { buildGenerationProviderPayloadRef } from "./generation-provider-request
 import { refreshGenerationInputUrls } from "./generation-input-url-refresh.ts";
 import {
   GENERATION_ARTIFACT_FETCH_NOT_READY,
+  GENERATION_ARTIFACT_LEASE_BUSY,
   resolveGenerationArtifactStageUnavailable,
   resolveGenerationSkippedNextAction,
 } from "./generation-skipped-coordinator.ts";
@@ -1566,9 +1569,13 @@ export async function finalizeGptImageArtifactJob(
     attemptId: row.attempt_id,
     now: input.now,
   });
-  if (!artifactLease) return { status: "skipped" };
+  if (!artifactLease) return resolveGenerationArtifactStageUnavailable(db, {
+    taskId: row.task_id,
+    failureCode: GENERATION_ARTIFACT_LEASE_BUSY,
+  });
 
   return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
+  const db = artifactLeaseGuards.get(artifactLease)!.db;
   let persisted: PersistedGptImageArtifact;
   try {
     await assertCanvasGenerationAssignmentActive(db, snapshot);
@@ -1622,6 +1629,7 @@ export async function finalizeGptImageArtifactJob(
         }
       : storedArtifact;
   } catch (error) {
+    if (isImageArtifactLeaseLost(error)) throw error;
     const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
     const errorMessage = translateProviderErrorMessage(error, {
       failureCode,
@@ -1836,6 +1844,19 @@ export async function fetchGptImageArtifactJob(
       failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
     });
   }
+  const snapshot = parseSnapshot(row.input_snapshot_json);
+  const artifactLease = await claimGptImageArtifactFinalizeLease(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  });
+  if (!artifactLease) return resolveGenerationArtifactStageUnavailable(db, {
+    taskId: row.task_id,
+    failureCode: GENERATION_ARTIFACT_LEASE_BUSY,
+  });
+
+  return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
+  const db = artifactLeaseGuards.get(artifactLease)!.db;
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
     attemptId: row.attempt_id,
@@ -1843,17 +1864,8 @@ export async function fetchGptImageArtifactJob(
     now: input.now,
   });
   if (existing) return { status: "succeeded" };
-  const snapshot = parseSnapshot(row.input_snapshot_json);
   const artifact = parseArtifactFromProviderResponse(parseProviderResponse(row.provider_response_redacted_json));
   if (!artifact) return { status: "failed", failureCode: "provider_output_missing" };
-  const artifactLease = await claimGptImageArtifactFinalizeLease(db, {
-    taskId: row.task_id,
-    attemptId: row.attempt_id,
-    now: input.now,
-  });
-  if (!artifactLease) return { status: "skipped" };
-
-  return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
@@ -1921,9 +1933,13 @@ export async function persistGptImageArtifactJob(
     attemptId: row.attempt_id,
     now: input.now,
   });
-  if (!artifactLease) return { status: "skipped" };
+  if (!artifactLease) return resolveGenerationArtifactStageUnavailable(db, {
+    taskId: row.task_id,
+    failureCode: GENERATION_ARTIFACT_LEASE_BUSY,
+  });
 
   return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
+  const db = artifactLeaseGuards.get(artifactLease)!.db;
   const snapshot = parseSnapshot(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   const providerLabel = "model-gateway";
@@ -2580,12 +2596,15 @@ interface GptImageArtifactFinalizeLease {
   owner: string;
 }
 
+const artifactLeaseGuards = new WeakMap<GptImageArtifactFinalizeLease, ReturnType<typeof createImageArtifactLeaseGuard>>();
+const imageArtifactLeaseDurationMs = 5 * 60_000;
+
 async function claimGptImageArtifactFinalizeLease(
   db: SqlDatabase,
   input: { taskId: string; attemptId: string; now: Date },
 ): Promise<GptImageArtifactFinalizeLease | null> {
   const owner = `gpt-image-artifact-finalizer:${randomUUID()}`;
-  const lockedUntil = new Date(input.now.getTime() + 20 * 60_000);
+  const lockedUntil = new Date(input.now.getTime() + imageArtifactLeaseDurationMs);
   const claim = await queryOne<{ claimed: boolean }>(
     db,
     `
@@ -2625,15 +2644,28 @@ async function runWithGptImageArtifactFinalizeLease<T>(
   lease: GptImageArtifactFinalizeLease,
   operation: () => Promise<T>,
 ) {
+  const guard = createImageArtifactLeaseGuard(db, lease);
+  artifactLeaseGuards.set(lease, guard);
+  let renewing: Promise<void> | null = null;
   const heartbeat = setInterval(() => {
-    void renewGptImageArtifactFinalizeLease(db, lease).catch(() => undefined);
+    if (renewing || guard.finalized) return;
+    renewing = runWithDatabaseContext(() => renewGptImageArtifactFinalizeLease(db, lease))
+      .catch(() => guard.invalidate())
+      .finally(() => { renewing = null; });
   }, 30_000);
   heartbeat.unref?.();
   try {
     return await operation();
+  } catch (error) {
+    if (isImageArtifactLeaseLost(error)) {
+      return { status: "failed" as const, failureCode: GENERATION_ARTIFACT_LEASE_BUSY };
+    }
+    throw error;
   } finally {
     clearInterval(heartbeat);
+    await renewing;
     await releaseGptImageArtifactFinalizeLease(db, lease).catch(() => undefined);
+    artifactLeaseGuards.delete(lease);
   }
 }
 
@@ -2642,8 +2674,8 @@ async function renewGptImageArtifactFinalizeLease(
   lease: GptImageArtifactFinalizeLease,
 ) {
   const now = new Date();
-  const lockedUntil = new Date(now.getTime() + 20 * 60_000);
-  await db.query(
+  const lockedUntil = new Date(now.getTime() + imageArtifactLeaseDurationMs);
+  const renewed = await db.query(
     `
       WITH renewed_task AS (
         UPDATE tasks
@@ -2652,6 +2684,7 @@ async function renewGptImageArtifactFinalizeLease(
         WHERE id = $1
           AND current_attempt_id = $2
           AND locked_by = $3
+          AND locked_until > $5
         RETURNING id
       )
       UPDATE task_attempts
@@ -2661,9 +2694,13 @@ async function renewGptImageArtifactFinalizeLease(
         AND task_id = $1
         AND locked_by = $3
         AND EXISTS (SELECT 1 FROM renewed_task)
+      RETURNING id
     `,
     [lease.taskId, lease.attemptId, lease.owner, lockedUntil, now],
   );
+  if (renewed.rows.length === 0) {
+    throw Object.assign(new Error(GENERATION_ARTIFACT_LEASE_BUSY), { failureCode: GENERATION_ARTIFACT_LEASE_BUSY });
+  }
 }
 
 async function releaseGptImageArtifactFinalizeLease(

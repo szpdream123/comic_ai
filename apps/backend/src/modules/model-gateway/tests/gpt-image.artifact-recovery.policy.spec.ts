@@ -86,6 +86,28 @@ describe("GPT image artifact recovery policy", () => {
     }
   });
 
+  it("bounds repeated failed upload waves by the original recovery deadline", () => {
+    let previous: unknown = null;
+    let now = startedAt;
+    let stopped = false;
+    for (let round = 1; round <= 8; round += 1) {
+      const decision = planGptImageArtifactRecovery({
+        now, previous, failure: { failureCode: "provider_output_upload_failed" },
+      });
+      assert.equal(decision.deadlineAt.toISOString(), "2026-08-03T16:00:00.000Z");
+      if (decision.action === "manual_review") {
+        assert.equal(decision.nextRetryAt, null);
+        assert.equal(resolveGptImageArtifactRecoveryDispatch(decision, now), "skip");
+        stopped = true;
+        break;
+      }
+      assert.ok(decision.nextRetryAt < decision.deadlineAt);
+      previous = decision;
+      now = new Date(decision.nextRetryAt.getTime() + 27.5 * 60_000);
+    }
+    assert.equal(stopped, true, "recovery must not reset its deadline on every wave");
+  });
+
   it("classifies stable client, missing-output, and invalid-media errors as permanent", () => {
     for (const failure of [
       { failureCode: "provider_output_missing" },

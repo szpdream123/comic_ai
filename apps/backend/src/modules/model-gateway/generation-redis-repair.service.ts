@@ -30,6 +30,7 @@ import {
 } from "./generation-model-config-snapshot.ts";
 import { resolveGptImageArtifactRecoveryDispatch } from "./gpt-image-artifact-recovery.policy.ts";
 import { handleGptImageArtifactQueueExhaustion } from "./gpt-image-artifact-recovery.service.ts";
+import { GENERATION_ARTIFACT_LEASE_BUSY } from "./generation-skipped-coordinator.ts";
 
 interface GenerationRepairTaskRow {
   task_id: string;
@@ -55,6 +56,9 @@ interface RunningSeedancePollRepairRow {
 
 interface GenerationQueueFailureTaskRow {
   task_id: string;
+  task_type: string;
+  locked_by: string | null;
+  locked_until: Date | string | null;
   workflow_id: string;
   current_attempt_id: string | null;
   reservation_id: string | null;
@@ -516,6 +520,9 @@ export async function failGenerationTaskAfterQueueError(
       `
       SELECT
         task.id AS task_id,
+        task.task_type,
+        task.locked_by,
+        task.locked_until,
         task.workflow_id,
         task.current_attempt_id,
         task.input_snapshot_json,
@@ -539,6 +546,17 @@ export async function failGenerationTaskAfterQueueError(
       [input.taskId, enforceExpectedAttempt, input.expectedAttemptId ?? null],
     );
     if (!row) {
+      await db.query("COMMIT");
+      return false;
+    }
+
+    // Queue exhaustion owns neither an artifact lease nor its transfer outcome.
+    // Leave a live video owner (including a successor of the failed job) intact.
+    if (row.task_type === "episode_generate_video" && (
+      input.failureCode === GENERATION_ARTIFACT_LEASE_BUSY
+      || (row.locked_by?.startsWith("seedance-video-finalizer:")
+        && row.locked_until && new Date(row.locked_until).getTime() > input.now.getTime())
+    )) {
       await db.query("COMMIT");
       return false;
     }
@@ -934,7 +952,7 @@ export async function repairRunningSeedancePollJobs(
               AND target_asset.project_id = t.project_id
           )
         )
-        AND NOT EXISTS (
+        AND (NOT EXISTS (
           SELECT 1
           FROM outbox_events oe
           WHERE oe.user_id = COALESCE(workflow.created_by_user_id, project.owner_user_id)
@@ -946,10 +964,20 @@ export async function repairRunningSeedancePollJobs(
             )
             AND oe.status IN ('pending', 'processing', 'failed')
           LIMIT 1
-        )
+        ) OR (
+          ((t.task_type = 'episode_generate_image' AND t.locked_by LIKE 'gpt-image-artifact-finalizer:%')
+            OR (t.task_type = 'episode_generate_video' AND (t.locked_by LIKE 'seedance-video-finalizer:%' OR t.locked_by = 'seedance-video-finalize-worker')))
+          AND t.locked_until < $3
+          AND (t.last_dispatched_at IS NULL OR t.last_dispatched_at <= t.locked_until)
+        ))
         AND (
           t.last_dispatched_at IS NULL
           OR t.last_dispatched_at < $2
+          OR (
+            ((t.task_type = 'episode_generate_image' AND t.locked_by LIKE 'gpt-image-artifact-finalizer:%')
+              OR (t.task_type = 'episode_generate_video' AND (t.locked_by LIKE 'seedance-video-finalizer:%' OR t.locked_by = 'seedance-video-finalize-worker')))
+            AND t.last_dispatched_at < $3::timestamptz - interval '30 seconds'
+          )
         )
         AND (
           t.task_type <> 'episode_generate_image'
@@ -996,6 +1024,11 @@ export async function repairRunningSeedancePollJobs(
         continue;
       }
     }
+    // Keep the dispatch claim, superseding a stranded outbox, and the new
+    // durable successor atomic. A crash here must not consume the only takeover.
+    const transactionalArtifactRepair = ["episode_generate_image", "episode_generate_video"].includes(candidate.task_type);
+    if (transactionalArtifactRepair) await db.query("BEGIN");
+    try {
     const claim = await markRunningFinalizeRepairClaimed(db, {
       taskId: candidate.task_id,
       taskType: candidate.task_type,
@@ -1004,7 +1037,28 @@ export async function repairRunningSeedancePollJobs(
       staleCutoff,
     });
     if (!claim.claimed) {
+      if (transactionalArtifactRepair) await db.query("COMMIT");
       continue;
+    }
+    if (transactionalArtifactRepair) {
+      await db.query(`
+        UPDATE outbox_events event
+        SET status = 'processed', processed_at = $3, updated_at = $3,
+            error_message = CASE WHEN task.task_type = 'episode_generate_video'
+              THEN 'video_artifact_lease_expired_superseded' ELSE 'image_artifact_lease_expired_superseded' END
+        FROM tasks task
+        WHERE task.id = $1 AND task.current_attempt_id = $2
+          AND ((task.task_type = 'episode_generate_image' AND task.locked_by LIKE 'gpt-image-artifact-finalizer:%')
+            OR (task.task_type = 'episode_generate_video' AND (task.locked_by LIKE 'seedance-video-finalizer:%' OR task.locked_by = 'seedance-video-finalize-worker')))
+          AND task.locked_until < $3
+          AND event.user_id = $4
+          AND event.event_type = 'generation.task.finalize_requested'
+          AND event.payload_json->>'taskId' = task.id::text
+          AND (event.payload_json->>'attemptId' = $2::text
+            OR (NOT (event.payload_json ? 'attemptId') AND task.attempt_count = 1))
+          AND event.status IN ('pending', 'processing', 'failed')
+          AND event.created_at <= task.locked_until
+      `, [candidate.task_id, candidate.current_attempt_id, input.now, candidate.user_id]);
     }
     if (claim.recoveredImageFailure) {
       await db.query(
@@ -1056,7 +1110,12 @@ export async function repairRunningSeedancePollJobs(
       finalizeMode: "retry_finalize",
       availableAt: input.now,
     });
+    if (transactionalArtifactRepair) await db.query("COMMIT");
     repairedTaskIds.push(candidate.task_id);
+    } catch (error) {
+      if (transactionalArtifactRepair) await db.query("ROLLBACK");
+      throw error;
+    }
   }
 
   return { repairedTaskIds };
@@ -1269,6 +1328,11 @@ async function markRunningFinalizeRepairClaimed(
           AND (
             last_dispatched_at IS NULL
             OR last_dispatched_at < $3
+            OR (
+              ((task_type = 'episode_generate_image' AND locked_by LIKE 'gpt-image-artifact-finalizer:%')
+                OR (task_type = 'episode_generate_video' AND (locked_by LIKE 'seedance-video-finalizer:%' OR locked_by = 'seedance-video-finalize-worker')))
+              AND last_dispatched_at < $2::timestamptz - interval '30 seconds'
+            )
           )
         FOR UPDATE
       ),

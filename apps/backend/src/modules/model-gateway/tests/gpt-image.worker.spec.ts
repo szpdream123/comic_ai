@@ -24,6 +24,7 @@ import {
   processGptImageSubmitJob,
 } from "../gpt-image.worker.ts";
 import { upsertQueuedGenerationTaskSnapshot } from "../generation-task-snapshot.service.ts";
+import { handleGptImageArtifactQueueExhaustion } from "../gpt-image-artifact-recovery.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 
@@ -661,7 +662,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("submits, defers finalization, then uploads the generated image to storage, persists the result, and consumes credits", async () => {
+  it("submits, defers finalization, then uploads the generated image to storage, persists the result, and consumes credits", async (t) => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -675,6 +676,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     );
     const providerCalls: Array<{ url: string; body: string }> = [];
     const uploadedBodies: unknown[] = [];
+    let afterUpload: (() => Promise<void>) | undefined;
     const runtime: UploadSessionRuntime = {
       mode: "cos",
       provider: "tencent_cos",
@@ -690,6 +692,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
         },
         async putObject(input) {
           uploadedBodies.push(input.body);
+          await afterUpload?.();
           return { eTag: "gpt-image-worker-etag" };
         },
       },
@@ -868,12 +871,79 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [imageTask.taskId],
       );
+      // A restarted worker must defer artifact work while the previous owner's
+      // lease is valid, then reuse the provider result as soon as it expires.
+      await db.query(
+        `UPDATE tasks SET locked_by = 'gpt-image-artifact-finalizer:interrupted',
+          locked_until = $2, heartbeat_at = $3 WHERE id = $1`,
+        [imageTask.taskId, new Date("2026-06-03T04:00:05.000Z"), new Date("2026-06-03T03:40:05.000Z")],
+      );
+      await db.query(
+        `UPDATE task_attempts SET locked_by = 'gpt-image-artifact-finalizer:interrupted',
+          locked_until = $2, heartbeat_at = $3 WHERE task_id = $1`,
+        [imageTask.taskId, new Date("2026-06-03T04:00:05.000Z"), new Date("2026-06-03T03:40:05.000Z")],
+      );
+      for (const processor of [fetchGptImageArtifactJob, persistGptImageArtifactJob, finalizeGptImageArtifactJob]) {
+        assert.deepEqual(await processor(db, {
+          taskId: imageTask.taskId, runtime, env, fetchImpl,
+          now: new Date("2026-06-03T04:00:04.000Z"),
+        }), { status: "failed", failureCode: "generation_artifact_lease_busy" });
+      }
+      assert.equal(uploadedBodies.length, 0);
+      assert.equal(providerCalls.length, 1);
+      assert.equal(await handleGptImageArtifactQueueExhaustion(db, {
+        taskId: imageTask.taskId,
+        error: Object.assign(new Error("generation_artifact_lease_busy"), { failureCode: "generation_artifact_lease_busy" }),
+        now: new Date("2026-06-03T04:00:04.000Z"),
+      }), "retry_pending");
+      const heldLease = await db.query<{ locked_by: string; locked_until: Date; heartbeat_at: Date }>(
+        `SELECT locked_by, locked_until, heartbeat_at FROM tasks WHERE id = $1
+         UNION ALL
+         SELECT locked_by, locked_until, heartbeat_at FROM task_attempts WHERE task_id = $1`,
+        [imageTask.taskId],
+      );
+      assert.equal(heldLease.rows.length, 2);
+      for (const lease of heldLease.rows) {
+        assert.equal(lease.locked_by, "gpt-image-artifact-finalizer:interrupted");
+        assert.equal(lease.locked_until.toISOString(), "2026-06-03T04:00:05.000Z");
+        assert.equal(lease.heartbeat_at.toISOString(), "2026-06-03T03:40:05.000Z");
+      }
+      // Artifact transfer timeouts also read the wall clock; keep it within the
+      // historical recovery window used by this integration fixture.
+      t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-03T04:00:05.000Z") });
+      // A paused upload can finish after another worker took over. Its return
+      // must not publish storage/handoff state, settle credits, or clear the new lease.
+      afterUpload = async () => {
+        const active = await db.query<{ locked_until: Date; heartbeat_at: Date }>(
+          "SELECT locked_until, heartbeat_at FROM tasks WHERE id = $1", [imageTask.taskId]);
+        assert.equal(active.rows[0]!.locked_until.getTime() - active.rows[0]!.heartbeat_at.getTime(), 300_000);
+        await db.query(`UPDATE tasks SET locked_by = 'gpt-image-artifact-finalizer:successor', locked_until = $2 WHERE id = $1`,
+          [imageTask.taskId, new Date("2026-06-03T04:00:06.000Z")]);
+        await db.query(`UPDATE task_attempts SET locked_by = 'gpt-image-artifact-finalizer:successor', locked_until = $2 WHERE task_id = $1`,
+          [imageTask.taskId, new Date("2026-06-03T04:00:06.000Z")]);
+      };
+      assert.deepEqual(await fetchGptImageArtifactJob(db, {
+        taskId: imageTask.taskId, runtime, env, fetchImpl, now: new Date("2026-06-03T04:00:05.000Z"),
+      }), { status: "failed", failureCode: "generation_artifact_lease_busy" });
+      const fenced = await db.query<{ locked_by: string; consumed: string; handoff: unknown }>(`
+        SELECT task.locked_by, reservation.amount_consumed AS consumed,
+          snapshot.provider_status_json->'artifactHandoff' AS handoff
+        FROM tasks task
+        JOIN credit_reservations reservation ON reservation.task_id = task.id
+        JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+        WHERE task.id = $1
+      `, [imageTask.taskId]);
+      assert.equal(fenced.rows[0]?.locked_by, "gpt-image-artifact-finalizer:successor");
+      assert.equal(Number(fenced.rows[0]?.consumed), 0);
+      assert.equal(fenced.rows[0]?.handoff, null);
+      assert.equal(providerCalls.length, 1);
+      afterUpload = undefined;
       const fetchArtifactResult = await fetchGptImageArtifactJob(db, {
         taskId: imageTask.taskId,
         runtime,
         env,
         fetchImpl,
-        now: new Date("2026-06-03T04:00:05.000Z"),
+        now: new Date("2026-06-03T04:00:06.000Z"),
       });
       const persistArtifactResult = await persistGptImageArtifactJob(db, {
         taskId: imageTask.taskId,
@@ -881,6 +951,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
         env,
         now: new Date("2026-06-03T04:00:06.000Z"),
       });
+      t.mock.timers.reset();
       const completedTaskResponse = await fetch(
         `${server.origin}/api/generation-tasks/${imageTask.taskId}`,
         { headers: { cookie } },
@@ -972,7 +1043,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(runningTask.status, "running");
       assert.deepEqual(fetchArtifactResult, { status: "succeeded" });
       assert.deepEqual(persistArtifactResult, { status: "succeeded" });
-      assert.equal(uploadedBodies.length, 1);
+      assert.equal(uploadedBodies.length, 2, "the interrupted PUT may finish but cannot publish; its successor recovers");
       assert.equal(uploadedBodies[0] instanceof Uint8Array, true);
       assert.equal(completedTaskResponse.status, 200);
       assert.equal(completedTask.status, "succeeded");

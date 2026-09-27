@@ -49,6 +49,48 @@ function artifactStageTaskDb(
 }
 
 describe("generation artifact recovery", () => {
+  it("hands exhausted lease waits to maintenance without changing transfer recovery, ownership, or credits", async () => {
+    for (const artifactRecovery of [undefined, {
+      state: "retry_pending", round: 1, startedAt: "2026-08-03T10:00:00.000Z",
+      nextRetryAt: "2026-08-03T10:02:00.000Z", deadlineAt: "2026-08-03T16:00:00.000Z",
+      lastFailureCode: "provider_output_upload_failed",
+    }]) {
+      const writes: string[] = [];
+      const db = { async query(sql: string) {
+        if (sql.includes("FOR UPDATE OF task")) return { rows: [{
+          task_id: "task", workflow_id: "workflow", task_status: "running",
+          current_attempt_id: "attempt", provider_request_id: "provider",
+          input_snapshot_json: {}, provider_status_json: { artifactRecovery },
+        }] };
+        if (/\b(?:UPDATE|INSERT|DELETE)\b/i.test(sql)) writes.push(sql);
+        return { rows: [] };
+      } };
+      assert.equal(await handleGptImageArtifactQueueExhaustion(db as never, {
+        taskId: "task", now: new Date("2026-08-03T11:00:00.000Z"),
+        error: { failureCode: "generation_artifact_lease_busy" },
+      }), "retry_pending");
+      assert.deepEqual(writes, [], "lease contention must not open or advance the six-hour transfer window");
+    }
+  });
+
+  it("does not let an earlier upload failure clear a successor's live artifact lease", async () => {
+    const writes: string[] = [];
+    const db = { async query(sql: string) {
+      if (sql.includes("FOR UPDATE OF task")) return { rows: [{
+        task_id: "task", workflow_id: "workflow", task_status: "running",
+        current_attempt_id: "attempt", provider_request_id: "provider",
+        input_snapshot_json: {}, provider_status_json: {},
+        locked_by: "gpt-image-artifact-finalizer:successor", locked_until: new Date("2026-08-03T11:05:00.000Z"),
+      }] };
+      if (/\b(?:UPDATE|INSERT|DELETE)\b/i.test(sql)) writes.push(sql);
+      return { rows: [] };
+    } };
+    assert.equal(await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task", now: new Date("2026-08-03T11:00:00.000Z"),
+      error: { failureCode: "provider_output_upload_failed" },
+    }), "retry_pending");
+    assert.deepEqual(writes, []);
+  });
   it("binds every artifact provider result to the durable current attempt", async () => {
     const [videoSource, audioSource, imageSource, imageRecoverySource] = await Promise.all([
       readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8"),
@@ -422,8 +464,23 @@ describe("generation artifact recovery", () => {
   });
 
   it("fails permanently when a provider-succeeded image has no artifact to finalize", async () => {
+    let leaseOwner: unknown;
+    let released = false;
     const result = await fetchGptImageArtifactJob({
-      async query(sql) {
+      async query(sql, params) {
+        if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
+        if (sql.includes("WITH claimed_task AS") && sql.includes("AS claimed")) {
+          leaseOwner = params[2];
+          return { rows: [{ claimed: true }] };
+        }
+        if (sql.includes("attempt.locked_by AS attempt_owner")) {
+          return { rows: [{ status: "running", locked_by: leaseOwner, attempt_owner: leaseOwner }] };
+        }
+        if (sql.includes("WITH released_task AS")) {
+          assert.equal(params[2], leaseOwner);
+          released = true;
+          return { rows: [] };
+        }
         if (sql.includes("FROM tasks t") && sql.includes("LEFT JOIN provider_requests pr")) {
           return {
             rows: [{
@@ -455,9 +512,11 @@ describe("generation artifact recovery", () => {
     });
 
     assert.deepEqual(result, { status: "failed", failureCode: "provider_output_missing" });
+    assert.equal(released, true);
   });
 
   it("does not start another artifact transfer while a finalize lease is active", async () => {
+    for (const taskStatus of ["running", "succeeded", "canceled"]) {
     let uploadCalls = 0;
     const result = await fetchGptImageArtifactJob({
       async query(sql) {
@@ -491,6 +550,9 @@ describe("generation artifact recovery", () => {
         if (sql.includes("WITH claimed_task AS") && sql.includes("AS claimed")) {
           return { rows: [{ claimed: false }] };
         }
+        if (sql.includes("t.status AS task_status") && sql.includes("t.failure_code")) {
+          return { rows: [{ task_status: taskStatus, failure_code: null }] };
+        }
         throw new Error(`unexpected_query:${sql}`);
       },
     } as never, {
@@ -508,8 +570,11 @@ describe("generation artifact recovery", () => {
       now: new Date("2026-08-03T10:00:00.000Z"),
     });
 
-    assert.deepEqual(result, { status: "skipped" });
+    assert.deepEqual(result, taskStatus === "running"
+      ? { status: "failed", failureCode: "generation_artifact_lease_busy" }
+      : { status: "skipped" });
     assert.equal(uploadCalls, 0);
+    }
   });
 
   it("marks missing provider image output unrecoverable at the queue boundary", async () => {
@@ -766,8 +831,14 @@ describe("generation artifact recovery", () => {
   it("continues persist recovery after a generation queue failure", async () => {
     let attemptReopened = false;
     let uploadRecordEnsured = false;
+    let leaseOwner: string | null = null;
+    let taskFinalized = false;
     const result = await persistGptImageArtifactJob({
-      async query(sql) {
+      async query(sql, params = []) {
+        if (sql.includes("attempt.locked_by AS attempt_owner")) {
+          return { rows: [{ status: taskFinalized ? "succeeded" : "running",
+            locked_by: taskFinalized ? null : leaseOwner, attempt_owner: leaseOwner }] };
+        }
         if (sql.includes("FROM tasks t") && sql.includes("LEFT JOIN provider_requests pr")) {
           const acceptsQueueFailure = sql.includes("'generation_queue_error'");
           return {
@@ -833,6 +904,7 @@ describe("generation artifact recovery", () => {
           };
         }
         if (sql.includes("WITH claimed_task AS") && sql.includes("AS claimed")) {
+          leaseOwner = params[2];
           return { rows: [{ claimed: true }] };
         }
         if (sql.includes("WITH released_task AS")) {
@@ -863,6 +935,7 @@ describe("generation artifact recovery", () => {
           return { rows: [{ id: "attempt-1" }] };
         }
         if (sql.includes("UPDATE tasks") && sql.includes("SET status = $2")) {
+          taskFinalized = true;
           return { rows: [{ id: "task-1" }] };
         }
         if (sql.includes("SELECT status FROM tasks WHERE workflow_id")) {

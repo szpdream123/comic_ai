@@ -3,6 +3,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export type GenerationSkippedNextAction = "submit" | "poll" | "finalize" | "stop";
 export const GENERATION_ARTIFACT_FETCH_NOT_READY = "generation_artifact_fetch_not_ready" as const;
+export const GENERATION_ARTIFACT_LEASE_BUSY = "generation_artifact_lease_busy" as const;
 
 const terminalGenerationTaskStatuses = new Set(["succeeded", "failed", "canceled"]);
 const staleGenerationArtifactTaskStatuses = new Set(["queued", "cancel_requested"]);
@@ -114,6 +115,7 @@ export function isGenerationArtifactStageNotReadyFailure(failureCode: string) {
 }
 
 export function resolveGenerationArtifactQueueExhaustionFailureCode(failureCode: string) {
+  if (failureCode === GENERATION_ARTIFACT_LEASE_BUSY) return GENERATION_ARTIFACT_LEASE_BUSY;
   return isGenerationArtifactStageNotReadyFailure(failureCode)
     ? "generation_queue_error" as const
     : "provider_output_storage_failed" as const;

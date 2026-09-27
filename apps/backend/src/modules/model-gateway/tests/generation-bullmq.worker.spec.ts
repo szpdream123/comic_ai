@@ -24,6 +24,146 @@ function generationQueueConfigWithMaxPollAttempts(
 }
 
 describe("generation BullMQ worker handlers", () => {
+  for (const artifactStage of ["fetch", "persist", undefined] as const) {
+    it(`bounds image ${artifactStage ?? "legacy finalize"} lease contention with 30-second checks`, async () => {
+      const added: Array<{ data: Record<string, unknown>; options: Record<string, unknown> }> = [];
+      let leaseBusy = true;
+      let publishFailed = false;
+      let released = 0;
+      const processor = async () => leaseBusy
+        ? { status: "failed" as const, failureCode: "generation_artifact_lease_busy" }
+        : { status: "succeeded" as const };
+      const input = {
+        job: { data: {
+          taskId: "locked-image", attemptId: "current-attempt", workflowId: "workflow-1",
+          mediaType: "image" as const, modelCode: "gpt-image-2-cn", providerExecutor: "gpt-image-2",
+          artifactKind: "image" as const, ...(artifactStage ? { artifactStage } : {}),
+          outboxEventId: "recovery-event", membershipPriority: true, queuePriority: 7,
+        } },
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add(_queue, _name, data, options) {
+          if (publishFailed) throw new Error("retry_queue_unavailable");
+          added.push({ data, options });
+        } },
+        processors: {
+          async submitSeedanceVideo() { throw new Error("must not resubmit"); },
+          async pollSeedanceVideo() { throw new Error("must not poll"); },
+          async expireSeedanceVideo() { throw new Error("must not expire"); },
+          async recordSkippedSuccessor() { throw new Error("lease contention is not terminal"); },
+          fetchGptImageArtifact: processor, persistGptImageArtifact: processor, finalizeGptImageArtifact: processor,
+        },
+        finalizeRateLimiter: { async acquireFinalizePermit() {
+          return { granted: true as const, async release() { released += 1; } };
+        } },
+        now: new Date("2026-09-27T05:33:45.000Z"),
+      };
+      const seenIds = new Set();
+      const delays = Array(12).fill(30_000);
+      for (let round = 0; round < delays.length; round += 1) {
+        const result = await handleGenerationFinalizeArtifactJob(input);
+        assert.equal(result.status, "rate_limited");
+        assert.equal(added.length, round + 1);
+        const retry = added.at(-1)!;
+        assert.equal(retry.options.delay, delays[round]);
+        assert.equal(retry.data.attemptId, "current-attempt");
+        assert.equal(retry.data.artifactStage, artifactStage);
+        assert.equal(retry.data.outboxEventId, "recovery-event");
+        assert.equal(retry.options.priority, 7);
+        assert.ok(!seenIds.has(retry.options.jobId));
+        seenIds.add(retry.options.jobId);
+        input.job.data = retry.data as typeof input.job.data;
+        input.now = new Date(input.now.getTime() + delays[round]);
+      }
+      await assert.rejects(handleGenerationFinalizeArtifactJob(input), {
+        name: "UnrecoverableError", message: "generation_artifact_lease_busy",
+        failureCode: "generation_artifact_lease_busy",
+      });
+      assert.equal(added.length, 12, "the exhausted wave must not publish another retry");
+      leaseBusy = false;
+      assert.equal((await handleGenerationFinalizeArtifactJob(input)).status, "succeeded");
+      assert.equal(released, 14);
+      assert.equal(added.length, artifactStage === "fetch" ? 13 : 12);
+      if (artifactStage === "fetch") assert.equal(added.at(-1)?.data.artifactStage, "persist");
+      leaseBusy = true;
+      publishFailed = true;
+      input.job.data = { ...input.job.data, retrySequence: 0 } as typeof input.job.data;
+      await assert.rejects(handleGenerationFinalizeArtifactJob(input), {
+        message: "retry_queue_unavailable", failureCode: "generation_artifact_lease_busy",
+      });
+      assert.equal(released, 15);
+    });
+  }
+
+  for (const artifactStage of ["fetch", "persist", undefined] as const) {
+    it(`bounds video ${artifactStage ?? "legacy finalize"} lease contention with 30-second checks`, async () => {
+      const added: Array<{ data: Record<string, unknown>; options: Record<string, unknown> }> = [];
+      let leaseBusy = true;
+      let publishFailed = false;
+      let released = 0;
+      const processor = async () => leaseBusy
+        ? { status: "failed" as const, failureCode: "generation_artifact_lease_busy" }
+        : { status: "succeeded" as const };
+      const input = {
+        job: { data: {
+          taskId: "locked-video", attemptId: "current-attempt", workflowId: "workflow-1",
+          mediaType: "video" as const, modelCode: "seedance-i2v-pro", providerExecutor: "seedance",
+          artifactKind: "video" as const, ...(artifactStage ? { artifactStage } : {}),
+          outboxEventId: "recovery-event", membershipPriority: true, queuePriority: 7,
+        } },
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add(_queue, _name, data, options) {
+          if (publishFailed) throw new Error("retry_queue_unavailable");
+          added.push({ data, options });
+        } },
+        processors: {
+          async submitSeedanceVideo() { throw new Error("must not resubmit"); },
+          async pollSeedanceVideo() { throw new Error("must not poll"); },
+          async expireSeedanceVideo() { throw new Error("must not expire"); },
+          async recordSkippedSuccessor() { throw new Error("lease contention is not terminal"); },
+          fetchSeedanceVideoArtifact: processor, persistSeedanceVideoArtifact: processor, finalizeSeedanceVideoArtifact: processor,
+        },
+        finalizeRateLimiter: { async acquireFinalizePermit() {
+          return { granted: true as const, async release() { released += 1; } };
+        } },
+        now: new Date("2026-09-27T05:33:45.000Z"),
+      };
+      const seenIds = new Set();
+      const delays = Array(12).fill(30_000);
+      for (let round = 0; round < delays.length; round += 1) {
+        const result = await handleGenerationFinalizeArtifactJob(input);
+        assert.equal(result.status, "rate_limited");
+        assert.equal(added.length, round + 1);
+        const retry = added.at(-1)!;
+        assert.equal(retry.options.delay, delays[round]);
+        assert.equal(retry.data.attemptId, "current-attempt");
+        assert.equal(retry.data.artifactStage, artifactStage);
+        assert.equal(retry.data.outboxEventId, "recovery-event");
+        assert.equal(retry.options.priority, 7);
+        assert.ok(!seenIds.has(retry.options.jobId));
+        seenIds.add(retry.options.jobId);
+        input.job.data = retry.data as typeof input.job.data;
+        input.now = new Date(input.now.getTime() + delays[round]);
+      }
+      await assert.rejects(handleGenerationFinalizeArtifactJob(input), {
+        name: "UnrecoverableError", message: "generation_artifact_lease_busy",
+        failureCode: "generation_artifact_lease_busy",
+      });
+      assert.equal(added.length, 12, "the exhausted wave must not publish another retry");
+      leaseBusy = false;
+      assert.equal((await handleGenerationFinalizeArtifactJob(input)).status, "succeeded");
+      assert.equal(released, 14);
+      assert.equal(added.length, artifactStage === "fetch" ? 13 : 12);
+      if (artifactStage === "fetch") assert.equal(added.at(-1)?.data.artifactStage, "persist");
+      leaseBusy = true;
+      publishFailed = true;
+      input.job.data = { ...input.job.data, retrySequence: 0 } as typeof input.job.data;
+      await assert.rejects(handleGenerationFinalizeArtifactJob(input), {
+        message: "retry_queue_unavailable", failureCode: "generation_artifact_lease_busy",
+      });
+      assert.equal(released, 15);
+    });
+  }
+
   it("queues a delayed image poll job after a GPT Image submit job succeeds", async () => {
     const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
     const result = await handleGenerationSubmitImageJob({

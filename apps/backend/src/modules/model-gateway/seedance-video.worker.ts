@@ -26,6 +26,8 @@ import {
 import { ensureProjectUploadRecordForStorageObject } from "../project/project-upload-record.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import { claimVideoArtifactLease, runWithVideoArtifactLease, assertVideoArtifactLeaseActive,
+  isVideoArtifactLeaseLost } from "./seedance-video-artifact-lease.ts";
 import {
   createOrReuseGenerationStorageObject,
   findGenerationStorageObject,
@@ -55,6 +57,7 @@ import {
 } from "./generation-input-url-refresh.ts";
 import {
   GENERATION_ARTIFACT_FETCH_NOT_READY,
+  GENERATION_ARTIFACT_LEASE_BUSY,
   resolveGenerationArtifactStageUnavailable,
   resolveGenerationSkippedNextAction,
 } from "./generation-skipped-coordinator.ts";
@@ -1751,7 +1754,7 @@ export async function processSeedanceVideoPollJob(
     });
     // renewSeedancePollLease holds a 5-minute lease under
     // 'seedance-video-poll-worker'. The fetch stage runs about a second later and
-    // markSeedanceFinalizeLease only claims an unheld, expired, or self-owned
+    // the artifact lease only claims an unheld, expired, or self-owned
     // lease, so leaving it in place made every successful poll hand the artifact
     // chain a lease it could not take: fetch returned skipped and the task waited
     // for the repair sweeper, which itself only picks up expired leases. Release
@@ -2273,19 +2276,11 @@ export async function finalizeSeedanceVideoArtifactJob(
       failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
     });
   }
-  const leaseClaimed = await markSeedanceFinalizeLease(db, {
-    taskId: row.task_id,
-    owner: leaseOwner,
-    now: input.now,
-  });
-  // A held lease means a live sibling finalizer owns this task. That is a real
-  // duplicate, not the stalled handoff the poll stage now releases explicitly.
-  if (!leaseClaimed) return { status: "skipped" };
-  const stopLeaseHeartbeat = startSeedanceFinalizeLeaseHeartbeat(db, {
-    taskId: row.task_id,
-    owner: leaseOwner,
-  });
-
+  const lease = { taskId: row.task_id, attemptId: row.attempt_id, owner: leaseOwner };
+  if (!await claimVideoArtifactLease(db, { ...lease, now: input.now })) {
+    return resolveGenerationArtifactStageUnavailable(db, { taskId: row.task_id, failureCode: GENERATION_ARTIFACT_LEASE_BUSY });
+  }
+  return runWithVideoArtifactLease(db, lease, async (db) => {
   try {
     await assertCanvasGenerationAssignmentActive(db, snapshot);
     var persisted = await persistSeedanceVideoArtifact(db, {
@@ -2298,6 +2293,7 @@ export async function finalizeSeedanceVideoArtifactJob(
       now: input.now,
     });
   } catch (error) {
+    if (isVideoArtifactLeaseLost(error)) throw error;
     const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
     const errorMessage = translateProviderErrorMessage(error, {
       failureCode,
@@ -2319,7 +2315,7 @@ export async function finalizeSeedanceVideoArtifactJob(
           storageObjectKey,
           now: input.now,
         });
-        return { status: "failed", failureCode: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE };
+        return { status: "failed" as const, failureCode: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE };
       }
       await markSeedanceTaskTransferRetryPending(db, {
         taskId: row.task_id,
@@ -2341,7 +2337,7 @@ export async function finalizeSeedanceVideoArtifactJob(
         },
         now: input.now,
       });
-      return { status: "failed", failureCode };
+      return { status: "failed" as const, failureCode };
     }
     if (failureCode === "provider_output_persist_failed") {
       await markSeedanceTaskManualReview(db, {
@@ -2378,7 +2374,7 @@ export async function finalizeSeedanceVideoArtifactJob(
         },
         now: input.now,
       });
-      return { status: "failed", failureCode };
+      return { status: "failed" as const, failureCode };
     }
     await failSeedanceTask(db, {
       row,
@@ -2411,9 +2407,7 @@ export async function finalizeSeedanceVideoArtifactJob(
       },
       now: input.now,
     });
-    return { status: "failed", failureCode };
-  } finally {
-    stopLeaseHeartbeat();
+    return { status: "failed" as const, failureCode };
   }
 
   await ensureProjectUploadRecordForStorageObject(db, {
@@ -2431,6 +2425,7 @@ export async function finalizeSeedanceVideoArtifactJob(
     now: input.now,
   });
 
+  const refundedRecovery = await findSeedanceRefundedRecovery(db, row);
   const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
   await finalizeTaskAttempt(db, {
     taskId: row.task_id,
@@ -2438,7 +2433,7 @@ export async function finalizeSeedanceVideoArtifactJob(
     status: "succeeded",
     now: input.now,
     finalize: async () => {
-      if (row.reservation_id && amount > 0) {
+      if (row.reservation_id && amount > 0 && !refundedRecovery) {
         await reopenManualReviewReservationForSettlement(db, {
           reservationId: row.reservation_id,
           now: input.now,
@@ -2477,6 +2472,13 @@ export async function finalizeSeedanceVideoArtifactJob(
         },
         now: input.now,
       });
+      if (refundedRecovery) {
+        await markSeedancePollTimeoutRecoverySnapshotSucceeded(db, {
+          taskId: row.task_id, attemptId: row.attempt_id!, providerRequestId: row.provider_request_id!,
+          resultAsset: persisted, releasedAmount: refundedRecovery.releasedAmount,
+          externalRequestId: row.external_request_id!, recoveryReason: refundedRecovery.recoveryReason, now: input.now,
+        });
+      }
       await markAssetConversationGenerationSucceeded(db, {
         taskId: row.task_id,
         result: persisted,
@@ -2486,7 +2488,8 @@ export async function finalizeSeedanceVideoArtifactJob(
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
 
-  return { status: "succeeded" };
+  return { status: "succeeded" as const };
+  });
 }
 
 export async function recoverSeedanceVideoAfterPollTimeout(
@@ -2537,14 +2540,17 @@ export async function recoverSeedanceVideoAfterPollTimeout(
   }
   await assertCanvasGenerationAssignmentActive(db, snapshot);
 
+  const recoveryOwner = `seedance-video-finalizer:${randomUUID()}`;
   const claimed = await claimSeedancePollTimeoutRecovery(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id!,
     providerRequestId: row.provider_request_id!,
     initialFailureCode: row.failure_code!,
+    owner: recoveryOwner,
     providerResponse: {
       ...poll.redactedResponse,
       videoUrl: redactProviderArtifactAuditUrl(videoUrl),
+      ...(redactProviderArtifactAuditUrl(videoUrl) !== videoUrl ? { artifactUrlRequiresRefresh: true } : {}),
       recoveryReason,
     },
     now: input.now,
@@ -2557,6 +2563,9 @@ export async function recoverSeedanceVideoAfterPollTimeout(
   }
   row = { ...row, task_status: "running", attempt_status: "running" };
 
+  const result = await runWithVideoArtifactLease(db, {
+    taskId: row.task_id, attemptId: row.attempt_id!, owner: recoveryOwner,
+  }, async (db) => {
   let handoff = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id!,
@@ -2668,7 +2677,9 @@ export async function recoverSeedanceVideoAfterPollTimeout(
     },
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
-  return { status: "succeeded" };
+  return { status: "succeeded" as const };
+  });
+  return result.status === "failed" ? { status: "skipped", reason: "recovery_in_progress" } : result;
 }
 
 async function markSeedanceTaskTransferRetryPending(
@@ -2683,7 +2694,8 @@ async function markSeedanceTaskTransferRetryPending(
       UPDATE tasks
       SET status = 'running',
           failure_code = NULL,
-          locked_by = 'seedance-video-finalize-worker',
+          locked_by = CASE WHEN locked_by LIKE 'seedance-video-finalizer:%' THEN locked_by
+            ELSE 'seedance-video-finalize-worker' END,
           locked_until = $2,
           heartbeat_at = $3,
           updated_at = $3
@@ -2691,67 +2703,6 @@ async function markSeedanceTaskTransferRetryPending(
         AND status IN ('running', 'manual_review_required')
     `,
     [input.taskId, seedanceVideoLeaseUntil(input.now), input.now],
-  );
-}
-
-async function markSeedanceFinalizeLease(
-  db: SqlDatabase,
-  input: {
-    taskId: string;
-    owner: string;
-    now: Date;
-  },
-): Promise<boolean> {
-  const row = await queryOne<{ id: string }>(db,
-    `
-      UPDATE tasks
-      SET status = 'running',
-          failure_code = NULL,
-          locked_by = $2,
-          locked_until = $3,
-          heartbeat_at = $4,
-          updated_at = $4
-      WHERE id = $1
-        AND status IN ('running', 'manual_review_required', 'result_unknown')
-        AND (
-          locked_until IS NULL
-          OR locked_until <= $4
-          OR locked_by = $2
-        )
-      RETURNING id
-    `,
-    [input.taskId, input.owner, seedanceVideoLeaseUntil(input.now), input.now],
-  );
-  return Boolean(row);
-}
-
-function startSeedanceFinalizeLeaseHeartbeat(
-  db: SqlDatabase,
-  input: { taskId: string; owner: string },
-) {
-  const heartbeat = setInterval(() => {
-    void renewSeedanceFinalizeLease(db, input).catch(() => undefined);
-  }, 30_000);
-  heartbeat.unref?.();
-  return () => clearInterval(heartbeat);
-}
-
-async function renewSeedanceFinalizeLease(
-  db: SqlDatabase,
-  input: { taskId: string; owner: string },
-) {
-  const now = new Date();
-  await db.query(
-    `
-      UPDATE tasks
-      SET locked_until = $3,
-          heartbeat_at = $4,
-          updated_at = $4
-      WHERE id = $1
-        AND locked_by = $2
-        AND status = 'running'
-    `,
-    [input.taskId, input.owner, seedanceVideoLeaseUntil(now), now],
   );
 }
 
@@ -2775,8 +2726,6 @@ export async function fetchSeedanceVideoArtifactJob(
     return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
-  const videoUrl = await resolveSeedanceArtifactUrlForTransfer(db, row, snapshot, input);
-  if (!videoUrl) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   const leaseOwner = `seedance-video-finalizer:${randomUUID()}`;
   row = await ensureSeedanceFinalizeAttempt(db, {
     row,
@@ -2784,32 +2733,21 @@ export async function fetchSeedanceVideoArtifactJob(
     workerId: leaseOwner,
   });
   if (!row.attempt_id) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
+  const lease = { taskId: row.task_id, attemptId: row.attempt_id, owner: leaseOwner };
+  if (!await claimVideoArtifactLease(db, { ...lease, now: input.now })) {
+    return resolveGenerationArtifactStageUnavailable(db, { taskId: row.task_id, failureCode: GENERATION_ARTIFACT_LEASE_BUSY });
+  }
+  return runWithVideoArtifactLease(db, lease, async (db) => {
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
     attemptId: row.attempt_id,
     mediaType: "video",
     now: input.now,
   });
-  if (existing) return { status: "succeeded" };
+  if (existing) return { status: "succeeded" as const };
+  const videoUrl = await resolveSeedanceArtifactUrlForTransfer(db, row, snapshot, input);
+  if (!videoUrl) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
-  const leaseClaimed = await markSeedanceFinalizeLease(db, {
-    taskId: row.task_id,
-    owner: leaseOwner,
-    now: input.now,
-  });
-  // A held lease means another stage of this same task — typically the poll job
-  // that just observed the finished video — is still releasing. That is transient
-  // contention, not a completed task. Returning a bare "skipped" here ended the
-  // fetch job as "completed" without enqueuing persist, so the task stalled until
-  // the repair sweeper recovered it minutes later. Route through the shared
-  // coordinator instead: a still-live task yields a retryable stage-not-ready
-  // failure, and only a genuinely terminal task skips.
-  if (!leaseClaimed) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
-  const stopLeaseHeartbeat = startSeedanceFinalizeLeaseHeartbeat(db, {
-    taskId: row.task_id,
-    owner: leaseOwner,
-  });
-  try {
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
@@ -2837,10 +2775,8 @@ export async function fetchSeedanceVideoArtifactJob(
     contentType: stored.mimeType,
     now: input.now,
   });
-  return { status: "succeeded" };
-  } finally {
-    stopLeaseHeartbeat();
-  }
+  return { status: "succeeded" as const };
+  });
 }
 
 async function resolveSeedanceVideoFetchUnavailable(
@@ -2874,6 +2810,11 @@ export async function persistSeedanceVideoArtifactJob(
       failureCode: "provider_output_persist_failed",
     });
   }
+  const lease = { taskId: row.task_id, attemptId: row.attempt_id, owner: `seedance-video-finalizer:${randomUUID()}` };
+  if (!await claimVideoArtifactLease(db, { ...lease, now: input.now })) {
+    return resolveGenerationArtifactStageUnavailable(db, { taskId: row.task_id, failureCode: GENERATION_ARTIFACT_LEASE_BUSY });
+  }
+  return runWithVideoArtifactLease(db, lease, async (db) => {
   const snapshot = parseSnapshot(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   const handoff = await findGenerationArtifactHandoff(db, row.task_id);
@@ -2882,14 +2823,14 @@ export async function persistSeedanceVideoArtifactJob(
     ?? readString(failure.storageObjectKey)
     ?? readString(failure.storage_object_key);
   if (!storageObjectKey) {
-    return { status: "failed", failureCode: "provider_output_persist_failed" };
+    return { status: "failed" as const, failureCode: "provider_output_persist_failed" };
   }
   const storageObject = await findStorageObjectByKey(db, {
     userId: row.created_by_user_id ?? row.user_id,
     objectKey: storageObjectKey,
   });
   if (!storageObject || storageObject.status !== "available") {
-    return { status: "failed", failureCode: "provider_output_persist_failed" };
+    return { status: "failed" as const, failureCode: "provider_output_persist_failed" };
   }
 
   const platformUrl = buildPlatformStorageUrl(input.runtime, storageObject);
@@ -2939,14 +2880,15 @@ export async function persistSeedanceVideoArtifactJob(
     now: input.now,
   });
 
+  const refundedRecovery = await findSeedanceRefundedRecovery(db, row);
   const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
-  const billingAlreadyReleased = row.reservation_id && amount > 0
+  const billingAlreadyReleased = refundedRecovery || (row.reservation_id && amount > 0
     ? await isSeedanceBillingAlreadyReleasedAfterInvalidResponse(db, {
         reservationId: row.reservation_id,
         providerRequestId: row.provider_request_id,
         amount,
       })
-    : false;
+    : false);
   await finalizeTaskAttempt(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
@@ -2994,6 +2936,13 @@ export async function persistSeedanceVideoArtifactJob(
         },
         now: input.now,
       });
+      if (refundedRecovery) {
+        await markSeedancePollTimeoutRecoverySnapshotSucceeded(db, {
+          taskId: row.task_id, attemptId: row.attempt_id!, providerRequestId: row.provider_request_id!,
+          resultAsset: persisted, releasedAmount: refundedRecovery.releasedAmount,
+          externalRequestId: row.external_request_id!, recoveryReason: refundedRecovery.recoveryReason, now: input.now,
+        });
+      }
       await markAssetConversationGenerationSucceeded(db, {
         taskId: row.task_id,
         result: persisted,
@@ -3003,7 +2952,8 @@ export async function persistSeedanceVideoArtifactJob(
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
 
-  return { status: "succeeded" };
+  return { status: "succeeded" as const };
+  });
 }
 
 async function markSeedanceTaskResultUnknown(
@@ -3591,6 +3541,7 @@ async function claimSeedancePollTimeoutRecovery(
     attemptId: string;
     providerRequestId: string;
     initialFailureCode: string;
+    owner: string;
     providerResponse: Record<string, unknown>;
     now: Date;
   },
@@ -3603,7 +3554,7 @@ async function claimSeedancePollTimeoutRecovery(
         UPDATE tasks
         SET status = 'running',
             failure_code = 'provider_poll_timeout_recovery',
-            locked_by = 'seedance-video-timeout-recovery',
+            locked_by = $6,
             locked_until = $3,
             heartbeat_at = $4,
             updated_at = $4
@@ -3628,7 +3579,7 @@ async function claimSeedancePollTimeoutRecovery(
           )
         RETURNING workflow_id
       `,
-      [input.taskId, input.attemptId, seedanceVideoLeaseUntil(input.now), input.now, input.initialFailureCode],
+      [input.taskId, input.attemptId, seedanceVideoLeaseUntil(input.now), input.now, input.initialFailureCode, input.owner],
     );
     if (!claimed) {
       await db.query("ROLLBACK");
@@ -3641,7 +3592,7 @@ async function claimSeedancePollTimeoutRecovery(
         SET status = 'running',
             failure_code = NULL,
             finished_at = NULL,
-            locked_by = 'seedance-video-timeout-recovery',
+            locked_by = $5,
             locked_until = $3,
             heartbeat_at = $4,
             updated_at = $4
@@ -3650,7 +3601,7 @@ async function claimSeedancePollTimeoutRecovery(
           AND status IN ('failed', 'running')
         RETURNING id
       `,
-      [input.attemptId, input.taskId, seedanceVideoLeaseUntil(input.now), input.now],
+      [input.attemptId, input.taskId, seedanceVideoLeaseUntil(input.now), input.now, input.owner],
     );
     if (!attempt) throw new Error("seedance_timeout_recovery_attempt_conflict");
     const provider = await queryOne<{ id: string }>(
@@ -4100,6 +4051,7 @@ async function persistSeedanceVideoArtifact(
       downloadUrl: platformUrl,
     };
   } catch (error) {
+    if (isVideoArtifactLeaseLost(error)) throw error;
     const storageObjectId = pendingStorageObjectId ?? readErrorStorageObjectId(error);
     let failureCode = readErrorFailureCode(error);
     if (pendingStorageObjectKey && failureCode !== "provider_output_download_failed" && failureCode !== "provider_output_upload_failed") {
@@ -4165,6 +4117,7 @@ async function uploadProviderArtifactToStorage(
   }
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
+    await assertVideoArtifactLeaseActive(db);
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), downloadTimeoutMs);
     let response: Response | null = null;
@@ -4202,6 +4155,7 @@ async function uploadProviderArtifactToStorage(
           now: input.now,
         });
       }
+      await assertVideoArtifactLeaseActive(db);
       sourceStream = Readable.fromWeb(response.body as never);
       uploadStream = new Transform({
         transform(chunk: Buffer | Uint8Array | string, _encoding, callback) {
@@ -4239,6 +4193,7 @@ async function uploadProviderArtifactToStorage(
         uploadResult,
       };
     } catch (error) {
+      if (isVideoArtifactLeaseLost(error)) throw error;
       const failureCode = sourceDownloadError
         || !response
         || readErrorFailureCode(error) === "provider_output_download_failed"
@@ -4250,6 +4205,7 @@ async function uploadProviderArtifactToStorage(
           storageObjectId: storageObject?.id,
         });
       }
+      await assertVideoArtifactLeaseActive(db);
       await delay(retryDelayMs);
     } finally {
       clearTimeout(timeout);
@@ -4966,6 +4922,20 @@ async function writeSeedanceVideoBackToStoryboard(
     `,
     [storyboardId, episodeId, input.projectId, input.assetVersionId, input.now],
   );
+}
+
+async function findSeedanceRefundedRecovery(db: SqlDatabase, row: SeedanceTaskRow) {
+  const recoveryReason = readString(parseProviderResponse(row.provider_response_redacted_json).recoveryReason);
+  if (!row.reservation_id || !["provider_completed_after_timeout", "provider_result_url_recovered"].includes(recoveryReason ?? "")) return null;
+  const refunded = await queryOne<{ amount_released: number | string }>(db, `
+    SELECT reservation.amount_released FROM credit_reservations reservation
+    JOIN provider_requests provider ON provider.id = $3 AND provider.task_id = reservation.task_id
+    WHERE reservation.id = $1 AND reservation.task_id = $2 AND provider.status = 'succeeded'
+      AND reservation.status = 'released' AND reservation.amount_total > 0
+      AND reservation.amount_reserved = 0 AND reservation.amount_consumed = 0
+      AND reservation.amount_released >= reservation.amount_total
+  `, [row.reservation_id, row.task_id, row.provider_request_id]);
+  return refunded ? { releasedAmount: Number(refunded.amount_released), recoveryReason: recoveryReason! } : null;
 }
 
 async function isSeedanceBillingAlreadyReleasedAfterInvalidResponse(
