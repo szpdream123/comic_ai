@@ -1,7 +1,6 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { formatGenerationPromptCount } from "../../shared/generation-prompt-policy.js";
-import { canSimplifyPrompt } from "./episode-prompt-simplification.js";
 import { renderAssetImportModal } from "./project-detail.js?single-episode-credits=1";
 import { buildConfiguredGenerationSettingsSections, normalizeGenerationPricingObject, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
@@ -3274,7 +3273,6 @@ export function renderPromptDock({
     <section class="episode-replica-prompt has-prompt-actions ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${resultAnnotationTarget?.targetId ? "has-result-annotation" : ""} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
       <div class="episode-prompt-actions-toolbar">
         <button type="button" class="episode-replica-annotation-trigger" data-action="restore-generation-prompt" hidden>恢复原稿</button>
-        <button type="button" class="episode-replica-annotation-trigger" data-action="simplify-generation-prompt" ${canSimplifyPrompt({ prompt: promptValue, model: selectedModel, mediaMode }) ? 'title="精简后预览，确认后应用"' : 'disabled title="请输入图片或视频提示词后精简"'}>AI 精简提示词</button>
         ${renderResultAnnotationTrigger(resultAnnotationTarget)}
       </div>
       ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}

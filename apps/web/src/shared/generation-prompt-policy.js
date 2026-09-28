@@ -61,7 +61,7 @@ export function formatGenerationPromptCount(prompt, model) {
     ? measureGenerationPrompt(source, limit) + model.promptBudget.additionalLength : measureGenerationPrompt(prompt, limit);
   if (length === null) return `${characters} 字符 · 模型上限 ${limit.maximum} ${limit.unit}（由模型校验）`;
   const label = limit.unit === "bytes" ? "字节" : "字符";
-  const overflow = model?.mediaType === "audio" ? " · 朗读原文保留，请分段后生成" : " · 可使用AI精简或手动修改";
+  const overflow = model?.mediaType === "audio" ? " · 朗读原文保留，请分段后生成" : " · 请手动缩短提示词";
   const additional = length - measureGenerationPrompt(source, limit);
   return `${length} / ${limit.maximum} ${label}${additional > 0 ? `（含系统附加 ${additional} ${label}）` : ""}${length > limit.maximum ? overflow : ""}`;
 }

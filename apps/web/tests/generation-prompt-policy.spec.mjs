@@ -31,8 +31,8 @@ it("budgets the completed image/video prompt including multiline style and uniqu
 
 it("uses the selected model's limit instead of a fixed editor maximum", () => {
   const text = "中".repeat(2900);
-  assert.match(formatGenerationPromptCount(text, { parameterSchema: { prompt: { maxLength: 2500 } } }), /2900 \/ 2500.*可使用AI精简或手动修改/);
-  assert.doesNotMatch(formatGenerationPromptCount(text, { parameterSchema: { prompt: { maxLength: 5000 } } }), /可使用AI精简/);
+  assert.match(formatGenerationPromptCount(text, { parameterSchema: { prompt: { maxLength: 2500 } } }), /2900 \/ 2500.*请手动缩短提示词/);
+  assert.doesNotMatch(formatGenerationPromptCount(text, { parameterSchema: { prompt: { maxLength: 5000 } } }), /请手动缩短提示词/);
   assert.equal(formatGenerationPromptCount("猫😀", {}), "2 字符");
   const configured = { mediaType: "video", parameterSchema: { prompt: { maxLength: 2500 } },
     promptComposition: { mediaType: "video", style: "日系动漫风格，干净线稿，统一角色设计，细腻上色，二次元造型明确" } };
@@ -54,8 +54,8 @@ it("renders the prompt dock using its effective selected model", () => {
       supportedModes: ["single-image"], parameterSchema: { prompt: { maxLength: 10 } }, pricing: {} }] },
   });
   assert.match(html, /12 \/ 10 字符/);
-  assert.match(html, /可使用AI精简或手动修改/);
-  assert.match(html, /data-action="simplify-generation-prompt" title="[^"]+">AI 精简提示词<\/button>/);
+  assert.match(html, /请手动缩短提示词/);
+  assert.doesNotMatch(html, /data-action="simplify-generation-prompt"|AI 精简提示词/);
 });
 
 it("updates the live prompt count for the model used after a video mode change", () => {
@@ -92,7 +92,7 @@ it("updates the live prompt count for the model used after a video mode change",
   const workbench = { ui: { episodeMediaMode: "video", videoGenerationMode: "first-frame",
     selectedModelId: "first-frame-short", episodeGenerationConfig: { models } } };
   const prompt = "猫".repeat(12);
-  assert.match(formatLiveCount(workbench, prompt), /12 \/ 10 字符.*可使用AI精简/);
+  assert.match(formatLiveCount(workbench, prompt), /12 \/ 10 字符.*请手动缩短提示词/);
 
   workbench.ui.videoGenerationMode = "reference-video";
   assert.equal(workbench.ui.selectedModelId, "first-frame-short");
@@ -121,10 +121,10 @@ it("retains configured fallback byte limits in the rendered model", () => {
       limits: { maxPromptLength: 5, promptLengthUnit: "bytes" } }] },
   });
   assert.match(html, /6 \/ 5 字节/);
-  assert.match(html, /data-action="simplify-generation-prompt" title="[^"]+">AI 精简提示词/);
+  assert.doesNotMatch(html, /data-action="simplify-generation-prompt"|AI 精简提示词/);
 });
 
-it("keeps simplification visible above the editor, immediately before image modification", () => {
+it("omits simplification while keeping image modification above the editor", () => {
   for (const mediaMode of ["image", "video"]) {
     for (const prompt of ["", "猫", "猫".repeat(12)]) {
       const html = renderPromptDock({ prompt, mediaMode, selectedModelId: "short",
@@ -134,12 +134,8 @@ it("keeps simplification visible above the editor, immediately before image modi
           videoCategory: "reference", supportedModes: [mediaMode === "video" ? "reference-video" : "single-image"],
           parameterSchema: { prompt: { maxLength: 10 } } }] },
       });
-      const button = html.match(/<button[^>]*data-action="simplify-generation-prompt"[^>]*>/)?.[0];
-      assert.ok(button);
-      assert.doesNotMatch(button, /hidden/);
-      assert.equal(button.includes("disabled"), !prompt.trim());
-      assert.ok(html.indexOf('class="episode-prompt-actions-toolbar"') < html.indexOf(button));
-      assert.ok(html.indexOf(button) < html.indexOf('data-action="open-result-image-annotation"'));
+      assert.doesNotMatch(html, /data-action="simplify-generation-prompt"|AI 精简提示词/);
+      assert.ok(html.indexOf('class="episode-prompt-actions-toolbar"') < html.indexOf('data-action="open-result-image-annotation"'));
       assert.ok(html.indexOf('data-action="open-result-image-annotation"') < html.indexOf('data-prompt-editor'));
       assert.doesNotMatch(html, /AI 精简提示词 · 免费/);
       assert.doesNotMatch(html, /data-prompt-simplification-status/);
@@ -162,14 +158,20 @@ it("shows overflow as a warning toast without leaving a footer message", () => {
     showWorkbenchToast: (_, message, options) => toasts.push({ message, tone: options.tone }),
     syncWorkbenchToastOnly: () => { synced++; return true; },
   });
-  const workbench = { ui: { validationMessage: "" } };
+  let focused = 0;
+  const workbench = { ui: { validationMessage: "" }, root: {
+    querySelector: (selector) => selector === "#video-prompt-input" ? { focus: () => focused++ } : null,
+  } };
   assert.equal(block(workbench), true);
   assert.equal(workbench.ui.validationMessage, "");
   assert.equal(workbench.promptSimplificationNotice, undefined);
   assert.equal(toasts.length, 1);
   assert.equal(toasts[0].tone, "warning");
   assert.match(toasts[0].message, /提示词超过当前模型上限/);
+  assert.match(toasts[0].message, /请手动缩短提示词/);
+  assert.doesNotMatch(toasts[0].message, /AI|精简/);
   assert.equal(synced, 1);
+  assert.equal(focused, 1, "overflow focuses the textarea while the rich editor is unavailable");
   for (const model of [{ mediaType: "video" },
     { mediaType: "video", parameterSchema: { prompt: { maxLength: 100 } } },
     { mediaType: "video", parameterSchema: { prompt: { maxLength: 1, limitUnit: "tokens" } } },
@@ -205,7 +207,7 @@ it("routes simplification feedback through toasts and ignores empty notices", ()
   assert.equal(synced, 2);
 });
 
-it("keeps the live simplification entry visible when editing or switching models", () => {
+it("keeps stale simplification controls hidden and disabled when editing or switching models", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   const start = source.indexOf("function syncPromptSimplificationControls(");
   const fn = source.slice(start, source.indexOf("\n}", start) + 2);
@@ -218,14 +220,14 @@ it("keeps the live simplification entry visible when editing or switching models
   const workbench = { ui: {}, root: { querySelector: (selector) => selector.includes('"simplify-generation-prompt"') ? button : null },
     promptSimplificationController: { pending: false, observe() {} } };
   sync(workbench);
-  assert.equal(button.hidden, false);
+  assert.equal(button.hidden, true);
   assert.equal(button.disabled, true);
   overLimit = true;
   sync(workbench);
-  assert.equal(button.disabled, false);
+  assert.equal(button.disabled, true);
   workbench.promptSimplificationController.pending = true;
   sync(workbench);
-  assert.equal(button.hidden, false);
+  assert.equal(button.hidden, true);
   assert.equal(button.disabled, true);
   assert.equal(button.textContent, "正在精简…");
 });

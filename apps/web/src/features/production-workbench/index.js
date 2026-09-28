@@ -14739,6 +14739,8 @@ function syncToolboxPromptReverseKeyFrameLightbox(workbench, target, index = -1)
 
 export async function handleProductionWorkbenchAction(workbench, target) {
   let action = target.dataset.action;
+  // Temporarily withdrawn: stale controls must not start a simplification request.
+  if (action === "simplify-generation-prompt") return;
   if (action === "simplify-generation-prompt" || action === "restore-generation-prompt") {
     syncPromptInputFromDom(workbench);
     const controller = getPromptSimplificationController(workbench);
@@ -44282,8 +44284,8 @@ function syncPromptSimplificationControls(workbench) {
   const root = workbench.root;
   const button = root?.querySelector?.('[data-action="simplify-generation-prompt"]');
   if (button) {
-    button.hidden = false;
-    button.disabled = Boolean(controller?.pending)
+    button.hidden = true;
+    button.disabled = button.hidden || Boolean(controller?.pending)
       || (workbench.promptCompositionCache?.key === snapshot.compositionKey && workbench.promptCompositionCache?.settled === false)
       || !canSimplifyPrompt(snapshot);
     button.title = canSimplifyPrompt(snapshot) ? "精简后预览，确认后应用" : "请输入图片或视频提示词后精简";
@@ -44309,10 +44311,11 @@ function blockOverflowPromptSubmission(workbench) {
   workbench.ui.validationMessage = "";
   const validation = workbench.root?.querySelector?.(".episode-replica-prompt .episode-replica-validation");
   if (validation) validation.textContent = "";
-  showWorkbenchToast(workbench, "提示词超过当前模型上限，请使用 AI 精简提示词或手动修改后再生成。", { tone: "warning" });
+  showWorkbenchToast(workbench, "提示词超过当前模型上限，请手动缩短提示词后再生成。", { tone: "warning" });
   syncWorkbenchToastOnly(workbench);
   syncPromptSimplificationControls(workbench);
-  workbench.root?.querySelector?.('[data-action="simplify-generation-prompt"]')?.focus?.();
+  (workbench.root?.querySelector?.('[data-prompt-editor] [contenteditable="true"]')
+    ?? workbench.root?.querySelector?.("#video-prompt-input"))?.focus?.();
   return true;
 }
 
