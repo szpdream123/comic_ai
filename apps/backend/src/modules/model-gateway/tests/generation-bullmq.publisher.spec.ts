@@ -62,6 +62,8 @@ describe("generation BullMQ publisher", () => {
     assert.match(source, /commandTimeout:\s*10_000/);
     assert.match(source, /keepAlive:\s*30_000/);
     assert.match(source, /maxRetriesPerRequest:\s*1/);
+    assert.match(source, /generation_queue_not_configured:/);
+    assert.doesNotMatch(source, /\?\? \[queueName\]/);
   });
 
   it("rejects BullMQ queue names with reserved separators or unsafe route data", () => {

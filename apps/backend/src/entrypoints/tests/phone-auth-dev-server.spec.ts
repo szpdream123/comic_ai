@@ -3281,6 +3281,69 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("forwards a configured project payment callback without charging the host order", async () => {
+    const received: Array<{ url: string; body: string; signature: string | undefined }> = [];
+    const target = createNodeHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      request.on("end", () => {
+        received.push({
+          url: request.url ?? "",
+          body: Buffer.concat(chunks).toString("utf8"),
+          signature: request.headers["wechatpay-signature"]?.toString(),
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ code: "SUCCESS", message: "成功" }));
+      });
+    });
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", () => resolve()));
+    const address = target.address();
+    if (!address || typeof address === "string") {
+      target.close();
+      throw new Error("payment_project_callback_test_target_unavailable");
+    }
+    const server = await createPhoneAuthDevServer({
+      db: await createMigratedTestDb(),
+      env: {
+        PAYMENT_PROJECT_CALLBACK_URL_NEWAPI: `http://127.0.0.1:${address.port}/api/user/wechat/notify`,
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const payload = JSON.stringify({ id: "wechat-event-newapi", resource: { ciphertext: "opaque" } });
+      const response = await fetch(
+        `${server.origin}/api/payment-provider-callbacks/wechat_pay/newapi`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "wechatpay-signature": "project-signature",
+            "wechatpay-timestamp": "1710000000",
+            "wechatpay-nonce": "project-nonce",
+          },
+          body: payload,
+        },
+      );
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body, { code: "SUCCESS", message: "成功" });
+      assert.deepEqual(received, [{
+        url: "/api/user/wechat/notify",
+        body: payload,
+        signature: "project-signature",
+      }]);
+    } finally {
+      await server.close();
+      await new Promise<void>((resolve, reject) => {
+        target.close((error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
   it("rejects oversized payment provider callback bodies", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

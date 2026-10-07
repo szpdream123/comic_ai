@@ -365,8 +365,13 @@ export function createBullMQGenerationPublisher(
 }
 
 function generationQueueCandidates(config: GenerationQueueConfig, queueName: string) {
-  return Object.values(config.queueNames).find((queueNames) => queueNames.includes(queueName))
-    ?? [queueName];
+  const grouped = Object.values(config.queueNames).find((queueNames) => queueNames.includes(queueName));
+  if (grouped) return grouped;
+  const scopedName = queueName.match(/^agent-[a-f0-9]{32}-(.+)$/)?.[1];
+  if (scopedName && Object.values(config.queueNames).some((queueNames) => queueNames.includes(scopedName))) {
+    return [queueName];
+  }
+  throw new Error(`generation_queue_not_configured:${queueName}`);
 }
 
 async function publishToLeastLoadedGenerationQueue(input: {

@@ -296,6 +296,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
+
+
   it("does not poll a historical image provider request for a newer attempt", async () => {
     const db = await createMigratedTestDb();
 
